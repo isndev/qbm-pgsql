@@ -81,6 +81,7 @@ Transaction::pop_query() {
 
 void
 Transaction::on_sub_command_status(bool status) {
+    _result &= status;
     _parent->on_sub_command_status(status);
 }
 void
