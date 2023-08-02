@@ -192,10 +192,10 @@ public:
             [this](auto const &err) { _on_error(err); }));
     }
 
-    void
-    on_sub_command_status(bool status) final {
-        _parent->on_sub_command_status(status);
-    }
+//    void
+//    on_sub_command_status(bool status) final {
+//        _parent->on_sub_command_status(status);
+//    }
 };
 
 template <typename CB_SUCCESS, typename CB_ERROR>
