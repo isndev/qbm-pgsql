@@ -29,7 +29,6 @@ qb_register_module(
         SOURCES
         not-qb/sqlstates.cpp
         not-qb/error.cpp
-        not-qb/md5.cpp
         not-qb/pg_types.cpp
         not-qb/common.cpp
         not-qb/protocol_io_traits.cpp
@@ -43,4 +42,4 @@ qb_register_module(
 
 if (QB_BUILD_TEST)
     add_subdirectory(tests)
-endif()
+endif ()
