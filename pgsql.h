@@ -20,14 +20,16 @@
 #include <qb/io/async.h>
 #include <qb/io/async/tcp/connector.h>
 #include <qb/system/allocator/pipe.h>
+#include <qb/io/crypto.h>
+
+#include <memory>
 #include "detail/transaction.h"
 #include "detail/commands.h"
-#include "not-qb/md5.h"
 
 namespace qb::protocol {
 
-template <typename _IO_>
-class pgsql final : public qb::io::async::AProtocol<_IO_> {
+template <typename IO_>
+class pgsql final : public qb::io::async::AProtocol<IO_> {
 public:
     using message = std::unique_ptr<pg::detail::message>;
 
@@ -37,8 +39,8 @@ private:
 
 public:
     pgsql() = delete;
-    pgsql(_IO_ &io) noexcept
-        : qb::io::async::AProtocol<_IO_>(io) {}
+    explicit pgsql(IO_ &io) noexcept
+        : qb::io::async::AProtocol<IO_>(io) {}
 
     template <typename InputIter, typename OutputIter>
     InputIter
@@ -51,8 +53,7 @@ public:
 
     std::size_t
     getMessageSize() noexcept final {
-        constexpr const size_t header_size =
-            sizeof(qb::pg::integer) + sizeof(qb::pg::byte);
+        constexpr const size_t header_size = sizeof(qb::pg::integer) + sizeof(qb::pg::byte);
 
         if (this->_io.in().size() < header_size)
             return 0; // read more
@@ -61,7 +62,7 @@ public:
         const auto &in = this->_io.in();
 
         if (!message_) {
-            message_.reset(new pg::detail::message);
+            message_ = std::make_unique<pg::detail::message>();
 
             // copy header
             auto out = message_->output();
@@ -74,13 +75,12 @@ public:
         if (message_->length() > message_->size()) {
             // Read the message body
             auto out = message_->output();
-            const std::size_t to_copy =
-                std::min(message_->length() - message_->size(), max_bytes);
+            const std::size_t to_copy = std::min(message_->length() - message_->size(), max_bytes);
             for (auto i = 0u; i < to_copy; ++i)
                 *out++ = *(in.begin() + offset_ + i);
 
             offset_ += to_copy;
-            max_bytes -= to_copy;
+            // max_bytes -= to_copy;
         }
 
         if (message_->length() == message_->size()) {
@@ -91,7 +91,7 @@ public:
     }
 
     void
-    onMessage(std::size_t size) noexcept final {
+    onMessage(std::size_t) noexcept final {
         if (!this->ok())
             return;
 
@@ -103,7 +103,6 @@ public:
     void
     reset() noexcept final {
         offset_ = 0;
-        message_.release();
     }
 };
 
@@ -124,8 +123,8 @@ public:
 private:
     connection_options conn_opts_;
     client_options_type client_opts_;
-    integer serverPid_;
-    integer serverSecret_;
+    integer serverPid_{};
+    integer serverSecret_{};
     PreparedQueryStorage storage_;
 
     void
@@ -137,7 +136,7 @@ private:
         m.write(options::DATABASE);
         m.write(conn_opts_.database);
 
-        for (auto opt : client_opts_) {
+        for (auto &opt : client_opts_) {
             m.write(opt.first);
             m.write(opt.second);
         }
@@ -184,11 +183,9 @@ private:
             if (qb::likely(_current_query->is_valid())) {
                 *this << _current_query->get();
                 return true;
-            }
-            else {
+            } else {
                 LOG_DEBUG("[pgsql] error processing query not valid");
-                on_error_query(error::client_error{
-                    "query couldn't be processed check logs for more infos"});
+                on_error_query(error::client_error{"query couldn't be processed check logs for more infos"});
                 return process_query(_current_command);
             }
         } else if (_current_command->parent()) {
@@ -254,13 +251,12 @@ private:
             std::string salt;
             msg.read(salt, 4);
             // Calculate hash
-            std::string pwdhash =
-                boost::md5((conn_opts_.password + conn_opts_.user).c_str())
-                    .digest()
-                    .hex_str_value();
+            std::string pwdhash = qb::crypto::to_hex_string(
+                qb::crypto::md5(conn_opts_.password + conn_opts_.user),
+                qb::crypto::range_hex_lower);
             std::string md5digest =
                 std::string("md5") +
-                boost::md5((pwdhash + salt).c_str()).digest().hex_str_value();
+                qb::crypto::to_hex_string(qb::crypto::md5(pwdhash + salt), qb::crypto::range_hex_lower);
             // Construct and send message
             message pm(password_message_tag);
             pm.write(md5digest);
@@ -269,8 +265,7 @@ private:
             break;
         }
         default: {
-            LOG_CRIT("[pgsql] Unsupported authentication scheme "
-                     << auth_state << "requested by server");
+            LOG_CRIT("[pgsql] Unsupported authentication scheme " << auth_state << "requested by server");
         } break;
         }
     }
@@ -292,8 +287,7 @@ private:
         msg.read(notice);
 
         LOG_WARN("[pgsql] Error " << notice);
-        error::query_error err(notice.message, notice.severity, notice.sqlstate,
-                               notice.detail);
+        error::query_error err(notice.message, notice.severity, notice.sqlstate, notice.detail);
 
         on_error_query(err);
     }
@@ -324,9 +318,9 @@ private:
 
         if (!process_query(_current_command)) {
             _ready_for_query = true;
-            LOG_DEBUG("[pgsql] Database " << conn_opts_.uri << "[" << conn_opts_.database
-                                          << "]"
-                                          << " is ready for query (" << stat << ")");
+            LOG_DEBUG(
+                "[pgsql] Database " << conn_opts_.uri << "[" << conn_opts_.database << "]"
+                                    << " is ready for query (" << stat << ")");
         }
     }
     void
@@ -382,33 +376,32 @@ private:
         LOG_DEBUG("[pgsql] Unhandled message tag " << (char)msg.tag());
     }
 
-    inline static const qb::unordered_flat_map<int, void (Database::*)(message &)>
-        routes_ = {{authentication_tag, &Database::on_authentication},
-                   {command_complete_tag, &Database::on_command_complete},
-                   {backend_key_data_tag, &Database::on_backend_key_data},
-                   {error_response_tag, &Database::on_error_response},
-                   {parameter_status_tag, &Database::on_parameter_status},
-                   {notice_response_tag, &Database::on_notice_response},
-                   {ready_for_query_tag, &Database::on_ready_for_query},
-                   {row_description_tag, &Database::on_row_description},
-                   {data_row_tag, &Database::on_data_row},
-                   {parse_complete_tag, &Database::on_parse_complete},
-                   {parameter_description_tag, &Database::on_parameter_description},
-                   {bind_complete_tag, &Database::on_bind_complete},
-                   {no_data_tag, &Database::on_no_data},
-                   {portal_suspended_tag, &Database::on_portal_suspended}};
+    inline static const qb::unordered_flat_map<int, void (Database::*)(message &)> routes_ = {
+        {authentication_tag, &Database::on_authentication},
+        {command_complete_tag, &Database::on_command_complete},
+        {backend_key_data_tag, &Database::on_backend_key_data},
+        {error_response_tag, &Database::on_error_response},
+        {parameter_status_tag, &Database::on_parameter_status},
+        {notice_response_tag, &Database::on_notice_response},
+        {ready_for_query_tag, &Database::on_ready_for_query},
+        {row_description_tag, &Database::on_row_description},
+        {data_row_tag, &Database::on_data_row},
+        {parse_complete_tag, &Database::on_parse_complete},
+        {parameter_description_tag, &Database::on_parameter_description},
+        {bind_complete_tag, &Database::on_bind_complete},
+        {no_data_tag, &Database::on_no_data},
+        {portal_suspended_tag, &Database::on_portal_suspended}};
 
 public:
     Database()
         : Transaction(storage_) {}
-    Database(std::string const &opts)
+    explicit Database(std::string const &opts)
         : Transaction(storage_)
         , conn_opts_(connection_options::parse(opts)) {}
 
     bool
     connect() {
-        if (!this->transport().connect(
-                qb::io::uri{conn_opts_.schema + "://" + conn_opts_.uri})) {
+        if (!this->transport().connect(qb::io::uri{conn_opts_.schema + "://" + conn_opts_.uri})) {
 
             if (this->protocol())
                 this->clear_protocols();

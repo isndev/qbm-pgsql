@@ -20,7 +20,7 @@ namespace qb {
 namespace pg {
 
 namespace detail {
-struct result_impl;
+class result_impl;
 }
 
 /**

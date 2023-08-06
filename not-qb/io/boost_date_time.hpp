@@ -9,14 +9,10 @@
 #include "../protocol_io_traits.h"
 #include "../util/endian.h"
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wsign-compare"
 #include <boost/date_time.hpp>
 #include <boost/spirit/include/karma.hpp>
 #include <boost/spirit/include/phoenix.hpp>
 #include <boost/spirit/include/qi.hpp>
-
-#pragma GCC diagnostic pop
 
 namespace qb {
 namespace pg {

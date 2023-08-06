@@ -320,8 +320,9 @@ public:
             cmd.write((smallint)fd.format_code);
         }
         LOG_DEBUG("[pgsql] Execute prepared [" << query.name << "] \""
-                                               << query.expression << "\""
-                  << " params : " << std::string_view(_params.data(), _params.size()));
+                                               << query.expression << "\"");
+        // issue logger does not accept binary
+        // << " params : " << std::string_view(_params.data(), _params.size()));
 
         message execute(execute_tag);
         execute.write(""); // portal name
