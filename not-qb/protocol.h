@@ -89,7 +89,9 @@ enum auth_states {
      */
     GSSContinue = 8,
     SSPI = 9, /**< Specifies that SSPI authentication is required. */
-
+    SCRAM_SHA256 = 10,
+    SCRAM_SHA256_CLIENT_PROOF = 11,
+    SCRAM_SHA256_SERVER_CHECK = 12
 };
 
 struct row_data;
@@ -252,6 +254,13 @@ public:
      * @param s the string
      */
     void write(std::string const &);
+    //@}
+
+    /**
+     * Write a NON NULL-terminated string to the message buffer
+     * @param s the string
+     */
+    void write_sv(std::string_view const &);
     //@}
 
     /**

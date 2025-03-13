@@ -26,6 +26,117 @@
 #include "detail/transaction.h"
 #include "detail/commands.h"
 
+constexpr const uint32_t ATTRIBUTE_NAME_MAX = 1024;         // 1 KB
+constexpr const uint32_t ATTRIBUTE_VALUE_MAX = 1024 * 1024; // 1 MB
+
+inline bool
+is_control(int c) {
+    return ((c >= 0 && c <= 31) || c == 127);
+}
+
+inline qb::icase_unordered_map<std::string>
+parse_header_attributes(const char *ptr, const size_t len) {
+    qb::icase_unordered_map<std::string> dict;
+
+    enum AttributeParseState {
+        ATTRIBUTE_PARSE_NAME, ATTRIBUTE_PARSE_VALUE, ATTRIBUTE_PARSE_IGNORE
+    } parse_state = ATTRIBUTE_PARSE_NAME;
+
+    // misc other variables used for parsing
+    const char * const end = ptr + len;
+    std::string attribute_name;
+    std::string attribute_value;
+    char value_quote_character = '\0';
+
+    // iterate through each character
+    while (ptr < end) {
+        switch (parse_state) {
+
+            case ATTRIBUTE_PARSE_NAME:
+                // parsing attribute name
+                if (*ptr == '=') {
+                    // end of name found (OK if empty)
+                    value_quote_character = '\0';
+                    parse_state = ATTRIBUTE_PARSE_VALUE;
+                } else if (*ptr == ';' || *ptr == ',') {
+                    // ignore empty attribute names since this may occur naturally
+                    // when quoted values are encountered
+                    if (! attribute_name.empty()) {
+                        // value is empty (OK)
+                        dict.emplace(attribute_name, attribute_value);
+                        attribute_name.erase();
+                    }
+                } else if (*ptr != ' ') {   // ignore whitespace
+                    // check if control character detected, or max sized exceeded
+                    if (is_control(*ptr) || attribute_name.size() >= ATTRIBUTE_NAME_MAX)
+                        throw std::runtime_error("ctrl in name found or max attribute name length");
+                    // character is part of the name
+                    attribute_name.push_back(*ptr);
+                }
+                break;
+
+            case ATTRIBUTE_PARSE_VALUE:
+                // parsing attribute value
+                if (value_quote_character == '\0') {
+                    // value is not (yet) quoted
+                    if (*ptr == ';' || *ptr == ',') {
+                        // end of value found (OK if empty)
+                        dict.emplace(attribute_name, attribute_value);
+                        attribute_name.erase();
+                        attribute_value.erase();
+                        parse_state = ATTRIBUTE_PARSE_NAME;
+                    } else if (*ptr == '\'' || *ptr == '"') {
+                        if (attribute_value.empty()) {
+                            // begin quoted value
+                            value_quote_character = *ptr;
+                        } else if (attribute_value.size() >= ATTRIBUTE_VALUE_MAX) {
+                            // max size exceeded
+                            throw std::runtime_error("max attribute size");
+                        } else {
+                            // assume character is part of the (unquoted) value
+                            attribute_value.push_back(*ptr);
+                        }
+                    } else if (*ptr != ' ' || !attribute_value.empty()) {  // ignore leading unquoted whitespace
+                        // check if control character detected, or max sized exceeded
+                        if (is_control(*ptr) || attribute_value.size() >= ATTRIBUTE_VALUE_MAX)
+                            throw std::runtime_error("ctrl in value found or max attribute value length");
+                        // character is part of the (unquoted) value
+                        attribute_value.push_back(*ptr);
+                    }
+                } else {
+                    // value is quoted
+                    if (*ptr == value_quote_character) {
+                        // end of value found (OK if empty)
+                        dict.emplace(attribute_name, attribute_value);
+                        attribute_name.erase();
+                        attribute_value.erase();
+                        parse_state = ATTRIBUTE_PARSE_IGNORE;
+                    } else if (attribute_value.size() >= ATTRIBUTE_VALUE_MAX) {
+                        // max size exceeded
+                        throw std::runtime_error("max attribute value length");
+                    } else {
+                        // character is part of the (quoted) value
+                        attribute_value.push_back(*ptr);
+                    }
+                }
+                break;
+
+            case ATTRIBUTE_PARSE_IGNORE:
+                // ignore everything until we reach a comma "," or semicolon ";"
+                if (*ptr == ';' || *ptr == ',')
+                    parse_state = ATTRIBUTE_PARSE_NAME;
+                break;
+        }
+
+        ++ptr;
+    }
+
+    // handle last attribute in string
+    dict.emplace(attribute_name, attribute_value);
+
+    return dict;
+}
+
 namespace qb::protocol {
 
 template <typename IO_>
@@ -225,6 +336,9 @@ private:
         }
     }
 
+    std::string _nonce;
+    std::vector<uint8_t> _password_salt;
+    std::string _auth_message;
     // postgres handle protocol message
     void
     on_authentication(message &msg) {
@@ -234,11 +348,11 @@ private:
         LOG_DEBUG("[pgsql] Handle auth_event");
         switch (auth_state) {
         case OK: {
-            LOG_DEBUG("[pgsql] Authenticated with server");
+            LOG_INFO("[pgsql] Authenticated with server");
             break;
         }
         case Cleartext: {
-            LOG_DEBUG("[pgsql] Clear text password requested");
+            LOG_INFO("[pgsql] Clear text authentication requested");
             message pm(password_message_tag);
             pm.write(conn_opts_.password);
 
@@ -246,7 +360,7 @@ private:
             break;
         }
         case MD5Password: {
-            LOG_DEBUG("[pgsql] MD5 password requested");
+            LOG_INFO("[pgsql] MD5 authentication requested");
             // Read salt
             std::string salt;
             msg.read(salt, 4);
@@ -264,9 +378,107 @@ private:
             *this << pm;
             break;
         }
+        case SCRAM_SHA256: {
+            LOG_INFO("[pgsql] SCRAM-SHA-256 authentication requested");
+            message pm(password_message_tag);
+            // set new nonce
+            _nonce = qb::crypto::generate_random_string(32, qb::crypto::range_hex_lower);
+            const auto data = "n,,n=" + conn_opts_.user + ",r=" + _nonce;
+            // add mechanism
+            pm.write("SCRAM-SHA-256");
+            // add sasl data
+            pm.write(static_cast<qb::pg::integer>(data.size()));
+            pm.write_sv(data);
+            *this << pm;
+            break;
+        }
+        case SCRAM_SHA256_CLIENT_PROOF: {
+            LOG_INFO("[pgsql] SCRAM-SHA-256 authentication client proof check");
+            std::string data;
+            msg.read(data);
+            auto params = parse_header_attributes(data.c_str(), data.size());
+
+            try {
+                // SCRAM inputs
+                const std::string clientNonce = _nonce;        // nonce generated by us
+                const std::string username = conn_opts_.user;
+                const std::string password = conn_opts_.password;
+                const std::string serverNonce = std::move(params["r"]);    // combined nonce (client + server)
+                const std::string salt_base64 = std::move(params["s"]);   // salt (base64)
+                const int iteration = std::stoi(params["i"]);                         // nombre d'itérations reçu du serveur
+
+                // client-first-message-bare
+                std::string client_first_message_bare = "n=" + username + ",r=" + clientNonce;
+                std::string server_first_message =
+                        "r=" + serverNonce + ",s=" + salt_base64 + ",i=" + std::to_string(iteration);
+                std::string client_final_message_without_proof =
+                        "c=biws,r=" + serverNonce; // "biws" est l'encodage base64 de "n,,"
+                _auth_message = client_first_message_bare + "," + server_first_message + "," +
+                                          client_final_message_without_proof;
+                // compute SaltedPassword using PBKDF2-HMAC-SHA256
+                std::vector<unsigned char> salt = qb::crypto::base64_decode(salt_base64);
+                std::vector<unsigned char> saltedPassword(32); // 32 octets pour SHA256
+                if (PKCS5_PBKDF2_HMAC(password.c_str(), static_cast<int>(password.size()),
+                                      salt.data(), static_cast<int>(salt.size()),
+                                      iteration, EVP_sha256(), 32, saltedPassword.data()) != 1) {
+                    throw std::runtime_error("error during PBKDF2 computing");
+                }
+                // compute clientKey : HMAC(saltedPassword, "Client Key")
+                std::vector<unsigned char> clientKey = qb::crypto::hmac_sha256(saltedPassword, "Client Key");
+                // compute storedKey : SHA256(clientKey)
+                std::vector<unsigned char> storedKey = qb::crypto::sha256(clientKey);
+                // compute clientSignature : HMAC(storedKey, authMessage)
+                std::vector<unsigned char> clientSignature = qb::crypto::hmac_sha256(storedKey, _auth_message);
+                // compute clientProof : XOR(clientKey, clientSignature)
+                std::vector<unsigned char> clientProof = qb::crypto::xor_bytes(clientKey, clientSignature);
+                // encode clientProof in base64
+                std::string clientProofBase64 = qb::crypto::base64_encode(clientProof.data(), clientProof.size());
+                // construction of final message to send
+                std::string client_final_message = "c=biws,r=" + serverNonce + ",p=" + clientProofBase64;
+
+                message pm(password_message_tag);
+                pm.write_sv(client_final_message);
+                *this << pm;
+                _password_salt = std::move(saltedPassword);
+            }
+            catch (const std::exception& ex) {
+                LOG_CRIT("[pgsql] Exception: " << ex.what());
+            }
+        }
+        case SCRAM_SHA256_SERVER_CHECK: {
+            try {
+                std::string serverFinalMessage;
+
+                msg.read(serverFinalMessage);
+                // extract the server signature from the final message.
+                const std::string prefix = "v=";
+                size_t pos = serverFinalMessage.find(prefix);
+                if (pos == std::string::npos) {
+                    throw std::runtime_error("server final message does not contain a signature");
+                }
+                std::string receivedServerSignatureBase64 = serverFinalMessage.substr(pos + prefix.size());
+                // compute the ServerKey: HMAC(saltedPassword, "Server Key")
+                std::vector<unsigned char> serverKey = qb::crypto::hmac_sha256(_password_salt, "Server Key");
+                // compute the ServerSignature: HMAC(serverKey, authMessage)
+                std::vector<unsigned char> computedServerSignature = qb::crypto::hmac_sha256(serverKey, _auth_message);
+                // encode the computed server signature in Base64.
+                std::string computedServerSignatureBase64 = qb::crypto::base64_encode(computedServerSignature.data(),
+                                                                          computedServerSignature.size());
+                // compare the computed server signature with the received one
+                if (computedServerSignatureBase64 != receivedServerSignatureBase64) {
+                    throw std::runtime_error("server signature does not match. Authentication failed");
+                }
+                LOG_INFO("[pgsql] SCRAM-SHA-256 Authentication successful: server signature verified");
+                break;
+            } catch (std::exception &ex) {
+                LOG_CRIT("[pgsql] SCRAM-SHA-256 Failed verifying server signature: " << ex.what());
+            }
+            break;
+        }
         default: {
             LOG_CRIT("[pgsql] Unsupported authentication scheme " << auth_state << "requested by server");
-        } break;
+            throw std::runtime_error("[pgsql] fatal error: check logs");
+        }
         }
     }
     void
