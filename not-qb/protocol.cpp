@@ -272,6 +272,11 @@ message::write(std::string const &s) {
 }
 
 void
+message::write_sv(std::string_view const &s) {
+    io::protocol_write<TEXT_DATA_FORMAT>(payload, s);
+}
+
+void
 message::pack(message const &m) {
     buffer(); // to write the length, if hasn't been packed already
     packed_ = true;
