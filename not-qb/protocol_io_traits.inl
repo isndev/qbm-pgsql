@@ -128,7 +128,7 @@ protocol_parser<bool, TEXT_DATA_FORMAT>::operator()(InputIterator begin,
 template <typename InputIterator>
 InputIterator
 protocol_parser<bool, BINARY_DATA_FORMAT>::operator()(InputIterator begin,
-                                                      InputIterator end) {
+                                                      InputIterator) {
     typedef InputIterator iterator_type;
     typedef std::iterator_traits<iterator_type> iter_traits;
     typedef typename iter_traits::value_type iter_value_type;
