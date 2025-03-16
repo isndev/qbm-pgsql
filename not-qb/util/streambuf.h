@@ -57,6 +57,7 @@ protected:
     pos_type
     seekoff(off_type off, ios_base::seekdir way,
             ios_base::openmode which = ios_base::in | ios_base::out) {
+        (void) which;
         char_type *tgt(nullptr);
         switch (way) {
         case ios_base::beg:
@@ -80,6 +81,7 @@ protected:
     }
     pos_type
     seekpos(pos_type pos, ios_base::openmode which = ios_base::in | ios_base::out) {
+        (void) which;
         char_type *tgt = start_ + pos;
         if (tgt < start_ || start_ + count_ < tgt)
             return -1;

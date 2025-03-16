@@ -97,12 +97,12 @@ struct is_nullable<std::optional<T>> : ::std::true_type {};
 template <typename T>
 struct nullable_traits {
     inline static bool
-    is_null(T const &v) {
+    is_null(T const &) {
         return false;
     }
 
     inline static void
-    set_null(T &v) {}
+    set_null(T &) {}
 };
 
 template <typename T>

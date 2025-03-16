@@ -84,7 +84,7 @@ Transaction &
 Transaction::prepare(std::string query_name, std::string expr,
                      type_oid_sequence &&types, CB_SUCCESS &&on_success,
                      CB_ERROR &&on_error) {
-    PreparedQuery query{std::move(query_name), std::move(expr), std::move(types)};
+    PreparedQuery query{std::move(query_name), std::move(expr), std::move(types), {}};
 
     push_transaction(new Prepare<CB_SUCCESS, CB_ERROR>(
         this, std::move(query), std::forward<CB_SUCCESS>(on_success),
