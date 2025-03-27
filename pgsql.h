@@ -1,6 +1,6 @@
 /*
  * qb - C++ Actor Framework
- * Copyright (C) 2011-2021 isndev (www.qbaf.io). All rights reserved.
+ * Copyright (c) 2011-2025 qb - isndev (cpp.actor). All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,26 @@
  *         limitations under the License.
  */
 
+/**
+ * @file pgsql.h
+ * @brief PostgreSQL client for the QB Actor Framework
+ * 
+ * This file implements an asynchronous PostgreSQL client integrated with the QB Actor Framework.
+ * It provides a non-blocking interface for database operations such as:
+ * 
+ * - Connection management to PostgreSQL databases
+ * - Transaction management (begin, commit, rollback)
+ * - Support for savepoints within transactions
+ * - Simple and prepared statement execution
+ * - Query parameter binding and result retrieval
+ * 
+ * The implementation is designed to work with the actor model, allowing
+ * database operations to be performed without blocking actor threads.
+ * 
+ * @see qb::pg::detail::Database
+ * @see qb::pg::detail::Transaction
+ */
+
 #ifndef QBM_PGSQL_H
 #define QBM_PGSQL_H
 #include <qb/io/async.h>
@@ -26,14 +46,47 @@
 #include "detail/transaction.h"
 #include "detail/commands.h"
 
+/**
+ * @brief Maximum length for attribute names in PostgreSQL protocol
+ * 
+ * Defines the maximum length in bytes for attribute names when parsing
+ * PostgreSQL protocol messages.
+ */
 constexpr const uint32_t ATTRIBUTE_NAME_MAX = 1024;         // 1 KB
+
+/**
+ * @brief Maximum length for attribute values in PostgreSQL protocol
+ * 
+ * Defines the maximum length in bytes for attribute values when parsing
+ * PostgreSQL protocol messages.
+ */
 constexpr const uint32_t ATTRIBUTE_VALUE_MAX = 1024 * 1024; // 1 MB
 
+/**
+ * @brief Checks if a character is a control character
+ * 
+ * Used during attribute parsing to validate input.
+ * 
+ * @param c Character to check
+ * @return true if the character is a control character, false otherwise
+ */
 inline bool
 is_control(int c) {
     return ((c >= 0 && c <= 31) || c == 127);
 }
 
+/**
+ * @brief Parses header attributes in the PostgreSQL protocol
+ * 
+ * Parses a buffer of header attributes into a case-insensitive map.
+ * Supports quoted and unquoted attribute values and handles
+ * various format rules according to the PostgreSQL protocol.
+ * 
+ * @param ptr Pointer to the buffer containing attributes
+ * @param len Length of the buffer
+ * @return Case-insensitive map of attribute names to values
+ * @throws std::runtime_error If parsing fails due to control characters or exceeding size limits
+ */
 inline qb::icase_unordered_map<std::string>
 parse_header_attributes(const char *ptr, const size_t len) {
     qb::icase_unordered_map<std::string> dict;
@@ -139,20 +192,53 @@ parse_header_attributes(const char *ptr, const size_t len) {
 
 namespace qb::protocol {
 
+/**
+ * @brief PostgreSQL protocol implementation for the QB actor framework
+ * 
+ * Handles the message framing and parsing according to the PostgreSQL
+ * wire protocol. Responsible for extracting complete messages from
+ * the input stream and forwarding them to the appropriate handlers.
+ * 
+ * @tparam IO_ I/O handler type
+ */
 template <typename IO_>
 class pgsql final : public qb::io::async::AProtocol<IO_> {
 public:
+    /**
+     * @brief PostgreSQL protocol message type
+     * 
+     * Represents a complete PostgreSQL protocol message.
+     */
     using message = std::unique_ptr<pg::detail::message>;
 
 private:
-    message message_;
-    std::size_t offset_ = 0;
+    message message_; ///< Current message being processed
+    std::size_t offset_ = 0; ///< Current offset in the input buffer
 
 public:
     pgsql() = delete;
+    
+    /**
+     * @brief Constructs a PostgreSQL protocol handler
+     * 
+     * @param io Reference to the I/O handler
+     */
     explicit pgsql(IO_ &io) noexcept
         : qb::io::async::AProtocol<IO_>(io) {}
 
+    /**
+     * @brief Copy data from input iterator to output iterator
+     * 
+     * Helper method to copy data between iterators with a maximum limit.
+     * 
+     * @tparam InputIter Input iterator type
+     * @tparam OutputIter Output iterator type
+     * @param in Start of input range
+     * @param end End of input range
+     * @param max Maximum number of items to copy
+     * @param out Output iterator
+     * @return InputIter Iterator after the last copied element
+     */
     template <typename InputIter, typename OutputIter>
     InputIter
     copy(InputIter in, InputIter end, size_t max, OutputIter out) {
@@ -162,6 +248,15 @@ public:
         return in;
     }
 
+    /**
+     * @brief Calculate the size of a complete PostgreSQL message
+     * 
+     * Inspects the input buffer to determine if a complete message is available.
+     * If a message is complete, returns its size, otherwise returns 0 to indicate
+     * more data is needed.
+     * 
+     * @return std::size_t Size of the complete message, or 0 if incomplete
+     */
     std::size_t
     getMessageSize() noexcept final {
         constexpr const size_t header_size = sizeof(qb::pg::integer) + sizeof(qb::pg::byte);
@@ -201,6 +296,14 @@ public:
         return 0;
     }
 
+    /**
+     * @brief Handle a complete PostgreSQL message
+     * 
+     * Called when a complete message has been received and parsed.
+     * Forwards the message to the appropriate handler.
+     * 
+     * @param size Size of the message (unused)
+     */
     void
     onMessage(std::size_t) noexcept final {
         if (!this->ok())
@@ -211,6 +314,11 @@ public:
         reset();
     }
 
+    /**
+     * @brief Reset the protocol state
+     * 
+     * Prepares the protocol handler for the next message.
+     */
     void
     reset() noexcept final {
         offset_ = 0;
@@ -224,20 +332,40 @@ namespace detail {
 using namespace qb::io;
 using namespace qb::pg;
 
+/**
+ * @brief PostgreSQL database client implementation
+ * 
+ * Core implementation of the PostgreSQL client that handles connection
+ * establishment, authentication, and query execution. Inherits from
+ * Transaction to provide transaction management capabilities.
+ * 
+ * @tparam QB_IO_ I/O handler type
+ */
 template <typename QB_IO_>
 class Database
     : public qb::io::async::tcp::client<Database<QB_IO_>, QB_IO_, void>
     , public Transaction {
 public:
+    /**
+     * @brief PostgreSQL protocol handler type
+     */
     using pg_protocol = qb::protocol::pgsql<Database<QB_IO_>>;
 
 private:
-    connection_options conn_opts_;
-    client_options_type client_opts_;
-    integer serverPid_{};
-    integer serverSecret_{};
-    PreparedQueryStorage storage_;
+    connection_options conn_opts_; ///< Database connection options
+    client_options_type client_opts_; ///< Client options
+    integer serverPid_{}; ///< Server process ID
+    integer serverSecret_{}; ///< Server secret for protocol operations
+    PreparedQueryStorage storage_; ///< Storage for prepared statements
 
+    /**
+     * @brief Create a startup message for initial connection
+     * 
+     * Builds the startup message according to the PostgreSQL protocol,
+     * including user, database, and client options.
+     * 
+     * @param m Message to populate
+     */
     void
     create_startup_message(message &m) {
         m.write(PROTOCOL_VERSION);
@@ -261,18 +389,41 @@ private:
         *this << m;
     }
 
+    /**
+     * @brief Handles new command events
+     *
+     * Overrides the Transaction::on_new_command method to process
+     * pending queries if the client is ready.
+     */
     void
     on_new_command() final {
         process_if_query_ready();
     }
+    
+    /**
+     * @brief Handles sub-command status updates
+     *
+     * Overrides the Transaction::on_sub_command_status method.
+     * Database class doesn't need to process sub-command status.
+     * 
+     * @param status Status of the sub-command (unused)
+     */
     void
     on_sub_command_status(bool) final {}
 
-    Transaction *_current_command = this;
-    ISqlQuery *_current_query = nullptr;
-    bool _ready_for_query = false;
+    Transaction *_current_command = this;  ///< Current transaction being processed
+    ISqlQuery *_current_query = nullptr;   ///< Current query being executed
+    bool _ready_for_query = false;         ///< Flag indicating if ready for next query
 
-    // postgres database
+    /**
+     * @brief Finds the leaf transaction to execute
+     * 
+     * Recursively traverses the transaction tree to find the 
+     * deepest (leaf) transaction that should be executed next.
+     *
+     * @param cmd Starting transaction
+     * @return Transaction* Leaf transaction to execute
+     */
     static Transaction *
     next_transaction(Transaction *cmd) {
         if (!cmd)
@@ -284,6 +435,16 @@ private:
         else
             return next_transaction(sub);
     }
+    
+    /**
+     * @brief Processes the next query in the transaction
+     * 
+     * Fetches and executes the next query from the given transaction.
+     * If no more queries are in the current transaction, moves to parent.
+     *
+     * @param cmd Transaction to process
+     * @return bool true if a query was processed, false if no queries remain
+     */
     bool
     process_query(Transaction *cmd) {
         _ready_for_query = false;
@@ -309,6 +470,12 @@ private:
         }
         return false;
     }
+    
+    /**
+     * @brief Processes queries if ready
+     * 
+     * Called when the client is ready to execute the next query.
+     */
     void
     process_if_query_ready() {
         if (_ready_for_query) {
@@ -316,6 +483,12 @@ private:
         }
     }
 
+    /**
+     * @brief Handles successful query completion
+     * 
+     * Called when a query completes successfully. Executes the query's
+     * success callback and cleans up resources.
+     */
     void
     on_success_query() {
         if (_current_query) {
@@ -325,6 +498,15 @@ private:
             _current_query = nullptr;
         }
     }
+    
+    /**
+     * @brief Handles query error
+     * 
+     * Called when a query fails. Executes the query's error callback,
+     * marks the transaction as failed, and cleans up resources.
+     *
+     * @param err Error information
+     */
     void
     on_error_query(error::db_error const &err) {
         if (_current_query) {
@@ -336,10 +518,20 @@ private:
         }
     }
 
-    std::string _nonce;
-    std::vector<uint8_t> _password_salt;
-    std::string _auth_message;
-    // postgres handle protocol message
+    std::string _nonce;                   ///< Client nonce for SCRAM authentication
+    std::vector<uint8_t> _password_salt;  ///< Salted password for SCRAM authentication
+    std::string _auth_message;            ///< Authentication message for SCRAM protocol
+    
+    /**
+     * @brief Handles authentication messages from the server
+     * 
+     * Processes various authentication methods including:
+     * - Cleartext password
+     * - MD5 password
+     * - SCRAM-SHA-256 authentication
+     *
+     * @param msg Authentication message from server
+     */
     void
     on_authentication(message &msg) {
         integer auth_state(-1);
@@ -405,7 +597,7 @@ private:
                 const std::string serverNonce = std::move(params["r"]);    // combined nonce (client + server)
                 const std::string salt_base64 = std::move(params["s"]);   // salt (base64)
                 const int iteration = std::stoi(
-                        params["i"]);                         // nombre d'itérations reçu du serveur
+                        params["i"]);                         // nombre d'itÃ©rations reÃ§u du serveur
 
                 // client-first-message-bare
                 std::string client_first_message_bare = "n=" + username + ",r=" + clientNonce;
@@ -480,18 +672,44 @@ private:
             }
         }
     }
+    
+    /**
+     * @brief Handles command complete messages
+     * 
+     * Called when a command has been completed successfully.
+     *
+     * @param msg Command complete message
+     */
     void
     on_command_complete(message &msg) {
         command_complete cmpl;
         msg.read(cmpl.command_tag);
         LOG_DEBUG("[pgsql] Command complete (" << cmpl.command_tag << ")");
     }
+    
+    /**
+     * @brief Handles backend key data messages
+     * 
+     * Stores the server process ID and secret key for
+     * potential future cancel requests.
+     *
+     * @param msg Backend key data message
+     */
     void
     on_backend_key_data(message &msg) {
         msg.read(serverPid_);
         msg.read(serverSecret_);
         LOG_DEBUG("[pgsql] Received backend key data");
     }
+    
+    /**
+     * @brief Handles error response messages
+     * 
+     * Processes error notifications from the server and
+     * triggers error handling for the current query.
+     *
+     * @param msg Error response message
+     */
     void
     on_error_response(message &msg) {
         notice_message notice;
@@ -502,6 +720,14 @@ private:
 
         on_error_query(err);
     }
+    
+    /**
+     * @brief Handles parameter status messages
+     * 
+     * Updates client options with parameters sent by the server.
+     *
+     * @param msg Parameter status message
+     */
     void
     on_parameter_status(message &msg) {
         std::string key;
@@ -514,6 +740,14 @@ private:
 
         client_opts_[key] = value;
     }
+    
+    /**
+     * @brief Handles notice response messages
+     * 
+     * Processes non-error notices from the server.
+     *
+     * @param msg Notice response message
+     */
     void
     on_notice_response(message &msg) {
         notice_message notice;
@@ -521,6 +755,15 @@ private:
 
         LOG_INFO("[pgsql] Received notice" << notice);
     }
+    
+    /**
+     * @brief Handles ready for query messages
+     * 
+     * Called when the server is ready to receive the next query.
+     * Processes any pending queries or sets the client as ready.
+     *
+     * @param msg Ready for query message
+     */
     void
     on_ready_for_query(message &msg) {
         on_success_query();
@@ -534,6 +777,15 @@ private:
                                     << " is ready for query (" << stat << ")");
         }
     }
+    
+    /**
+     * @brief Handles row description messages
+     * 
+     * Processes metadata about result columns and passes
+     * the information to the current command.
+     *
+     * @param msg Row description message
+     */
     void
     on_row_description(message &msg) {
         row_description_type fields;
@@ -552,6 +804,14 @@ private:
         }
         _current_command->on_new_row_description(std::move(fields));
     }
+    
+    /**
+     * @brief Handles data row messages
+     * 
+     * Processes result rows and passes them to the current command.
+     *
+     * @param msg Data row message
+     */
     void
     on_data_row(message &msg) {
         row_data row;
@@ -562,31 +822,84 @@ private:
             _current_command->result(false);
         }
     }
+    
+    /**
+     * @brief Handles parse complete messages
+     * 
+     * Called when a prepared statement has been successfully parsed.
+     *
+     * @param msg Parse complete message (unused)
+     */
     void
     on_parse_complete(message &) {
         LOG_DEBUG("[pgsql] Parse complete");
     }
+    
+    /**
+     * @brief Handles parameter description messages
+     * 
+     * Called when the server sends parameter information for a prepared statement.
+     *
+     * @param msg Parameter description message (unused)
+     */
     void
     on_parameter_description(message &) {
         LOG_DEBUG("[pgsql] Parameter descriptions");
     }
+    
+    /**
+     * @brief Handles bind complete messages
+     * 
+     * Called when a portal has been successfully bound to a prepared statement.
+     *
+     * @param msg Bind complete message (unused)
+     */
     void
     on_bind_complete(message &) {
         LOG_DEBUG("[pgsql] Bind complete");
     }
+    
+    /**
+     * @brief Handles no data messages
+     * 
+     * Called when a query will not return any rows.
+     *
+     * @param msg No data message (unused)
+     */
     void
     on_no_data(message &) {
         LOG_DEBUG("[pgsql] No data");
     }
+    
+    /**
+     * @brief Handles portal suspended messages
+     * 
+     * Called when a portal has been suspended (partial result set).
+     *
+     * @param msg Portal suspended message (unused)
+     */
     void
     on_portal_suspended(message &) {
         LOG_DEBUG("[pgsql] Portal suspended");
     }
+    
+    /**
+     * @brief Handles unrecognized messages
+     * 
+     * Called for any message type not explicitly handled.
+     *
+     * @param msg Unhandled message
+     */
     void
     on_unhandled_message(message &msg) {
         LOG_DEBUG("[pgsql] Unhandled message tag " << (char)msg.tag());
     }
 
+    /**
+     * @brief Message routing table
+     * 
+     * Maps PostgreSQL protocol message tags to their handler methods.
+     */
     inline static const qb::unordered_flat_map<int, void (Database::*)(message &)> routes_ = {
         {authentication_tag, &Database::on_authentication},
         {command_complete_tag, &Database::on_command_complete},
@@ -604,12 +917,31 @@ private:
         {portal_suspended_tag, &Database::on_portal_suspended}};
 
 public:
+    /**
+     * @brief Default constructor
+     * 
+     * Creates a database client without connection information.
+     */
     Database()
         : Transaction(storage_) {}
+    
+    /**
+     * @brief Constructs a database client with connection options
+     * 
+     * @param opts Connection string in the format "postgresql://user:password@host:port/database"
+     */
     explicit Database(std::string const &opts)
         : Transaction(storage_)
         , conn_opts_(connection_options::parse(opts)) {}
 
+    /**
+     * @brief Initiates a connection to the database
+     * 
+     * Establishes a TCP connection, configures the protocol handler,
+     * and starts the authentication process.
+     * 
+     * @return bool False on success, true on failure (matching TCP connect return value)
+     */
     bool
     connect() {
         if (!this->transport().connect(qb::io::uri{conn_opts_.schema + "://" + conn_opts_.uri})) {
@@ -625,11 +957,31 @@ public:
         }
         return false;
     }
+    
+    /**
+     * @brief Connects to a database using connection options
+     * 
+     * Parses the connection string and initiates a connection.
+     * 
+     * @param conn_opts Connection string
+     * @return bool False on success, true on failure
+     */
     bool
     connect(std::string const &conn_opts) {
         conn_opts_ = connection_options::parse(conn_opts);
         return connect();
     }
+    
+    /**
+     * @brief Connects to a database using an existing I/O channel
+     * 
+     * Uses an existing transport I/O channel (e.g., from a connection pool)
+     * to establish a database connection.
+     * 
+     * @param conn_opts Connection string
+     * @param raw_io Existing I/O channel
+     * @return bool False on success, true on failure
+     */
     bool
     connect(std::string const &conn_opts, typename QB_IO_::transport_io_type &&raw_io) {
         conn_opts_ = connection_options::parse(conn_opts);
@@ -638,6 +990,14 @@ public:
         return connect();
     }
 
+    /**
+     * @brief Message handler callback
+     * 
+     * Called by the protocol handler when a complete message is received.
+     * Routes the message to the appropriate handler based on its tag.
+     * 
+     * @param msg Protocol message
+     */
     void
     on(typename pg_protocol::message msg) {
         const auto it = routes_.find(msg->tag());
@@ -647,6 +1007,14 @@ public:
             on_unhandled_message(*msg);
     }
 
+    /**
+     * @brief Disconnection handler
+     * 
+     * Called when the connection to the database server is lost.
+     * Raises an error for any pending queries.
+     * 
+     * @param Disconnection event (unused)
+     */
     void
     on(qb::io::async::event::disconnected const &) {
         on_error_query(error::client_error("database disconnected"));
@@ -655,16 +1023,62 @@ public:
 
 } // namespace detail
 
+/**
+ * @brief Type alias for database with custom I/O handler
+ * 
+ * Provides a convenient alias for creating database clients with
+ * different I/O handlers.
+ * 
+ * @tparam QB_IO_ I/O handler type
+ */
 template <typename QB_IO_>
 using database = detail::Database<QB_IO_>;
+
+/**
+ * @brief Type alias for transaction base class
+ * 
+ * Provides a convenient alias for the transaction base class.
+ */
 using transaction = detail::Transaction;
+
+/**
+ * @brief Type alias for query result set
+ * 
+ * Provides a convenient alias for working with query results.
+ */
 using results = detail::resultset;
+
+/**
+ * @brief Type alias for query parameters
+ * 
+ * Provides a convenient alias for binding parameters to prepared statements.
+ */
 using params = detail::QueryParams;
 
+/**
+ * @brief TCP transport namespace
+ * 
+ * Contains database clients that use TCP transport.
+ */
 struct tcp {
+    /**
+     * @brief Database client with plain TCP transport
+     * 
+     * Database client implementation using unencrypted TCP connections.
+     */
     using database = detail::Database<qb::io::transport::tcp>;
 #ifdef QB_IO_WITH_SSL
+    /**
+     * @brief SSL transport namespace
+     * 
+     * Contains database clients that use SSL/TLS encrypted transport.
+     */
     struct ssl {
+        /**
+         * @brief Database client with SSL transport
+         * 
+         * Database client implementation using SSL/TLS encrypted connections.
+         */
         using database = detail::Database<qb::io::transport::stcp>;
     };
 #endif
@@ -674,6 +1088,14 @@ struct tcp {
 
 namespace qb::allocator {
 
+/**
+ * @brief Specialization for pipe allocation with PostgreSQL messages
+ * 
+ * Allows PostgreSQL messages to be allocated with the pipe allocator.
+ * 
+ * @param message PostgreSQL message
+ * @return pipe<char>& Reference to the pipe
+ */
 template <>
 pipe<char> &pipe<char>::put<qb::pg::detail::message>(const qb::pg::detail::message &);
 

@@ -1,6 +1,6 @@
 /*
  * qb - C++ Actor Framework
- * Copyright (C) 2011-2021 isndev (www.qbaf.io). All rights reserved.
+ * Copyright (c) 2011-2025 qb - isndev (cpp.actor). All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,23 @@
  *         limitations under the License.
  */
 
+/**
+ * @file commands.h
+ * @brief PostgreSQL transaction command implementations
+ * 
+ * This file implements the concrete command classes that represent
+ * various database operations within transactions. These command classes
+ * encapsulate the logic for executing specific types of SQL operations
+ * while maintaining transaction state and handling callbacks.
+ * 
+ * The implementation follows a command pattern, where each operation
+ * is represented by a specialized command class that inherits from
+ * the Transaction base class.
+ * 
+ * @see qb::pg::detail::Transaction
+ * @see qb::pg::detail::ISqlQuery
+ */
+
 #ifndef QBM_PGSQL_DETAIL_COMMANDS_H
 #define QBM_PGSQL_DETAIL_COMMANDS_H
 #include "../not-qb/result_impl.h"
@@ -24,20 +41,45 @@
 namespace qb::pg::detail {
 using namespace qb::pg;
 
+/**
+ * @brief Command for ending a transaction
+ * 
+ * Represents the final phase of a transaction, responsible for
+ * committing or rolling back the transaction based on its result status.
+ * 
+ * @tparam CB_ERROR Type of error callback
+ */
 template <typename CB_ERROR>
 class End final : public Transaction {
-    CB_ERROR _on_error;
+    CB_ERROR _on_error; ///< Error callback
 
 public:
+    /**
+     * @brief Constructs an End command
+     * 
+     * @param parent Parent transaction
+     * @param on_error Callback for error handling
+     */
     End(Transaction *parent, CB_ERROR &&on_error)
         : Transaction(parent)
         , _on_error(std::forward<CB_ERROR>(on_error)) {}
 
+    /**
+     * @brief Gets the error callback
+     * 
+     * @return CB_ERROR& Reference to the error callback
+     */
     CB_ERROR &
     get_error_callback() {
         return _on_error;
     }
 
+    /**
+     * @brief Initiates the transaction end sequence
+     * 
+     * Creates and queues either a COMMIT or ROLLBACK query
+     * based on the transaction's result status.
+     */
     void
     on_end_transaction() {
         push_query(_result ? (ISqlQuery *)new CommitQuery(
@@ -54,13 +96,30 @@ public:
     }
 };
 
+/**
+ * @brief Command for beginning a transaction
+ * 
+ * Initiates a new transaction with the specified mode and
+ * manages its lifecycle, including setting up the end command.
+ * 
+ * @tparam CB_SUCCESS Type of success callback
+ * @tparam CB_ERROR Type of error callback
+ */
 template <typename CB_SUCCESS, typename CB_ERROR>
 class Begin final : public Transaction {
-    End<CB_ERROR> *_end;
-    transaction_mode _mode;
-    CB_SUCCESS _on_success;
+    End<CB_ERROR> *_end; ///< End command for this transaction
+    transaction_mode _mode; ///< Transaction mode (isolation level, etc.)
+    CB_SUCCESS _on_success; ///< Success callback
 
 public:
+    /**
+     * @brief Constructs a Begin command
+     * 
+     * @param parent Parent transaction
+     * @param end End command for this transaction
+     * @param mode Transaction mode
+     * @param on_success Callback for successful transaction start
+     */
     Begin(Transaction *parent, End<CB_ERROR> *end, transaction_mode mode,
           CB_SUCCESS &&on_success)
         : Transaction(parent)
@@ -81,38 +140,83 @@ public:
             [this](auto const &err) { _end->get_error_callback()(err); }));
     }
 
+    /**
+     * @brief Destructor
+     * 
+     * Finalizes the transaction by updating the end command's
+     * result status and triggering the end sequence.
+     */
     ~Begin() {
         _end->result(_result);
         _end->on_end_transaction();
     }
 
+    /**
+     * @brief Handles sub-command status updates
+     * 
+     * Updates this transaction's result status based on
+     * the status of sub-commands.
+     * 
+     * @param status Result status of the sub-command
+     */
     void
     on_sub_command_status(bool status) final {
         _result &= status;
     }
 };
 
+/**
+ * @brief Command for ending a savepoint
+ * 
+ * Represents the final phase of a savepoint operation, responsible for
+ * releasing or rolling back to the savepoint based on its result status.
+ * 
+ * @tparam CB_ERROR Type of error callback
+ */
 template <typename CB_ERROR>
 class EndSavePoint final : public Transaction {
-    const std::string _name;
-    CB_ERROR _on_error;
+    const std::string _name; ///< Savepoint name
+    CB_ERROR _on_error; ///< Error callback
 
 public:
+    /**
+     * @brief Constructs an EndSavePoint command
+     * 
+     * @param parent Parent transaction
+     * @param name Savepoint name
+     * @param on_error Callback for error handling
+     */
     EndSavePoint(Transaction *parent, std::string &&name, CB_ERROR &&on_error)
         : Transaction(parent)
         , _name(std::move(name))
         , _on_error(std::forward<CB_ERROR>(on_error)) {}
 
+    /**
+     * @brief Gets the savepoint name
+     * 
+     * @return std::string const& Reference to the savepoint name
+     */
     std::string const &
     get_name() {
         return _name;
     }
 
+    /**
+     * @brief Gets the error callback
+     * 
+     * @return CB_ERROR& Reference to the error callback
+     */
     CB_ERROR &
     get_error_callback() {
         return _on_error;
     }
 
+    /**
+     * @brief Initiates the savepoint end sequence
+     * 
+     * Creates and queues either a RELEASE or ROLLBACK TO savepoint query
+     * based on the transaction's result status.
+     */
     void
     on_end_savepoint() {
         push_query(_result ? (ISqlQuery *)new ReleaseSavePointQuery(
@@ -132,12 +236,28 @@ public:
     }
 };
 
+/**
+ * @brief Command for creating a savepoint
+ * 
+ * Creates a new savepoint within a transaction and manages its lifecycle,
+ * including setting up the end savepoint command.
+ * 
+ * @tparam CB_SUCCESS Type of success callback
+ * @tparam CB_ERROR Type of error callback
+ */
 template <typename CB_SUCCESS, typename CB_ERROR>
 class SavePoint final : public Transaction {
-    EndSavePoint<CB_ERROR> *_end;
-    CB_SUCCESS _on_success;
+    EndSavePoint<CB_ERROR> *_end; ///< End command for this savepoint
+    CB_SUCCESS _on_success; ///< Success callback
 
 public:
+    /**
+     * @brief Constructs a SavePoint command
+     * 
+     * @param parent Parent transaction
+     * @param end End command for this savepoint
+     * @param on_success Callback for successful savepoint creation
+     */
     SavePoint(Transaction *parent, EndSavePoint<CB_ERROR> *end, CB_SUCCESS &&on_success)
         : Transaction(parent)
         , _end(end)
@@ -156,11 +276,25 @@ public:
             [this](auto const &err) { _end->get_error_callback()(err); }));
     }
 
+    /**
+     * @brief Destructor
+     * 
+     * Finalizes the savepoint by updating the end command's
+     * result status and triggering the end sequence.
+     */
     ~SavePoint() {
         _end->result(_result);
         _end->on_end_savepoint();
     }
 
+    /**
+     * @brief Handles sub-command status updates
+     * 
+     * Updates this savepoint's result status and propagates
+     * the status to the parent transaction.
+     * 
+     * @param status Result status of the sub-command
+     */
     void
     on_sub_command_status(bool status) final {
         _result &= status;
@@ -168,12 +302,28 @@ public:
     }
 };
 
+/**
+ * @brief Command for executing a simple query
+ * 
+ * Executes a raw SQL expression and handles the callbacks.
+ * 
+ * @tparam CB_SUCCESS Type of success callback
+ * @tparam CB_ERROR Type of error callback
+ */
 template <typename CB_SUCCESS, typename CB_ERROR>
 class Query final : public Transaction {
-    CB_SUCCESS _on_success;
-    CB_ERROR _on_error;
+    CB_SUCCESS _on_success; ///< Success callback
+    CB_ERROR _on_error; ///< Error callback
 
 public:
+    /**
+     * @brief Constructs a Query command
+     * 
+     * @param parent Parent transaction
+     * @param expr SQL expression to execute
+     * @param on_success Callback for successful query execution
+     * @param on_error Callback for query execution errors
+     */
     Query(Transaction *parent, std::string &&expr, CB_SUCCESS &&on_success,
           CB_ERROR &&on_error)
         : Transaction(parent)
@@ -198,13 +348,29 @@ public:
 //    }
 };
 
+/**
+ * @brief Command for executing a query that returns results
+ * 
+ * Executes a SQL query and collects the result set for processing.
+ * 
+ * @tparam CB_SUCCESS Type of success callback that receives the result set
+ * @tparam CB_ERROR Type of error callback
+ */
 template <typename CB_SUCCESS, typename CB_ERROR>
 class ResultQuery final : public Transaction {
-    CB_SUCCESS _on_success;
-    CB_ERROR _on_error;
-    result_impl _results;
+    CB_SUCCESS _on_success; ///< Success callback
+    CB_ERROR _on_error; ///< Error callback
+    result_impl _results; ///< Result data storage
 
 public:
+    /**
+     * @brief Constructs a ResultQuery command
+     * 
+     * @param parent Parent transaction
+     * @param expr SQL expression to execute
+     * @param on_success Callback for successful query execution with results
+     * @param on_error Callback for query execution errors
+     */
     ResultQuery(Transaction *parent, std::string &&expr, CB_SUCCESS &&on_success,
                 CB_ERROR &&on_error)
         : Transaction(parent)
@@ -223,25 +389,59 @@ public:
             [this](auto const &err) { _on_error(err); }));
     }
 
+    /**
+     * @brief Handles row description from the query result
+     * 
+     * Stores the row description metadata for the result set.
+     * 
+     * @param desc Row description metadata
+     */
     void
     on_new_row_description(row_description_type &&desc) final {
         _results.row_description() = std::move(desc);
     };
+    
+    /**
+     * @brief Handles a data row from the query result
+     * 
+     * Adds a row of data to the result set.
+     * 
+     * @param data Row data
+     */
     void
     on_new_data_row(row_data &&data) final {
         _results.rows().push_back(std::move(data));
     }
 };
 
+/**
+ * @brief Command for chaining operations
+ * 
+ * Executes a callback after the previous operation if it was successful.
+ * 
+ * @tparam CB_SUCCESS Type of success callback
+ */
 template <typename CB_SUCCESS>
 class Then final : public Transaction {
-    CB_SUCCESS _on_success;
+    CB_SUCCESS _on_success; ///< Success callback
 
 public:
+    /**
+     * @brief Constructs a Then command
+     * 
+     * @param parent Parent transaction
+     * @param on_success Callback to execute if the parent's result is successful
+     */
     Then(Transaction *parent, CB_SUCCESS &&on_success)
         : Transaction(parent)
         , _on_success(std::forward<CB_SUCCESS>(on_success)) {}
 
+    /**
+     * @brief Destructor
+     * 
+     * Executes the success callback if the parent transaction
+     * has a successful result status.
+     */
     ~Then() {
         if (!parent()->result())
             return;
@@ -255,13 +455,30 @@ public:
     }
 };
 
+/**
+ * @brief Command for preparing a named query
+ * 
+ * Prepares a SQL statement with the specified name and parameter types.
+ * Stores the prepared query in the query storage for future execution.
+ * 
+ * @tparam CB_SUCCESS Type of success callback
+ * @tparam CB_ERROR Type of error callback
+ */
 template <typename CB_SUCCESS, typename CB_ERROR>
 class Prepare final : public Transaction {
-    CB_SUCCESS _on_success;
-    CB_ERROR _on_error;
-    PreparedQuery _query;
+    CB_SUCCESS _on_success; ///< Success callback
+    CB_ERROR _on_error;     ///< Error callback
+    PreparedQuery _query;   ///< Query to prepare
 
 public:
+    /**
+     * @brief Constructs a Prepare command
+     * 
+     * @param parent Parent transaction
+     * @param query Prepared query definition
+     * @param on_success Callback for successful preparation
+     * @param on_error Callback for preparation errors
+     */
     Prepare(Transaction *parent, PreparedQuery &&query, CB_SUCCESS &&on_success,
             CB_ERROR &&on_error)
         : Transaction(parent)
@@ -281,19 +498,44 @@ public:
             [this](auto const &err) { _on_error(err); }));
     }
 
+    /**
+     * @brief Handles row description from query preparation
+     * 
+     * Stores the row description metadata in the prepared query.
+     * 
+     * @param desc Row description metadata
+     */
     void
     on_new_row_description(row_description_type &&desc) {
         _query.row_description = std::move(desc);
     }
 };
 
+/**
+ * @brief Command for executing a prepared query
+ * 
+ * Executes a previously prepared query with the specified parameters.
+ * Does not collect result rows.
+ * 
+ * @tparam CB_SUCCESS Type of success callback
+ * @tparam CB_ERROR Type of error callback
+ */
 template <typename CB_SUCCESS, typename CB_ERROR>
 class ExecutePrepared final : public Transaction {
-    CB_SUCCESS _on_success;
-    CB_ERROR _on_error;
-    const std::string _query_name;
+    CB_SUCCESS _on_success;       ///< Success callback
+    CB_ERROR _on_error;           ///< Error callback
+    const std::string _query_name; ///< Name of the prepared query
 
 public:
+    /**
+     * @brief Constructs an ExecutePrepared command
+     * 
+     * @param parent Parent transaction
+     * @param query_name Name of the prepared query
+     * @param params Parameter values for the query
+     * @param on_success Callback for successful execution
+     * @param on_error Callback for execution errors
+     */
     ExecutePrepared(Transaction *parent, std::string const &query_name,
                     std::vector<byte> &&params, CB_SUCCESS &&on_success,
                     CB_ERROR &&on_error)
@@ -315,14 +557,32 @@ public:
     }
 };
 
+/**
+ * @brief Command for executing a prepared query with result retrieval
+ * 
+ * Executes a previously prepared query with the specified parameters
+ * and collects the result rows for processing.
+ * 
+ * @tparam CB_SUCCESS Type of success callback that receives the result set
+ * @tparam CB_ERROR Type of error callback
+ */
 template <typename CB_SUCCESS, typename CB_ERROR>
 class QueryPrepared final : public Transaction {
-    CB_SUCCESS _on_success;
-    CB_ERROR _on_error;
-    const std::string _query_name;
-    result_impl _results;
+    CB_SUCCESS _on_success;       ///< Success callback
+    CB_ERROR _on_error;           ///< Error callback
+    const std::string _query_name; ///< Name of the prepared query
+    result_impl _results;         ///< Result data storage
 
 public:
+    /**
+     * @brief Constructs a QueryPrepared command
+     * 
+     * @param parent Parent transaction
+     * @param query_name Name of the prepared query
+     * @param params Parameter values for the query
+     * @param on_success Callback for successful execution with results
+     * @param on_error Callback for execution errors
+     */
     QueryPrepared(Transaction *parent, std::string const &query_name,
                   std::vector<byte> &&params, CB_SUCCESS &&on_success,
                   CB_ERROR &&on_error)
@@ -345,6 +605,13 @@ public:
             [this](auto const &err) { _on_error(err); }));
     }
 
+    /**
+     * @brief Handles a data row from the query result
+     * 
+     * Adds a row of data to the result set.
+     * 
+     * @param data Row data
+     */
     void
     on_new_data_row(row_data &&data) final {
         _results.rows().push_back(std::move(data));
