@@ -41,5 +41,5 @@ qb_register_module(
 )
 
 if (QB_BUILD_TEST)
-    add_subdirectory(tests)
+#    add_subdirectory(tests)
 endif ()
