@@ -34,43 +34,42 @@ Transaction::begin(CB_SUCCESS &&on_success, CB_ERROR &&on_error, transaction_mod
         on_error((error::db_error)error::query_error("already in transaction"));
     } else {
         auto end = new End<CB_ERROR>(this, std::forward<CB_ERROR>(on_error));
-        push_transaction(new Begin<CB_SUCCESS, CB_ERROR>(
-            this, end, mode, std::forward<CB_SUCCESS>(on_success)));
-        push_transaction(end);
+        push_transaction(std::unique_ptr<Transaction>(new Begin<CB_SUCCESS, CB_ERROR>(
+            this, end, mode, std::forward<CB_SUCCESS>(on_success))));
+        push_transaction(std::unique_ptr<Transaction>(end));
     }
     return *this;
 }
 
 template <typename CB_SUCCESS, typename CB_ERROR, typename>
 Transaction &
-Transaction::savepoint(std::string name, CB_SUCCESS &&on_success,
+Transaction::savepoint(std::string_view name, CB_SUCCESS &&on_success,
                        CB_ERROR &&on_error) {
-    auto end = new EndSavePoint<CB_ERROR>(this, std::move(name),
-                                          std::forward<CB_ERROR>(on_error));
-    push_transaction(new SavePoint<CB_SUCCESS, CB_ERROR>(
-        this, end, std::forward<CB_SUCCESS>(on_success)));
-    push_transaction(end);
+    auto end = new EndSavePoint<CB_ERROR>(this, std::move(name), std::forward<CB_ERROR>(on_error));
+    push_transaction(std::unique_ptr<Transaction>(new SavePoint<CB_SUCCESS, CB_ERROR>(
+        this, end, std::forward<CB_SUCCESS>(on_success))));
+    push_transaction(std::unique_ptr<Transaction>(end));
     return *this;
 }
 
 template <typename CB_SUCCESS>
 Transaction &
-Transaction::savepoint(std::string name, CB_SUCCESS &&on_success) {
-    return savepoint(std::move(name), std::forward<CB_SUCCESS>(on_success),
+Transaction::savepoint(std::string_view name, CB_SUCCESS &&on_success) {
+    return savepoint(name, std::forward<CB_SUCCESS>(on_success),
                      [](error::db_error) {});
 }
 
 template <typename CB_SUCCESS, typename CB_ERROR, typename>
 Transaction &
-Transaction::execute(std::string expr, CB_SUCCESS &&on_success, CB_ERROR &&on_error) {
+Transaction::execute(std::string_view expr, CB_SUCCESS &&on_success, CB_ERROR &&on_error) {
     if constexpr (std::is_invocable_v<CB_SUCCESS, Transaction &, resultset>) {
-        push_transaction(new ResultQuery<CB_SUCCESS, CB_ERROR>(
-            this, std::move(expr), std::forward<CB_SUCCESS>(on_success),
-            std::forward<CB_ERROR>(on_error)));
+        push_transaction(std::unique_ptr<Transaction>(new ResultQuery<CB_SUCCESS, CB_ERROR>(
+            this, std::string(expr), std::forward<CB_SUCCESS>(on_success),
+            std::forward<CB_ERROR>(on_error))));
     } else if constexpr (std::is_invocable_v<CB_SUCCESS, Transaction &>) {
-        push_transaction(new Query<CB_SUCCESS, CB_ERROR>(
-            this, std::move(expr), std::forward<CB_SUCCESS>(on_success),
-            std::forward<CB_ERROR>(on_error)));
+        push_transaction(std::unique_ptr<Transaction>(new Query<CB_SUCCESS, CB_ERROR>(
+            this, std::string(expr), std::forward<CB_SUCCESS>(on_success),
+            std::forward<CB_ERROR>(on_error))));
     } else
         static_assert("execute call_back requires -> [](qb::pg::transaction &tr, "
                       "(optional) qb::pg::results res)");
@@ -80,44 +79,44 @@ Transaction::execute(std::string expr, CB_SUCCESS &&on_success, CB_ERROR &&on_er
 
 template <typename CB_SUCCESS, typename>
 Transaction &
-Transaction::execute(std::string expr, CB_SUCCESS &&on_success) {
-    return execute(std::move(expr), std::forward<CB_SUCCESS>(on_success),
+Transaction::execute(std::string_view expr, CB_SUCCESS &&on_success) {
+    return execute(std::string(expr), std::forward<CB_SUCCESS>(on_success),
                    [](error::db_error const &) {});
 }
 
 template <typename CB_SUCCESS, typename CB_ERROR, typename>
 Transaction &
-Transaction::prepare(std::string query_name, std::string expr,
+Transaction::prepare(std::string_view query_name, std::string_view expr,
                      type_oid_sequence &&types, CB_SUCCESS &&on_success,
                      CB_ERROR &&on_error) {
-    PreparedQuery query{std::move(query_name), std::move(expr), std::move(types), {}};
+    PreparedQuery query{std::string(query_name), std::string(expr), std::move(types), {}};
 
-    push_transaction(new Prepare<CB_SUCCESS, CB_ERROR>(
+    push_transaction(std::unique_ptr<Transaction>(new Prepare<CB_SUCCESS, CB_ERROR>(
         this, std::move(query), std::forward<CB_SUCCESS>(on_success),
-        std::forward<CB_ERROR>(on_error)));
+        std::forward<CB_ERROR>(on_error))));
     return *this;
 }
 
 template <typename CB_SUCCESS, typename>
 Transaction &
-Transaction::prepare(std::string query_name, std::string expr,
+Transaction::prepare(std::string_view query_name, std::string_view expr,
                      type_oid_sequence &&types, CB_SUCCESS &&on_success) {
-    return prepare(std::move(query_name), std::move(expr), types,
-                   std::forward<CB_SUCCESS>(on_success), [](error::db_error const &) {});
+    return prepare(query_name, expr, types, std::forward<CB_SUCCESS>(on_success),
+                   [](error::db_error const &) {});
 }
 
 template <typename CB_SUCCESS, typename CB_ERROR, typename>
 Transaction &
-Transaction::execute(std::string query_name, QueryParams &&params,
+Transaction::execute(std::string_view query_name, QueryParams &&params,
                      CB_SUCCESS &&on_success, CB_ERROR &&on_error) {
     if constexpr (std::is_invocable_v<CB_SUCCESS, Transaction &, resultset>) {
-        push_transaction(new QueryPrepared<CB_SUCCESS, CB_ERROR>(
-            this, std::move(query_name), std::move(params.get()),
-            std::forward<CB_SUCCESS>(on_success), std::forward<CB_ERROR>(on_error)));
+        push_transaction(std::unique_ptr<Transaction>(new QueryPrepared<CB_SUCCESS, CB_ERROR>(
+            this, std::string(query_name), std::move(params.get()),
+            std::forward<CB_SUCCESS>(on_success), std::forward<CB_ERROR>(on_error))));
     } else if constexpr (std::is_invocable_v<CB_SUCCESS, Transaction &>) {
-        push_transaction(new ExecutePrepared<CB_SUCCESS, CB_ERROR>(
-            this, std::move(query_name), std::move(params.get()),
-            std::forward<CB_SUCCESS>(on_success), std::forward<CB_ERROR>(on_error)));
+        push_transaction(std::unique_ptr<Transaction>(new ExecutePrepared<CB_SUCCESS, CB_ERROR>(
+            this, std::string(query_name), std::move(params.get()),
+            std::forward<CB_SUCCESS>(on_success), std::forward<CB_ERROR>(on_error))));
     } else
         static_assert("execute call_back requires -> [](qb::pg::transaction &tr, "
                       "(optional) qb::pg::results res)");
@@ -126,38 +125,38 @@ Transaction::execute(std::string query_name, QueryParams &&params,
 
 template <typename CB_SUCCESS, typename>
 Transaction &
-Transaction::execute(std::string query_name, QueryParams &&params,
+Transaction::execute(std::string_view query_name, QueryParams &&params,
                      CB_SUCCESS &&on_success) {
-    return execute(std::move(query_name), std::move(params), std::forward<CB_SUCCESS>(on_success),
+    return execute(query_name, std::move(params), std::forward<CB_SUCCESS>(on_success),
                    [](error::db_error const &) {});
 }
 
 template <typename CB_SUCCESS, typename>
 Transaction &
-Transaction::execute(std::string query_name, CB_SUCCESS &&on_success,
+Transaction::execute(std::string_view query_name, CB_SUCCESS &&on_success,
                      QueryParams &&params) {
-    return execute(std::move(query_name), std::move(params),
-                   std::forward<CB_SUCCESS>(on_success), [](error::db_error const &) {});
+    return execute(query_name, std::move(params), std::forward<CB_SUCCESS>(on_success),
+                   [](error::db_error const &) {});
 }
 
 template <typename CB_SUCCESS>
 Transaction &
 Transaction::then(CB_SUCCESS &&on_success) {
-    push_transaction(new Then<CB_SUCCESS>(this, std::forward<CB_SUCCESS>(on_success)));
+    push_transaction(std::unique_ptr<Transaction>(new Then<CB_SUCCESS>(this, std::forward<CB_SUCCESS>(on_success))));
     return *this;
 }
 
 template <typename CB_SUCCESS>
 Transaction &
 Transaction::success(CB_SUCCESS &&on_success) {
-    push_transaction(new Then<CB_SUCCESS>(this, std::forward<CB_SUCCESS>(on_success)));
+    push_transaction(std::unique_ptr<Transaction>(new Then<CB_SUCCESS>(this, std::forward<CB_SUCCESS>(on_success))));
     return *this;
 }
 
 template <typename CB_ERROR>
 Transaction &
 Transaction::error(CB_ERROR &&on_error) {
-    push_transaction(new Error<CB_ERROR>(this, std::forward<CB_ERROR>(on_error)));
+    push_transaction(std::unique_ptr<Transaction>(new Error<CB_ERROR>(this, std::forward<CB_ERROR>(on_error))));
     return *this;
 }
 

@@ -217,7 +217,7 @@ public:
     template <typename CB_SUCCESS, typename CB_ERROR,
               typename = std::enable_if<std::is_function_v<CB_SUCCESS> &&
                                         std::is_function_v<CB_ERROR>>>
-    Transaction &savepoint(std::string name, CB_SUCCESS &&on_success,
+    Transaction &savepoint(std::string_view name, CB_SUCCESS &&on_success,
                            CB_ERROR &&on_error);
 
     /**
@@ -229,7 +229,7 @@ public:
      * @return Transaction& Reference to this transaction for chaining
      */
     template <typename CB_SUCCESS>
-    Transaction &savepoint(std::string name, CB_SUCCESS &&on_success);
+    Transaction &savepoint(std::string_view name, CB_SUCCESS &&on_success);
 
     /**
      * @brief Executes a raw SQL expression with callbacks
@@ -244,7 +244,7 @@ public:
     template <typename CB_SUCCESS, typename CB_ERROR,
               typename = std::enable_if<std::is_function_v<CB_SUCCESS> &&
                                         std::is_function_v<CB_ERROR>>>
-    Transaction &execute(std::string expr, CB_SUCCESS &&on_success,
+    Transaction &execute(std::string_view expr, CB_SUCCESS &&on_success,
                          CB_ERROR &&on_error);
 
     /**
@@ -257,7 +257,7 @@ public:
      */
     template <typename CB_SUCCESS,
               typename = std::enable_if<std::is_function_v<CB_SUCCESS>>>
-    Transaction &execute(std::string expr, CB_SUCCESS &&on_success);
+    Transaction &execute(std::string_view expr, CB_SUCCESS &&on_success);
 
     /**
      * @brief Executes a raw SQL expression without callbacks
@@ -265,7 +265,7 @@ public:
      * @param expr SQL expression to execute
      * @return Transaction& Reference to this transaction for chaining
      */
-    Transaction &execute(std::string expr);
+    Transaction &execute(std::string_view expr);
 
     /**
      * @brief Prepares a named query with parameter types and callbacks
@@ -282,7 +282,7 @@ public:
     template <typename CB_SUCCESS, typename CB_ERROR,
               typename = std::enable_if<std::is_function_v<CB_SUCCESS> &&
                                         std::is_function_v<CB_ERROR>>>
-    Transaction &prepare(std::string query_name, std::string expr,
+    Transaction &prepare(std::string_view query_name, std::string_view expr,
                          type_oid_sequence &&types, CB_SUCCESS &&on_success,
                          CB_ERROR &&on_error);
 
@@ -298,7 +298,7 @@ public:
      */
     template <typename CB_SUCCESS,
               typename = std::enable_if<std::is_function_v<CB_SUCCESS>>>
-    Transaction &prepare(std::string query_name, std::string expr,
+    Transaction &prepare(std::string_view query_name, std::string_view expr,
                          type_oid_sequence &&types, CB_SUCCESS &&on_success);
 
     /**
@@ -309,7 +309,7 @@ public:
      * @param types Sequence of parameter types (can be empty)
      * @return Transaction& Reference to this transaction for chaining
      */
-    Transaction &prepare(std::string query_name, std::string expr,
+    Transaction &prepare(std::string_view query_name, std::string_view expr,
                          type_oid_sequence &&types = {});
 
     /**
@@ -326,7 +326,7 @@ public:
     template <typename CB_SUCCESS, typename CB_ERROR,
               typename = std::enable_if<std::is_function_v<CB_SUCCESS> &&
                                         std::is_function_v<CB_ERROR>>>
-    Transaction &execute(std::string query_name, QueryParams &&params,
+    Transaction &execute(std::string_view query_name, QueryParams &&params,
                          CB_SUCCESS &&on_success, CB_ERROR &&on_error);
 
     /**
@@ -340,7 +340,7 @@ public:
      */
     template <typename CB_SUCCESS,
               typename = std::enable_if<std::is_function_v<CB_SUCCESS>>>
-    Transaction &execute(std::string query_name, QueryParams &&params,
+    Transaction &execute(std::string_view query_name, QueryParams &&params,
                          CB_SUCCESS &&on_success);
 
     /**
@@ -354,7 +354,7 @@ public:
      */
     template <typename CB_SUCCESS,
               typename = std::enable_if<std::is_function_v<CB_SUCCESS>>>
-    Transaction &execute(std::string query_name, CB_SUCCESS &&on_success,
+    Transaction &execute(std::string_view query_name, CB_SUCCESS &&on_success,
                          QueryParams &&params);
 
     /**
@@ -364,7 +364,7 @@ public:
      * @param params Parameters for the query
      * @return Transaction& Reference to this transaction for chaining
      */
-    Transaction &execute(std::string query_name, QueryParams &&params);
+    Transaction &execute(std::string_view query_name, QueryParams &&params);
 
     /**
      * @brief Adds a callback to be executed after the next operation
