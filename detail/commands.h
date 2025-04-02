@@ -137,7 +137,7 @@ public:
                         (error::db_error)error::client_error{e.what()});
                 }
             },
-            [this](auto const &err) { _end->get_error_callback()(err); })));
+            [this](auto &&err) { _end->get_error_callback()(err); })));
     }
 
     /**
@@ -496,9 +496,9 @@ public:
  */
 template <typename CB_SUCCESS, typename CB_ERROR>
 class Prepare final : public Transaction {
+    PreparedQuery _query;   ///< Query to prepare
     CB_SUCCESS _on_success; ///< Success callback
     CB_ERROR _on_error;     ///< Error callback
-    PreparedQuery _query;   ///< Query to prepare
 
 public:
     /**
@@ -552,9 +552,9 @@ public:
  */
 template <typename CB_SUCCESS, typename CB_ERROR>
 class ExecutePrepared final : public Transaction {
+    const std::string _query_name; ///< Name of the prepared query
     CB_SUCCESS _on_success;       ///< Success callback
     CB_ERROR _on_error;           ///< Error callback
-    const std::string _query_name; ///< Name of the prepared query
 
 public:
     /**
