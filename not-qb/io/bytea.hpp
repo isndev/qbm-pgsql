@@ -53,39 +53,12 @@ struct protocol_parser<bytea, BINARY_DATA_FORMAT> : detail::parser_base<bytea> {
     template <typename InputIterator>
     InputIterator operator()(InputIterator begin, InputIterator end);
 };
-
-template <>
-struct protocol_formatter<bytea, BINARY_DATA_FORMAT> : detail::formatter_base<bytea> {
-
-    typedef detail::formatter_base<bytea> base_type;
-    typedef base_type::value_type value_type;
-
-    protocol_formatter(bytea const &val)
-        : base_type(val) {}
-    size_t
-    size() const {
-        return base_type::value.size();
-    }
-
-    bool
-    operator()(std::vector<byte> &buffer) {
-        if (buffer.capacity() - buffer.size() < size()) {
-            buffer.reserve(buffer.size() + size());
-        }
-        std::copy(base_type::value.begin(), base_type::value.end(),
-                  std::back_inserter(buffer));
-        return true;
-    }
-};
-
 namespace traits {
 
 template <>
 struct has_parser<bytea, TEXT_DATA_FORMAT> : std::true_type {};
 template <>
 struct has_parser<bytea, BINARY_DATA_FORMAT> : std::true_type {};
-template <>
-struct has_formatter<bytea, BINARY_DATA_FORMAT> : std::true_type {};
 
 //@{
 template <>

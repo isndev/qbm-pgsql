@@ -17,16 +17,6 @@ namespace pg {
 namespace io {
 
 template <typename T, std::size_t Sz>
-struct protocol_formatter<std::array<T, Sz>, TEXT_DATA_FORMAT>
-    : detail::text_container_formatter<std::array<T, Sz>> {
-    typedef detail::text_container_formatter<std::array<T, Sz>> base_type;
-    typedef typename base_type::value_type value_type;
-
-    protocol_formatter(value_type const &v)
-        : base_type(v) {}
-};
-
-template <typename T, std::size_t Sz>
 struct protocol_parser<std::array<T, Sz>, TEXT_DATA_FORMAT>
     : detail::text_container_parser<protocol_parser<std::array<T, Sz>, TEXT_DATA_FORMAT>,
                                     std::array<T, Sz>> {
@@ -56,8 +46,6 @@ struct protocol_parser<std::array<T, Sz>, TEXT_DATA_FORMAT>
 
 namespace traits {
 
-template <typename T, std::size_t Sz>
-struct has_formatter<std::array<T, Sz>, TEXT_DATA_FORMAT> : std::true_type {};
 template <typename T, std::size_t Sz>
 struct has_parser<std::array<T, Sz>, TEXT_DATA_FORMAT> : std::true_type {};
 

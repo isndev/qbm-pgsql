@@ -39,11 +39,17 @@
 #include "../not-qb/common.h"
 #include "../not-qb/error.h"
 #include "../not-qb/protocol.h"
-#include "../not-qb/write_format.h"
+#include "param_serializer.h"
+#include "type_mapping.h"
 #include <qb/io.h>
 #include <qb/system/container/unordered_map.h>
 #include <qb/utility/branch_hints.h>
 #include <type_traits>
+#include <string_view>
+#include <vector>
+#include <iostream>
+#include <iomanip>
+#include <netinet/in.h>
 
 namespace qb::pg::detail {
 using namespace qb::pg;
@@ -67,11 +73,11 @@ struct PreparedQuery {
  * Provides a central repository for all prepared statements in the
  * database session, allowing them to be referenced by name.
  */
-class PreparedQueryStorage {
+class PreparedStorage {
     qb::unordered_map<std::string, PreparedQuery> _prepared_queries; ///< Map of query names to definitions
 
 public:
-    PreparedQueryStorage() = default;
+    PreparedStorage() = default;
 
     /**
      * @brief Checks if a prepared query exists
@@ -80,8 +86,8 @@ public:
      * @return bool True if the query exists, false otherwise
      */
     bool
-    has(std::string const &name) const {
-        return _prepared_queries.find(name) != _prepared_queries.cend();
+    has(std::string_view name) const {
+        return _prepared_queries.find(std::string(name)) != _prepared_queries.cend();
     }
 
     /**
@@ -103,10 +109,13 @@ public:
      * @throws std::out_of_range If the query doesn't exist
      */
     PreparedQuery const &
-    get(std::string const &name) const {
-        return _prepared_queries.at(name);
+    get(std::string_view name) const {
+        return _prepared_queries.at(std::string(name));
     }
 };
+
+// Maintain backward compatibility
+using PreparedQueryStorage = PreparedStorage;
 
 /**
  * @brief Class for managing query parameters
@@ -115,9 +124,15 @@ public:
  * type conversion and binary encoding according to PostgreSQL protocol.
  */
 class QueryParams {
-    std::vector<byte> _params; ///< Serialized parameters
+    std::vector<byte> _params;       ///< Serialized parameters
+    std::vector<integer> _param_types; ///< OIDs for parameter types
 
 public:
+    /**
+     * @brief Constructs an empty parameter set
+     */
+    QueryParams() = default;
+    
     /**
      * @brief Constructs parameter set from variadic arguments
      * 
@@ -129,9 +144,21 @@ public:
      */
     template <typename... T>
     QueryParams(T &&...args) {
-        if constexpr (static_cast<bool>(sizeof...(T))) {
-            std::vector<oids::type::oid_type> param_types;
-            write_params(param_types, _params, std::forward<T>(args)...);
+        if constexpr (sizeof...(T) > 0) {
+            // Do not use format_codes_buffer, no longer used
+            
+            // Serialize parameters directly
+            ParamSerializer serializer;
+            serializer.serialize_params(std::forward<T>(args)...);
+            
+            // Retrieve serialized data
+            _params = serializer.params_buffer();
+            _param_types = serializer.param_types();
+            
+            // Check if the beginning of the parameter buffer contains a 'B'
+            if (!_params.empty() && _params.size() > sizeof(smallint) && _params[sizeof(smallint)] == 'B') {
+                LOG_CRIT("[pgsql] CORRUPTION DETECTED in construction: first byte after count = 'B'");
+            }
         }
     }
     
@@ -143,6 +170,64 @@ public:
     std::vector<byte> &
     get() {
         return _params;
+    }
+    
+    /**
+     * @brief Gets the serialized parameters (const version)
+     * 
+     * @return const std::vector<byte>& Const reference to the serialized parameters
+     */
+    const std::vector<byte> &
+    get() const {
+        return _params;
+    }
+    
+    /**
+     * @brief Gets the parameter types
+     * 
+     * @return const std::vector<integer>& Const reference to parameter OIDs
+     */
+    const std::vector<integer> &
+    param_types() const {
+        return _param_types;
+    }
+    
+    /**
+     * @brief Gets the number of parameters
+     * 
+     * @return smallint The number of parameters
+     */
+    smallint param_count() const {
+        if (_params.size() >= sizeof(smallint)) {
+            // Extract the number of parameters from the buffer
+            smallint count;
+            std::memcpy(&count, _params.data(), sizeof(smallint));
+            return ntohs(count); // Convert from network byte order to host byte order
+        }
+        return 0;
+    }
+    
+    /**
+     * @brief Checks if the parameter set is empty
+     * 
+     * @return bool True if there are no parameters, false otherwise
+     */
+    bool
+    empty() const {
+        return _params.empty();
+    }
+
+private:
+    /**
+     * @brief Write a smallint to a buffer
+     * 
+     * @param buffer Target buffer
+     * @param value Smallint value
+     */
+    static void write_smallint(std::vector<byte>& buffer, smallint value) {
+        smallint networkValue = htons(value);
+        const byte* bytes = reinterpret_cast<const byte*>(&networkValue);
+        buffer.insert(buffer.end(), bytes, bytes + sizeof(smallint));
     }
 };
 
@@ -542,15 +627,30 @@ public:
     }
 };
 
+/**
+ * @brief Prepared statement execution
+ * 
+ * @tparam CB_SUCCESS Type of success callback
+ * @tparam CB_ERROR Type of error callback
+ */
 template <typename CB_SUCCESS, typename CB_ERROR>
-class BindExecQuery final : public SqlQuery<CB_SUCCESS, CB_ERROR> {
-    PreparedQueryStorage const &_storage;
-    std::string const &_query_name;
-    std::vector<byte> _params;
+class ExecuteQuery final : public SqlQuery<CB_SUCCESS, CB_ERROR> {
+    const PreparedStorage &_storage;  ///< Prepared statement storage
+    std::string _query_name;     ///< Query name to execute
+    QueryParams _params;              ///< Query parameters
 
 public:
-    BindExecQuery(PreparedQueryStorage const &storage, std::string const &query_name,
-                  std::vector<byte> &&params, CB_SUCCESS &&success, CB_ERROR &&error)
+    /**
+     * @brief Constructs an execute query
+     * 
+     * @param storage Prepared statement storage
+     * @param query_name Query name to execute
+     * @param params Query parameters
+     * @param success Success callback
+     * @param error Error callback
+     */
+    ExecuteQuery(const PreparedStorage &storage, std::string_view query_name,
+                 QueryParams &&params, CB_SUCCESS &&success, CB_ERROR &&error)
         : SqlQuery<CB_SUCCESS, CB_ERROR>(std::forward<CB_SUCCESS>(success),
                                          std::forward<CB_ERROR>(error))
         , _storage(storage)
@@ -569,33 +669,48 @@ public:
     get() const final {
         const auto &query = _storage.get(_query_name);
         message cmd(bind_tag);
-        cmd.write(""); // portal_name
+        
+        // Exact format expected by PostgreSQL for a Bind message:
+        // 1. Portal name (empty = unnamed)
+        cmd.write("");
+        
+        // 2. Prepared statement name
         cmd.write(query.name);
-        if (!_params.empty()) {
-            auto out = cmd.output();
-            std::copy(_params.begin(), _params.end(), out);
-        } else {
-            cmd.write((smallint)0); // parameter format codes
-            cmd.write((smallint)0); // number of parameters
+        
+        // 3. Format codes section - 1 code for all parameters
+        // Format 1 = binary
+        cmd.write((smallint)1);  // Number of format codes
+        cmd.write((smallint)1);  // Format = 1 (binary)
+        
+        // 4. Total number of parameters
+        smallint param_count = _params.param_count();
+        cmd.write(param_count);
+        
+        // 5. Parameter values
+        if (!_params.empty() && param_count > 0) {
+            // Skip the count in the parameters buffer
+            const std::vector<byte>& param_buffer = _params.get();
+            if (param_buffer.size() > sizeof(smallint)) {
+                const byte* data = param_buffer.data() + sizeof(smallint);
+                size_t data_size = param_buffer.size() - sizeof(smallint);
+                
+                // Copy the raw data
+                auto out = cmd.output();
+                std::copy(data, data + data_size, out);
+            }
         }
-
-        auto const &fields = query.row_description;
-        cmd.write((smallint)fields.size());
-        LOG_DEBUG("[pgsql] Write " << fields.size() << " field formats");
-        for (auto const &fd : fields) {
-            cmd.write((smallint)fd.format_code);
-        }
-        LOG_DEBUG("[pgsql] Execute prepared [" << query.name << "] \""
-                                               << query.expression << "\"");
-        // issue logger does not accept binary
-        // << " params : " << std::string_view(_params.data(), _params.size()));
-
+        
+        // 6. Result format = 0 (none)
+        cmd.write((smallint)0);
+        
+        // 7. Execute message (empty portal, no row limit)
         message execute(execute_tag);
-        execute.write(""); // portal name
+        execute.write("");
         execute.write(0);
         cmd.pack(execute);
-        cmd.pack(message(sync_tag));
-
+        
+        // 8. Sync message
+        cmd.pack(message(sync_tag));        
         return cmd;
     }
 };

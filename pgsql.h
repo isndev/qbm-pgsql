@@ -68,7 +68,7 @@ constexpr const uint32_t ATTRIBUTE_VALUE_MAX = 1024 * 1024; // 1 MB
  * Used during attribute parsing to validate input.
  * 
  * @param c Character to check
- * @return true if the character is a control character, false otherwise
+ * @return true if the character is a control character (ASCII 0-31 or 127)
  */
 inline bool
 is_control(int c) {
@@ -76,7 +76,7 @@ is_control(int c) {
 }
 
 /**
- * @brief Parses header attributes in the PostgreSQL protocol
+ * @brief Parses header attributes from a PostgreSQL protocol message
  * 
  * Parses a buffer of header attributes into a case-insensitive map.
  * Supports quoted and unquoted attribute values and handles
@@ -360,7 +360,7 @@ private:
     bool is_connected_ = false; ///< Flag indicating if the connection is established
 
     /**
-     * @brief Create a startup message for initial connection
+     * @brief Creates a startup message for PostgreSQL connection
      * 
      * Builds the startup message according to the PostgreSQL protocol,
      * including user, database, and client options.
@@ -383,6 +383,10 @@ private:
         // trailing terminator
         m.write('\0');
     }
+
+    /**
+     * @brief Sends the startup message to the PostgreSQL server
+     */
     void
     send_startup_message() {
         message m(empty_tag);
@@ -391,10 +395,7 @@ private:
     }
 
     /**
-     * @brief Handles new command events
-     *
-     * Overrides the Transaction::on_new_command method to process
-     * pending queries if the client is ready.
+     * @brief Handles new command events in the transaction
      */
     void
     on_new_command() final {
@@ -403,11 +404,8 @@ private:
     
     /**
      * @brief Handles sub-command status updates
-     *
-     * Overrides the Transaction::on_sub_command_status method.
-     * Database class doesn't need to process sub-command status.
      * 
-     * @param status Status of the sub-command (unused)
+     * @param status Status of the sub-command
      */
     void
     on_sub_command_status(bool) final {}
@@ -417,13 +415,13 @@ private:
     bool _ready_for_query = false;         ///< Flag indicating if ready for next query
 
     /**
-     * @brief Finds the leaf transaction to execute
+     * @brief Finds the next transaction to execute
      * 
      * Recursively traverses the transaction tree to find the 
      * deepest (leaf) transaction that should be executed next.
      *
-     * @param cmd Starting transaction
-     * @return Transaction* Leaf transaction to execute
+     * @param cmd Current transaction
+     * @return Transaction* Next transaction to execute
      */
     static Transaction *
     next_transaction(Transaction *cmd) {
@@ -438,12 +436,12 @@ private:
     }
     
     /**
-     * @brief Processes the next query in the transaction
+     * @brief Processes a query in the transaction
      * 
      * Fetches and executes the next query from the given transaction.
      * If no more queries are in the current transaction, moves to parent.
      *
-     * @param cmd Transaction to process
+     * @param cmd Transaction containing the query
      * @return bool true if a query was processed, false if no queries remain
      */
     bool
@@ -473,9 +471,7 @@ private:
     }
     
     /**
-     * @brief Processes queries if ready
-     * 
-     * Called when the client is ready to execute the next query.
+     * @brief Processes queries if the client is ready
      */
     void
     process_if_query_ready() {
@@ -486,9 +482,6 @@ private:
 
     /**
      * @brief Handles successful query completion
-     * 
-     * Called when a query completes successfully. Executes the query's
-     * success callback and cleans up resources.
      */
     void
     on_success_query() {
@@ -502,9 +495,6 @@ private:
     /**
      * @brief Handles query error
      * 
-     * Called when a query fails. Executes the query's error callback,
-     * marks the transaction as failed, and cleans up resources.
-     *
      * @param err Error information
      */
     void
@@ -530,7 +520,7 @@ public:
      * - MD5 password
      * - SCRAM-SHA-256 authentication
      *
-     * @param msg Authentication message from server
+     * @param msg Authentication message
      */
     void
     on_authentication(message &msg) {
@@ -677,8 +667,6 @@ public:
     /**
      * @brief Handles command complete messages
      * 
-     * Called when a command has been completed successfully.
-     *
      * @param msg Command complete message
      */
     void
@@ -691,9 +679,6 @@ public:
     /**
      * @brief Handles backend key data messages
      * 
-     * Stores the server process ID and secret key for
-     * potential future cancel requests.
-     *
      * @param msg Backend key data message
      */
     void
@@ -706,9 +691,6 @@ public:
     /**
      * @brief Handles error response messages
      * 
-     * Processes error notifications from the server and
-     * triggers error handling for the current query.
-     *
      * @param msg Error response message
      */
     void
@@ -725,8 +707,6 @@ public:
     /**
      * @brief Handles parameter status messages
      * 
-     * Updates client options with parameters sent by the server.
-     *
      * @param msg Parameter status message
      */
     void
@@ -745,8 +725,6 @@ public:
     /**
      * @brief Handles notice response messages
      * 
-     * Processes non-error notices from the server.
-     *
      * @param msg Notice response message
      */
     void
@@ -760,9 +738,6 @@ public:
     /**
      * @brief Handles ready for query messages
      * 
-     * Called when the server is ready to receive the next query.
-     * Processes any pending queries or sets the client as ready.
-     *
      * @param msg Ready for query message
      */
     void
@@ -782,9 +757,6 @@ public:
     /**
      * @brief Handles row description messages
      * 
-     * Processes metadata about result columns and passes
-     * the information to the current command.
-     *
      * @param msg Row description message
      */
     void
@@ -809,8 +781,6 @@ public:
     /**
      * @brief Handles data row messages
      * 
-     * Processes result rows and passes them to the current command.
-     *
      * @param msg Data row message
      */
     void
@@ -827,9 +797,7 @@ public:
     /**
      * @brief Handles parse complete messages
      * 
-     * Called when a prepared statement has been successfully parsed.
-     *
-     * @param msg Parse complete message (unused)
+     * @param msg Parse complete message
      */
     void
     on_parse_complete(message &) {
@@ -839,9 +807,7 @@ public:
     /**
      * @brief Handles parameter description messages
      * 
-     * Called when the server sends parameter information for a prepared statement.
-     *
-     * @param msg Parameter description message (unused)
+     * @param msg Parameter description message
      */
     void
     on_parameter_description(message &) {
@@ -851,9 +817,7 @@ public:
     /**
      * @brief Handles bind complete messages
      * 
-     * Called when a portal has been successfully bound to a prepared statement.
-     *
-     * @param msg Bind complete message (unused)
+     * @param msg Bind complete message
      */
     void
     on_bind_complete(message &) {
@@ -863,9 +827,7 @@ public:
     /**
      * @brief Handles no data messages
      * 
-     * Called when a query will not return any rows.
-     *
-     * @param msg No data message (unused)
+     * @param msg No data message
      */
     void
     on_no_data(message &) {
@@ -875,9 +837,7 @@ public:
     /**
      * @brief Handles portal suspended messages
      * 
-     * Called when a portal has been suspended (partial result set).
-     *
-     * @param msg Portal suspended message (unused)
+     * @param msg Portal suspended message
      */
     void
     on_portal_suspended(message &) {
@@ -887,8 +847,6 @@ public:
     /**
      * @brief Handles unrecognized messages
      * 
-     * Called for any message type not explicitly handled.
-     *
      * @param msg Unhandled message
      */
     void

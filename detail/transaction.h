@@ -191,26 +191,39 @@ public:
     virtual void on_new_data_row(row_data&&);
 
     /**
-     * @brief Begins a new transaction
+     * @brief Begins a new transaction with success and error callbacks
      * 
-     * @tparam CB_SUCCESS Type of success callback
-     * @tparam CB_ERROR Type of error callback
-     * @param on_success Callback called on successful transaction start
+     * @tparam CB_SUCCESS Type of success callback function
+     * @tparam CB_ERROR Type of error callback function
+     * @param on_success Callback called when transaction starts successfully
      * @param on_error Callback called if transaction start fails
-     * @param mode Transaction mode (isolation level, etc.)
+     * @param mode Optional transaction mode settings
      * @return Transaction& Reference to this transaction for chaining
      */
-    template <typename CB_SUCCESS, typename CB_ERROR>
+    template<typename CB_SUCCESS, typename CB_ERROR,
+            typename = std::enable_if<std::is_function_v<CB_SUCCESS> &&
+                                      std::is_function_v<CB_ERROR>>>
     Transaction &begin(CB_SUCCESS &&on_success, CB_ERROR &&on_error,
                        transaction_mode mode = {});
 
     /**
+     * @brief Begins a new transaction with only a success callback
+     * 
+     * @tparam CB_SUCCESS Type of success callback function
+     * @param on_success Callback called when transaction starts successfully
+     * @param mode Optional transaction mode settings
+     * @return Transaction& Reference to this transaction for chaining
+     */
+    template<typename CB_SUCCESS>
+    Transaction &begin(CB_SUCCESS &&on_success, transaction_mode mode = {});
+
+    /**
      * @brief Creates a savepoint within the current transaction
      * 
-     * @tparam CB_SUCCESS Type of success callback
-     * @tparam CB_ERROR Type of error callback
+     * @tparam CB_SUCCESS Type of success callback function
+     * @tparam CB_ERROR Type of error callback function
      * @param name Name of the savepoint
-     * @param on_success Callback called on successful savepoint creation
+     * @param on_success Callback called when savepoint is created successfully
      * @param on_error Callback called if savepoint creation fails
      * @return Transaction& Reference to this transaction for chaining
      */
@@ -223,22 +236,22 @@ public:
     /**
      * @brief Creates a savepoint with only a success callback
      * 
-     * @tparam CB_SUCCESS Type of success callback
+     * @tparam CB_SUCCESS Type of success callback function
      * @param name Name of the savepoint
-     * @param on_success Callback called on successful savepoint creation
+     * @param on_success Callback called when savepoint is created successfully
      * @return Transaction& Reference to this transaction for chaining
      */
     template <typename CB_SUCCESS>
     Transaction &savepoint(std::string_view name, CB_SUCCESS &&on_success);
 
     /**
-     * @brief Executes a raw SQL expression with callbacks
+     * @brief Executes a SQL query with success and error callbacks
      * 
-     * @tparam CB_SUCCESS Type of success callback
-     * @tparam CB_ERROR Type of error callback
-     * @param expr SQL expression to execute
-     * @param on_success Callback called on successful execution
-     * @param on_error Callback called if execution fails
+     * @tparam CB_SUCCESS Type of success callback function
+     * @tparam CB_ERROR Type of error callback function
+     * @param expr SQL query to execute
+     * @param on_success Callback called when query executes successfully
+     * @param on_error Callback called if query execution fails
      * @return Transaction& Reference to this transaction for chaining
      */
     template <typename CB_SUCCESS, typename CB_ERROR,
@@ -248,11 +261,11 @@ public:
                          CB_ERROR &&on_error);
 
     /**
-     * @brief Executes a raw SQL expression with only a success callback
+     * @brief Executes a SQL query with only a success callback
      * 
-     * @tparam CB_SUCCESS Type of success callback
-     * @param expr SQL expression to execute
-     * @param on_success Callback called on successful execution
+     * @tparam CB_SUCCESS Type of success callback function
+     * @param expr SQL query to execute
+     * @param on_success Callback called when query executes successfully
      * @return Transaction& Reference to this transaction for chaining
      */
     template <typename CB_SUCCESS,
@@ -260,23 +273,23 @@ public:
     Transaction &execute(std::string_view expr, CB_SUCCESS &&on_success);
 
     /**
-     * @brief Executes a raw SQL expression without callbacks
+     * @brief Executes a SQL query without callbacks
      * 
-     * @param expr SQL expression to execute
+     * @param expr SQL query to execute
      * @return Transaction& Reference to this transaction for chaining
      */
     Transaction &execute(std::string_view expr);
 
     /**
-     * @brief Prepares a named query with parameter types and callbacks
+     * @brief Prepares a SQL query with parameter types and callbacks
      * 
-     * @tparam CB_SUCCESS Type of success callback
-     * @tparam CB_ERROR Type of error callback
+     * @tparam CB_SUCCESS Type of success callback function
+     * @tparam CB_ERROR Type of error callback function
      * @param query_name Name for the prepared query
-     * @param expr SQL expression to prepare
+     * @param expr SQL query to prepare
      * @param types Sequence of parameter types
-     * @param on_success Callback called on successful preparation
-     * @param on_error Callback called if preparation fails
+     * @param on_success Callback called when query is prepared successfully
+     * @param on_error Callback called if query preparation fails
      * @return Transaction& Reference to this transaction for chaining
      */
     template <typename CB_SUCCESS, typename CB_ERROR,
@@ -287,13 +300,13 @@ public:
                          CB_ERROR &&on_error);
 
     /**
-     * @brief Prepares a named query with parameter types and success callback
+     * @brief Prepares a SQL query with parameter types and success callback
      * 
-     * @tparam CB_SUCCESS Type of success callback
+     * @tparam CB_SUCCESS Type of success callback function
      * @param query_name Name for the prepared query
-     * @param expr SQL expression to prepare
+     * @param expr SQL query to prepare
      * @param types Sequence of parameter types
-     * @param on_success Callback called on successful preparation
+     * @param on_success Callback called when query is prepared successfully
      * @return Transaction& Reference to this transaction for chaining
      */
     template <typename CB_SUCCESS,
@@ -302,11 +315,11 @@ public:
                          type_oid_sequence &&types, CB_SUCCESS &&on_success);
 
     /**
-     * @brief Prepares a named query with parameter types without callbacks
+     * @brief Prepares a SQL query with parameter types without callbacks
      * 
      * @param query_name Name for the prepared query
-     * @param expr SQL expression to prepare
-     * @param types Sequence of parameter types (can be empty)
+     * @param expr SQL query to prepare
+     * @param types Sequence of parameter types
      * @return Transaction& Reference to this transaction for chaining
      */
     Transaction &prepare(std::string_view query_name, std::string_view expr,
@@ -315,12 +328,12 @@ public:
     /**
      * @brief Executes a prepared query with parameters and callbacks
      * 
-     * @tparam CB_SUCCESS Type of success callback
-     * @tparam CB_ERROR Type of error callback
-     * @param query_name Name of the prepared query
-     * @param params Parameters for the query
-     * @param on_success Callback called on successful execution
-     * @param on_error Callback called if execution fails
+     * @tparam CB_SUCCESS Type of success callback function
+     * @tparam CB_ERROR Type of error callback function
+     * @param query_name Name of the prepared query to execute
+     * @param params Parameters for the prepared query
+     * @param on_success Callback called when query executes successfully
+     * @param on_error Callback called if query execution fails
      * @return Transaction& Reference to this transaction for chaining
      */
     template <typename CB_SUCCESS, typename CB_ERROR,
@@ -332,10 +345,10 @@ public:
     /**
      * @brief Executes a prepared query with parameters and success callback
      * 
-     * @tparam CB_SUCCESS Type of success callback
-     * @param query_name Name of the prepared query
-     * @param params Parameters for the query
-     * @param on_success Callback called on successful execution
+     * @tparam CB_SUCCESS Type of success callback function
+     * @param query_name Name of the prepared query to execute
+     * @param params Parameters for the prepared query
+     * @param on_success Callback called when query executes successfully
      * @return Transaction& Reference to this transaction for chaining
      */
     template <typename CB_SUCCESS,
@@ -344,12 +357,12 @@ public:
                          CB_SUCCESS &&on_success);
 
     /**
-     * @brief Alternative syntax for executing a prepared query
+     * @brief Executes a prepared query with parameters and success callback (alternative syntax)
      * 
-     * @tparam CB_SUCCESS Type of success callback
-     * @param query_name Name of the prepared query
-     * @param on_success Callback called on successful execution
-     * @param params Parameters for the query
+     * @tparam CB_SUCCESS Type of success callback function
+     * @param query_name Name of the prepared query to execute
+     * @param on_success Callback called when query executes successfully
+     * @param params Parameters for the prepared query
      * @return Transaction& Reference to this transaction for chaining
      */
     template <typename CB_SUCCESS,
@@ -360,8 +373,8 @@ public:
     /**
      * @brief Executes a prepared query with parameters without callbacks
      * 
-     * @param query_name Name of the prepared query
-     * @param params Parameters for the query
+     * @param query_name Name of the prepared query to execute
+     * @param params Parameters for the prepared query
      * @return Transaction& Reference to this transaction for chaining
      */
     Transaction &execute(std::string_view query_name, QueryParams &&params);
@@ -369,8 +382,8 @@ public:
     /**
      * @brief Adds a callback to be executed after the next operation
      * 
-     * @tparam CB_SUCCESS Type of success callback
-     * @param on_success Callback to execute on success
+     * @tparam CB_SUCCESS Type of success callback function
+     * @param on_success Callback to be executed after the next operation
      * @return Transaction& Reference to this transaction for chaining
      */
     template <typename CB_SUCCESS>
@@ -379,10 +392,8 @@ public:
     /**
      * @brief Adds a success callback to the transaction
      * 
-     * Called if the transaction completes successfully.
-     * 
-     * @tparam CB_SUCCESS Type of success callback
-     * @param on_success Callback to execute on success
+     * @tparam CB_SUCCESS Type of success callback function
+     * @param on_success Callback to be executed on transaction success
      * @return Transaction& Reference to this transaction for chaining
      */
     template <typename CB_SUCCESS>
@@ -391,10 +402,8 @@ public:
     /**
      * @brief Adds an error callback to the transaction
      * 
-     * Called if the transaction fails.
-     * 
-     * @tparam CB_ERROR Type of error callback
-     * @param on_error Callback to execute on error
+     * @tparam CB_ERROR Type of error callback function
+     * @param on_error Callback to be executed on transaction error
      * @return Transaction& Reference to this transaction for chaining
      */
     template <typename CB_ERROR>

@@ -14,36 +14,6 @@ namespace pg {
 namespace io {
 namespace detail {
 
-template <typename Container>
-struct text_container_formatter : formatter_base<Container> {
-    typedef formatter_base<Container> base_type;
-    typedef typename base_type::value_type value_type;
-    typedef typename value_type::const_iterator element_iterator;
-
-    text_container_formatter(value_type const &v)
-        : base_type(v) {}
-
-    size_t
-    size() const {
-        return 0;
-    }
-
-    bool
-    operator()(std::vector<byte> &buffer) {
-        buffer.push_back('{');
-        element_iterator elem = base_type::value.begin();
-        element_iterator end = base_type::value.end();
-        while (elem != end) {
-            quoted_write(buffer, *elem);
-            ++elem;
-            if (elem != end)
-                buffer.push_back(',');
-        }
-        buffer.push_back('}');
-        return true;
-    }
-};
-
 template <typename Parser, typename Container>
 struct text_container_parser : detail::parser_base<Container> {
 

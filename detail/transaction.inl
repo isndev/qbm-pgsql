@@ -27,7 +27,7 @@
 
 namespace qb::pg::detail {
 
-template <typename CB_SUCCESS, typename CB_ERROR>
+template <typename CB_SUCCESS, typename CB_ERROR, typename>
 Transaction &
 Transaction::begin(CB_SUCCESS &&on_success, CB_ERROR &&on_error, transaction_mode mode) {
     if (_parent) {
@@ -41,11 +41,17 @@ Transaction::begin(CB_SUCCESS &&on_success, CB_ERROR &&on_error, transaction_mod
     return *this;
 }
 
+template <typename CB_SUCCESS>
+Transaction &
+Transaction::begin(CB_SUCCESS &&on_success, transaction_mode mode) {
+    return begin(std::forward<CB_SUCCESS>(on_success), [](error::db_error const &) {}, mode);
+}
+
 template <typename CB_SUCCESS, typename CB_ERROR, typename>
 Transaction &
 Transaction::savepoint(std::string_view name, CB_SUCCESS &&on_success,
                        CB_ERROR &&on_error) {
-    auto end = new EndSavePoint<CB_ERROR>(this, std::move(name), std::forward<CB_ERROR>(on_error));
+    auto end = new EndSavePoint<CB_ERROR>(this, std::string(name), std::forward<CB_ERROR>(on_error));
     push_transaction(std::unique_ptr<Transaction>(new SavePoint<CB_SUCCESS, CB_ERROR>(
         this, end, std::forward<CB_SUCCESS>(on_success))));
     push_transaction(std::unique_ptr<Transaction>(end));
@@ -111,11 +117,11 @@ Transaction::execute(std::string_view query_name, QueryParams &&params,
                      CB_SUCCESS &&on_success, CB_ERROR &&on_error) {
     if constexpr (std::is_invocable_v<CB_SUCCESS, Transaction &, resultset>) {
         push_transaction(std::unique_ptr<Transaction>(new QueryPrepared<CB_SUCCESS, CB_ERROR>(
-            this, std::string(query_name), std::move(params.get()),
+            this, std::string(query_name), std::move(params),
             std::forward<CB_SUCCESS>(on_success), std::forward<CB_ERROR>(on_error))));
     } else if constexpr (std::is_invocable_v<CB_SUCCESS, Transaction &>) {
         push_transaction(std::unique_ptr<Transaction>(new ExecutePrepared<CB_SUCCESS, CB_ERROR>(
-            this, std::string(query_name), std::move(params.get()),
+            this, std::string(query_name), std::move(params),
             std::forward<CB_SUCCESS>(on_success), std::forward<CB_ERROR>(on_error))));
     } else
         static_assert("execute call_back requires -> [](qb::pg::transaction &tr, "
