@@ -32,8 +32,16 @@
 
 #ifndef QBM_PGSQL_DETAIL_TRANSACTION_H
 #define QBM_PGSQL_DETAIL_TRANSACTION_H
+
 #include "queries.h"
+#include "../not-qb/result_impl.h"
+#include "../not-qb/resultset.h"
 #include <queue>
+#include <qb/io/async.h>
+#include <memory>
+#include <string_view>
+#include <type_traits>
+#include <utility>
 
 namespace qb::pg::detail {
 using namespace qb::pg;
@@ -53,29 +61,33 @@ using namespace qb::pg;
  */
 class Transaction {
 protected:
-    Transaction *_parent;                 ///< Parent transaction (for nested transactions)
-    std::queue<Transaction *> _sub_commands; ///< Queue of sub-transactions
-    std::queue<ISqlQuery *> _queries;     ///< Queue of SQL queries to execute
-    PreparedQueryStorage &_query_storage; ///< Storage for prepared queries
-    bool _result = true;                  ///< Result status of the transaction
+    Transaction* _parent{nullptr};                 ///< Parent transaction (for nested transactions)
+    std::queue<std::unique_ptr<Transaction>> _sub_commands; ///< Queue of sub-transactions
+    std::queue<std::unique_ptr<ISqlQuery>> _queries;     ///< Queue of SQL queries to execute
+    PreparedQueryStorage& _query_storage; ///< Storage for prepared queries
+    bool _result{true};                  ///< Result status of the transaction
+    error::db_error _error;               ///< Error message of the transaction
+    result_impl _results;                 ///< Last results of the transaction
 
     Transaction() = delete;
-    Transaction(Transaction const &) = delete;
-    Transaction(Transaction &&) = delete;
+    Transaction(const Transaction&) = delete;
+    Transaction(Transaction&&) = delete;
+    Transaction& operator=(const Transaction&) = delete;
+    Transaction& operator=(Transaction&&) = delete;
     
     /**
      * @brief Constructs a nested transaction
      * 
      * @param parent Pointer to the parent transaction
      */
-    Transaction(Transaction *parent) noexcept;
+    explicit Transaction(Transaction* parent) noexcept;
     
     /**
      * @brief Constructs a root transaction
      * 
      * @param storage Reference to prepared query storage
      */
-    Transaction(PreparedQueryStorage &storage) noexcept;
+    explicit Transaction(PreparedQueryStorage& storage) noexcept;
 
 public:
     /**
@@ -97,56 +109,56 @@ public:
      * 
      * @return bool Current result status
      */
-    bool result() const;
+    [[nodiscard]] bool result() const;
     
     /**
      * @brief Gets the parent transaction
      * 
      * @return Transaction* Pointer to parent transaction or nullptr for root
      */
-    Transaction *parent() const;
+    [[nodiscard]] Transaction* parent() const;
 
     /**
      * @brief Adds a sub-transaction to the queue
      * 
      * @param cmd Pointer to the sub-transaction
      */
-    void push_transaction(Transaction *cmd);
+    void push_transaction(std::unique_ptr<Transaction> cmd);
     
     /**
      * @brief Removes and returns the next sub-transaction from the queue
      * 
      * @return Transaction* Pointer to the removed sub-transaction or nullptr if empty
      */
-    Transaction *pop_transaction();
+    std::unique_ptr<Transaction> pop_transaction();
     
     /**
      * @brief Returns the next sub-transaction without removing it
      * 
      * @return Transaction* Pointer to the next sub-transaction or nullptr if empty
      */
-    Transaction *next_transaction();
+    [[nodiscard]] Transaction* next_transaction();
 
     /**
      * @brief Adds a query to the queue
      * 
      * @param qry Pointer to the query
      */
-    void push_query(ISqlQuery *qry);
+    void push_query(std::unique_ptr<ISqlQuery> qry);
     
     /**
      * @brief Returns the next query without removing it
      * 
      * @return ISqlQuery* Pointer to the next query or nullptr if empty
      */
-    ISqlQuery *next_query();
+    [[nodiscard]] ISqlQuery* next_query();
     
     /**
      * @brief Removes and returns the next query from the queue
      * 
      * @return ISqlQuery* Pointer to the removed query or nullptr if empty
      */
-    ISqlQuery *pop_query();
+    std::unique_ptr<ISqlQuery> pop_query();
 
     /**
      * @brief Handles the result status of a sub-command
@@ -169,14 +181,14 @@ public:
      * 
      * @param Row description metadata from the result
      */
-    virtual void on_new_row_description(row_description_type &&);
+    virtual void on_new_row_description(row_description_type&&);
     
     /**
      * @brief Called when a query returns a data row
      * 
      * @param Row data from the result
      */
-    virtual void on_new_data_row(row_data &&);
+    virtual void on_new_data_row(row_data&&);
 
     /**
      * @brief Begins a new transaction
@@ -188,9 +200,9 @@ public:
      * @param mode Transaction mode (isolation level, etc.)
      * @return Transaction& Reference to this transaction for chaining
      */
-    template <typename CB_SUCCESS, typename CB_ERROR>
-    Transaction &begin(CB_SUCCESS &&on_success, CB_ERROR &&on_error,
-                       transaction_mode mode = {});
+    template<typename CB_SUCCESS, typename CB_ERROR>
+    Transaction& begin(CB_SUCCESS&& on_success, CB_ERROR&& on_error,
+                      transaction_mode mode = {});
                        
     /**
      * @brief Creates a savepoint within the current transaction
@@ -202,11 +214,9 @@ public:
      * @param on_error Callback called if savepoint creation fails
      * @return Transaction& Reference to this transaction for chaining
      */
-    template <typename CB_SUCCESS, typename CB_ERROR,
-              typename = std::enable_if<std::is_function_v<CB_SUCCESS> &&
-                                        std::is_function_v<CB_ERROR>>>
-    Transaction &savepoint(std::string name, CB_SUCCESS &&on_success,
-                           CB_ERROR &&on_error);
+    template<typename CB_SUCCESS, typename CB_ERROR>
+    Transaction& savepoint(std::string_view name, CB_SUCCESS&& on_success,
+                          CB_ERROR&& on_error);
                            
     /**
      * @brief Creates a savepoint with only a success callback
@@ -216,8 +226,8 @@ public:
      * @param on_success Callback called on successful savepoint creation
      * @return Transaction& Reference to this transaction for chaining
      */
-    template <typename CB_SUCCESS>
-    Transaction &savepoint(std::string name, CB_SUCCESS &&on_success);
+    template<typename CB_SUCCESS>
+    Transaction& savepoint(std::string_view name, CB_SUCCESS&& on_success);
 
     /**
      * @brief Executes a raw SQL expression with callbacks
@@ -229,11 +239,9 @@ public:
      * @param on_error Callback called if execution fails
      * @return Transaction& Reference to this transaction for chaining
      */
-    template <typename CB_SUCCESS, typename CB_ERROR,
-              typename = std::enable_if<std::is_function_v<CB_SUCCESS> &&
-                                        std::is_function_v<CB_ERROR>>>
-    Transaction &execute(std::string expr, CB_SUCCESS &&on_success,
-                         CB_ERROR &&on_error);
+    template<typename CB_SUCCESS, typename CB_ERROR>
+    Transaction& execute(std::string_view expr, CB_SUCCESS&& on_success,
+                        CB_ERROR&& on_error);
                          
     /**
      * @brief Executes a raw SQL expression with only a success callback
@@ -243,9 +251,8 @@ public:
      * @param on_success Callback called on successful execution
      * @return Transaction& Reference to this transaction for chaining
      */
-    template <typename CB_SUCCESS,
-              typename = std::enable_if<std::is_function_v<CB_SUCCESS>>>
-    Transaction &execute(std::string expr, CB_SUCCESS &&on_success);
+    template<typename CB_SUCCESS>
+    Transaction& execute(std::string_view expr, CB_SUCCESS&& on_success);
     
     /**
      * @brief Executes a raw SQL expression without callbacks
@@ -253,7 +260,7 @@ public:
      * @param expr SQL expression to execute
      * @return Transaction& Reference to this transaction for chaining
      */
-    Transaction &execute(std::string expr);
+    Transaction& execute(std::string_view expr);
 
     /**
      * @brief Prepares a named query with parameter types and callbacks
@@ -267,12 +274,10 @@ public:
      * @param on_error Callback called if preparation fails
      * @return Transaction& Reference to this transaction for chaining
      */
-    template <typename CB_SUCCESS, typename CB_ERROR,
-              typename = std::enable_if<std::is_function_v<CB_SUCCESS> &&
-                                        std::is_function_v<CB_ERROR>>>
-    Transaction &prepare(std::string query_name, std::string expr,
-                         type_oid_sequence &&types, CB_SUCCESS &&on_success,
-                         CB_ERROR &&on_error);
+    template<typename CB_SUCCESS, typename CB_ERROR>
+    Transaction& prepare(std::string_view query_name, std::string_view expr,
+                        type_oid_sequence&& types, CB_SUCCESS&& on_success,
+                        CB_ERROR&& on_error);
                          
     /**
      * @brief Prepares a named query with parameter types and success callback
@@ -284,10 +289,9 @@ public:
      * @param on_success Callback called on successful preparation
      * @return Transaction& Reference to this transaction for chaining
      */
-    template <typename CB_SUCCESS,
-              typename = std::enable_if<std::is_function_v<CB_SUCCESS>>>
-    Transaction &prepare(std::string query_name, std::string expr,
-                         type_oid_sequence &&types, CB_SUCCESS &&on_success);
+    template<typename CB_SUCCESS>
+    Transaction& prepare(std::string_view query_name, std::string_view expr,
+                        type_oid_sequence&& types, CB_SUCCESS&& on_success);
                          
     /**
      * @brief Prepares a named query with parameter types without callbacks
@@ -297,8 +301,8 @@ public:
      * @param types Sequence of parameter types (can be empty)
      * @return Transaction& Reference to this transaction for chaining
      */
-    Transaction &prepare(std::string query_name, std::string expr,
-                         type_oid_sequence &&types = {});
+    Transaction& prepare(std::string_view query_name, std::string_view expr,
+                        type_oid_sequence&& types = {});
 
     /**
      * @brief Executes a prepared query with parameters and callbacks
@@ -311,11 +315,9 @@ public:
      * @param on_error Callback called if execution fails
      * @return Transaction& Reference to this transaction for chaining
      */
-    template <typename CB_SUCCESS, typename CB_ERROR,
-              typename = std::enable_if<std::is_function_v<CB_SUCCESS> &&
-                                        std::is_function_v<CB_ERROR>>>
-    Transaction &execute(std::string query_name, QueryParams &&params,
-                         CB_SUCCESS &&on_success, CB_ERROR &&on_error);
+    template<typename CB_SUCCESS, typename CB_ERROR>
+    Transaction& execute(std::string_view query_name, QueryParams&& params,
+                        CB_SUCCESS&& on_success, CB_ERROR&& on_error);
                          
     /**
      * @brief Executes a prepared query with parameters and success callback
@@ -326,10 +328,9 @@ public:
      * @param on_success Callback called on successful execution
      * @return Transaction& Reference to this transaction for chaining
      */
-    template <typename CB_SUCCESS,
-              typename = std::enable_if<std::is_function_v<CB_SUCCESS>>>
-    Transaction &execute(std::string query_name, QueryParams &&params,
-                         CB_SUCCESS &&on_success);
+    template<typename CB_SUCCESS>
+    Transaction& execute(std::string_view query_name, QueryParams&& params,
+                        CB_SUCCESS&& on_success);
                          
     /**
      * @brief Alternative syntax for executing a prepared query
@@ -340,10 +341,9 @@ public:
      * @param params Parameters for the query
      * @return Transaction& Reference to this transaction for chaining
      */
-    template <typename CB_SUCCESS,
-              typename = std::enable_if<std::is_function_v<CB_SUCCESS>>>
-    Transaction &execute(std::string query_name, CB_SUCCESS &&on_success,
-                         QueryParams &&params);
+    template<typename CB_SUCCESS>
+    Transaction& execute(std::string_view query_name, CB_SUCCESS&& on_success,
+                        QueryParams&& params);
                          
     /**
      * @brief Executes a prepared query with parameters without callbacks
@@ -352,7 +352,7 @@ public:
      * @param params Parameters for the query
      * @return Transaction& Reference to this transaction for chaining
      */
-    Transaction &execute(std::string query_name, QueryParams &&params);
+    Transaction& execute(std::string_view query_name, QueryParams&& params);
 
     /**
      * @brief Adds a callback to be executed after the next operation
@@ -361,8 +361,8 @@ public:
      * @param on_success Callback to execute on success
      * @return Transaction& Reference to this transaction for chaining
      */
-    template <typename CB_SUCCESS>
-    Transaction &then(CB_SUCCESS &&on_success);
+    template<typename CB_SUCCESS>
+    Transaction& then(CB_SUCCESS&& on_success);
     
     /**
      * @brief Adds a success callback to the transaction
@@ -373,8 +373,8 @@ public:
      * @param on_success Callback to execute on success
      * @return Transaction& Reference to this transaction for chaining
      */
-    template <typename CB_SUCCESS>
-    Transaction &success(CB_SUCCESS &&on_success);
+    template<typename CB_SUCCESS>
+    Transaction& success(CB_SUCCESS&& on_success);
     
     /**
      * @brief Adds an error callback to the transaction
@@ -385,12 +385,70 @@ public:
      * @param on_error Callback to execute on error
      * @return Transaction& Reference to this transaction for chaining
      */
-    template <typename CB_ERROR>
-    Transaction &error(CB_ERROR &&on_success);
+    template<typename CB_ERROR>
+    Transaction& error(CB_ERROR&& on_error);
+
+    /**
+     * @brief Checks if the transaction has an error
+     * 
+     * @return bool True if the transaction has an error, false otherwise
+     */
+    [[nodiscard]] bool has_error() const;
+
+    /**
+     * @brief Gets the error message of the transaction
+     * 
+     * @return std::string& Reference to the error message
+     */
+    [[nodiscard]] const error::db_error& error() const;
+
+    /**
+     * @brief Gets the last results of the transaction
+     * 
+     * @return result_impl& Reference to the last results
+     */
+    result_impl& results();
+
+    class status {
+        friend class Transaction;
+        result_impl _results;
+        error::db_error _error{"unknown error"};
+
+        public:
+        status() = default;
+        ~status() = default;
+        status(status&) = default;
+        status(status&&) = default;
+        status& operator=(status&) = default;
+        status& operator=(status&&) = default;
+
+        status(result_impl results, error::db_error error)
+            : _results(std::move(results))
+            , _error(std::move(error)) {}
+
+        [[nodiscard]] explicit operator bool() const {
+            return _error.code.empty();
+        }
+
+        [[nodiscard]] bool operator()() const {
+            return static_cast<bool>(*this);
+        }
+
+        [[nodiscard]] resultset results() { return {&_results}; }
+        [[nodiscard]] error::db_error& error() { return _error; }
+    };
+
+    status await();
 };
 
 } // namespace qb::pg::detail
 
 #include "transaction.inl"
+
+namespace qb::pg {
+    inline detail::Transaction::status await(detail::Transaction& t) {
+        return t.await();
+    }
+}
 
 #endif // QBM_PGSQL_DETAIL_TRANSACTION_H
