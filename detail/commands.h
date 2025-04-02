@@ -221,7 +221,7 @@ public:
     on_end_savepoint() {
         push_query(_result ? std::unique_ptr<ISqlQuery>(new ReleaseSavePointQuery(
                                  _name,
-                                 [this]() {
+                                 []() {
                                      // commited
                                  },
                                  [this](auto const &err) { _on_error(err); }))
@@ -567,13 +567,13 @@ public:
      * @param on_error Callback for execution errors
      */
     ExecutePrepared(Transaction *parent, std::string &&query_name,
-                   std::vector<char> &&params, CB_SUCCESS &&on_success,
+                   QueryParams &&params, CB_SUCCESS &&on_success,
                    CB_ERROR &&on_error)
         : Transaction(parent)
         , _query_name(std::move(query_name))
         , _on_success(std::forward<CB_SUCCESS>(on_success))
         , _on_error(std::forward<CB_ERROR>(on_error)) {
-        push_query(std::unique_ptr<ISqlQuery>(new BindExecQuery(
+        push_query(std::unique_ptr<ISqlQuery>(new ExecuteQuery(
             _query_storage, _query_name, std::move(params),
             [this]() {
                 try {
@@ -614,19 +614,20 @@ public:
      * @param on_error Callback for execution errors
      */
     QueryPrepared(Transaction *parent, std::string const &query_name,
-                  std::vector<byte> &&params, CB_SUCCESS &&on_success,
+                  QueryParams &&params, CB_SUCCESS &&on_success,
                   CB_ERROR &&on_error)
         : Transaction(parent)
         , _on_success(std::forward<CB_SUCCESS>(on_success))
         , _on_error(std::forward<CB_ERROR>(on_error))
         , _query_name(query_name) {
-        push_query(std::unique_ptr<ISqlQuery>(new BindExecQuery(
+        push_query(std::unique_ptr<ISqlQuery>(new ExecuteQuery(
             _query_storage, _query_name, std::move(params),
             [this]() {
                 try {
                     _results.row_description() =
                         _query_storage.get(_query_name).row_description;
                     _on_success(*this, resultset(&_results));
+                    _parent->results() = std::move(_results);
                 } catch (std::exception const &e) {
                     _result = false;
                     _on_error((error::db_error)error::client_error{e.what()});

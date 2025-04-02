@@ -125,7 +125,7 @@ Transaction::prepare(std::string_view query_name, std::string_view expr,
 Transaction &
 Transaction::execute(std::string_view query_name, QueryParams &&params) {
     return this->execute(
-        query_name, std::move(params), [](Transaction &) {},
+        query_name, std::move(params), [](Transaction &, auto) {},
         [](error::db_error const &) {});
 }
 

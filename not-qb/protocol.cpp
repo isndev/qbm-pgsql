@@ -94,7 +94,12 @@ message::buffer() const {
     if (!packed_) {
         // Encode length of message
         integer len = size();
-        io::protocol_write<BINARY_DATA_FORMAT>(payload.begin() + 1, len);
+        // Conversion manuelle au lieu d'utiliser protocol_write
+        unsigned char* p = reinterpret_cast<unsigned char*>(&len);
+        len = boost::endian::native_to_big(len);
+        for (size_t i = 0; i < sizeof(len); ++i) {
+            payload[i + 1] = p[i];
+        }
     }
 
     if (payload.front() == 0)
@@ -143,7 +148,12 @@ message::read(char &c) {
 template <typename T>
 void
 write_int(message::buffer_type &payload, T val) {
-    io::protocol_write<BINARY_DATA_FORMAT>(payload, val);
+    // Conversion manuelle au lieu d'utiliser protocol_write
+    T converted = boost::endian::native_to_big(val);
+    unsigned char* p = reinterpret_cast<unsigned char*>(&converted);
+    for (size_t i = 0; i < sizeof(T); ++i) {
+        payload.push_back(p[i]);
+    }
 }
 
 bool
@@ -267,13 +277,15 @@ message::write(integer v) {
 
 void
 message::write(std::string const &s) {
-    io::protocol_write<TEXT_DATA_FORMAT>(payload, s);
+    // Copier la chaîne directement au lieu d'utiliser protocol_write
+    std::copy(s.begin(), s.end(), std::back_inserter(payload));
     payload.push_back(0);
 }
 
 void
 message::write_sv(std::string_view const &s) {
-    io::protocol_write<TEXT_DATA_FORMAT>(payload, s);
+    // Copier la vue de chaîne directement au lieu d'utiliser protocol_write
+    std::copy(s.begin(), s.end(), std::back_inserter(payload));
 }
 
 void

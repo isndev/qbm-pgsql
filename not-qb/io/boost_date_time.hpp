@@ -152,34 +152,10 @@ struct protocol_parser<boost::posix_time::ptime, BINARY_DATA_FORMAT>
     void from_int_value(bigint);
 };
 
-template <>
-struct protocol_formatter<boost::posix_time::ptime, BINARY_DATA_FORMAT>
-    : detail::formatter_base<boost::posix_time::ptime> {
-
-    using ptime = boost::posix_time::ptime;
-    using time_duration = boost::posix_time::time_duration;
-    using base_type = detail::formatter_base<boost::posix_time::ptime>;
-    using value_type = base_type::value_type;
-
-    static value_type const pg_epoch;
-
-    protocol_formatter(value_type const &val)
-        : base_type(val) {}
-
-    size_t
-    size() const {
-        return sizeof(bigint);
-    }
-
-    bool operator()(std::vector<byte> &buffer);
-};
-
 namespace traits {
 
 template <>
 struct has_parser<boost::posix_time::ptime, BINARY_DATA_FORMAT> : std::true_type {};
-template <>
-struct has_formatter<boost::posix_time::ptime, BINARY_DATA_FORMAT> : std::true_type {};
 
 //@{
 template <>
@@ -204,8 +180,6 @@ struct nullable_traits<boost::posix_time::ptime> {
     }
 };
 
-template <>
-struct needs_quotes<boost::posix_time::ptime> : ::std::true_type {};
 //@}
 
 } // namespace traits

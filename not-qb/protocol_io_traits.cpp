@@ -86,27 +86,10 @@ protocol_parser<bytea, TEXT_DATA_FORMAT>::operator()(buffer_type &buffer) {
 using ::boost::gregorian::date;
 using ::boost::posix_time::ptime;
 
-ptime const protocol_formatter<ptime, BINARY_DATA_FORMAT>::pg_epoch{
-    date{2000, boost::gregorian::Jan, 1}};
-
 void
 protocol_parser<ptime, BINARY_DATA_FORMAT>::from_int_value(bigint val) {
-    using fmt_type = protocol_formatter<ptime, BINARY_DATA_FORMAT>;
-    base_type::value = fmt_type::pg_epoch + ::boost::posix_time::microseconds{val};
-}
-
-bool
-protocol_formatter<ptime, BINARY_DATA_FORMAT>::operator()(::std::vector<byte> &buffer) {
-    if (buffer.capacity() - buffer.size() < size()) {
-        buffer.reserve(buffer.size() + size());
-    }
-
-    bigint delta = (base_type::value - pg_epoch).total_microseconds();
-    delta = util::endian::native_to_big(delta);
-    char const *p = reinterpret_cast<char const *>(&delta);
-    char const *e = p + size();
-    ::std::copy(p, e, ::std::back_inserter(buffer));
-    return true;
+//    using fmt_type = protocol_formatter<ptime, BINARY_DATA_FORMAT>;
+//    base_type::value = fmt_type::pg_epoch + ::boost::posix_time::microseconds{val};
 }
 
 } // namespace io

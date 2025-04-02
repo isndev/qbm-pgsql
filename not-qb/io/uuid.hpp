@@ -45,40 +45,10 @@ struct protocol_parser<qb::uuid, BINARY_DATA_FORMAT> : detail::parser_base<qb::u
     }
 };
 
-template <>
-struct protocol_formatter<qb::uuid, BINARY_DATA_FORMAT>
-    : detail::formatter_base<qb::uuid> {
-
-    using uuid = qb::uuid;
-    using base_type = detail::formatter_base<uuid>;
-    using value_type = base_type::value_type;
-
-    protocol_formatter(value_type const &val)
-        : base_type(val) {}
-
-    size_t
-    size() const {
-        return 16;
-    }
-
-    bool
-    operator()(::std::vector<byte> &buffer) {
-        if (buffer.capacity() - buffer.size() < size()) {
-            buffer.reserve(buffer.size() + size());
-        }
-
-        ::std::copy(base_type::value.begin(), base_type::value.end(),
-                    ::std::back_inserter(buffer));
-        return true;
-    }
-};
-
 namespace traits {
 
 template <>
 struct has_parser<qb::uuid, BINARY_DATA_FORMAT> : std::true_type {};
-template <>
-struct has_formatter<qb::uuid, BINARY_DATA_FORMAT> : std::true_type {};
 
 //@{
 template <>
