@@ -19,7 +19,11 @@ public:
     typedef std::vector<row_data> row_set_type;
 
 public:
-    result_impl();
+    result_impl() = default;
+    result_impl(result_impl &) = default;
+    result_impl(result_impl &&) = default;
+    result_impl &operator=(result_impl &) = default;
+    result_impl &operator=(result_impl &&) = default;
 
     row_description_type &
     row_description() {

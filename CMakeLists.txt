@@ -15,11 +15,23 @@
 #         limitations under the License.
 #
 
+if (NOT QB_FOUND)
+    message(STATUS "qb project not found, skipping PostgreSQL module")
+    return()
+endif()
+
 project(qbm-pgsql)
 
 set(Boost_USE_STATIC_LIBS ON)
 find_package(Boost CONFIG REQUIRED)
+
+if (NOT Boost_FOUND)
+    message(STATUS "Boost not found, skipping PostgreSQL module")
+    return()
+endif()
+
 include_directories(${Boost_INCLUDE_DIRS})
+include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
 qb_register_module(
         NAME pgsql
@@ -41,5 +53,5 @@ qb_register_module(
 )
 
 if (QB_BUILD_TEST)
-#    add_subdirectory(tests)
+   add_subdirectory(tests)
 endif ()

@@ -82,17 +82,17 @@ public:
      */
     void
     on_end_transaction() {
-        push_query(_result ? (ISqlQuery *)new CommitQuery(
+        push_query(_result ? std::unique_ptr<ISqlQuery>(new CommitQuery(
                                  []() {
                                      // commited
                                  },
-                                 [this](auto const &err) { _on_error(err); })
-                           : (ISqlQuery *)new RollbackQuery(
+                                 [this](auto const &err) { _on_error(err); }))
+                           : std::unique_ptr<ISqlQuery>(new RollbackQuery(
                                  [this]() {
                                      _on_error((error::db_error)error::query_error(
                                          "rollback processed due to a query failure"));
                                  },
-                                 [this](auto const &err) { _on_error(err); }));
+                                 [this](auto const &err) { _on_error(err); })));
     }
 };
 
@@ -126,7 +126,7 @@ public:
         , _end(end)
         , _mode(mode)
         , _on_success(std::forward<CB_SUCCESS>(on_success)) {
-        push_query(new BeginQuery(
+        push_query(std::unique_ptr<ISqlQuery>(new BeginQuery(
             mode,
             [this]() {
                 try {
@@ -137,7 +137,7 @@ public:
                         (error::db_error)error::client_error{e.what()});
                 }
             },
-            [this](auto const &err) { _end->get_error_callback()(err); }));
+            [this](auto const &err) { _end->get_error_callback()(err); })));
     }
 
     /**
@@ -219,20 +219,20 @@ public:
      */
     void
     on_end_savepoint() {
-        push_query(_result ? (ISqlQuery *)new ReleaseSavePointQuery(
+        push_query(_result ? std::unique_ptr<ISqlQuery>(new ReleaseSavePointQuery(
                                  _name,
                                  [this]() {
                                      // commited
                                  },
-                                 [this](auto const &err) { _on_error(err); })
-                           : (ISqlQuery *)new RollbackSavePointQuery(
+                                 [this](auto const &err) { _on_error(err); }))
+                           : std::unique_ptr<ISqlQuery>(new RollbackSavePointQuery(
                                  _name,
                                  [this]() {
                                      _on_error((error::db_error)error::query_error(
                                          "savepoint rollback processed due to a "
                                          "query failure"));
                                  },
-                                 [this](auto const &err) { _on_error(err); }));
+                                 [this](auto const &err) { _on_error(err); })));
     }
 };
 
@@ -262,7 +262,7 @@ public:
         : Transaction(parent)
         , _end(end)
         , _on_success(std::forward<CB_SUCCESS>(on_success)) {
-        push_query(new SavePointQuery(
+        push_query(std::unique_ptr<ISqlQuery>(new SavePointQuery(
             _end->get_name(),
             [this]() {
                 try {
@@ -273,7 +273,7 @@ public:
                         (error::db_error)error::client_error{e.what()});
                 }
             },
-            [this](auto const &err) { _end->get_error_callback()(err); }));
+            [this](auto const &err) { _end->get_error_callback()(err); })));
     }
 
     /**
@@ -329,7 +329,7 @@ public:
         : Transaction(parent)
         , _on_success(std::forward<CB_SUCCESS>(on_success))
         , _on_error(std::forward<CB_ERROR>(on_error)) {
-        push_query(new SimpleQuery(
+        push_query(std::unique_ptr<ISqlQuery>(new SimpleQuery(
             std::move(expr),
             [this]() {
                 try {
@@ -339,7 +339,7 @@ public:
                     _on_error((error::db_error)error::client_error{e.what()});
                 }
             },
-            [this](auto const &err) { _on_error(err); }));
+            [this](auto const &err) { _on_error(err); })));
     }
 
 //    void
@@ -376,17 +376,18 @@ public:
         : Transaction(parent)
         , _on_success(std::forward<CB_SUCCESS>(on_success))
         , _on_error(std::forward<CB_ERROR>(on_error)) {
-        push_query(new SimpleQuery(
+        push_query(std::unique_ptr<ISqlQuery>(new SimpleQuery(
             std::move(expr),
             [this]() {
                 try {
                     _on_success(*this, resultset(&_results));
+                    _parent->results() = std::move(_results);
                 } catch (std::exception const &e) {
                     _result = false;
                     _on_error((error::db_error)error::client_error{e.what()});
                 }
             },
-            [this](auto const &err) { _on_error(err); }));
+            [this](auto const &err) { _on_error(err); })));
     }
 
     /**
@@ -456,6 +457,35 @@ public:
 };
 
 /**
+ * @brief Command for handling errors
+ * 
+ * Executes a callback when an error occurs.
+ * 
+ * @tparam CB_ERROR Type of error callback
+ */
+template <typename CB_ERROR>
+class Error final : public Transaction {
+    CB_ERROR _on_error; ///< Error callback
+
+public:
+    Error(Transaction *parent, CB_ERROR &&on_error)
+        : Transaction(parent), _on_error(std::forward<CB_ERROR>(on_error)) {}
+        
+    ~Error() {
+        if (parent()->result())
+            return;
+        
+        try {
+            _on_error(*(parent()));
+        } catch (...) {
+            if (parent() && parent()->parent()) {
+                parent()->result(false);
+            }
+        }
+    }
+};  
+
+/**
  * @brief Command for preparing a named query
  * 
  * Prepares a SQL statement with the specified name and parameter types.
@@ -482,10 +512,10 @@ public:
     Prepare(Transaction *parent, PreparedQuery &&query, CB_SUCCESS &&on_success,
             CB_ERROR &&on_error)
         : Transaction(parent)
+        , _query(std::move(query))
         , _on_success(std::forward<CB_SUCCESS>(on_success))
-        , _on_error(std::forward<CB_ERROR>(on_error))
-        , _query(std::move(query)) {
-        push_query(new ParseQuery(
+        , _on_error(std::forward<CB_ERROR>(on_error)) {
+        push_query(std::unique_ptr<ISqlQuery>(new ParseQuery(
             _query,
             [this]() {
                 try {
@@ -495,7 +525,7 @@ public:
                     _on_error((error::db_error)error::client_error{e.what()});
                 }
             },
-            [this](auto const &err) { _on_error(err); }));
+            [this](auto const &err) { _on_error(err); })));
     }
 
     /**
@@ -536,14 +566,14 @@ public:
      * @param on_success Callback for successful execution
      * @param on_error Callback for execution errors
      */
-    ExecutePrepared(Transaction *parent, std::string const &query_name,
-                    std::vector<byte> &&params, CB_SUCCESS &&on_success,
-                    CB_ERROR &&on_error)
+    ExecutePrepared(Transaction *parent, std::string &&query_name,
+                   std::vector<char> &&params, CB_SUCCESS &&on_success,
+                   CB_ERROR &&on_error)
         : Transaction(parent)
+        , _query_name(std::move(query_name))
         , _on_success(std::forward<CB_SUCCESS>(on_success))
-        , _on_error(std::forward<CB_ERROR>(on_error))
-        , _query_name(query_name) {
-        push_query(new BindExecQuery(
+        , _on_error(std::forward<CB_ERROR>(on_error)) {
+        push_query(std::unique_ptr<ISqlQuery>(new BindExecQuery(
             _query_storage, _query_name, std::move(params),
             [this]() {
                 try {
@@ -553,7 +583,7 @@ public:
                     _on_error((error::db_error)error::client_error{e.what()});
                 }
             },
-            [this](auto const &err) { _on_error(err); }));
+            [this](auto const &err) { _on_error(err); })));
     }
 };
 
@@ -590,7 +620,7 @@ public:
         , _on_success(std::forward<CB_SUCCESS>(on_success))
         , _on_error(std::forward<CB_ERROR>(on_error))
         , _query_name(query_name) {
-        push_query(new BindExecQuery(
+        push_query(std::unique_ptr<ISqlQuery>(new BindExecQuery(
             _query_storage, _query_name, std::move(params),
             [this]() {
                 try {
@@ -602,7 +632,7 @@ public:
                     _on_error((error::db_error)error::client_error{e.what()});
                 }
             },
-            [this](auto const &err) { _on_error(err); }));
+            [this](auto const &err) { _on_error(err); })));
     }
 
     /**

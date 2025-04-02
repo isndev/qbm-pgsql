@@ -13,8 +13,6 @@ namespace qb {
 namespace pg {
 namespace detail {
 
-result_impl::result_impl() {}
-
 size_t
 result_impl::size() const {
     return rows_.size();

@@ -357,6 +357,7 @@ private:
     integer serverPid_{}; ///< Server process ID
     integer serverSecret_{}; ///< Server secret for protocol operations
     PreparedQueryStorage storage_; ///< Storage for prepared statements
+    bool is_connected_ = false; ///< Flag indicating if the connection is established
 
     /**
      * @brief Create a startup message for initial connection
@@ -463,7 +464,7 @@ private:
         } else if (_current_command->parent()) {
             auto next_cmd = _current_command->parent();
             do {
-                delete next_cmd->pop_transaction();
+                next_cmd->pop_transaction();
             } while (!next_cmd->result() && (next_cmd = next_cmd->parent()));
 
             return process_query(next_cmd);
@@ -492,9 +493,8 @@ private:
     void
     on_success_query() {
         if (_current_query) {
-            const auto query = _current_command->pop_query();
+            auto query = _current_command->pop_query();
             query->on_success();
-            delete query;
             _current_query = nullptr;
         }
     }
@@ -509,19 +509,19 @@ private:
      */
     void
     on_error_query(error::db_error const &err) {
+        _error = err;
         if (_current_query) {
             _current_command->result(false);
-            const auto query = _current_command->pop_query();
+            auto query = _current_command->pop_query();
             query->on_error(err);
-            delete query;
             _current_query = nullptr;
         }
     }
-
+private:
     std::string _nonce;                   ///< Client nonce for SCRAM authentication
     std::vector<uint8_t> _password_salt;  ///< Salted password for SCRAM authentication
     std::string _auth_message;            ///< Authentication message for SCRAM protocol
-    
+public:    
     /**
      * @brief Handles authentication messages from the server
      * 
@@ -541,6 +541,7 @@ private:
         switch (auth_state) {
             case OK: {
                 LOG_INFO("[pgsql] Authenticated with server");
+                is_connected_ = true;
             }
                 break;
             case Cleartext: {
@@ -934,6 +935,10 @@ public:
         : Transaction(storage_)
         , conn_opts_(connection_options::parse(opts)) {}
 
+    ~Database() {
+        is_connected_ = false;
+    }
+
     /**
      * @brief Initiates a connection to the database
      * 
@@ -944,6 +949,11 @@ public:
      */
     bool
     connect() {
+        if (is_connected_)
+            return true;
+
+        _error = error::db_error{"unknown error"};
+
         if (!this->transport().connect(qb::io::uri{conn_opts_.schema + "://" + conn_opts_.uri})) {
 
             if (this->protocol())
@@ -953,7 +963,10 @@ public:
             this->start();
             send_startup_message();
 
-            return true;
+            while (!is_connected_ && !has_error())
+                qb::io::async::run_once();
+
+            return is_connected_;
         }
         return false;
     }
@@ -1017,7 +1030,15 @@ public:
      */
     void
     on(qb::io::async::event::disconnected const &) {
-        on_error_query(error::client_error("database disconnected"));
+        if (is_connected_) {
+            is_connected_ = false;
+            on_error_query(error::client_error("database disconnected"));
+        }
+    }
+
+    void disconnect() {
+        static_cast<qb::io::async::tcp::client<Database<QB_IO_>, QB_IO_, void> &>(*this).disconnect();
+        qb::io::async::run(EVRUN_NOWAIT);
     }
 };
 

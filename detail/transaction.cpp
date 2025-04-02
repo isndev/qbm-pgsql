@@ -16,27 +16,36 @@
  */
 
 #include "transaction.h"
+#include "transaction.inl"
+#include <memory>
+#include <utility>
 
 namespace qb::pg::detail {
 
 Transaction::Transaction(Transaction *parent) noexcept
     : _parent(parent)
-    , _query_storage(parent->_query_storage) {}
+    , _query_storage(parent->_query_storage)
+    , _error{"unknown error"} {}
+
 Transaction::Transaction(PreparedQueryStorage &storage) noexcept
     : _parent(nullptr)
-    , _query_storage(storage) {}
+    , _query_storage(storage)
+    , _error{"unknown error"} {}
 
 Transaction::~Transaction() {
-    while (!_sub_commands.empty())
-        delete pop_transaction();
-    while (!_queries.empty())
-        delete pop_query();
+    while (!_sub_commands.empty()) {
+        pop_transaction();
+    }
+    while (!_queries.empty()) {
+        pop_query();
+    }
 }
 
 void
 Transaction::result(bool value) {
     _result = value;
 }
+
 bool
 Transaction::result() const {
     return _result;
@@ -48,33 +57,37 @@ Transaction::parent() const {
 }
 
 void
-Transaction::push_transaction(Transaction *cmd) {
-    _sub_commands.push(cmd);
+Transaction::push_transaction(std::unique_ptr<Transaction> cmd) {
+    _sub_commands.push(std::move(cmd));
     on_new_command();
 }
-Transaction *
+
+std::unique_ptr<Transaction>
 Transaction::pop_transaction() {
-    auto ret = _sub_commands.front();
+    auto ret = std::move(_sub_commands.front());
     _sub_commands.pop();
     on_sub_command_status(ret->_result);
     return ret;
 }
+
 Transaction *
 Transaction::next_transaction() {
-    return _sub_commands.empty() ? nullptr : _sub_commands.front();
+    return _sub_commands.empty() ? nullptr : _sub_commands.front().get();
 }
 
 void
-Transaction::push_query(ISqlQuery *qry) {
-    _queries.push(qry);
+Transaction::push_query(std::unique_ptr<ISqlQuery> qry) {
+    _queries.push(std::move(qry));
 }
+
 ISqlQuery *
 Transaction::next_query() {
-    return _queries.empty() ? nullptr : _queries.front();
+    return _queries.empty() ? nullptr : _queries.front().get();
 }
-ISqlQuery *
+
+std::unique_ptr<ISqlQuery>
 Transaction::pop_query() {
-    auto ret = _queries.front();
+    auto ret = std::move(_queries.front());
     _queries.pop();
     return ret;
 }
@@ -82,34 +95,68 @@ Transaction::pop_query() {
 void
 Transaction::on_sub_command_status(bool status) {
     _result &= status;
-    _parent->on_sub_command_status(status);
+    if (_parent)
+        _parent->on_sub_command_status(status);
 }
+
 void
 Transaction::on_new_command() {}
+
 void
 Transaction::on_new_row_description(row_description_type &&) {}
+
 void
 Transaction::on_new_data_row(row_data &&) {}
 
 Transaction &
-Transaction::execute(std::string expr) {
+Transaction::execute(std::string_view expr) {
     return this->execute(
-        std::move(expr), [](Transaction &) {}, [](error::db_error const &) {});
+        expr, [](Transaction &, auto) {}, [](error::db_error const &) {});
 }
 
 Transaction &
-Transaction::prepare(std::string query_name, std::string expr,
+Transaction::prepare(std::string_view query_name, std::string_view expr,
                      type_oid_sequence &&types) {
     return this->prepare(
-        std::move(query_name), std::move(expr), std::move(types),
+        query_name, expr, std::move(types),
         [](Transaction &, PreparedQuery const &) {}, [](error::db_error const &) {});
 }
 
 Transaction &
-Transaction::execute(std::string query_name, QueryParams &&params) {
+Transaction::execute(std::string_view query_name, QueryParams &&params) {
     return this->execute(
-        std::move(query_name), std::move(params), [](Transaction &) {},
+        query_name, std::move(params), [](Transaction &) {},
         [](error::db_error const &) {});
+}
+
+bool
+Transaction::has_error() const {
+    return _error.sqlstate != sqlstate::unknown_code;
+}
+
+error::db_error const &
+Transaction::error() const {
+    return _error;
+}
+
+result_impl &
+Transaction::results() {
+    return _results;
+}
+
+Transaction::status
+Transaction::await() {
+    results() = {};
+    error::db_error err{"unknown error"};
+
+    error([this, &err](auto &){
+        err = error();
+    });
+
+    while (!_sub_commands.empty() || !_queries.empty())
+        qb::io::async::run_once();
+
+    return {std::move(results()), std::move(err)};
 }
 
 } // namespace qb::pg::detail
