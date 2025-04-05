@@ -63,7 +63,7 @@ using namespace qb::pg;
 struct PreparedQuery {
     std::string name;              ///< Name of the prepared query
     std::string expression;        ///< SQL expression
-    std::vector<integer> param_types; ///< Types of parameters (was type_oid_sequence)
+    std::vector<oid> param_types; ///< Types of parameters (was type_oid_sequence)
     row_description_type row_description; ///< Description of result columns
 };
 
@@ -606,15 +606,15 @@ public:
                                          std::forward<CB_ERROR>(error))
         , _query(query) {}
 
-    message
+    [[nodiscard]] message
     get() const final {
         LOG_DEBUG("[pgsql] Send PARSE QUERY \"" << _query.expression << "\"");
         message cmd(parse_tag);
         cmd.write(_query.name);
         cmd.write(_query.expression);
         cmd.write((smallint)_query.param_types.size());
-        for (integer oid_val : _query.param_types) {
-            cmd.write(oid_val); // déjà un integer, pas besoin de cast
+        for (auto oid_val : _query.param_types) {
+            cmd.write(static_cast<integer>(oid_val)); // déjà un integer, pas besoin de cast
         }
 
         message describe(describe_tag);

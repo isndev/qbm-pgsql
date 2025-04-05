@@ -40,7 +40,7 @@ public:
     static bool read_buffer(bool is_null, const std::vector<byte>& buffer, T& value) {
         if (is_null) {
             // Pour les types optional, on peut gérer NULL facilement
-            if constexpr (std::is_same_v<T, std::optional<typename T::value_type>>) {
+            if constexpr (is_optional_v<T>) {
                 value.reset();
                 return true;
             } else {
@@ -56,6 +56,16 @@ public:
 private:
     // Désérialiseur utilisé pour la lecture des données
     static ParamUnserializer unserializer;
+
+    // Détection des types optional
+    template <typename T>
+    struct is_optional : std::false_type {};
+    
+    template <typename T>
+    struct is_optional<std::optional<T>> : std::true_type {};
+    
+    template <typename T>
+    static inline constexpr bool is_optional_v = is_optional<T>::value;
 
     /**
      * @brief Lit une valeur à partir d'un tampon

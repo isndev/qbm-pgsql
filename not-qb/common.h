@@ -164,54 +164,6 @@ namespace qb {
 namespace pg {
 
 /**
- * @brief 2-byte integer, to match PostgreSQL `smallint` and `smallserial` types
- */
-using smallint = int16_t;
-/**
- * @brief 2-byte unsigned integer
- */
-using usmallint = uint16_t;
-/**
- * @brief 4-byte integer, to match PostgreSQL `integer` and `serial` types
- */
-using integer = int32_t;
-/**
- * @brief 4-byte unsigned integer
- */
-using uinteger = uint32_t;
-/**
- * @brief 8-byte integer, to match PostgreSQL `bigint` and `bigserial` types
- */
-using bigint = int64_t;
-/**
- * @brief 8-byte unsigned integer
- */
-using ubigint = uint64_t;
-
-/**
- * @brief uuid type
- */
-using uuid_t = qb::uuid;
-
-/**
- * @brief PostgreSQL protocol version
- */
-constexpr const integer PROTOCOL_VERSION = (3 << 16); // 3.0
-
-/**
- * @brief 1-byte char or byte type.
- */
-using byte = char;
-
-/**
- * @brief Nullable data type
- * @see [std::optional
- * documentation](http://www.boost.org/doc/libs/1_58_0/libs/optional/doc/html/index.html)
- */
-template <typename T>
-using nullable = std::optional<T>;
-
-/**
  * @brief Binary data, matches PostgreSQL `bytea` type
  */
 struct bytea : std::vector<byte> {
@@ -333,14 +285,6 @@ struct transaction_mode {
 ::std::ostream &operator<<(::std::ostream &os, transaction_mode const &val);
 
 /**
- * Protocol format type
- */
-enum protocol_data_format {
-    TEXT_DATA_FORMAT = 0,  //!< TEXT_DATA_FORMAT
-    BINARY_DATA_FORMAT = 1 //!< BINARY_DATA_FORMAT
-};
-
-/**
  * @brief Description of a field returned by the backend
  */
 struct field_description {
@@ -398,7 +342,7 @@ using connection_ptr = std::shared_ptr<basic_connection>;
 
 /** @brief  */
 using client_options_type = std::map<std::string, std::string>;
-using type_oid_sequence = std::vector<integer>;
+using type_oid_sequence = std::vector<oid>;
 
 using simple_callback = std::function<void()>;
 /** @brief Callback for error handling */

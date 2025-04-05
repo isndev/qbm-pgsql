@@ -26,6 +26,7 @@
 #include <iomanip>
 #include "../not-qb/pg_types.h"
 #include "type_mapping.h"
+#include "type_converter.h"
 
 namespace qb::pg::detail {
 
@@ -261,7 +262,38 @@ public:
      */
     template<typename T>
     void add_param(const T& param) {
-        param_serializer_traits<typename std::decay<T>::type>::add_param(*this, param);
+        using value_type = typename std::decay<T>::type;
+        
+        // Cas spécial: vecteur de chaînes comme multiples paramètres
+        if constexpr (std::is_same_v<value_type, std::vector<std::string>>) {
+            add_string_vector(param);
+            return;
+        }
+        
+        // Cas spécial: valeur nulle (nullptr)
+        if constexpr (std::is_same_v<value_type, std::nullptr_t>) {
+            add_null();
+            return;
+        }
+        
+        // Cas standard: utiliser TypeConverter
+        // 1. Ajouter l'OID du type
+        param_types_.push_back(TypeConverter<value_type>::get_oid());
+        
+        // 2. Vérifier si c'est une valeur optionnelle nulle
+        if constexpr (ParamUnserializer::is_optional<value_type>::value) {
+            if (!param.has_value()) {
+                write_null();
+                return;
+            }
+        }
+        
+        // 3. Sérialiser en binaire
+        std::vector<byte> buffer;
+        TypeConverter<value_type>::to_binary(param, buffer);
+        
+        // 4. Ajouter le résultat au buffer de paramètres
+        params_buffer_.insert(params_buffer_.end(), buffer.begin(), buffer.end());
     }
 
     /**
@@ -327,6 +359,22 @@ public:
         
         // Replace the original buffer
         params_buffer_ = std::move(final_buffer);
+    }
+
+    /**
+     * @brief Get the parameter types
+     * @return Vector of parameter OIDs
+     */
+    const std::vector<integer>& get_param_types() const {
+        return param_types_;
+    }
+
+    /**
+     * @brief Get the serialized parameter data
+     * @return Binary buffer containing all parameter data
+     */
+    const std::vector<byte>& get_params_buffer() const {
+        return params_buffer_;
     }
 
 private:
@@ -473,7 +521,7 @@ private:
      * 
      * @param format Format code
      */
-    void add_format_code(data_format format) {
+    void add_format_code(protocol_data_format format) {
         // NO-OP - We don't add format codes in the serializer anymore
         // This avoids the extra format codes problem
     }

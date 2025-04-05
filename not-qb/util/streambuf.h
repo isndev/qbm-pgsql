@@ -52,6 +52,17 @@ public:
     empty() const {
         return count_ == 0;
     }
+    
+    /**
+     * @brief Convertir le contenu du buffer en vecteur
+     * @return Un vecteur contenant tous les octets du buffer
+     */
+    std::vector<charT> to_vector() const {
+        if (empty()) {
+            return std::vector<charT>();
+        }
+        return std::vector<charT>(begin(), end());
+    }
 
 protected:
     pos_type

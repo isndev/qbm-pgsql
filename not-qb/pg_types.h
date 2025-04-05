@@ -9,10 +9,53 @@ namespace qb {
 namespace pg {
 
 // Basic type definitions
-using byte = char;
+/**
+ * @brief 2-byte integer, to match PostgreSQL `smallint` and `smallserial` types
+ */
 using smallint = int16_t;
+/**
+ * @brief 2-byte unsigned integer
+ */
+using usmallint = uint16_t;
+/**
+ * @brief 4-byte integer, to match PostgreSQL `integer` and `serial` types
+ */
 using integer = int32_t;
+/**
+ * @brief 4-byte unsigned integer
+ */
+using uinteger = uint32_t;
+/**
+ * @brief 8-byte integer, to match PostgreSQL `bigint` and `bigserial` types
+ */
 using bigint = int64_t;
+/**
+ * @brief 8-byte unsigned integer
+ */
+using ubigint = uint64_t;
+
+/**
+ * @brief uuid type
+ */
+using uuid_t = qb::uuid;
+
+/**
+ * @brief PostgreSQL protocol version
+ */
+constexpr const integer PROTOCOL_VERSION = (3 << 16); // 3.0
+
+/**
+ * @brief 1-byte char or byte type.
+ */
+using byte = char;
+
+/**
+ * @brief Nullable data type
+ * @see [std::optional
+ * documentation](http://www.boost.org/doc/libs/1_58_0/libs/optional/doc/html/index.html)
+ */
+template <typename T>
+using nullable = std::optional<T>;
 
 // Enum pour les OIDs PostgreSQL
 enum class oid: int {
@@ -138,7 +181,7 @@ enum class code_category : char {
 };
 
 // Data format constants
-enum class data_format : smallint {
+enum class protocol_data_format : smallint {
     Text = 0,
     Binary = 1
 };

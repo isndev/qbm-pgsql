@@ -159,7 +159,7 @@ write_int(message::buffer_type &payload, T val) {
 
 bool
 message::read(smallint &val) {
-    const_iterator c = io::protocol_read<BINARY_DATA_FORMAT>(curr_, payload.cend(), val);
+    const_iterator c = io::protocol_read<pg::protocol_data_format::Binary>(curr_, payload.cend(), val);
     if (curr_ == c)
         return false;
     curr_ = c;
@@ -168,7 +168,7 @@ message::read(smallint &val) {
 
 bool
 message::read(integer &val) {
-    const_iterator c = io::protocol_read<BINARY_DATA_FORMAT>(curr_, payload.cend(), val);
+    const_iterator c = io::protocol_read<pg::protocol_data_format::Binary>(curr_, payload.cend(), val);
     if (curr_ == c)
         return false;
     curr_ = c;
@@ -177,7 +177,7 @@ message::read(integer &val) {
 
 bool
 message::read(std::string &val) {
-    const_iterator c = io::protocol_read<TEXT_DATA_FORMAT>(curr_, payload.cend(), val);
+    const_iterator c = io::protocol_read<pg::protocol_data_format::Text>(curr_, payload.cend(), val);
     if (curr_ == c)
         return false;
     curr_ = c;

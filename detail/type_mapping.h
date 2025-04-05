@@ -15,7 +15,10 @@
 #include <string_view>
 #include <optional>
 #include <type_traits>
+#include <qb/uuid.h>
+#include <qb/system/timestamp.h>
 #include "../not-qb/pg_types.h"
+#include "../not-qb/common.h"
 
 namespace qb::pg::detail {
 
@@ -47,6 +50,15 @@ template <size_t N> struct type_mapping<char[N]> { static constexpr integer type
 // Binary data
 template <> struct type_mapping<std::vector<char>> { static constexpr integer type_oid = 17; };        // bytea
 template <> struct type_mapping<std::vector<unsigned char>> { static constexpr integer type_oid = 17; }; // bytea
+template <> struct type_mapping<bytea> { static constexpr integer type_oid = 17; };                     // bytea
+
+// UUID type
+template <> struct type_mapping<qb::uuid> { static constexpr integer type_oid = 2950; };     // uuid
+
+// Date and timestamp types
+template <> struct type_mapping<qb::Timestamp> { static constexpr integer type_oid = 1114; };  // timestamp
+template <> struct type_mapping<qb::UtcTimestamp> { static constexpr integer type_oid = 1184; }; // timestamptz
+template <> struct type_mapping<qb::LocalTimestamp> { static constexpr integer type_oid = 1114; }; // timestamp
 
 // Optional types (use the underlying type's OID)
 template <typename T>
