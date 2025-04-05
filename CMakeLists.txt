@@ -18,7 +18,7 @@
 if (NOT QB_FOUND)
     message(STATUS "qb project not found, skipping PostgreSQL module")
     return()
-endif()
+endif ()
 
 project(qbm-pgsql)
 
@@ -26,23 +26,23 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
 qb_register_module(
         NAME pgsql
-        VERSION 1.0.0
+        VERSION 2.0.0
         DEPENDENCIES
         SOURCES
-        not-qb/sqlstates.cpp
-        not-qb/error.cpp
-        not-qb/pg_types.cpp
-        not-qb/common.cpp
-        not-qb/protocol.cpp
-        not-qb/protocol_io_traits.cpp
-        not-qb/result_impl.cpp
-        not-qb/resultset.cpp
-        detail/transaction.cpp
-        detail/field_reader_integration.cpp
-        detail/param_unserializer.cpp
+        src/sqlstates.cpp
+        src/error.cpp
+        src/pg_types.cpp
+        src/common.cpp
+        src/protocol.cpp
+        src/protocol_io_traits.cpp
+        src/result_impl.cpp
+        src/resultset.cpp
+        src/transaction.cpp
+        src/field_reader_integration.cpp
+        src/param_unserializer.cpp
         pgsql.cpp
 )
 
 if (QB_BUILD_TEST)
-   add_subdirectory(tests)
+    add_subdirectory(tests)
 endif ()

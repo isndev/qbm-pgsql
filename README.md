@@ -1,6 +1,8 @@
 # QB PostgreSQL Module (qbm-pgsql)
 
-The PostgreSQL module for the QB C++ Actor Framework provides a high-performance, asynchronous client implementation for PostgreSQL databases. It offers a comprehensive API for SQL operations with transaction support, prepared statements, and error handling.
+The PostgreSQL module for the QB C++ Actor Framework provides a high-performance, asynchronous client implementation for
+PostgreSQL databases. It offers a comprehensive API for SQL operations with transaction support, prepared statements,
+and error handling.
 
 ## Features
 
@@ -312,7 +314,8 @@ The PostgreSQL module is built around these key components:
 - **Result Processing**: Converts raw PostgreSQL data into usable C++ types.
 - **Error Handling**: Provides comprehensive error reporting and recovery mechanisms.
 
-The module integrates with QB's asynchronous I/O system, allowing database operations to be non-blocking and event-driven.
+The module integrates with QB's asynchronous I/O system, allowing database operations to be non-blocking and
+event-driven.
 
 ## License
 

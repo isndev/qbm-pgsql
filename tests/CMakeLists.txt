@@ -15,28 +15,26 @@
 #         limitations under the License.
 #
 
-# Define test files and their corresponding test names
-set(PGSQL_TESTS
-    data-types
-    param-serializer
-    param-unserializer
-    param-parsing
-    connection
-    data-types-integration
-    #transaction
-    #prepared-statements
-    #operations
-    #queries
-    #params
-    # error-handling
-    # performance
+set(QB_PGSQL_TESTS
+        param-serializer
+        param-unserializer
+        param-parsing
+        connection
+        data-types-integration
+        prepared-statements
+        transaction
+        operations
+        queries
+        params
+        error-handling
+        #performance
 )
 
 # Register each test
-foreach(TEST ${PGSQL_TESTS})
+foreach (TEST ${QB_PGSQL_TESTS})
     qb_register_module_gtest(
-        NAME pgsql
-        TESTNAME ${TEST}
-        SOURCES test-${TEST}.cpp
+            NAME pgsql
+            TESTNAME ${TEST}
+            SOURCES test-${TEST}.cpp
     )
-endforeach() 
+endforeach ()
