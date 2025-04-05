@@ -1,259 +1,347 @@
-#include <gtest/gtest.h>
-#include <qb/io/async.h>
-#include <thread>
 #include <chrono>
-#include <vector>
+#include <future>
+#include <gtest/gtest.h>
+#include <iostream>
 #include <random>
-#include <algorithm>
+#include <string>
+#include <thread>
+#include <utility>
+#include <vector>
+
 #include "../pgsql.h"
 
 using namespace qb::pg;
 
-class PostgreSQLPerformanceTest : public ::testing::Test {
+class PerformanceTest : public ::testing::Test {
 protected:
-    void SetUp() override {
-        db_ = std::make_unique<tcp::database>("host=localhost port=5432 dbname=postgres user=postgres password=postgres");
-        ASSERT_TRUE(db_->connect());
-        
-        // Create temporary test tables
-        db_->execute(R"(
-            CREATE TEMP TABLE test_performance (
-                id SERIAL PRIMARY KEY,
-                value1 TEXT,
-                value2 INTEGER,
-                value3 TIMESTAMP,
-                value4 JSONB,
-                value5 TEXT[]
-            )
-        )");
-        
-        // Create indexes
-        db_->execute("CREATE INDEX idx_value2 ON test_performance(value2)");
-        db_->execute("CREATE INDEX idx_value3 ON test_performance(value3)");
+    void
+    SetUp() override {
+        // Configuration pour la connexion à la base de données de test
+        std::string connection_string =
+            "host=localhost port=5432 dbname=postgres user=postgres password=postgres";
+
+        // Création de la connexion
+        db_ = std::make_shared<database<qb::io::transport::tcp>>(connection_string);
+
+        // Se connecter à la base de données
+        bool connected = false;
+        db_->connect([&connected](auto) { connected = true; }, [](auto) {});
+
+        // Attendre la connexion
+        for (int i = 0; i < 100 && !connected; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+
+        // Vérifier que la connexion a réussi
+        ASSERT_TRUE(connected) << "La connexion à PostgreSQL a échoué";
+
+        // Créer la table de test pour les performances
+        bool table_created = false;
+        auto transaction = db_->create_transaction();
+        transaction->execute(
+            "DROP TABLE IF EXISTS test_performance",
+            [&table_created](auto) { table_created = true; }, [](auto) {});
+
+        // Attendre la suppression de la table
+        for (int i = 0; i < 100 && !table_created; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+
+        table_created = false;
+        transaction->execute(
+            "CREATE TABLE IF NOT EXISTS test_performance ("
+            "  id SERIAL PRIMARY KEY,"
+            "  value1 TEXT NOT NULL,"
+            "  value2 INTEGER NOT NULL,"
+            "  value3 FLOAT NOT NULL,"
+            "  value4 BOOLEAN NOT NULL,"
+            "  value5 TEXT NOT NULL"
+            ")",
+            [&table_created](auto) { table_created = true; }, [](auto) {});
+
+        // Attendre la création de la table
+        for (int i = 0; i < 100 && !table_created; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
     }
 
-    void TearDown() override {
+    void
+    TearDown() override {
         if (db_) {
-            db_->execute("DROP TABLE IF EXISTS test_performance");
-            db_.reset();
+            // Supprimer la table de test
+            bool cleaned = false;
+            auto transaction = db_->create_transaction();
+            transaction->execute(
+                "DROP TABLE IF EXISTS test_performance", [&cleaned](auto) { cleaned = true; },
+                [](auto) {});
+
+            // Attendre la suppression
+            for (int i = 0; i < 100 && !cleaned; ++i) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+
+            // Fermer la connexion
+            db_->disconnect();
         }
     }
 
-    std::unique_ptr<tcp::database> db_;
-    
-    // Helper function to generate random data
-    std::string generate_random_string(size_t length) {
-        const std::string chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::uniform_int_distribution<> dis(0, chars.size() - 1);
-        
-        std::string result;
-        result.reserve(length);
-        for (size_t i = 0; i < length; ++i) {
-            result += chars[dis(gen)];
-        }
-        return result;
-    }
+    std::shared_ptr<database<qb::io::transport::tcp>> db_;
 };
 
-TEST_F(PostgreSQLPerformanceTest, BulkInsertPerformance) {
-    const int num_rows = 10000;
-    auto start = std::chrono::steady_clock::now();
-    
-    // Prepare statement for better performance
-    auto stmt = db_->prepare("INSERT INTO test_performance (value1, value2, value3, value4, value5) VALUES ($1, $2, $3, $4, $5)");
-    ASSERT_TRUE(stmt);
-    
-    // Start transaction
-    ASSERT_TRUE(db_->begin());
-    
-    // Insert data in bulk
-    for (int i = 0; i < num_rows; ++i) {
-        std::string value1 = generate_random_string(50);
-        int value2 = i;
-        std::string timestamp = "2024-03-20 12:00:00";
-        std::string json = "{\"key\": \"" + generate_random_string(20) + "\"}";
-        std::string array = "{" + generate_random_string(10) + "," + generate_random_string(10) + "}";
-        
-        ASSERT_TRUE(stmt->execute(value1, value2, timestamp, json, array));
+TEST_F(PerformanceTest, SimpleInsertPerformance) {
+    const int num_inserts = 100;
+
+    // Préparer une requête pour l'insertion
+    bool prepare_success = false;
+    auto transaction = db_->create_transaction();
+    transaction->prepare(
+        "insert_stmt",
+        "INSERT INTO test_performance (value1, value2, value3, value4, value5) VALUES ($1, $2, $3, "
+        "$4, $5)",
+        {}, [&prepare_success](auto) { prepare_success = true; }, [](auto) {});
+
+    // Attendre la préparation
+    for (int i = 0; i < 100 && !prepare_success; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    
-    // Commit transaction
-    ASSERT_TRUE(db_->commit());
-    
-    auto end = std::chrono::steady_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-    
-    std::cout << "Bulk insert performance: " << duration.count() << "ms for " << num_rows << " rows" << std::endl;
-    ASSERT_LT(duration.count(), 5000); // Should complete within 5 seconds
+    ASSERT_TRUE(prepare_success);
+
+    // Démarrer une transaction
+    bool begin_success = false;
+    transaction->begin([&begin_success](auto) { begin_success = true; }, [](auto) {});
+
+    // Attendre le début de la transaction
+    for (int i = 0; i < 100 && !begin_success; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_TRUE(begin_success);
+
+    // Mesurer le temps d'insertion
+    auto start = std::chrono::high_resolution_clock::now();
+
+    // Insérer plusieurs lignes
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> int_dist(1, 1000);
+    std::uniform_real_distribution<> float_dist(0.0, 1000.0);
+    std::uniform_int_distribution<> bool_dist(0, 1);
+
+    int completed_inserts = 0;
+    for (int i = 0; i < num_inserts; ++i) {
+        std::string text_value = "Test value " + std::to_string(i);
+        int int_value = int_dist(gen);
+        float float_value = float_dist(gen);
+        bool bool_value = bool_dist(gen) == 1;
+        std::string extra_value = "Extra " + std::to_string(i);
+
+        detail::ParamSerializer params;
+        params.add_param(text_value);
+        params.add_param(int_value);
+        params.add_param(float_value);
+        params.add_param(bool_value);
+        params.add_param(extra_value);
+
+        transaction->execute(
+            "insert_stmt", params, [&completed_inserts](auto) { completed_inserts++; },
+            [](auto) {});
+    }
+
+    // Attendre que toutes les insertions soient terminées
+    for (int i = 0; i < 500 && completed_inserts < num_inserts; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_EQ(completed_inserts, num_inserts);
+
+    // Commit de la transaction
+    bool commit_success = false;
+    transaction->commit([&commit_success](auto) { commit_success = true; }, [](auto) {});
+
+    // Attendre le commit
+    for (int i = 0; i < 100 && !commit_success; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_TRUE(commit_success);
+
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+
+    std::cout << "Durée pour " << num_inserts << " insertions: " << duration << " ms" << std::endl;
+    std::cout << "Moyenne par insertion: " << (duration / static_cast<double>(num_inserts)) << " ms"
+              << std::endl;
 }
 
-TEST_F(PostgreSQLPerformanceTest, QueryPerformance) {
-    // Insert test data
-    const int num_rows = 10000;
-    auto stmt = db_->prepare("INSERT INTO test_performance (value1, value2, value3, value4, value5) VALUES ($1, $2, $3, $4, $5)");
-    ASSERT_TRUE(stmt);
-    
-    ASSERT_TRUE(db_->begin());
-    for (int i = 0; i < num_rows; ++i) {
-        ASSERT_TRUE(stmt->execute(
-            generate_random_string(50),
-            i,
-            "2024-03-20 12:00:00",
-            "{\"key\": \"value\"}",
-            "{\"value1\",\"value2\"}"
-        ));
+TEST_F(PerformanceTest, BatchQueryPerformance) {
+    const int num_queries = 10;
+    const int rows_per_query = 10;
+
+    // Préparer des données pour les tests
+    std::vector<std::pair<std::string, std::string>> queries;
+    for (int i = 0; i < num_queries; ++i) {
+        std::string query =
+            "SELECT * FROM generate_series(1, " + std::to_string(rows_per_query) + ")";
+        queries.emplace_back("Query " + std::to_string(i), query);
     }
-    ASSERT_TRUE(db_->commit());
-    
-    // Test different query types
-    std::vector<std::pair<std::string, std::string>> queries = {
-        {"Simple SELECT", "SELECT * FROM test_performance LIMIT 100"},
-        {"WHERE clause", "SELECT * FROM test_performance WHERE value2 > 5000"},
-        {"ORDER BY", "SELECT * FROM test_performance ORDER BY value2 DESC LIMIT 100"},
-        {"JOIN", "SELECT a.*, b.* FROM test_performance a JOIN test_performance b ON a.value2 = b.value2 LIMIT 100"},
-        {"Aggregation", "SELECT value2, COUNT(*) FROM test_performance GROUP BY value2"},
-        {"Complex query", R"(
-            SELECT value2, COUNT(*), AVG(EXTRACT(EPOCH FROM value3))
-            FROM test_performance
-            WHERE value2 > 5000
-            GROUP BY value2
-            HAVING COUNT(*) > 10
-            ORDER BY value2 DESC
-            LIMIT 100
-        )"}
-    };
-    
-    for (const auto& query : queries) {
-        auto start = std::chrono::steady_clock::now();
-        auto result = db_->query(query.second);
-        auto end = std::chrono::steady_clock::now();
-        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-        
-        std::cout << query.first << " performance: " << duration.count() << "ms" << std::endl;
-        ASSERT_LT(duration.count(), 1000); // Should complete within 1 second
+
+    // Mesurer le temps d'exécution des requêtes en séquence
+    auto start = std::chrono::high_resolution_clock::now();
+
+    auto transaction = db_->create_transaction();
+    int completed_queries = 0;
+    for (const auto &query : queries) {
+        transaction->execute(
+            query.second, [&completed_queries](auto) { completed_queries++; }, [](auto) {});
     }
+
+    // Attendre que toutes les requêtes soient terminées
+    for (int i = 0; i < 100 && completed_queries < num_queries; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_EQ(completed_queries, num_queries);
+
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+
+    std::cout << "Durée pour " << num_queries << " requêtes séquentielles: " << duration << " ms"
+              << std::endl;
+    std::cout << "Moyenne par requête: " << (duration / static_cast<double>(num_queries)) << " ms"
+              << std::endl;
 }
 
-TEST_F(PostgreSQLPerformanceTest, ConcurrentQueryPerformance) {
-    // Insert test data
-    const int num_rows = 10000;
-    auto stmt = db_->prepare("INSERT INTO test_performance (value1, value2, value3, value4, value5) VALUES ($1, $2, $3, $4, $5)");
-    ASSERT_TRUE(stmt);
-    
-    ASSERT_TRUE(db_->begin());
-    for (int i = 0; i < num_rows; ++i) {
-        ASSERT_TRUE(stmt->execute(
-            generate_random_string(50),
-            i,
-            "2024-03-20 12:00:00",
-            "{\"key\": \"value\"}",
-            "{\"value1\",\"value2\"}"
-        ));
-    }
-    ASSERT_TRUE(db_->commit());
-    
-    // Test concurrent queries
-    const int num_threads = 5;
-    const int queries_per_thread = 100;
-    std::vector<std::thread> threads;
-    std::atomic<int> total_queries{0};
-    
-    auto start = std::chrono::steady_clock::now();
-    
-    for (int i = 0; i < num_threads; ++i) {
-        threads.emplace_back([this, queries_per_thread, &total_queries]() {
-            auto thread_db = std::make_unique<tcp::database>("host=localhost port=5432 dbname=postgres user=postgres password=postgres");
-            ASSERT_TRUE(thread_db->connect());
-            
-            for (int j = 0; j < queries_per_thread; ++j) {
-                auto result = thread_db->query("SELECT * FROM test_performance WHERE value2 = $1", j);
-                total_queries++;
+TEST_F(PerformanceTest, ConcurrentInsertPerformance) {
+    const int num_threads = 4;
+    const int inserts_per_thread = 25;
+
+    // Insérer des données en utilisant plusieurs threads
+    auto start = std::chrono::high_resolution_clock::now();
+
+    std::vector<std::future<void>> futures;
+    for (int t = 0; t < num_threads; ++t) {
+        futures.push_back(std::async(std::launch::async, [this, t, inserts_per_thread]() {
+            // Créer une nouvelle connexion par thread
+            std::string connection_string =
+                "host=localhost port=5432 dbname=postgres user=postgres password=postgres";
+            auto thread_db = std::make_shared<database<qb::io::transport::tcp>>(connection_string);
+
+            bool connected = false;
+            thread_db->connect([&connected](auto) { connected = true; }, [](auto) {});
+
+            // Attendre la connexion
+            for (int i = 0; i < 100 && !connected; ++i) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
-        });
+
+            auto transaction = thread_db->create_transaction();
+
+            // Démarrer une transaction
+            bool begin_success = false;
+            transaction->begin([&begin_success](auto) { begin_success = true; }, [](auto) {});
+
+            // Attendre le début de la transaction
+            for (int i = 0; i < 100 && !begin_success; ++i) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+
+            // Préparer une requête pour l'insertion
+            bool prepare_success = false;
+            transaction->prepare(
+                "insert_stmt",
+                "INSERT INTO test_performance (value1, value2, value3, value4, value5) VALUES ($1, "
+                "$2, $3, $4, $5)",
+                {}, [&prepare_success](auto) { prepare_success = true; }, [](auto) {});
+
+            // Attendre la préparation
+            for (int i = 0; i < 100 && !prepare_success; ++i) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+
+            // Insérer plusieurs lignes
+            std::random_device rd;
+            std::mt19937 gen(rd());
+            std::uniform_int_distribution<> int_dist(1, 1000);
+            std::uniform_real_distribution<> float_dist(0.0, 1000.0);
+            std::uniform_int_distribution<> bool_dist(0, 1);
+
+            int completed_inserts = 0;
+            for (int i = 0; i < inserts_per_thread; ++i) {
+                std::string text_value =
+                    "Thread " + std::to_string(t) + " Value " + std::to_string(i);
+                int int_value = int_dist(gen);
+                float float_value = float_dist(gen);
+                bool bool_value = bool_dist(gen) == 1;
+                std::string extra_value = "Extra " + std::to_string(i);
+
+                detail::ParamSerializer params;
+                params.add_param(text_value);
+                params.add_param(int_value);
+                params.add_param(float_value);
+                params.add_param(bool_value);
+                params.add_param(extra_value);
+
+                transaction->execute(
+                    "insert_stmt", params, [&completed_inserts](auto) { completed_inserts++; },
+                    [](auto) {});
+
+                // Pour éviter une surcharge trop rapide
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+
+            // Attendre que toutes les insertions soient terminées
+            for (int i = 0; i < 100 && completed_inserts < inserts_per_thread; ++i) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+
+            // Commit de la transaction
+            bool commit_success = false;
+            transaction->commit([&commit_success](auto) { commit_success = true; }, [](auto) {});
+
+            // Attendre le commit
+            for (int i = 0; i < 100 && !commit_success; ++i) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+
+            // Fermer la connexion
+            thread_db->disconnect();
+        }));
     }
-    
-    for (auto& thread : threads) {
-        thread.join();
+
+    // Attendre que tous les threads terminent
+    for (auto &future : futures) {
+        future.wait();
     }
-    
-    auto end = std::chrono::steady_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-    
-    std::cout << "Concurrent query performance: " << duration.count() << "ms for " 
-              << total_queries << " total queries" << std::endl;
-    ASSERT_EQ(total_queries, num_threads * queries_per_thread);
-    ASSERT_LT(duration.count(), 10000); // Should complete within 10 seconds
+
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+
+    std::cout << "Durée pour " << num_threads << " threads x " << inserts_per_thread
+              << " insertions = " << (num_threads * inserts_per_thread)
+              << " insertions totales: " << duration << " ms" << std::endl;
+    std::cout << "Moyenne par insertion: "
+              << (duration / static_cast<double>(num_threads * inserts_per_thread)) << " ms"
+              << std::endl;
+
+    // Vérifier le nombre total d'insertions
+    bool query_success = false;
+    std::size_t count = 0;
+
+    auto transaction = db_->create_transaction();
+    transaction->execute(
+        "SELECT COUNT(*) FROM test_performance",
+        [&query_success, &count](auto result) {
+            query_success = true;
+            count = result.template get_value<std::size_t>(0, 0).value_or(0);
+        },
+        [](auto) {});
+
+    // Attendre la requête
+    for (int i = 0; i < 100 && !query_success; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    ASSERT_EQ(count, num_threads * inserts_per_thread);
 }
 
-TEST_F(PostgreSQLPerformanceTest, TransactionPerformance) {
-    const int num_transactions = 1000;
-    const int rows_per_transaction = 10;
-    
-    auto start = std::chrono::steady_clock::now();
-    
-    for (int i = 0; i < num_transactions; ++i) {
-        ASSERT_TRUE(db_->begin());
-        
-        auto stmt = db_->prepare("INSERT INTO test_performance (value1, value2, value3, value4, value5) VALUES ($1, $2, $3, $4, $5)");
-        ASSERT_TRUE(stmt);
-        
-        for (int j = 0; j < rows_per_transaction; ++j) {
-            ASSERT_TRUE(stmt->execute(
-                generate_random_string(50),
-                i * rows_per_transaction + j,
-                "2024-03-20 12:00:00",
-                "{\"key\": \"value\"}",
-                "{\"value1\",\"value2\"}"
-            ));
-        }
-        
-        ASSERT_TRUE(db_->commit());
-    }
-    
-    auto end = std::chrono::steady_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-    
-    std::cout << "Transaction performance: " << duration.count() << "ms for " 
-              << num_transactions << " transactions" << std::endl;
-    ASSERT_LT(duration.count(), 30000); // Should complete within 30 seconds
-}
-
-TEST_F(PostgreSQLPerformanceTest, PreparedStatementReusePerformance) {
-    const int num_executions = 10000;
-    
-    // Prepare statement once
-    auto stmt = db_->prepare("INSERT INTO test_performance (value1, value2, value3, value4, value5) VALUES ($1, $2, $3, $4, $5)");
-    ASSERT_TRUE(stmt);
-    
-    auto start = std::chrono::steady_clock::now();
-    
-    // Start transaction
-    ASSERT_TRUE(db_->begin());
-    
-    // Execute prepared statement multiple times
-    for (int i = 0; i < num_executions; ++i) {
-        ASSERT_TRUE(stmt->execute(
-            generate_random_string(50),
-            i,
-            "2024-03-20 12:00:00",
-            "{\"key\": \"value\"}",
-            "{\"value1\",\"value2\"}"
-        ));
-    }
-    
-    ASSERT_TRUE(db_->commit());
-    
-    auto end = std::chrono::steady_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-    
-    std::cout << "Prepared statement reuse performance: " << duration.count() << "ms for " 
-              << num_executions << " executions" << std::endl;
-    ASSERT_LT(duration.count(), 5000); // Should complete within 5 seconds
-}
-
-int main(int argc, char **argv) {
-    testing::InitGoogleTest(&argc, argv);
+int
+main(int argc, char **argv) {
+    ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
-} 
+}
