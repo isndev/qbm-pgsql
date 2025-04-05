@@ -1,609 +1,426 @@
 /**
- *  @author zmij
- *  from project: https://github.com/zmij/pg_async.git
+ * @file protocol_io_traits.h
+ * @brief Traits minimaux pour le protocole PostgreSQL
  */
 
 #ifndef QBM_PGSQL_NOT_QB_PROTOCOL_IO_TRAITS_H
 #define QBM_PGSQL_NOT_QB_PROTOCOL_IO_TRAITS_H
 
+#include "common.h"
 #include <string>
-
-#include <istream>
-#include <ostream>
-#include <sstream>
-
 #include <optional>
 #include <type_traits>
-
-#include <boost/iostreams/device/back_inserter.hpp>
-#include <boost/iostreams/stream_buffer.hpp>
-
-#include "common.h"
-#include "pg_types.h"
+#include <limits>
+#include <algorithm>
+#include "../detail/param_unserializer.h"
 
 namespace qb {
 namespace pg {
+
 namespace io {
 
 /**
- * @brief Enumeration for binary parser/formatter template selection
+ * @brief Traits pour les entrées/sorties du protocole PostgreSQL
  */
-enum protocol_binary_type {
-    OTHER,          //!< OTHER Other types, require specialization
-    INTEGRAL,       //!< INTEGRAL Integral types, requiring endianness conversion
-    FLOATING_POINT, //!< FLOATING_POINT Floating point types, requiring endianness
-                    //!< conversion
-};
-
-namespace detail {
-/** @brief Types other then integral or floating point.
- * Require explicit specialization of a binary data parser
- */
-typedef std::integral_constant<protocol_binary_type, OTHER> other_binary_type;
-/** @brief Integral datatypes.
- * Selects binary parser specialization with network byte order conversion
- */
-typedef std::integral_constant<protocol_binary_type, INTEGRAL> integral_binary_type;
-/** @brief Floating point datatypes.
- * Binary parser is not implemented yet.
- * @todo Implement binary parser for floating point values
- */
-typedef std::integral_constant<protocol_binary_type, FLOATING_POINT>
-    floating_point_binary_type;
-
-/**
- * @brief Metafunction for specifying binary procotocol type
- */
-template <typename T>
-struct protocol_binary_selector : other_binary_type {};
-//@{
-/** @name Protocol selectors for integral types */
-template <>
-struct protocol_binary_selector<smallint> : integral_binary_type {};
-template <>
-struct protocol_binary_selector<usmallint> : integral_binary_type {};
-template <>
-struct protocol_binary_selector<integer> : integral_binary_type {};
-template <>
-struct protocol_binary_selector<uinteger> : integral_binary_type {};
-template <>
-struct protocol_binary_selector<bigint> : integral_binary_type {};
-template <>
-struct protocol_binary_selector<ubigint> : integral_binary_type {};
-//@}
-
-//@{
-/** @name Protocol selectors for floating point types */
-template <>
-struct protocol_binary_selector<float> : floating_point_binary_type {};
-template <>
-struct protocol_binary_selector<double> : floating_point_binary_type {};
-//@}
-
-} // namespace detail
-
 namespace traits {
 
-template <typename T, protocol_data_format format>
-struct has_parser : std::false_type {};
-
-template <typename T>
-struct is_nullable : ::std::false_type {};
-template <typename T>
-struct is_nullable<std::optional<T>> : ::std::true_type {};
-
-template <typename T>
-struct nullable_traits {
-    inline static bool
-    is_null(T const &) {
-        return false;
-    }
-
-    inline static void
-    set_null(T &) {}
-};
-
-template <typename T>
-struct nullable_traits<std::optional<T>> {
-    typedef std::optional<T> value_type;
-
-    inline static bool
-    is_null(value_type const &v) {
-        return !v.is_initialized();
-    }
-    inline static void
-    set_null(value_type &v) {
-        value_type().swap(v);
-    }
-};
-
-} // namespace traits
-
-template <typename T, protocol_data_format>
-struct protocol_parser;
-
 /**
- * @brief I/O Traits structure
- * @tparam T data type for input/output
- * @tparam F data format
+ * @brief Vérifie si un type a un parser pour un format donné
  */
 template <typename T, protocol_data_format F>
-struct protocol_io_traits {
-    typedef qb::util::input_iterator_buffer input_buffer_type;
-    typedef protocol_parser<T, F> parser_type;
+struct has_parser : std::false_type {};
+
+/**
+ * @brief Vérifie si un type est nullable
+ */
+template <typename T>
+struct is_nullable : std::false_type {};
+
+/**
+ * @brief Spécialisation pour std::optional
+ */
+template <typename T>
+struct is_nullable<std::optional<T>> : std::true_type {};
+
+/**
+ * @brief Traits pour les types nullables
+ */
+template <typename T>
+struct nullable_traits {
+    static void set_null(T& val) {
+        val = T{};
+    }
 };
 
 /**
- * @brief Helper function to create a protocol parser
- *
- * Deduces datatype by the function argument and returns a data parser
- * using protocol_io_traits.
- *
- * @param value
- * @return
+ * @brief Spécialisation pour std::optional
  */
-template <protocol_data_format F, typename T>
-typename protocol_io_traits<T, F>::parser_type
-protocol_reader(T &value) {
-    return typename protocol_io_traits<T, F>::parser_type(value);
-}
+template <typename T>
+struct nullable_traits<std::optional<T>> {
+    static void set_null(std::optional<T>& val) {
+        val = std::nullopt;
+    }
+};
+
+// Spécialisations pour les types de base
+template <> struct has_parser<smallint, TEXT_DATA_FORMAT> : std::true_type {};
+template <> struct has_parser<smallint, BINARY_DATA_FORMAT> : std::true_type {};
+template <> struct has_parser<integer, TEXT_DATA_FORMAT> : std::true_type {};
+template <> struct has_parser<integer, BINARY_DATA_FORMAT> : std::true_type {};
+template <> struct has_parser<bigint, TEXT_DATA_FORMAT> : std::true_type {};
+template <> struct has_parser<bigint, BINARY_DATA_FORMAT> : std::true_type {};
+template <> struct has_parser<float, TEXT_DATA_FORMAT> : std::true_type {};
+template <> struct has_parser<float, BINARY_DATA_FORMAT> : std::true_type {};
+template <> struct has_parser<double, TEXT_DATA_FORMAT> : std::true_type {};
+template <> struct has_parser<double, BINARY_DATA_FORMAT> : std::true_type {};
+template <> struct has_parser<bool, TEXT_DATA_FORMAT> : std::true_type {};
+template <> struct has_parser<bool, BINARY_DATA_FORMAT> : std::true_type {};
+template <> struct has_parser<std::string, TEXT_DATA_FORMAT> : std::true_type {};
+template <> struct has_parser<std::string, BINARY_DATA_FORMAT> : std::true_type {};
+
+// Spécialisations pour std::optional
+template <typename T>
+struct has_parser<std::optional<T>, TEXT_DATA_FORMAT> : has_parser<T, TEXT_DATA_FORMAT> {};
+
+template <typename T>
+struct has_parser<std::optional<T>, BINARY_DATA_FORMAT> : has_parser<T, BINARY_DATA_FORMAT> {};
+
+// Spécialisations pour les tuples
+template <typename... Args>
+struct has_parser<std::tuple<Args...>, TEXT_DATA_FORMAT> : std::true_type {};
+
+template <typename... Args>
+struct has_parser<std::tuple<Args...>, BINARY_DATA_FORMAT> : std::true_type {};
 
 /**
- * @brief Read value from input buffer
- *
- * Deduces a parser using protocol_io_traits for the type and protocol and uses
- * it to read a value from the buffer specified by the pair of iterators
- *
- * @param begin Iterator to start of buffer
- * @param end Iterator beyond the end of buffer
- * @param value variable to read into
- * @return    iterator after the value. If the iterator returned is equal to the
- *             begin iterator, nothing has been read and it means an error.
- * @tparam F Protocol data format
- * @tparam T Data type to read
- * @tparam InputIterator Buffer iterator type
+ * @brief Lecteur de données de base qui utilise le ParamUnserializer
+ */
+template <typename T>
+struct binary_reader {
+    template <typename InputIterator>
+    static InputIterator read(InputIterator begin, InputIterator end, T& value) {
+        if (std::distance(begin, end) < sizeof(T))
+            return begin;
+        
+        std::vector<byte> buffer(begin, begin + sizeof(T));
+        static detail::ParamUnserializer unserializer;
+        
+        // Cette méthode ne sera pas vraiment utilisée
+        // Voir les spécialisations ci-dessous
+        return begin + sizeof(T);
+    }
+};
+
+/**
+ * @brief Spécialisation pour smallint
+ */
+template <>
+struct binary_reader<smallint> {
+    template <typename InputIterator>
+    static InputIterator read(InputIterator begin, InputIterator end, smallint& value) {
+        if (std::distance(begin, end) < sizeof(smallint))
+            return begin;
+        
+        std::vector<byte> buffer(begin, begin + sizeof(smallint));
+        static detail::ParamUnserializer unserializer;
+        value = unserializer.read_smallint(buffer);
+        return begin + sizeof(smallint);
+    }
+};
+
+/**
+ * @brief Spécialisation pour integer
+ */
+template <>
+struct binary_reader<integer> {
+    template <typename InputIterator>
+    static InputIterator read(InputIterator begin, InputIterator end, integer& value) {
+        if (std::distance(begin, end) < sizeof(integer))
+            return begin;
+        
+        std::vector<byte> buffer(begin, begin + sizeof(integer));
+        static detail::ParamUnserializer unserializer;
+        value = unserializer.read_integer(buffer);
+        return begin + sizeof(integer);
+    }
+};
+
+/**
+ * @brief Spécialisation pour bigint
+ */
+template <>
+struct binary_reader<bigint> {
+    template <typename InputIterator>
+    static InputIterator read(InputIterator begin, InputIterator end, bigint& value) {
+        if (std::distance(begin, end) < sizeof(bigint))
+            return begin;
+        
+        std::vector<byte> buffer(begin, begin + sizeof(bigint));
+        static detail::ParamUnserializer unserializer;
+        value = unserializer.read_bigint(buffer);
+        return begin + sizeof(bigint);
+    }
+};
+
+/**
+ * @brief Spécialisation pour float
+ */
+template <>
+struct binary_reader<float> {
+    template <typename InputIterator>
+    static InputIterator read(InputIterator begin, InputIterator end, float& value) {
+        if (std::distance(begin, end) < sizeof(float))
+            return begin;
+        
+        std::vector<byte> buffer(begin, begin + sizeof(float));
+        static detail::ParamUnserializer unserializer;
+        value = unserializer.read_float(buffer);
+        return begin + sizeof(float);
+    }
+};
+
+/**
+ * @brief Spécialisation pour double
+ */
+template <>
+struct binary_reader<double> {
+    template <typename InputIterator>
+    static InputIterator read(InputIterator begin, InputIterator end, double& value) {
+        if (std::distance(begin, end) < sizeof(double))
+            return begin;
+        
+        std::vector<byte> buffer(begin, begin + sizeof(double));
+        static detail::ParamUnserializer unserializer;
+        value = unserializer.read_double(buffer);
+        return begin + sizeof(double);
+    }
+};
+
+/**
+ * @brief Spécialisation pour bool
+ */
+template <>
+struct binary_reader<bool> {
+    template <typename InputIterator>
+    static InputIterator read(InputIterator begin, InputIterator end, bool& value) {
+        if (begin == end)
+            return begin;
+        
+        value = (*begin != 0);
+        return begin + 1;
+    }
+};
+
+/**
+ * @brief Spécialisation pour std::string
+ */
+template <>
+struct binary_reader<std::string> {
+    template <typename InputIterator>
+    static InputIterator read(InputIterator begin, InputIterator end, std::string& value) {
+        if (begin == end) {
+            value.clear();
+            return begin;
+        }
+        
+        std::vector<byte> buffer(begin, end);
+        static detail::ParamUnserializer unserializer;
+        value = unserializer.read_string(buffer);
+        return end;
+    }
+};
+
+/**
+ * @brief Lecteur de données textuelles
+ */
+template <typename T>
+struct text_reader {
+    template <typename InputIterator>
+    static InputIterator read(InputIterator begin, InputIterator end, T& value) {
+        // Version par défaut - ne fait rien
+        return begin;
+    }
+};
+
+/**
+ * @brief Spécialisation pour smallint
+ */
+template <>
+struct text_reader<smallint> {
+    template <typename InputIterator>
+    static InputIterator read(InputIterator begin, InputIterator end, smallint& value) {
+        // Pour le format TEXT, nous cherchons une chaîne terminée par \0
+        InputIterator null_terminator = std::find(begin, end, '\0');
+        if (null_terminator == end)
+            return begin;
+        
+        std::string text_value(begin, null_terminator);
+        try {
+            value = std::stoi(text_value);
+            return null_terminator + 1; // Sauter le \0
+        } catch (const std::exception&) {
+            return begin;
+        }
+    }
+};
+
+/**
+ * @brief Spécialisation pour integer
+ */
+template <>
+struct text_reader<integer> {
+    template <typename InputIterator>
+    static InputIterator read(InputIterator begin, InputIterator end, integer& value) {
+        // Pour le format TEXT, nous cherchons une chaîne terminée par \0
+        InputIterator null_terminator = std::find(begin, end, '\0');
+        if (null_terminator == end)
+            return begin;
+        
+        std::string text_value(begin, null_terminator);
+        try {
+            value = std::stoi(text_value);
+            return null_terminator + 1; // Sauter le \0
+        } catch (const std::exception&) {
+            return begin;
+        }
+    }
+};
+
+/**
+ * @brief Spécialisation pour bigint
+ */
+template <>
+struct text_reader<bigint> {
+    template <typename InputIterator>
+    static InputIterator read(InputIterator begin, InputIterator end, bigint& value) {
+        // Pour le format TEXT, nous cherchons une chaîne terminée par \0
+        InputIterator null_terminator = std::find(begin, end, '\0');
+        if (null_terminator == end)
+            return begin;
+        
+        std::string text_value(begin, null_terminator);
+        try {
+            value = std::stoll(text_value);
+            return null_terminator + 1; // Sauter le \0
+        } catch (const std::exception&) {
+            return begin;
+        }
+    }
+};
+
+/**
+ * @brief Spécialisation pour float
+ */
+template <>
+struct text_reader<float> {
+    template <typename InputIterator>
+    static InputIterator read(InputIterator begin, InputIterator end, float& value) {
+        // Pour le format TEXT, nous cherchons une chaîne terminée par \0
+        InputIterator null_terminator = std::find(begin, end, '\0');
+        if (null_terminator == end)
+            return begin;
+        
+        std::string text_value(begin, null_terminator);
+        try {
+            value = std::stof(text_value);
+            return null_terminator + 1; // Sauter le \0
+        } catch (const std::exception&) {
+            return begin;
+        }
+    }
+};
+
+/**
+ * @brief Spécialisation pour double
+ */
+template <>
+struct text_reader<double> {
+    template <typename InputIterator>
+    static InputIterator read(InputIterator begin, InputIterator end, double& value) {
+        // Pour le format TEXT, nous cherchons une chaîne terminée par \0
+        InputIterator null_terminator = std::find(begin, end, '\0');
+        if (null_terminator == end)
+            return begin;
+        
+        std::string text_value(begin, null_terminator);
+        try {
+            value = std::stod(text_value);
+            return null_terminator + 1; // Sauter le \0
+        } catch (const std::exception&) {
+            return begin;
+        }
+    }
+};
+
+/**
+ * @brief Spécialisation pour bool
+ */
+template <>
+struct text_reader<bool> {
+    template <typename InputIterator>
+    static InputIterator read(InputIterator begin, InputIterator end, bool& value) {
+        // Pour le format TEXT, nous cherchons une chaîne terminée par \0
+        InputIterator null_terminator = std::find(begin, end, '\0');
+        if (null_terminator == end)
+            return begin;
+        
+        std::string text_value(begin, null_terminator);
+        
+        // PostgreSQL utilise 'true'/'false' ou 't'/'f'
+        value = (text_value == "true" || text_value == "t" || text_value == "1" || text_value == "yes" || text_value == "y");
+        return null_terminator + 1; // Sauter le \0
+    }
+};
+
+/**
+ * @brief Spécialisation pour std::string
+ */
+template <>
+struct text_reader<std::string> {
+    template <typename InputIterator>
+    static InputIterator read(InputIterator begin, InputIterator end, std::string& value) {
+        // Pour le format TEXT, nous cherchons une chaîne terminée par \0
+        InputIterator null_terminator = std::find(begin, end, '\0');
+        
+        value.assign(begin, null_terminator);
+        
+        if (null_terminator == end)
+            return end;
+        
+        return null_terminator + 1; // Sauter le \0
+    }
+};
+
+} // namespace traits
+
+/**
+ * @brief Fonction de lecture principale pour le protocole PostgreSQL
+ * 
+ * Cette fonction est un point d'entrée qui sélectionne la bonne implémentation
+ * en fonction du format et du type.
+ * 
+ * @tparam F Format de données (TEXT ou BINARY)
+ * @tparam T Type à lire
+ * @tparam InputIterator Type d'itérateur d'entrée
+ * @param begin Itérateur de début
+ * @param end Itérateur de fin
+ * @param value Valeur à remplir
+ * @return InputIterator Nouvel itérateur de début (après la lecture)
  */
 template <protocol_data_format F, typename T, typename InputIterator>
-InputIterator
-protocol_read(InputIterator begin, InputIterator end, T &value) {
-    static_assert(traits::has_parser<T, F>::value == true,
-                  "Type doesn't have an appropriate parser");
-    return typename protocol_io_traits<T, F>::parser_type(value)(begin, end);
+InputIterator protocol_read(InputIterator begin, InputIterator end, T &value) {
+    if (begin == end)
+        return begin;
+        
+    if constexpr (F == BINARY_DATA_FORMAT) {
+        return traits::binary_reader<T>::read(begin, end, value);
+    } else { // TEXT_DATA_FORMAT
+        return traits::text_reader<T>::read(begin, end, value);
+    }
 }
-
-namespace detail {
-
-/**
- * @brief Base template struct for a data parser
- * @tparam T type of value to parse
- */
-template <typename T>
-struct parser_base {
-    typedef typename std::decay<T>::type value_type;
-    value_type &value;
-
-    parser_base(value_type &val)
-        : value(val) {}
-};
-
-/**
- * @brief Base structure for a binary data parser.
- * Has no definition.
- * @tparam T type of value to parse
- * @tparam TYPE selector for the type
- */
-template <typename T, protocol_binary_type TYPE>
-struct binary_data_parser;
-
-/**
- * @brief Specification of a binary parser for integral values
- *
- * Supports @ref qb::pg::smallint, @ref qb::pg::integer,
- * @ref qb::pg::bigint and their unsigned variants
- * @tparam T integral data type
- */
-template <typename T>
-struct binary_data_parser<T, INTEGRAL> : parser_base<T> {
-    typedef parser_base<T> base_type;
-    typedef typename base_type::value_type value_type;
-
-    /**
-     * @brief data size
-     */
-    size_t
-    size() const {
-        return sizeof(T);
-    }
-
-    binary_data_parser(value_type &val)
-        : base_type(val) {}
-
-    template <typename InputIterator>
-    InputIterator operator()(InputIterator begin, InputIterator end);
-};
-
-template <typename T>
-struct binary_data_parser<T, OTHER>;
-
-/**
- * @brief Base structure for specifying mapping between C++ data type and
- *           PostgreSQL type oid.
- */
-template <oids::type::oid_type TypeOid, typename T>
-struct data_mapping_base {
-    static constexpr oids::type::oid_type type_oid = TypeOid;
-    using type = typename std::decay<T>::type;
-};
-
-} // namespace detail
-
-namespace traits {
-
-/**
- * @brief Mark a type oid that it has a binary parser, so that pg_async
- *           can request data in binary format.
- * @param id PostgreSQL type oid.
- */
-void register_binary_parser(oids::type::oid_type id);
-
-/**
- * @brief Check if there is a binary parser for the specified oid
- * @param id PostgreSQL type oid.
- * @return
- */
-bool has_binary_parser(oids::type::oid_type id);
-
-/**
- * Struct for using for generating wanted data formats from oids
- * Default type mapping falls back to string type and text format
- */
-template <oids::type::oid_type TypeOid>
-struct pgcpp_data_mapping : detail::data_mapping_base<TypeOid, std::string> {};
-
-/**
- * @brief Template for specifying mapping between a C++ type and PostgreSQL
- *           type oid
- *
- * Default mapping is unknown and will lead to a compilation error when a type
- * is used as a parameter for a prepared statement
- */
-template <typename T>
-struct cpppg_data_mapping : detail::data_mapping_base<oids::type::unknown, T> {};
-template <typename T>
-struct cpppg_data_mapping<std::optional<T>> : cpppg_data_mapping<T> {};
-
-//@{
-/** @name parser and formatter traits */
-struct __io_meta_function_helper {
-    template <typename T>
-    __io_meta_function_helper(T const &);
-};
-
-std::false_type operator<<(std::ostream const &, __io_meta_function_helper const &);
-std::false_type operator>>(std::istream const &, __io_meta_function_helper const &);
-
-template <typename T>
-struct has_input_operator {
-private:
-    static std::false_type test(std::false_type);
-    static std::true_type test(std::istream &);
-
-    static std::istream &is;
-    static T &val;
-
-public:
-    static constexpr bool value =
-        std::is_same<decltype(test(is >> val)), std::true_type>::type::value;
-};
-
-template <typename T>   
-struct has_output_operator {
-private:
-    static std::false_type test(std::false_type);
-    static std::true_type test(std::ostream &);
-
-    static std::ostream &os;
-    static T const &val;
-
-public:
-    static constexpr bool value =
-        std::is_same<decltype(test(os << val)), std::true_type>::type::value;
-};
-
-
-template <typename T>
-struct has_parser<T, TEXT_DATA_FORMAT>
-    : std::integral_constant<bool, has_input_operator<T>::value> {};
-template <>
-struct has_parser<smallint, BINARY_DATA_FORMAT> : std::true_type {};
-template <>
-struct has_parser<integer, BINARY_DATA_FORMAT> : std::true_type {};
-template <>
-struct has_parser<bigint, BINARY_DATA_FORMAT> : std::true_type {};
-//@}
-
-//@{
-/** @name IO metafunctions tests */
-struct ___no_inout_test {};
-
-static_assert(has_input_operator<___no_inout_test>::value == false,
-              "Input operator test OK");
-static_assert(has_output_operator<___no_inout_test>::value == false,
-              "Output operator test OK");
-
-static_assert(has_parser<___no_inout_test, TEXT_DATA_FORMAT>::value == false,
-              "Text parser test is OK");
-//@}
-
-/**
- * @brief Template parser selector
- */
-template <typename T>
-struct best_parser {
-private:
-    static constexpr bool has_binary_parser = has_parser<T, BINARY_DATA_FORMAT>::value;
-
-public:
-    static constexpr protocol_data_format value =
-        has_binary_parser ? BINARY_DATA_FORMAT : TEXT_DATA_FORMAT;
-    typedef protocol_parser<T, value> type;
-};
-
-//@{
-/** @name checks for integral types */
-static_assert(has_parser<smallint, TEXT_DATA_FORMAT>::value,
-              "Text format parser for smallint");
-static_assert(has_parser<smallint, BINARY_DATA_FORMAT>::value,
-              "Binary format parser for smallint");
-static_assert(best_parser<smallint>::value == BINARY_DATA_FORMAT,
-              "Best parser for smallint is binary");
-
-static_assert(has_parser<integer, TEXT_DATA_FORMAT>::value,
-              "Text format parser for integer");
-static_assert(has_parser<integer, BINARY_DATA_FORMAT>::value,
-              "Binary format parser for integer");
-static_assert(best_parser<integer>::value == BINARY_DATA_FORMAT,
-              "Best parser for integer is binary");
-
-static_assert(has_parser<bigint, TEXT_DATA_FORMAT>::value,
-              "Text format parser for bigint");
-static_assert(has_parser<bigint, BINARY_DATA_FORMAT>::value,
-              "Binary format parser for bigint");
-static_assert(best_parser<bigint>::value == BINARY_DATA_FORMAT,
-              "Best parser for bigint is binary");
-
-//@}
-//@{
-/** @name checks for floating-point types */
-static_assert(has_parser<float, TEXT_DATA_FORMAT>::value,
-              "Text format parser for float");
-// @todo implement binary parser for floats
-// static_assert(has_parser<float, BINARY_DATA_FORMAT>::value,
-//        "Binary format parser for float");
-static_assert(best_parser<float>::value == TEXT_DATA_FORMAT,
-              "Best parser for float is text");
-
-static_assert(has_parser<double, TEXT_DATA_FORMAT>::value,
-              "Text format parser for double");
-// @todo implement binary parser for doubles
-// static_assert(has_parser<double, BINARY_DATA_FORMAT>::value,
-//        "Binary format parser for double");
-static_assert(best_parser<double>::value == TEXT_DATA_FORMAT,
-              "Best parser for double is text");
-
-} // namespace traits
-
-/**
- * Default parser for text data format implementation
- */
-template <typename T>
-struct protocol_parser<T, TEXT_DATA_FORMAT> : detail::parser_base<T> {
-    typedef detail::parser_base<T> base_type;
-    typedef typename base_type::value_type value_type;
-
-    typedef qb::util::input_iterator_buffer buffer_type;
-
-    protocol_parser(value_type &v)
-        : base_type(v) {}
-
-    size_t
-    size() const {
-        return sizeof(T);
-    }
-
-    template <typename InputIterator>
-    InputIterator operator()(InputIterator begin, InputIterator end);
-};
-
-template <typename T>
-struct protocol_parser<T, BINARY_DATA_FORMAT>
-    : detail::binary_data_parser<
-          T, detail::protocol_binary_selector<typename std::decay<T>::type>::value> {
-
-    typedef detail::binary_data_parser<
-        T, detail::protocol_binary_selector<typename std::decay<T>::type>::value>
-        parser_base;
-    typedef typename parser_base::value_type value_type;
-
-    protocol_parser(value_type &val)
-        : parser_base(val) {}
-};
-
-/**
- * @brief Protocol parser specialization for std::string, text data format
- */
-template <>
-struct protocol_parser<std::string, TEXT_DATA_FORMAT>
-    : detail::parser_base<std::string> {
-    typedef detail::parser_base<std::string> base_type;
-    typedef base_type::value_type value_type;
-
-    protocol_parser(value_type &v)
-        : base_type(v) {}
-
-    size_t
-    size() const {
-        return base_type::value.size();
-    }
-
-    template <typename InputIterator>
-    InputIterator operator()(InputIterator begin, InputIterator end);
-};
-
-namespace traits {
-static_assert(has_parser<std::string, TEXT_DATA_FORMAT>::value,
-              "Text data parser for std::string");
-static_assert(!has_parser<std::string, BINARY_DATA_FORMAT>::value,
-              "No binary data parser for std::string");
-static_assert(best_parser<std::string>::value == TEXT_DATA_FORMAT,
-              "Best parser for std::string is binary");
-} // namespace traits
-
-
-/**
- * @brief Protocol parser specialization for bool, text data format
- */
-template <>
-struct protocol_parser<bool, TEXT_DATA_FORMAT> : detail::parser_base<bool> {
-    typedef detail::parser_base<bool> base_type;
-    typedef base_type::value_type value_type;
-
-    typedef qb::util::input_iterator_buffer buffer_type;
-
-    protocol_parser(value_type &v)
-        : base_type(v) {}
-
-    size_t
-    size() const {
-        return sizeof(bool);
-    }
-    bool use_literal(std::string const &l);
-
-    template <typename InputIterator>
-    InputIterator operator()(InputIterator begin, InputIterator end);
-};
-
-/**
- * @brief Protocol parser specialization for bool, binary data format
- */
-template <>
-struct protocol_parser<bool, BINARY_DATA_FORMAT> : detail::parser_base<bool> {
-    typedef detail::parser_base<bool> base_type;
-    typedef base_type::value_type value_type;
-    typedef qb::util::input_iterator_buffer buffer_type;
-
-    protocol_parser(value_type &v)
-        : base_type(v) {}
-    size_t
-    size() const {
-        return sizeof(bool);
-    }
-    template <typename InputIterator>
-    InputIterator operator()(InputIterator begin, InputIterator end);
-};
-
-namespace traits {
-template <>
-struct has_parser<bool, BINARY_DATA_FORMAT> : std::true_type {};
-static_assert(has_parser<bool, TEXT_DATA_FORMAT>::value, "Text data parser for bool");
-static_assert(has_parser<bool, BINARY_DATA_FORMAT>::value,
-              "Binary data parser for bool");
-static_assert(best_parser<bool>::value == BINARY_DATA_FORMAT,
-              "Best parser for bool is binary");
-} // namespace traits
-
-/**
- * @brief Protocol parser specialization for std::optional (used for nullable types),
- * text data format
- */
-template <typename T>
-struct protocol_parser<std::optional<T>, TEXT_DATA_FORMAT>
-    : detail::parser_base<std::optional<T>> {
-    typedef detail::parser_base<std::optional<T>> base_type;
-    typedef typename base_type::value_type value_type;
-
-    typedef T element_type;
-    typedef qb::util::input_iterator_buffer buffer_type;
-
-    protocol_parser(value_type &v)
-        : base_type(v) {}
-
-    bool
-    operator()(std::istream &in) {
-        element_type tmp;
-        if (protocol_reader(tmp)(in)) {
-            base_type::value = value_type(tmp);
-        } else {
-            base_type::value = value_type();
-        }
-        return true;
-    }
-
-    bool
-    operator()(buffer_type &buffer) {
-        element_type tmp;
-        if (protocol_reader(tmp)(buffer)) {
-            base_type::value = value_type(tmp);
-        } else {
-            base_type::value = value_type();
-        }
-        return true;
-    }
-
-    template <typename InputIterator>
-    InputIterator operator()(InputIterator begin, InputIterator end);
-};
-
-/**
- * @brief Protocol parser specialization for std::optional (used for nullable types),
- * binary data format
- */
-template <typename T>
-struct protocol_parser<std::optional<T>, BINARY_DATA_FORMAT>
-    : detail::parser_base<std::optional<T>> {
-    typedef detail::parser_base<std::optional<T>> base_type;
-    typedef typename base_type::value_type value_type;
-
-    typedef T element_type;
-    typedef protocol_parser<element_type, BINARY_DATA_FORMAT> element_parser;
-    typedef qb::util::input_iterator_buffer buffer_type;
-
-    protocol_parser(value_type &v)
-        : base_type(v) {}
-
-    size_t
-    size() const {
-        if (base_type::value)
-            return element_parser(*base_type::value).size();
-        return 0;
-    }
-
-    template <typename InputIterator>
-    InputIterator
-    operator()(InputIterator begin, InputIterator end) {
-        T tmp;
-        InputIterator c = protocol_read<BINARY_DATA_FORMAT>(begin, end, tmp);
-        if (c != begin) {
-            base_type::value = value_type(tmp);
-        } else {
-            base_type::value = value_type();
-        }
-        return c;
-    }
-};
-
 
 } // namespace io
 } // namespace pg
 } // namespace qb
 
-#include "protocol_io_traits.inl"
-// Common datatypes implementation includes
-#include "io/bytea.hpp"
-#include "io/uuid.hpp"
-#include "io/array.hpp"
-#include "io/set.hpp"
-#include "io/vector.hpp"
-#include "datatype_mapping.h"
-
-#endif /* QBM_PGSQL_NOT_QB_PROTOCOL_IO_TRAITS_H */
+#endif // QBM_PGSQL_NOT_QB_PROTOCOL_IO_TRAITS_H

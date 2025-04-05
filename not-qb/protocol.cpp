@@ -15,6 +15,7 @@
 #include <sstream>
 
 #include <boost/endian/conversion.hpp>
+#include <cassert>
 
 namespace qb {
 namespace pg {
@@ -202,8 +203,8 @@ message::read(field_description &fd) {
     smallint fmt;
     if (read(tmp.name) && read(tmp.table_oid) && read(tmp.attribute_number) &&
         read(type_oid) && read(tmp.type_size) && read(tmp.type_mod) && read(fmt)) {
-        tmp.type_oid = (oids::type::oid_type)type_oid;
-        tmp.format_code = (protocol_data_format)fmt;
+        tmp.type_oid = static_cast<oid>(type_oid);
+        tmp.format_code = static_cast<protocol_data_format>(fmt);
         fd = tmp;
         return true;
     }

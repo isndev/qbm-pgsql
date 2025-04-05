@@ -1,34 +1,49 @@
-/*
- * qb - C++ Actor Framework
- * Copyright (c) 2011-2025 qb - isndev (cpp.actor). All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *         http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- *         limitations under the License.
+/**
+ * @file pgsql.cpp
+ * @brief Implements initialization of Postgres module
  */
 
 #include "pgsql.h"
+#include "detail/transaction.h"
+#include "detail/field_reader.h"
+#include "detail/tuple_converter.h"
+#include "not-qb/protocol.h"
 
-namespace qb::allocator {
+namespace qb::pg {
 
-template <>
-pipe<char> &
-pipe<char>::put<qb::pg::detail::message>(const qb::pg::detail::message &msg) {
-    const auto data_range = msg.buffer();
-
-    return put(&*data_range.first, data_range.second - data_range.first);
+/**
+ * Initialize configuration defaults and type database.
+ * 
+ * Load static database of types, etc.
+ * called once, at startup. 
+ */
+void init() {
+    // Initialisation par défaut de la configuration
+    // Chargement des bases de données de types
+    // Les bases de données statiques sont chargées au démarrage
+    
+    // Initialiser le lecteur de champs
+    detail::initialize_field_reader();
 }
 
+} // namespace qb::pg
+
+namespace qb::allocator {
+    template <>
+    pipe<char> &
+    pipe<char>::put<qb::pg::detail::message>(const qb::pg::detail::message &msg) {
+        auto buffer_range = msg.buffer();
+        // Écrire les données du buffer dans le pipe
+        if (buffer_range.first != buffer_range.second) {
+            const char* data = &(*buffer_range.first);
+            std::size_t size = std::distance(buffer_range.first, buffer_range.second);
+            put(data, size);
+        }
+        return *this;
+    }
 } // namespace qb::allocator
 
+// Implémentation des templates pour Database
 template class qb::pg::detail::Database<qb::io::transport::tcp>;
 #ifdef QB_IO_WITH_SSL
 template class qb::pg::detail::Database<qb::io::transport::stcp>;

@@ -22,33 +22,24 @@ endif()
 
 project(qbm-pgsql)
 
-set(Boost_USE_STATIC_LIBS ON)
-find_package(Boost CONFIG REQUIRED)
-
-if (NOT Boost_FOUND)
-    message(STATUS "Boost not found, skipping PostgreSQL module")
-    return()
-endif()
-
-include_directories(${Boost_INCLUDE_DIRS})
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
 qb_register_module(
         NAME pgsql
         VERSION 1.0.0
         DEPENDENCIES
-        ${Boost_LIBRARIES}
         SOURCES
         not-qb/sqlstates.cpp
         not-qb/error.cpp
         not-qb/pg_types.cpp
         not-qb/common.cpp
-        not-qb/protocol_io_traits.cpp
-        not-qb/protocol_parsers.cpp
         not-qb/protocol.cpp
+        not-qb/protocol_io_traits.cpp
         not-qb/result_impl.cpp
         not-qb/resultset.cpp
         detail/transaction.cpp
+        detail/field_reader_integration.cpp
+        detail/param_unserializer.cpp
         pgsql.cpp
 )
 

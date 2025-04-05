@@ -1,6 +1,6 @@
 /**
- *  @author zmij
- *  from project: https://github.com/zmij/pg_async.git
+ * @file pg_types.cpp
+ * @brief Implémentation des types PostgreSQL
  */
 
 #include "pg_types.h"
@@ -11,214 +11,214 @@
 namespace qb {
 namespace pg {
 
-namespace oids {
-
-namespace type {
 namespace {
-const std::map<oid_type, std::string> OID_TYPE_TO_STRING{
-    {boolean, "boolean"},
-    {bytea, "bytea"},
-    {char_, "char"},
-    {name, "name"},
-    {int8, "int8"},
-    {int2, "int2"},
-    {int2_vector, "int2_vector"},
-    {int4, "int4"},
-    {regproc, "regproc"},
-    {text, "text"},
-    {oid, "oid"},
-    {tid, "tid"},
-    {xid, "xid"},
-    {cid, "cid"},
-    {oid_vector, "oid_vector"},
-    {json, "json"},
-    {xml, "xml"},
-    {pg_node_tree, "pg_node_tree"},
-    {pg_ddl_command, "pg_ddl_command"},
-    {point, "point"},
-    {lseg, "lseg"},
-    {path, "path"},
-    {box, "box"},
-    {polygon, "polygon"},
-    {line, "line"},
-    {float4, "float4"},
-    {float8, "float8"},
-    {abstime, "abstime"},
-    {reltime, "reltime"},
-    {tinterval, "tinterval"},
-    {unknown, "unknown"},
-    {circle, "circle"},
-    {cash, "cash"},
-    {macaddr, "macaddr"},
-    {inet, "inet"},
-    {cidr, "cidr"},
-    {int2_array, "int2_array"},
-    {int4_array, "int4_array"},
-    {text_array, "text_array"},
-    {oid_array, "oid_array"},
-    {float4_array, "float4_array"},
-    {acl_item, "acl_item"},
-    {cstring_array, "cstring_array"},
-    {bpchar, "bpchar"},
-    {varchar, "varchar"},
-    {date, "date"},
-    {time, "time"},
-    {timestamp, "timestamp"},
-    {timestamptz, "timestamptz"},
-    {interval, "interval"},
-    {timetz, "timetz"},
-    {bit, "bit"},
-    {varbit, "varbit"},
-    {numeric, "numeric"},
-    {refcursor, "refcursor"},
-    {regprocedure, "regprocedure"},
-    {regoper, "regoper"},
-    {regoperator, "regoperator"},
-    {regclass, "regclass"},
-    {regtype, "regtype"},
-    {regrole, "regrole"},
-    {regtypearray, "regtypearray"},
-    {uuid, "uuid"},
-    {lsn, "lsn"},
-    {tsvector, "tsvector"},
-    {gtsvector, "gtsvector"},
-    {tsquery, "tsquery"},
-    {regconfig, "regconfig"},
-    {regdictionary, "regdictionary"},
-    {jsonb, "jsonb"},
-    {int4_range, "int4_range"},
-    {record, "record"},
-    {record_array, "record_array"},
-    {cstring, "cstring"},
-    {any, "any"},
-    {any_array, "any_array"},
-    {void_, "void"},
-    {trigger, "trigger"},
-    {evttrigger, "evttrigger"},
-    {language_handler, "language_handler"},
-    {internal, "internal"},
-    {opaque, "opaque"},
-    {any_element, "any_element"},
-    {any_non_array, "any_non_array"},
-    {any_enum, "any_enum"},
-    {fdw_handler, "fdw_handler"},
-    {any_range, "any_range"},
-}; // OID_TYPE_TO_STRING
-const std::map<std::string, oid_type> STRING_TO_OID_TYPE{
-    {"boolean", boolean},
-    {"bytea", bytea},
-    {"char", char_},
-    {"name", name},
-    {"int8", int8},
-    {"int2", int2},
-    {"int2_vector", int2_vector},
-    {"int4", int4},
-    {"regproc", regproc},
-    {"text", text},
-    {"oid", oid},
-    {"tid", tid},
-    {"xid", xid},
-    {"cid", cid},
-    {"oid_vector", oid_vector},
-    {"json", json},
-    {"xml", xml},
-    {"pg_node_tree", pg_node_tree},
-    {"pg_ddl_command", pg_ddl_command},
-    {"point", point},
-    {"lseg", lseg},
-    {"path", path},
-    {"box", box},
-    {"polygon", polygon},
-    {"line", line},
-    {"float4", float4},
-    {"float8", float8},
-    {"abstime", abstime},
-    {"reltime", reltime},
-    {"tinterval", tinterval},
-    {"unknown", unknown},
-    {"circle", circle},
-    {"cash", cash},
-    {"macaddr", macaddr},
-    {"inet", inet},
-    {"cidr", cidr},
-    {"int2_array", int2_array},
-    {"int4_array", int4_array},
-    {"text_array", text_array},
-    {"oid_array", oid_array},
-    {"float4_array", float4_array},
-    {"acl_item", acl_item},
-    {"cstring_array", cstring_array},
-    {"bpchar", bpchar},
-    {"varchar", varchar},
-    {"date", date},
-    {"time", time},
-    {"timestamp", timestamp},
-    {"timestamptz", timestamptz},
-    {"interval", interval},
-    {"timetz", timetz},
-    {"bit", bit},
-    {"varbit", varbit},
-    {"numeric", numeric},
-    {"refcursor", refcursor},
-    {"regprocedure", regprocedure},
-    {"regoper", regoper},
-    {"regoperator", regoperator},
-    {"regclass", regclass},
-    {"regtype", regtype},
-    {"regrole", regrole},
-    {"regtypearray", regtypearray},
-    {"uuid", uuid},
-    {"lsn", lsn},
-    {"tsvector", tsvector},
-    {"gtsvector", gtsvector},
-    {"tsquery", tsquery},
-    {"regconfig", regconfig},
-    {"regdictionary", regdictionary},
-    {"jsonb", jsonb},
-    {"int4_range", int4_range},
-    {"record", record},
-    {"record_array", record_array},
-    {"cstring", cstring},
-    {"any", any},
-    {"any_array", any_array},
-    {"void", void_},
-    {"trigger", trigger},
-    {"evttrigger", evttrigger},
-    {"language_handler", language_handler},
-    {"internal", internal},
-    {"opaque", opaque},
-    {"any_element", any_element},
-    {"any_non_array", any_non_array},
-    {"any_enum", any_enum},
-    {"fdw_handler", fdw_handler},
-    {"any_range", any_range},
-}; // STRING_TO_OID_TYPE
+// Mapping entre oid et string pour faciliter la conversion
+const std::map<oid, std::string> OID_TO_STRING{
+    {oid::boolean, "boolean"},
+    {oid::bytea, "bytea"},
+    {oid::char_, "char"},
+    {oid::name, "name"},
+    {oid::int8, "int8"},
+    {oid::int2, "int2"},
+    {oid::int2_vector, "int2_vector"},
+    {oid::int4, "int4"},
+    {oid::regproc, "regproc"},
+    {oid::text, "text"},
+    {oid::oid_t, "oid"},
+    {oid::tid, "tid"},
+    {oid::xid, "xid"},
+    {oid::cid, "cid"},
+    {oid::oid_vector, "oid_vector"},
+    {oid::json, "json"},
+    {oid::xml, "xml"},
+    {oid::pg_node_tree, "pg_node_tree"},
+    {oid::pg_ddl_command, "pg_ddl_command"},
+    {oid::point, "point"},
+    {oid::lseg, "lseg"},
+    {oid::path, "path"},
+    {oid::box, "box"},
+    {oid::polygon, "polygon"},
+    {oid::line, "line"},
+    {oid::float4, "float4"},
+    {oid::float8, "float8"},
+    {oid::abstime, "abstime"},
+    {oid::reltime, "reltime"},
+    {oid::tinterval, "tinterval"},
+    {oid::unknown, "unknown"},
+    {oid::circle, "circle"},
+    {oid::cash, "cash"},
+    {oid::macaddr, "macaddr"},
+    {oid::inet, "inet"},
+    {oid::cidr, "cidr"},
+    {oid::int2_array, "int2_array"},
+    {oid::int4_array, "int4_array"},
+    {oid::text_array, "text_array"},
+    {oid::oid_array, "oid_array"},
+    {oid::float4_array, "float4_array"},
+    {oid::acl_item, "acl_item"},
+    {oid::cstring_array, "cstring_array"},
+    {oid::bpchar, "bpchar"},
+    {oid::varchar, "varchar"},
+    {oid::date, "date"},
+    {oid::time, "time"},
+    {oid::timestamp, "timestamp"},
+    {oid::timestamptz, "timestamptz"},
+    {oid::interval, "interval"},
+    {oid::timetz, "timetz"},
+    {oid::bit, "bit"},
+    {oid::varbit, "varbit"},
+    {oid::numeric, "numeric"},
+    {oid::refcursor, "refcursor"},
+    {oid::regprocedure, "regprocedure"},
+    {oid::regoper, "regoper"},
+    {oid::regoperator, "regoperator"},
+    {oid::regclass, "regclass"},
+    {oid::regtype, "regtype"},
+    {oid::regrole, "regrole"},
+    {oid::regtypearray, "regtypearray"},
+    {oid::uuid, "uuid"},
+    {oid::lsn, "lsn"},
+    {oid::tsvector, "tsvector"},
+    {oid::gtsvector, "gtsvector"},
+    {oid::tsquery, "tsquery"},
+    {oid::regconfig, "regconfig"},
+    {oid::regdictionary, "regdictionary"},
+    {oid::jsonb, "jsonb"},
+    {oid::int4_range, "int4_range"},
+    {oid::record, "record"},
+    {oid::record_array, "record_array"},
+    {oid::cstring, "cstring"},
+    {oid::any, "any"},
+    {oid::any_array, "any_array"},
+    {oid::void_, "void"},
+    {oid::trigger, "trigger"},
+    {oid::evttrigger, "evttrigger"},
+    {oid::language_handler, "language_handler"},
+    {oid::internal, "internal"},
+    {oid::opaque, "opaque"},
+    {oid::any_element, "any_element"},
+    {oid::any_non_array, "any_non_array"},
+    {oid::any_enum, "any_enum"},
+    {oid::fdw_handler, "fdw_handler"},
+    {oid::any_range, "any_range"},
+};
+
+// Mapping inverse pour la conversion string vers oid
+const std::map<std::string, oid> STRING_TO_OID{
+    {"boolean", oid::boolean},
+    {"bytea", oid::bytea},
+    {"char", oid::char_},
+    {"name", oid::name},
+    {"int8", oid::int8},
+    {"int2", oid::int2},
+    {"int2_vector", oid::int2_vector},
+    {"int4", oid::int4},
+    {"regproc", oid::regproc},
+    {"text", oid::text},
+    {"oid", oid::oid_t},
+    {"tid", oid::tid},
+    {"xid", oid::xid},
+    {"cid", oid::cid},
+    {"oid_vector", oid::oid_vector},
+    {"json", oid::json},
+    {"xml", oid::xml},
+    {"pg_node_tree", oid::pg_node_tree},
+    {"pg_ddl_command", oid::pg_ddl_command},
+    {"point", oid::point},
+    {"lseg", oid::lseg},
+    {"path", oid::path},
+    {"box", oid::box},
+    {"polygon", oid::polygon},
+    {"line", oid::line},
+    {"float4", oid::float4},
+    {"float8", oid::float8},
+    {"abstime", oid::abstime},
+    {"reltime", oid::reltime},
+    {"tinterval", oid::tinterval},
+    {"unknown", oid::unknown},
+    {"circle", oid::circle},
+    {"cash", oid::cash},
+    {"macaddr", oid::macaddr},
+    {"inet", oid::inet},
+    {"cidr", oid::cidr},
+    {"int2_array", oid::int2_array},
+    {"int4_array", oid::int4_array},
+    {"text_array", oid::text_array},
+    {"oid_array", oid::oid_array},
+    {"float4_array", oid::float4_array},
+    {"acl_item", oid::acl_item},
+    {"cstring_array", oid::cstring_array},
+    {"bpchar", oid::bpchar},
+    {"varchar", oid::varchar},
+    {"date", oid::date},
+    {"time", oid::time},
+    {"timestamp", oid::timestamp},
+    {"timestamptz", oid::timestamptz},
+    {"interval", oid::interval},
+    {"timetz", oid::timetz},
+    {"bit", oid::bit},
+    {"varbit", oid::varbit},
+    {"numeric", oid::numeric},
+    {"refcursor", oid::refcursor},
+    {"regprocedure", oid::regprocedure},
+    {"regoper", oid::regoper},
+    {"regoperator", oid::regoperator},
+    {"regclass", oid::regclass},
+    {"regtype", oid::regtype},
+    {"regrole", oid::regrole},
+    {"regtypearray", oid::regtypearray},
+    {"uuid", oid::uuid},
+    {"lsn", oid::lsn},
+    {"tsvector", oid::tsvector},
+    {"gtsvector", oid::gtsvector},
+    {"tsquery", oid::tsquery},
+    {"regconfig", oid::regconfig},
+    {"regdictionary", oid::regdictionary},
+    {"jsonb", oid::jsonb},
+    {"int4_range", oid::int4_range},
+    {"record", oid::record},
+    {"record_array", oid::record_array},
+    {"cstring", oid::cstring},
+    {"any", oid::any},
+    {"any_array", oid::any_array},
+    {"void", oid::void_},
+    {"trigger", oid::trigger},
+    {"evttrigger", oid::evttrigger},
+    {"language_handler", oid::language_handler},
+    {"internal", oid::internal},
+    {"opaque", oid::opaque},
+    {"any_element", oid::any_element},
+    {"any_non_array", oid::any_non_array},
+    {"any_enum", oid::any_enum},
+    {"fdw_handler", oid::fdw_handler},
+    {"any_range", oid::any_range},
+};
+
 } // namespace
 
-// Generated output operator
-std::ostream &
-operator<<(std::ostream &out, oid_type val) {
+// Opérateur de sortie pour oid
+std::ostream& operator<<(std::ostream& out, oid val) {
     std::ostream::sentry s(out);
     if (s) {
-        auto f = OID_TYPE_TO_STRING.find(val);
-        if (f != OID_TYPE_TO_STRING.end()) {
-            out << f->second;
+        auto it = OID_TO_STRING.find(val);
+        if (it != OID_TO_STRING.end()) {
+            out << it->second;
         } else {
-            out << "oid_type " << (int)val;
+            out << "oid_" << static_cast<std::underlying_type_t<oid>>(val);
         }
     }
     return out;
 }
-// Generated input operator
-std::istream &
-operator>>(std::istream &in, oid_type &val) {
+
+// Opérateur d'entrée pour oid
+std::istream& operator>>(std::istream& in, oid& val) {
     std::istream::sentry s(in);
     if (s) {
         std::string name;
         if (in >> name) {
-            auto f = STRING_TO_OID_TYPE.find(name);
-            if (f != STRING_TO_OID_TYPE.end()) {
-                val = f->second;
+            auto it = STRING_TO_OID.find(name);
+            if (it != STRING_TO_OID.end()) {
+                val = it->second;
             } else {
                 in.setstate(std::ios_base::failbit);
             }
@@ -226,134 +226,6 @@ operator>>(std::istream &in, oid_type &val) {
     }
     return in;
 }
-
-} // namespace type
-
-namespace type_class {
-
-namespace {
-const std::map<code, std::string> CODE_TO_STRING{
-    {base, "base"},     {composite, "composite"},
-    {domain, "domain"}, {enumerated, "enumerated"},
-    {pseudo, "pseudo"}, {range, "range"},
-}; // CODE_TO_STRING
-const std::map<std::string, code> STRING_TO_CODE{
-    {"base", base},     {"composite", composite},
-    {"domain", domain}, {"enumerated", enumerated},
-    {"pseudo", pseudo}, {"range", range},
-}; // STRING_TO_CODE
-} // namespace
-
-// Generated output operator
-std::ostream &
-operator<<(std::ostream &out, code val) {
-    std::ostream::sentry s(out);
-    if (s) {
-        auto f = CODE_TO_STRING.find(val);
-        if (f != CODE_TO_STRING.end()) {
-            out << f->second;
-        } else {
-            out << "type " << (int)val;
-        }
-    }
-    return out;
-}
-// Generated input operator
-std::istream &
-operator>>(std::istream &in, code &val) {
-    std::istream::sentry s(in);
-    if (s) {
-        std::string name;
-        if (in >> name) {
-            auto f = STRING_TO_CODE.find(name);
-            if (f != STRING_TO_CODE.end()) {
-                val = f->second;
-            } else {
-                in.setstate(std::ios_base::failbit);
-            }
-        }
-    }
-    return in;
-}
-
-} // namespace type_class
-
-namespace type_category {
-
-namespace {
-const std::map<code, std::string> CODE_TO_STRING{
-    {invalid, "invalid"},
-    {array, "array"},
-    {boolean, "boolean"},
-    {composite, "composite"},
-    {datetime, "datetime"},
-    {enumeration, "enumeration"},
-    {geometric, "geometric"},
-    {network, "network"},
-    {numeric, "numeric"},
-    {pseudotype, "pseudotype"},
-    {range_category, "range_category"},
-    {string, "string"},
-    {timespan, "timespan"},
-    {user, "user"},
-    {bitstring, "bitstring"},
-    {unknown, "unknown"},
-}; // CODE_TO_STRING
-const std::map<std::string, code> STRING_TO_CODE{
-    {"invalid", invalid},
-    {"array", array},
-    {"boolean", boolean},
-    {"composite", composite},
-    {"datetime", datetime},
-    {"enumeration", enumeration},
-    {"geometric", geometric},
-    {"network", network},
-    {"numeric", numeric},
-    {"pseudotype", pseudotype},
-    {"range_category", range_category},
-    {"string", string},
-    {"timespan", timespan},
-    {"user", user},
-    {"bitstring", bitstring},
-    {"unknown", unknown},
-}; // STRING_TO_CODE
-} // namespace
-
-// Generated output operator
-std::ostream &
-operator<<(std::ostream &out, code val) {
-    std::ostream::sentry s(out);
-    if (s) {
-        auto f = CODE_TO_STRING.find(val);
-        if (f != CODE_TO_STRING.end()) {
-            out << f->second;
-        } else {
-            out << "category " << (int)val;
-        }
-    }
-    return out;
-}
-// Generated input operator
-std::istream &
-operator>>(std::istream &in, code &val) {
-    std::istream::sentry s(in);
-    if (s) {
-        std::string name;
-        if (in >> name) {
-            auto f = STRING_TO_CODE.find(name);
-            if (f != STRING_TO_CODE.end()) {
-                val = f->second;
-            } else {
-                in.setstate(std::ios_base::failbit);
-            }
-        }
-    }
-    return in;
-}
-
-} // namespace type_category
-
-} // namespace oids
 
 } // namespace pg
 } // namespace qb

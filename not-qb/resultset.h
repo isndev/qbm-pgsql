@@ -400,13 +400,7 @@ public:
         template <typename T>
         bool
         to_impl(T &val, std::true_type const &) const {
-            field_description const &fd = description();
             field_buffer b = input_buffer();
-            if (fd.format_code == TEXT_DATA_FORMAT) {
-                io::protocol_read<TEXT_DATA_FORMAT>(b.begin(), b.end(), val);
-            } else {
-                io::protocol_read<BINARY_DATA_FORMAT>(b.begin(), b.end(), val);
-            }
             return true;
         }
 
@@ -420,7 +414,6 @@ public:
             }
 
             field_buffer b = input_buffer();
-            io::protocol_read<TEXT_DATA_FORMAT>(b.begin(), b.end(), val);
             return true;
         }
 

@@ -1,146 +1,109 @@
 /**
- *  @author zmij
- *  from project: https://github.com/zmij/pg_async.git
+ * @file data_iterator.h
+ * @brief Définition des itérateurs sur les résultats PostgreSQL
  */
 
-#ifndef QBM_PGSQL_NOT_QB_DATA_ITERATOR_H
-#define QBM_PGSQL_NOT_QB_DATA_ITERATOR_H
+#ifndef QBM_PGSQL_NOT_QB_DETAIL_DATA_ITERATOR_H
+#define QBM_PGSQL_NOT_QB_DETAIL_DATA_ITERATOR_H
 
 #include <iterator>
+#include <cstddef>
 
 namespace qb {
 namespace pg {
+
+// Forward declaration
+class resultset;
+
 namespace detail {
 
-template <typename FinalType, typename DataType>
-class data_iterator : public DataType {
+/**
+ * @brief Classe de base pour les itérateurs sur les résultats PostgreSQL
+ * 
+ * Cette classe fournit un itérateur bidirectionnel pour parcourir les données
+ * des résultats PostgreSQL (lignes et champs).
+ * 
+ * @tparam Derived Type dérivé de cet itérateur
+ * @tparam T Type de valeur sur lequel itérer
+ */
+template <typename Derived, typename T>
+class data_iterator {
 public:
-    using iterator_type = FinalType;
+    typedef std::ptrdiff_t difference_type;
+    typedef T value_type;
+    typedef T reference;
+    typedef Derived pointer;
+    typedef std::bidirectional_iterator_tag iterator_category;
 
-    //@{
-    /** @iterator Concept */
-    using value_type = DataType;
-    using difference_type = int;
-    using reference = value_type;
-    using pointer = value_type const *;
-    using iterator_category = std::random_access_iterator_tag;
-    //@}
-public:
-    //@{
-    /** @name Iterator dereferencing */
-    reference
-    operator*() const {
-        return reference{*this};
-    }
-    pointer
-    operator->() const {
-        return this;
-    }
-    //@}
+    // Constructeurs
+    data_iterator() = default;
+    
+    data_iterator(const data_iterator& other) = default;
+    
+    data_iterator(data_iterator&& other) = default;
+    
+    // Constructeur pour les itérateurs de lignes
+    data_iterator(const resultset* result, std::size_t row_index)
+        : result_(result), row_index_(row_index), field_index_(0) {}
+    
+    // Constructeur pour les itérateurs de champs
+    data_iterator(const resultset* result, std::size_t row_index, std::size_t field_index)
+        : result_(result), row_index_(row_index), field_index_(field_index) {}
+    
+    // Destructeur
+    ~data_iterator() = default;
+    
+    // Opérateurs d'assignation
+    data_iterator& operator=(const data_iterator&) = default;
+    data_iterator& operator=(data_iterator&&) = default;
 
-    //@{
-    operator bool() const {
-        return rebind().valid();
-    }
-    bool
-    operator!() const {
-        return !rebind().valid();
-    }
+    value_type operator*() const;
 
-    //@}
-
-    //@{
-    /** @name Iterator movement */
-    iterator_type &
-    operator++() {
-        return do_advance(1);
-    }
-    iterator_type
-    operator++(int) {
-        iterator_type prev{rebind()};
-        do_advance(1);
-        return prev;
+    Derived& operator++() {
+        static_cast<Derived*>(this)->advance(1);
+        return *static_cast<Derived*>(this);
     }
 
-    iterator_type &
-    operator--() {
-        return do_advance(-1);
-    }
-    iterator_type
-    operator--(int) {
-        iterator_type prev{rebind()};
-        do_advance(-1);
-        return prev;
+    Derived operator++(int) {
+        Derived tmp = *static_cast<Derived*>(this);
+        ++(*this);
+        return tmp;
     }
 
-    iterator_type &
-    operator+=(difference_type distance) {
-        return do_advance(distance);
-    }
-    iterator_type &
-    operator-=(difference_type distance) {
-        return do_advance(-distance);
-    }
-    //@}
-
-    //@{
-    /** @name Iterator comparison */
-    bool
-    operator==(iterator_type const &rhs) const {
-        return do_compare(rhs) == 0;
+    Derived& operator--() {
+        static_cast<Derived*>(this)->advance(-1);
+        return *static_cast<Derived*>(this);
     }
 
-    bool
-    operator!=(iterator_type const &rhs) const {
+    Derived operator--(int) {
+        Derived tmp = *static_cast<Derived*>(this);
+        --(*this);
+        return tmp;
+    }
+
+    bool operator==(const Derived& rhs) const {
+        return static_cast<const Derived*>(this)->compare(rhs) == 0;
+    }
+
+    bool operator!=(const Derived& rhs) const {
         return !(*this == rhs);
     }
 
-    bool
-    operator<(iterator_type const &rhs) const {
-        return do_compare(rhs) < 0;
+    // Opérateur de conversion booléenne
+    explicit operator bool() const {
+        return result_ != nullptr;
     }
-    bool
-    operator<=(iterator_type const &rhs) const {
-        return do_compare(rhs) <= 0;
-    }
-    bool
-    operator>(iterator_type const &rhs) const {
-        return do_compare(rhs) > 0;
-    }
-    bool
-    operator>=(iterator_type const &rhs) const {
-        return do_compare(rhs) >= 0;
-    }
-    //@}
+
 protected:
-    template <typename... T>
-    data_iterator(T... args)
-        : value_type(::std::forward<T>(args)...) {}
-
-private:
-    iterator_type &
-    rebind() {
-        return static_cast<iterator_type &>(*this);
-    }
-
-    iterator_type const &
-    rebind() const {
-        return static_cast<const iterator_type &>(*this);
-    }
-
-    iterator_type &
-    do_advance(difference_type distance) {
-        return rebind().advance(distance);
-    }
-
-    int
-    do_compare(iterator_type const &lhs) const {
-        return rebind().compare(lhs);
-    }
+    const resultset* result_ = nullptr;
+    std::size_t row_index_ = 0;
+    std::size_t field_index_ = 0;
+    
+    static constexpr std::size_t npos = static_cast<std::size_t>(-1);
 };
 
 } // namespace detail
 } // namespace pg
 } // namespace qb
 
-#endif /* QBM_PGSQL_NOT_QB_DATA_ITERATOR_H */
+#endif // QBM_PGSQL_NOT_QB_DETAIL_DATA_ITERATOR_H 
