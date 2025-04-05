@@ -29,12 +29,6 @@
 
 namespace qb::pg::detail {
 
-// Data format constants
-enum class DataFormat : smallint {
-    Text = 0,
-    Binary = 1
-};
-
 /**
  * @brief Modern parameter serializer for PostgreSQL binary protocol
  */
@@ -103,7 +97,7 @@ public:
      */
     void add_bool(bool value) {
         // Don't add format code here
-        param_types_.push_back(oid::boolean);
+        param_types_.push_back(16); // boolean (was oid::boolean)
         write_bool(value);
     }
 
@@ -114,7 +108,7 @@ public:
      */
     void add_smallint(smallint value) {
         // Don't add format code here
-        param_types_.push_back(oid::int2);
+        param_types_.push_back(21); // int2 (was oid::int2)
         write_smallint(value);
     }
 
@@ -125,7 +119,7 @@ public:
      */
     void add_integer(integer value) {
         // Don't add format code here
-        param_types_.push_back(oid::int4);
+        param_types_.push_back(23); // int4 (was oid::int4)
         write_integer(value);
     }
 
@@ -136,7 +130,7 @@ public:
      */
     void add_bigint(bigint value) {
         // Don't add format code here
-        param_types_.push_back(oid::int8);
+        param_types_.push_back(20); // int8 (was oid::int8)
         write_bigint(value);
     }
 
@@ -147,7 +141,7 @@ public:
      */
     void add_float(float value) {
         // Don't add format code here
-        param_types_.push_back(oid::float4);
+        param_types_.push_back(700); // float4 (was oid::float4)
         write_float(value);
     }
 
@@ -158,7 +152,7 @@ public:
      */
     void add_double(double value) {
         // Don't add format code here
-        param_types_.push_back(oid::float8);
+        param_types_.push_back(701); // float8 (was oid::float8)
         write_double(value);
     }
 
@@ -169,7 +163,7 @@ public:
      */
     void add_string(const std::string& value) {
         // Don't add format code here
-        param_types_.push_back(oid::text);
+        param_types_.push_back(25); // text (was oid::text)
         write_string(value);
     }
 
@@ -180,7 +174,7 @@ public:
      */
     void add_string_view(std::string_view value) {
         // Don't add format code here
-        param_types_.push_back(oid::text);
+        param_types_.push_back(25); // text (was oid::text)
         write_string_view(value);
     }
 
@@ -191,7 +185,7 @@ public:
      */
     void add_cstring(const char* value) {
         // Don't add format code here
-        param_types_.push_back(oid::text);
+        param_types_.push_back(25); // text (was oid::text)
         
         if (!value) {
             write_null();
@@ -209,7 +203,7 @@ public:
      */
     void add_byte_array(const byte* data, size_t size) {
         // Don't add format code here
-        param_types_.push_back(oid::bytea);
+        param_types_.push_back(17); // bytea (was oid::bytea)
         write_byte_array(data, size);
     }
 
@@ -241,7 +235,7 @@ public:
         // to get the exact format that PostgreSQL expects for VALUES ($1),($2),...
         for (const auto& value : values) {
             // Add the OID type
-            param_types_.push_back(oid::text);
+            param_types_.push_back(25); // text (was oid::text)
             
             // Write the parameter length (4 bytes)
             integer len = static_cast<integer>(value.size());
@@ -267,75 +261,7 @@ public:
      */
     template<typename T>
     void add_param(const T& param) {
-        if constexpr (std::is_same_v<T, std::nullptr_t>) {
-            add_null();
-        }
-        else if constexpr (std::is_same_v<T, bool>) {
-            add_bool(param);
-        }
-        else if constexpr (std::is_integral_v<T> && !std::is_same_v<T, bool>) {
-            // Integer types (excluding bool)
-            if constexpr (sizeof(T) <= 2) {
-                add_smallint(param);
-            }
-            else if constexpr (sizeof(T) <= 4) {
-                add_integer(param);
-            }
-            else {
-                add_bigint(param);
-            }
-        }
-        else if constexpr (std::is_floating_point_v<T>) {
-            // Floating point types
-            if constexpr (sizeof(T) <= 4) {
-                add_float(param);
-            }
-            else {
-                add_double(param);
-            }
-        }
-        else if constexpr (std::is_same_v<T, std::string>) {
-            add_string(param);
-        }
-        else if constexpr (std::is_same_v<T, std::string_view>) {
-            add_string_view(param);
-        }
-        else if constexpr (std::is_same_v<T, const char*>) {
-            add_cstring(param);
-        }
-        else if constexpr (std::is_same_v<T, std::vector<std::string>>) {
-            // IMPORTANT: Vector of strings = one parameter PER element of the vector
-            // For a query like "INSERT INTO ... VALUES ($1),($2),($3),($4)"
-            add_string_vector(param);
-        }
-        else if constexpr (std::is_same_v<T, std::vector<char>>) {
-            // Vector of char treated as byte array
-            if (!param.empty()) {
-                add_byte_array(reinterpret_cast<const byte*>(param.data()), param.size());
-            } else {
-                add_null();
-            }
-        }
-        else if constexpr (std::is_same_v<T, std::vector<unsigned char>> || std::is_same_v<T, std::vector<byte>>) {
-            // Vector of unsigned bytes treated directly as byte array
-            if (!param.empty()) {
-                add_byte_array(reinterpret_cast<const byte*>(param.data()), param.size());
-            } else {
-                add_null();
-            }
-        }
-        else if constexpr (is_optional<T>::value) {
-            using ValueType = typename T::value_type;
-            if (param.has_value()) {
-                add_param(*param);
-            } else {
-                add_null();
-            }
-        }
-        else {
-            // Fallback for unsupported types
-            static_assert(!sizeof(T), "Unsupported parameter type");
-        }
+        param_serializer_traits<typename std::decay<T>::type>::add_param(*this, param);
     }
 
     /**
@@ -343,6 +269,11 @@ public:
      * This should be called after adding all parameters and before sending to PostgreSQL
      */
     void finalize_format_codes() {
+        // S'assurer que le buffer a suffisamment d'espace pour le nombre de paramètres
+        if (format_codes_buffer_.size() < sizeof(smallint)) {
+            format_codes_buffer_.resize(sizeof(smallint));
+        }
+        
         // The format codes count should be written at the beginning of the buffer
         write_smallint_at(format_codes_buffer_, 0, param_count());
     }
@@ -399,18 +330,140 @@ public:
     }
 
 private:
+    // Traits pattern for type-based serialization
+
+    /**
+     * @brief Base template for param serializer traits
+     * 
+     * This template is specialized for each supported type
+     */
+    template<typename T, typename Enable = void>
+    struct param_serializer_traits {
+        static void add_param(ParamSerializer& serializer, const T& param) {
+            // Fallback for unsupported types
+            static_assert(!sizeof(T), "Unsupported parameter type");
+        }
+    };
+
+    // Specialization for nullptr_t
+    template<>
+    struct param_serializer_traits<std::nullptr_t> {
+        static void add_param(ParamSerializer& serializer, const std::nullptr_t&) {
+            serializer.add_null();
+        }
+    };
+
+    // Specialization for bool
+    template<>
+    struct param_serializer_traits<bool> {
+        static void add_param(ParamSerializer& serializer, const bool& param) {
+            serializer.add_bool(param);
+        }
+    };
+
+    // Specialization for integral types (excluding bool)
+    template<typename T>
+    struct param_serializer_traits<T, 
+        std::enable_if_t<std::is_integral_v<T> && !std::is_same_v<T, bool>, void>> {
+        static void add_param(ParamSerializer& serializer, const T& param) {
+            if constexpr (sizeof(T) <= 2) {
+                serializer.add_smallint(param);
+            }
+            else if constexpr (sizeof(T) <= 4) {
+                serializer.add_integer(param);
+            }
+            else {
+                serializer.add_bigint(param);
+            }
+        }
+    };
+
+    // Specialization for floating-point types
+    template<typename T>
+    struct param_serializer_traits<T, 
+        std::enable_if_t<std::is_floating_point_v<T>, void>> {
+        static void add_param(ParamSerializer& serializer, const T& param) {
+            if constexpr (sizeof(T) <= 4) {
+                serializer.add_float(param);
+            }
+            else {
+                serializer.add_double(param);
+            }
+        }
+    };
+
+    // Specialization for std::string
+    template<>
+    struct param_serializer_traits<std::string> {
+        static void add_param(ParamSerializer& serializer, const std::string& param) {
+            serializer.add_string(param);
+        }
+    };
+
+    // Specialization for std::string_view
+    template<>
+    struct param_serializer_traits<std::string_view> {
+        static void add_param(ParamSerializer& serializer, const std::string_view& param) {
+            serializer.add_string_view(param);
+        }
+    };
+
+    // Specialization for const char*
+    template<>
+    struct param_serializer_traits<const char*> {
+        static void add_param(ParamSerializer& serializer, const char* param) {
+            serializer.add_cstring(param);
+        }
+    };
+
+    // Specialization for vector<std::string>
+    template<>
+    struct param_serializer_traits<std::vector<std::string>> {
+        static void add_param(ParamSerializer& serializer, const std::vector<std::string>& param) {
+            serializer.add_string_vector(param);
+        }
+    };
+
+    // Specialization for vector<char>
+    template<>
+    struct param_serializer_traits<std::vector<char>> {
+        static void add_param(ParamSerializer& serializer, const std::vector<char>& param) {
+            if (!param.empty()) {
+                serializer.add_byte_array(reinterpret_cast<const byte*>(param.data()), param.size());
+            } else {
+                serializer.add_null();
+            }
+        }
+    };
+
+    // Specialization for vector<unsigned char>
+    template<>
+    struct param_serializer_traits<std::vector<unsigned char>> {
+        static void add_param(ParamSerializer& serializer, const std::vector<unsigned char>& param) {
+            if (!param.empty()) {
+                serializer.add_byte_array(reinterpret_cast<const byte*>(param.data()), param.size());
+            } else {
+                serializer.add_null();
+            }
+        }
+    };
+
+    // Specialization for std::optional
+    template<typename T>
+    struct param_serializer_traits<std::optional<T>> {
+        static void add_param(ParamSerializer& serializer, const std::optional<T>& param) {
+            if (param.has_value()) {
+                serializer.add_param(*param);
+            } else {
+                serializer.add_null();
+            }
+        }
+    };
+
+private:
     std::vector<byte> format_codes_buffer_;
     std::vector<byte> params_buffer_;
     std::vector<integer> param_types_;
-
-    /**
-     * @brief Helper for checking if a type is std::optional
-     */
-    template<typename T>
-    struct is_optional : std::false_type {};
-
-    template<typename T>
-    struct is_optional<std::optional<T>> : std::true_type {};
 
     /**
      * @brief Add a format code to the format codes buffer
@@ -420,7 +473,7 @@ private:
      * 
      * @param format Format code
      */
-    void add_format_code(DataFormat format) {
+    void add_format_code(data_format format) {
         // NO-OP - We don't add format codes in the serializer anymore
         // This avoids the extra format codes problem
     }

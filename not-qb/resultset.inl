@@ -14,6 +14,47 @@ namespace pg {
 
 namespace detail {
 
+// Extensions pour la conversion de tuples
+namespace resultset_ext {
+
+// Conversion de row vers tuple (implémentation)
+template <typename Tuple, std::size_t... I>
+inline void 
+row_to_impl(resultset::row const& row, Tuple& t, std::index_sequence<I...>) {
+    ((std::get<I>(t) = row[I].template as<typename std::tuple_element<I, Tuple>::type>()), ...);
+}
+
+// Conversion de row vers tuple 
+template <typename... Ts>
+inline void 
+row_to(resultset::row const& row, std::tuple<Ts...>& t) {
+    row_to_impl(row, t, std::index_sequence_for<Ts...>{});
+}
+
+// Conversion de row vers tuple de références
+template <typename... Ts>
+inline void 
+row_to(resultset::row const& row, std::tuple<Ts&...> t) {
+    row_to_impl(t, row, std::index_sequence_for<Ts...>{});
+}
+
+// Version pour la tuple de références
+template <typename Tuple, std::size_t... Is>
+inline void
+row_to_impl(Tuple& t, resultset::row const& row, std::index_sequence<Is...>) {
+    ((std::get<Is>(t) = row[Is].template as<std::tuple_element_t<Is, std::remove_reference_t<Tuple>>>()), ...);
+}
+
+// Conversion de row vers des paramètres multiples
+template <typename... Ts>
+inline void 
+row_to_multi(resultset::row const& row, Ts&... args) {
+    std::tuple<Ts&...> tuple_refs(args...);
+    row_to(row, tuple_refs);
+}
+
+} // namespace resultset_ext
+
 template <size_t Index, typename T>
 struct nth_field {
     enum { index = Index };
@@ -44,13 +85,12 @@ struct row_data_extractor_base<util::indexes_tuple<Indexes...>, T...> {
 
     static void
     get_tuple(resultset::row const &row, std::tuple<T...> &val) {
-        std::tuple<T...> tmp(nth_field<Indexes, T>(row).value()...);
-        tmp.swap(val);
+        resultset_ext::row_to(row, val);
     }
 
     static void
     get_values(resultset::row const &row, T &...val) {
-        util::expand(nth_field<Indexes, T>(row).to(val)...);
+        resultset_ext::row_to_multi(row, val...);
     }
 };
 
@@ -97,9 +137,7 @@ resultset::row::to(std::tuple<T...> &val) const {
 template <typename... T>
 void
 resultset::row::to(std::tuple<T &...> val) const {
-    std::tuple<T...> non_ref;
-    detail::row_data_extractor<T...>::get_tuple(*this, non_ref);
-    val = non_ref;
+    detail::resultset_ext::row_to(*this, val);
 }
 
 template <typename... T>

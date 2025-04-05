@@ -191,7 +191,7 @@ using ubigint = uint64_t;
 /**
  * @brief uuid type
  */
-using uuid = qb::uuid;
+using uuid_t = qb::uuid;
 
 /**
  * @brief PostgreSQL protocol version
@@ -356,7 +356,7 @@ struct field_description {
      */
     smallint attribute_number;
     /** @brief The object ID of the field's data type. */
-    oids::type::oid_type type_oid;
+    oid type_oid;
     /** @brief The data type size (see pg_type.typlen). Note that negative
      * values denote variable-width types.
      */
@@ -398,7 +398,7 @@ using connection_ptr = std::shared_ptr<basic_connection>;
 
 /** @brief  */
 using client_options_type = std::map<std::string, std::string>;
-using type_oid_sequence = std::vector<oids::type::oid_type>;
+using type_oid_sequence = std::vector<integer>;
 
 using simple_callback = std::function<void()>;
 /** @brief Callback for error handling */

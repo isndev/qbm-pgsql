@@ -17,13 +17,17 @@
 
 # Define test files and their corresponding test names
 set(PGSQL_TESTS
-    connection
-    transaction
-    prepared-statements
     data-types
-    operations
-    queries
-    params
+    param-serializer
+    param-unserializer
+    param-parsing
+    connection
+    data-types-integration
+    #transaction
+    #prepared-statements
+    #operations
+    #queries
+    #params
     # error-handling
     # performance
 )

@@ -63,7 +63,7 @@ using namespace qb::pg;
 struct PreparedQuery {
     std::string name;              ///< Name of the prepared query
     std::string expression;        ///< SQL expression
-    type_oid_sequence param_types; ///< Types of parameters
+    std::vector<integer> param_types; ///< Types of parameters (was type_oid_sequence)
     row_description_type row_description; ///< Description of result columns
 };
 
@@ -613,8 +613,8 @@ public:
         cmd.write(_query.name);
         cmd.write(_query.expression);
         cmd.write((smallint)_query.param_types.size());
-        for (oids::type::oid_type oid : _query.param_types) {
-            cmd.write((integer)oid);
+        for (integer oid_val : _query.param_types) {
+            cmd.write(oid_val); // déjà un integer, pas besoin de cast
         }
 
         message describe(describe_tag);

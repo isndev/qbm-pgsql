@@ -19,26 +19,6 @@
 
 namespace qb::pg::detail {
 
-// Basic type definitions
-using byte = char;
-using smallint = int16_t;
-using integer = int32_t;
-using bigint = int64_t;
-
-// OID types for PostgreSQL data types
-namespace oid {
-    constexpr integer boolean = 16;
-    constexpr integer int2 = 21;
-    constexpr integer int4 = 23;
-    constexpr integer int8 = 20;
-    constexpr integer float4 = 700;
-    constexpr integer float8 = 701;
-    constexpr integer text = 25;
-    constexpr integer varchar = 1043;
-    constexpr integer bytea = 17;
-    constexpr integer unknown = 705;
-}
-
 /**
  * @brief Type mapping from C++ to PostgreSQL OID types
  * 
@@ -47,26 +27,26 @@ namespace oid {
  */
 template <typename T, typename Enable = void>
 struct type_mapping {
-    static constexpr integer type_oid = oid::unknown;
+    static constexpr integer type_oid = 705; // unknown
 };
 
 // Specializations for common C++ types
-template <> struct type_mapping<bool> { static constexpr integer type_oid = oid::boolean; };
-template <> struct type_mapping<int16_t> { static constexpr integer type_oid = oid::int2; };
-template <> struct type_mapping<int32_t> { static constexpr integer type_oid = oid::int4; };
-template <> struct type_mapping<int64_t> { static constexpr integer type_oid = oid::int8; };
-template <> struct type_mapping<float> { static constexpr integer type_oid = oid::float4; };
-template <> struct type_mapping<double> { static constexpr integer type_oid = oid::float8; };
+template <> struct type_mapping<bool> { static constexpr integer type_oid = 16; };        // boolean
+template <> struct type_mapping<int16_t> { static constexpr integer type_oid = 21; };     // int2
+template <> struct type_mapping<int32_t> { static constexpr integer type_oid = 23; };     // int4
+template <> struct type_mapping<int64_t> { static constexpr integer type_oid = 20; };     // int8
+template <> struct type_mapping<float> { static constexpr integer type_oid = 700; };      // float4
+template <> struct type_mapping<double> { static constexpr integer type_oid = 701; };     // float8
 
 // String types
-template <> struct type_mapping<std::string> { static constexpr integer type_oid = oid::text; };
-template <> struct type_mapping<const char*> { static constexpr integer type_oid = oid::text; };
-template <> struct type_mapping<std::string_view> { static constexpr integer type_oid = oid::text; };
-template <size_t N> struct type_mapping<char[N]> { static constexpr integer type_oid = oid::text; };
+template <> struct type_mapping<std::string> { static constexpr integer type_oid = 25; };     // text
+template <> struct type_mapping<const char*> { static constexpr integer type_oid = 25; };     // text
+template <> struct type_mapping<std::string_view> { static constexpr integer type_oid = 25; }; // text
+template <size_t N> struct type_mapping<char[N]> { static constexpr integer type_oid = 25; }; // text
 
 // Binary data
-template <> struct type_mapping<std::vector<char>> { static constexpr integer type_oid = oid::bytea; };
-template <> struct type_mapping<std::vector<unsigned char>> { static constexpr integer type_oid = oid::bytea; };
+template <> struct type_mapping<std::vector<char>> { static constexpr integer type_oid = 17; };        // bytea
+template <> struct type_mapping<std::vector<unsigned char>> { static constexpr integer type_oid = 17; }; // bytea
 
 // Optional types (use the underlying type's OID)
 template <typename T>
@@ -95,7 +75,7 @@ inline integer get_type_oid() {
  * @param types_to_fill Vector to populate with OID types
  */
 template <typename... T>
-void fill_types(std::vector<oids::type::oid_type> &types_to_fill) {
+void fill_types(std::vector<integer> &types_to_fill) {
     types_to_fill.reserve(sizeof...(T));
     if constexpr (sizeof...(T) > 0) {
         (types_to_fill.push_back(get_type_oid<T>()), ...);

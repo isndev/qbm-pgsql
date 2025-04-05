@@ -1,18 +1,21 @@
-/**
- *  @author zmij
- *  from project: https://github.com/zmij/pg_async.git
- */
-
 #ifndef QBM_PGSQL_NOT_QB_PG_TYPES_H
 #define QBM_PGSQL_NOT_QB_PG_TYPES_H
 
 #include <iosfwd>
+#include <cstdint>
+#include <qb/uuid.h>
 
 namespace qb {
 namespace pg {
-namespace oids {
-namespace type {
-enum oid_type {
+
+// Basic type definitions
+using byte = char;
+using smallint = int16_t;
+using integer = int32_t;
+using bigint = int64_t;
+
+// Enum pour les OIDs PostgreSQL
+enum class oid: int {
     boolean = 16,
     bytea = 17,
     char_ = 18,
@@ -23,7 +26,7 @@ enum oid_type {
     int4 = 23,
     regproc = 24,
     text = 25,
-    oid = 26,
+    oid_t = 26,  // Renommé pour éviter les conflits
     tid = 27,
     xid = 28,
     cid = 29,
@@ -102,12 +105,11 @@ enum oid_type {
     any_range = 3831
 };
 
-std::ostream &operator<<(std::ostream &out, oid_type val);
-std::istream &operator>>(std::ostream &in, oid_type &val);
+// Opérateurs pour faciliter l'utilisation
+std::ostream& operator<<(std::ostream& out, oid val);
+std::istream& operator>>(std::istream& in, oid& val);
 
-} // namespace type
-namespace type_class {
-enum code {
+enum class code : char {
     base = 'b',
     composite = 'c',
     domain = 'd',
@@ -115,9 +117,8 @@ enum code {
     pseudo = 'p',
     range = 'r'
 };
-} // namespace type_class
-namespace type_category {
-enum code {
+
+enum class code_category : char {
     invalid = 0,
     array = 'A',
     boolean = 'B',
@@ -135,8 +136,13 @@ enum code {
     bitstring = 'V',
     unknown = 'X'
 };
-} // namespace type_category
-} // namespace oids
+
+// Data format constants
+enum class data_format : smallint {
+    Text = 0,
+    Binary = 1
+};
+
 } // namespace pg
 } // namespace qb
 
