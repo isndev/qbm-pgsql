@@ -133,7 +133,7 @@ private:
     static bool is_binary_format(const resultset::field& field) {
         // Get format code from field description
         // Format code 0 = text, 1 = binary
-        return field.description().format_code == BINARY_DATA_FORMAT;
+        return field.description().format_code == pg::protocol_data_format::Binary;
     }
 };
 

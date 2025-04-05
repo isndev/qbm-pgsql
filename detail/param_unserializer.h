@@ -15,6 +15,7 @@
 #include <string>
 
 #include "../not-qb/common.h"
+#include "../not-qb/pg_types.h"
 
 namespace qb::pg::detail {
 
@@ -24,6 +25,7 @@ namespace qb::pg::detail {
 class ParamUnserializer {
 public:
     ParamUnserializer() = default;
+    ~ParamUnserializer() = default;
 
     // Helper for checking if a type is std::optional
     template<typename T>
@@ -39,6 +41,16 @@ public:
     float read_float(const std::vector<byte>& buffer);
     double read_double(const std::vector<byte>& buffer);
     std::string read_string(const std::vector<byte>& buffer);
+
+    // Nouvelles méthodes pour gérer différents formats
+    std::string read_text_string(const std::vector<byte>& buffer);
+    std::string read_binary_string(const std::vector<byte>& buffer);
+    
+    // Méthode pour les booléens
+    bool read_bool(const std::vector<byte>& buffer);
+    
+    // Méthode pour les données binaires (bytea)
+    std::vector<byte> read_bytea(const std::vector<byte>& buffer);
 };
 
 } // namespace qb::pg::detail

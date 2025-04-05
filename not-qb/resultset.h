@@ -10,6 +10,8 @@
 #include "detail/data_iterator.h"
 #include "error.h"
 #include "protocol_io_traits.h"
+#include "../detail/field_reader.h"
+#include "../detail/type_converter.h"
 
 #include <istream>
 #include <iterator>
@@ -342,7 +344,7 @@ public:
                 return true;
             } else {
                 typename std::decay<T>::type tmp;
-                to_impl(tmp, io::traits::has_parser<T, BINARY_DATA_FORMAT>());
+                to_impl(tmp, io::traits::has_parser<T, pg::protocol_data_format::Binary>());
                 val = std::optional<T>(tmp);
                 return true;
             }
@@ -359,25 +361,35 @@ public:
         template <typename T>
         typename std::decay<T>::type
         as() const {
-            typename std::decay<T>::type val;
-            to(val);
-            return val;
+            using result_type = typename std::decay<T>::type;
+            
+            // 1. Vérifier si la valeur est NULL
+            if (is_null()) {
+                if constexpr (io::traits::is_nullable<result_type>::value) {
+                    result_type val;
+                    io::traits::nullable_traits<result_type>::set_null(val);
+                    return val;
+                } else {
+                    throw error::value_is_null(name());
+                }
+            }
+            
+            // 2. Récupérer les données et le format
+            field_buffer buffer = input_buffer();
+            bool is_binary = (description().format_code == pg::protocol_data_format::Binary);
+            auto data_vector = buffer.to_vector();
+            
+            // 3. Utiliser le TypeConverter pour convertir selon le format
+            if (is_binary) {
+                return detail::TypeConverter<result_type>::from_binary(data_vector);
+            } else {
+                // Pour le format texte, nous devons d'abord lire la chaîne
+                static detail::ParamUnserializer unserializer;
+                std::string text_value = unserializer.read_string(data_vector);
+                return detail::TypeConverter<result_type>::from_text(text_value);
+            }
         }
-        /**
-         * Cast the field value to the type requested. If the field is null
-         * value passed as the parameter to the function will be returned.
-         * @tparam T requested data type
-         * @param default_val Value to return if the field is null
-         * @return
-         */
-        template <typename T>
-        typename std::decay<T>::type
-        coalesce(T const &default_val) {
-            if (is_null())
-                return default_val;
-            return as<T>();
-        }
-
+        
     private:
         template <typename T>
         bool
@@ -388,14 +400,14 @@ public:
                 nullable_traits::set_null(val);
                 return true;
             }
-            return to_impl(val, io::traits::has_parser<T, BINARY_DATA_FORMAT>());
+            return to_impl(val, io::traits::has_parser<T, pg::protocol_data_format::Binary>());
         }
         template <typename T>
         bool
         to_nullable(T &val, std::false_type const &) const {
             if (is_null())
                 throw error::value_is_null(name());
-            return to_impl(val, io::traits::has_parser<T, BINARY_DATA_FORMAT>());
+            return to_impl(val, io::traits::has_parser<T, pg::protocol_data_format::Binary>());
         }
         template <typename T>
         bool
@@ -408,9 +420,9 @@ public:
         bool
         to_impl(T &val, std::false_type const &) const {
             field_description const &fd = description();
-            if (fd.format_code == BINARY_DATA_FORMAT) {
+            if (fd.format_code == pg::protocol_data_format::Binary) {
                 throw error::db_error{
-                    "Cannot find BINARY_DATA_FORMAT parser for field " + fd.name};
+                    "Cannot find pg::protocol_data_format::Binary parser for field " + fd.name};
             }
 
             field_buffer b = input_buffer();

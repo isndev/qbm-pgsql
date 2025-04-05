@@ -8,6 +8,10 @@
 #include <iomanip>
 #include <arpa/inet.h> // for htonl, htons
 #include <limits>
+#include <sstream>
+#include <qb/uuid.h>
+#include <qb/system/timestamp.h>
+#include "../detail/type_converter.h"
 
 using namespace qb::pg;
 using namespace qb::pg::detail;
@@ -948,6 +952,146 @@ TEST_F(ParamSerializerTest, FormatCodesSerialization) {
     
     // Note: La vérification des codes de format spécifiques dépend de l'implémentation.
     // Comme l'assertion précédente sur la taille a échoué, nous ne faisons pas d'autres suppositions
+}
+
+TEST(ParamSerializerTest, UUIDSerialization) {
+    // Create a param serializer
+    qb::pg::detail::ParamSerializer serializer;
+    
+    // Create a UUID
+    qb::uuid test_uuid = qb::uuid::from_string("12345678-1234-5678-1234-567812345678").value();
+    
+    // Serialize the UUID
+    serializer.add_param(test_uuid);
+    
+    // Get the serialized data
+    auto types = serializer.get_param_types();
+    auto data = serializer.get_params_buffer();
+    
+    // Verify OID type
+    ASSERT_EQ(types.size(), 1);
+    EXPECT_EQ(types[0], 2950); // UUID OID
+    
+    // Verify binary data (length + 16 bytes)
+    ASSERT_EQ(data.size(), 20); // 4 bytes length + 16 bytes data
+    
+    // Display buffer for debugging
+    std::ostringstream os;
+    os << "UUID Buffer (size: " << data.size() << "): ";
+    for (auto b : data) {
+        os << std::hex << std::setw(2) << std::setfill('0') << (static_cast<int>(b) & 0xFF) << " ";
+    }
+    std::cout << os.str() << std::endl;
+    
+    // Verify length field (should be 16 bytes)
+    EXPECT_EQ(data[0], 0);
+    EXPECT_EQ(data[1], 0);
+    EXPECT_EQ(data[2], 0);
+    EXPECT_EQ(data[3], 16);
+    
+    // Extract the UUID bytes from the buffer
+    std::array<uint8_t, 16> uuid_bytes;
+    for (size_t i = 0; i < 16; ++i) {
+        uuid_bytes[i] = static_cast<uint8_t>(data[i + 4]);
+    }
+    
+    // Create a UUID from the extracted bytes
+    qb::uuid extracted_uuid(uuid_bytes);
+    
+    // Verify it matches the original
+    EXPECT_EQ(extracted_uuid, test_uuid);
+}
+
+TEST(ParamSerializerTest, TimestampSerialization) {
+    // Create a param serializer
+    qb::pg::detail::ParamSerializer serializer;
+    
+    // Create a timestamp for a known date (2023-01-15 12:34:56.789)
+    // First, create a time_t for this date
+    std::tm time_data = {};
+    time_data.tm_year = 2023 - 1900;
+    time_data.tm_mon = 0;   // January (0-based)
+    time_data.tm_mday = 15;
+    time_data.tm_hour = 12;
+    time_data.tm_min = 34;
+    time_data.tm_sec = 56;
+    std::time_t unix_time = std::mktime(&time_data);
+    
+    // Create a Timestamp with seconds and microseconds
+    qb::Timestamp test_timestamp = qb::Timestamp::seconds(unix_time) + 
+                                  qb::Timespan::microseconds(789000);
+    
+    // Serialize the timestamp
+    serializer.add_param(test_timestamp);
+    
+    // Get the serialized data
+    auto types = serializer.get_param_types();
+    auto data = serializer.get_params_buffer();
+    
+    // Verify OID type
+    ASSERT_EQ(types.size(), 1);
+    EXPECT_EQ(types[0], 1114); // TIMESTAMP OID
+    
+    // Verify binary data (length + 8 bytes)
+    ASSERT_EQ(data.size(), 12); // 4 bytes length + 8 bytes data
+    
+    // Display buffer for debugging
+    std::ostringstream os;
+    os << "Timestamp Buffer (size: " << data.size() << "): ";
+    for (auto b : data) {
+        os << std::hex << std::setw(2) << std::setfill('0') << (static_cast<int>(b) & 0xFF) << " ";
+    }
+    std::cout << os.str() << std::endl;
+    
+    // Verify length field (should be 8 bytes)
+    EXPECT_EQ(data[0], 0);
+    EXPECT_EQ(data[1], 0);
+    EXPECT_EQ(data[2], 0);
+    EXPECT_EQ(data[3], 8);
+    
+    // Also verify the textual representation
+    std::string text_format = qb::pg::detail::TypeConverter<qb::Timestamp>::to_text(test_timestamp);
+    std::cout << "Timestamp as text: " << text_format << std::endl;
+    
+    // The text should look like: "2023-01-15 12:34:56.789000"
+    EXPECT_TRUE(text_format.find("2023-01-15") != std::string::npos);
+    EXPECT_TRUE(text_format.find("12:34:56") != std::string::npos);
+}
+
+TEST(ParamSerializerTest, UTCTimestampSerialization) {
+    // Create a param serializer
+    qb::pg::detail::ParamSerializer serializer;
+    
+    // Create a UTC timestamp
+    qb::UtcTimestamp test_timestamp = qb::UtcTimestamp(qb::Timestamp::seconds(std::time(nullptr)));
+    
+    // Serialize the timestamp
+    serializer.add_param(test_timestamp);
+    
+    // Get the serialized data
+    auto types = serializer.get_param_types();
+    auto data = serializer.get_params_buffer();
+    
+    // Verify OID type
+    ASSERT_EQ(types.size(), 1);
+    EXPECT_EQ(types[0], 1184); // TIMESTAMPTZ OID
+    
+    // Verify binary data format
+    ASSERT_EQ(data.size(), 12); // 4 bytes length + 8 bytes data
+    
+    // Display buffer for debugging
+    std::ostringstream os;
+    os << "UTC Timestamp Buffer (size: " << data.size() << "): ";
+    for (auto b : data) {
+        os << std::hex << std::setw(2) << std::setfill('0') << (static_cast<int>(b) & 0xFF) << " ";
+    }
+    std::cout << os.str() << std::endl;
+    
+    // Verify length field (should be 8 bytes)
+    EXPECT_EQ(data[0], 0);
+    EXPECT_EQ(data[1], 0);
+    EXPECT_EQ(data[2], 0);
+    EXPECT_EQ(data[3], 8);
 }
 
 int main(int argc, char **argv) {
