@@ -50,7 +50,7 @@ ParamUnserializer::read_smallint(const std::vector<byte> &buffer) {
     // Convert from network byte order (big-endian)
     union {
         smallint value;
-        byte bytes[sizeof(smallint)];
+        byte     bytes[sizeof(smallint)];
     } data;
 
     std::memcpy(data.bytes, buffer.data(), sizeof(smallint));
@@ -77,7 +77,7 @@ ParamUnserializer::read_integer(const std::vector<byte> &buffer) {
     // Convert from network byte order (big-endian)
     union {
         integer value;
-        byte bytes[sizeof(integer)];
+        byte    bytes[sizeof(integer)];
     } data;
 
     std::memcpy(data.bytes, buffer.data(), sizeof(integer));
@@ -105,7 +105,7 @@ ParamUnserializer::read_bigint(const std::vector<byte> &buffer) {
     // Manual byte swapping for 64-bit integers (network byte order)
     union {
         bigint i;
-        byte b[8];
+        byte   b[8];
     } src, dst;
 
     std::memcpy(src.b, buffer.data(), sizeof(bigint));
@@ -144,8 +144,8 @@ ParamUnserializer::read_float(const std::vector<byte> &buffer) {
     // we can interpret it directly
     union {
         uint32_t i;
-        float f;
-        byte b[4];
+        float    f;
+        byte     b[4];
     } src, dst;
 
     std::memcpy(src.b, buffer.data(), sizeof(float));
@@ -179,8 +179,8 @@ ParamUnserializer::read_double(const std::vector<byte> &buffer) {
     // Manual byte swap for 64-bit doubles
     union {
         uint64_t i;
-        double d;
-        byte b[8];
+        double   d;
+        byte     b[8];
     } src, dst;
 
     std::memcpy(src.b, buffer.data(), sizeof(src.b));
@@ -295,7 +295,6 @@ ParamUnserializer::read_bool(const std::vector<byte> &buffer) {
     // Text format ("true"/"false")
     if (buffer.size() >= 4 && (buffer[0] == 't' || buffer[0] == 'T' || buffer[0] == 'f' ||
                                buffer[0] == 'F' || buffer[0] == '1' || buffer[0] == '0')) {
-
         std::string text = read_text_string(buffer);
         return (text == "true" || text == "t" || text == "1" || text == "y" || text == "yes");
     }
@@ -345,7 +344,7 @@ ParamUnserializer::read_bytea(const std::vector<byte> &buffer) {
         return std::vector<byte>(buffer.begin() + 4, buffer.begin() + 4 + length);
     } else {
         // Text format (hex representation)
-        std::string hex_string = read_text_string(buffer);
+        std::string       hex_string = read_text_string(buffer);
         std::vector<byte> result;
 
         // Skip the "\x" prefix if present

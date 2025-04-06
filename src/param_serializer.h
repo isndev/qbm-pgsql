@@ -362,23 +362,41 @@ public:
     add_param(const T &param) {
         using value_type = typename std::decay<T>::type;
 
-        // Cas spécial: vecteur de chaînes comme multiples paramètres
-        if constexpr (std::is_same_v<value_type, std::vector<std::string>>) {
-            add_string_vector(param);
-            return;
+        // Special case: Generic vector handling
+        if constexpr (is_std_vector<value_type>::value) {
+            // Special case for vector<string> keeping its original behavior
+            if constexpr (std::is_same_v<value_type, std::vector<std::string>>) {
+                add_string_vector(param);
+                return;
+            }
+            // Special cases for byte arrays - keep existing behavior
+            else if constexpr (std::is_same_v<value_type, std::vector<char>> ||
+                               std::is_same_v<value_type, std::vector<unsigned char>>) {
+                if (!param.empty()) {
+                    add_byte_array(reinterpret_cast<const byte *>(param.data()), param.size());
+                } else {
+                    add_null();
+                }
+                return;
+            }
+            // General case: handle as a PostgreSQL array
+            else {
+                add_vector(param);
+                return;
+            }
         }
 
-        // Cas spécial: valeur nulle (nullptr)
+        // Special case: null value (nullptr)
         if constexpr (std::is_same_v<value_type, std::nullptr_t>) {
             add_null();
             return;
         }
 
-        // Cas standard: utiliser TypeConverter
-        // 1. Ajouter l'OID du type
+        // Standard case: use TypeConverter
+        // 1. Add the OID type
         param_types_.push_back(TypeConverter<value_type>::get_oid());
 
-        // 2. Vérifier si c'est une valeur optionnelle nulle
+        // 2. Check if it's an optional NULL value
         if constexpr (ParamUnserializer::is_optional<value_type>::value) {
             if (!param.has_value()) {
                 write_null();
@@ -386,11 +404,11 @@ public:
             }
         }
 
-        // 3. Sérialiser en binaire
+        // 3. Serialize to binary
         std::vector<byte> buffer;
         TypeConverter<value_type>::to_binary(param, buffer);
 
-        // 4. Ajouter le résultat au buffer de paramètres
+        // 4. Add the result to the parameter buffer
         params_buffer_.insert(params_buffer_.end(), buffer.begin(), buffer.end());
     }
 
@@ -622,8 +640,8 @@ private:
     };
 
 private:
-    std::vector<byte> format_codes_buffer_;
-    std::vector<byte> params_buffer_;
+    std::vector<byte>    format_codes_buffer_;
+    std::vector<byte>    params_buffer_;
     std::vector<integer> param_types_;
 
     /**
@@ -648,8 +666,8 @@ private:
      */
     static void
     write_smallint(std::vector<byte> &buffer, smallint value) {
-        smallint networkValue = htons(value);
-        const byte *bytes = reinterpret_cast<const byte *>(&networkValue);
+        smallint    networkValue = htons(value);
+        const byte *bytes        = reinterpret_cast<const byte *>(&networkValue);
         buffer.insert(buffer.end(), bytes, bytes + sizeof(smallint));
     }
 
@@ -662,8 +680,8 @@ private:
      */
     static void
     write_smallint_at(std::vector<byte> &buffer, size_t pos, smallint value) {
-        smallint networkValue = htons(value);
-        const byte *bytes = reinterpret_cast<const byte *>(&networkValue);
+        smallint    networkValue = htons(value);
+        const byte *bytes        = reinterpret_cast<const byte *>(&networkValue);
         std::copy(bytes, bytes + sizeof(smallint), buffer.begin() + pos);
     }
 
@@ -675,8 +693,8 @@ private:
      */
     static void
     write_integer(std::vector<byte> &buffer, integer value) {
-        integer networkValue = htonl(value);
-        const byte *bytes = reinterpret_cast<const byte *>(&networkValue);
+        integer     networkValue = htonl(value);
+        const byte *bytes        = reinterpret_cast<const byte *>(&networkValue);
         buffer.insert(buffer.end(), bytes, bytes + sizeof(integer));
     }
 
@@ -714,8 +732,8 @@ private:
         write_integer(params_buffer_, 2);
 
         // Write value (network byte order)
-        smallint networkValue = htons(value);
-        const byte *bytes = reinterpret_cast<const byte *>(&networkValue);
+        smallint    networkValue = htons(value);
+        const byte *bytes        = reinterpret_cast<const byte *>(&networkValue);
         params_buffer_.insert(params_buffer_.end(), bytes, bytes + sizeof(smallint));
     }
 
@@ -730,8 +748,8 @@ private:
         write_integer(params_buffer_, 4);
 
         // Write value (network byte order)
-        integer networkValue = htonl(value);
-        const byte *bytes = reinterpret_cast<const byte *>(&networkValue);
+        integer     networkValue = htonl(value);
+        const byte *bytes        = reinterpret_cast<const byte *>(&networkValue);
         params_buffer_.insert(params_buffer_.end(), bytes, bytes + sizeof(integer));
     }
 
@@ -748,10 +766,10 @@ private:
         // Manual byte swapping for 64-bit integers
         union {
             bigint i;
-            byte b[8];
+            byte   b[8];
         } src, dst;
 
-        src.i = value;
+        src.i    = value;
         dst.b[0] = src.b[7];
         dst.b[1] = src.b[6];
         dst.b[2] = src.b[5];
@@ -870,6 +888,113 @@ private:
         // Write byte array data
         params_buffer_.insert(params_buffer_.end(), data, data + size);
     }
+
+    // Add type trait to detect std::vector
+    template <typename T>
+    struct is_std_vector : std::false_type {};
+
+    template <typename T, typename Alloc>
+    struct is_std_vector<std::vector<T, Alloc>> : std::true_type {};
+
+    /**
+     * @brief Add a generic vector as a PostgreSQL array
+     *
+     * This method serializes any std::vector into a PostgreSQL array format
+     *
+     * @tparam VecType The vector type to serialize
+     * @param vector The vector to serialize
+     */
+    template <typename VecType>
+    void
+    add_vector(const VecType &vector) {
+        using element_type = typename VecType::value_type;
+
+        // Get array element OID type from the element type
+        integer element_oid = TypeConverter<element_type>::get_oid();
+
+        // Determine the array OID based on element type OID
+        // This is a simplification; PostgreSQL array OIDs typically follow a pattern
+        // but a proper implementation would use a mapping from element OID to array OID
+        integer array_oid = 0;
+
+        // Array type determination - common array OIDs
+        switch (element_oid) {
+            case 16: array_oid = 1000; break;  // boolean array
+            case 21: array_oid = 1005; break;  // int2 array
+            case 23: array_oid = 1007; break;  // int4 array
+            case 20: array_oid = 1016; break;  // int8 array
+            case 700: array_oid = 1021; break; // float4 array
+            case 701: array_oid = 1022; break; // float8 array
+            case 25: array_oid = 1009; break;  // text array
+            default: array_oid = 2277; break;  // Use anyarray as fallback
+        }
+
+        // Add the array OID type
+        param_types_.push_back(array_oid);
+
+        // For empty vectors, write NULL
+        if (vector.empty()) {
+            write_null();
+            return;
+        }
+
+        // Prepare a binary buffer for the array
+        std::vector<byte> array_buffer;
+
+        // PostgreSQL array binary format:
+        // int32 number of dimensions (1 for 1D array)
+        // int32 has nulls flag (1 if array has nulls, 0 otherwise)
+        // int32 element type OID
+        // int32 dimension size
+        // int32 dimension lower bound (typically 1)
+        // followed by each element with int32 length prefix and data
+
+        // We'll start with a 1D array header (20 bytes)
+        // Number of dimensions
+        write_integer(array_buffer, 1);
+
+        // Has nulls flag (0 = no nulls, check or implement if needed)
+        write_integer(array_buffer, 0);
+
+        // Element type OID
+        write_integer(array_buffer, element_oid);
+
+        // Dimension size
+        write_integer(array_buffer, static_cast<integer>(vector.size()));
+
+        // Lower bound (typically 1 for PostgreSQL arrays)
+        write_integer(array_buffer, 1);
+
+        // Now serialize each element
+        for (const auto &elem : vector) {
+            // For each element, use TypeConverter to serialize it
+            std::vector<byte> elem_buffer;
+            TypeConverter<element_type>::to_binary(elem, elem_buffer);
+
+            // Add element data to array buffer
+            array_buffer.insert(array_buffer.end(), elem_buffer.begin(), elem_buffer.end());
+        }
+
+        // Write the total array length
+        write_integer(params_buffer_, static_cast<integer>(array_buffer.size()));
+
+        // Write the array data
+        params_buffer_.insert(params_buffer_.end(), array_buffer.begin(), array_buffer.end());
+    }
+
+    // Specialization for vector types
+    template <typename T>
+    struct param_serializer_traits<
+        std::vector<T>,
+        std::enable_if_t<!std::is_same_v<std::vector<T>, std::vector<std::string>> &&
+                             !std::is_same_v<std::vector<T>, std::vector<char>> &&
+                             !std::is_same_v<std::vector<T>, std::vector<unsigned char>>,
+                         void>> {
+        static void
+        add_param(ParamSerializer &serializer, const std::vector<T> &param) {
+            serializer.add_vector(param);
+        }
+    };
 };
 
 /**
@@ -893,7 +1018,7 @@ serialize_params(std::vector<byte> &params_buffer, std::vector<byte> &format_cod
 
     // Récupérer les données sérialisées
     params_buffer = serializer.params_buffer();
-    param_types = serializer.param_types();
+    param_types   = serializer.param_types();
 
     // Le buffer de codes de format n'est plus utilisé
     format_codes_buffer.clear();

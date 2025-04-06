@@ -45,14 +45,14 @@ template <typename charT, typename container = std::vector<charT>,
           typename traits = std::char_traits<charT>>
 class basic_input_iterator_buffer : public std::basic_streambuf<charT, traits> {
 public:
-    typedef charT char_type;                                        ///< Character type
-    typedef container container_type;                               ///< Container type
+    typedef charT                                   char_type;      ///< Character type
+    typedef container                               container_type; ///< Container type
     typedef typename container_type::const_iterator const_iterator; ///< Iterator type
-    typedef std::ios_base ios_base;                                 ///< Base IO class type
+    typedef std::ios_base                           ios_base;       ///< Base IO class type
 
-    typedef std::basic_streambuf<charT, traits> base; ///< Base streambuf type
-    typedef typename base::pos_type pos_type;         ///< Position type
-    typedef typename base::off_type off_type;         ///< Offset type
+    typedef std::basic_streambuf<charT, traits> base;     ///< Base streambuf type
+    typedef typename base::pos_type             pos_type; ///< Position type
+    typedef typename base::off_type             off_type; ///< Offset type
 
 public:
     /**
@@ -148,25 +148,16 @@ protected:
     pos_type
     seekoff(off_type off, ios_base::seekdir way,
             ios_base::openmode which = ios_base::in | ios_base::out) {
-        (void)which;
+        (void) which;
         char_type *tgt(nullptr);
         switch (way) {
-        case ios_base::beg:
-            tgt = start_ + off;
-            break;
-        case ios_base::cur:
-            tgt = base::gptr() + off;
-            break;
-        case ios_base::end:
-            tgt = start_ + count_ - 1 + off;
-            break;
-        default:
-            break;
+            case ios_base::beg: tgt = start_ + off; break;
+            case ios_base::cur: tgt = base::gptr() + off; break;
+            case ios_base::end: tgt = start_ + count_ - 1 + off; break;
+            default: break;
         }
-        if (!tgt)
-            return -1;
-        if (tgt < start_ || start_ + count_ < tgt)
-            return -1;
+        if (!tgt) return -1;
+        if (tgt < start_ || start_ + count_ < tgt) return -1;
         base::setg(start_, tgt, start_ + count_);
         return tgt - start_;
     }
@@ -183,18 +174,17 @@ protected:
      */
     pos_type
     seekpos(pos_type pos, ios_base::openmode which = ios_base::in | ios_base::out) {
-        (void)which;
+        (void) which;
         char_type *tgt = start_ + pos;
-        if (tgt < start_ || start_ + count_ < tgt)
-            return -1;
+        if (tgt < start_ || start_ + count_ < tgt) return -1;
         base::setg(start_, tgt, start_ + count_);
         return tgt - start_;
     }
 
 private:
-    const_iterator s_; ///< Iterator to the start of the range
-    char_type *start_; ///< Pointer to the start of the buffer
-    size_t count_;     ///< Number of elements in the buffer
+    const_iterator s_;     ///< Iterator to the start of the range
+    char_type     *start_; ///< Pointer to the start of the buffer
+    size_t         count_; ///< Number of elements in the buffer
 };
 
 /**

@@ -20,9 +20,11 @@ set(QB_PGSQL_TESTS
         param-unserializer
         param-parsing
         connection
+        data-types
         data-types-integration
         prepared-statements
         transaction
+        transaction-advanced
         operations
         queries
         params

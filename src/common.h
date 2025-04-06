@@ -139,7 +139,7 @@ struct dbalias : std::string {
  * connections, with optional SSL encryption.
  */
 struct connection_options {
-    dbalias alias;      /**< Database alias for convenient reference */
+    dbalias     alias;  /**< Database alias for convenient reference */
     std::string schema; /**< Database connection schema. Currently supported are tcp and socket */
     std::string
         uri; /**< Database connection URI. `host:port` for tcp, `/path/to/file` for socket */
@@ -198,8 +198,8 @@ enum class isolation_level {
     repeatable_read, /**< All statements in the transaction see only rows committed before the first
                         query is executed */
     serializable     /**< All statements in the transaction see only rows committed before the first
-                        query, and     transactions can only be committed if they could be executed one at a
-                        time */
+                        query, and     transactions can only be committed if they could be executed one
+                        at a     time */
 };
 
 /**
@@ -223,7 +223,7 @@ enum class isolation_level {
 struct transaction_mode {
     isolation_level isolation =
         isolation_level::read_committed; /**< Isolation level for the transaction */
-    bool read_only = false;  /**< Whether the transaction is read-only (no writes allowed) */
+    bool read_only  = false; /**< Whether the transaction is read-only (no writes allowed) */
     bool deferrable = false; /**< Whether the transaction is deferrable (only applies to
                                 serializable transactions) */
 

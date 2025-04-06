@@ -1,8 +1,39 @@
-#include <chrono>
+/**
+ * @file test-queries.cpp
+ * @brief Unit tests for PostgreSQL query execution functionality
+ *
+ * This file implements tests for the query execution capabilities of the PostgreSQL 
+ * client module. It verifies the client's ability to correctly execute various types 
+ * of SQL queries and process their results, including:
+ *
+ * - Basic SELECT operations
+ * - Conditional queries with WHERE clauses
+ * - JOIN operations across tables
+ * - Aggregation functions and GROUP BY queries
+ * - Subqueries and complex query constructs
+ * - Common Table Expressions (CTEs)
+ * - Query performance characteristics
+ *
+ * The implementation validates query execution with different complexities,
+ * ensuring results are correctly retrieved and processed. It also tests
+ * bulk operations and different parameter passing approaches.
+ *
+ * Key features tested:
+ * - Query result handling
+ * - Query parameterization
+ * - Complex query execution
+ * - Vector parameter serialization
+ * - Query performance
+ * - Bulk operations
+ *
+ * @see qb::pg::tcp::database
+ * @see qb::pg::detail::Transaction
+ * @see qb::pg::detail::results
+ *
+ * @author QB PostgreSQL Module Team
+ */
+
 #include <gtest/gtest.h>
-#include <iostream>
-#include <thread>
-#include <vector>
 #include "../pgsql.h"
 
 using namespace qb::pg;
@@ -10,8 +41,20 @@ using namespace qb::io;
 
 constexpr std::string_view PGSQL_CONNECTION_STR = "tcp://test:test@localhost:5432[test]";
 
+/**
+ * @brief Test fixture for PostgreSQL query functionality
+ *
+ * Sets up a test environment with database tables and sample data
+ * for comprehensive query testing.
+ */
 class PostgreSQLQueryTest : public ::testing::Test {
 protected:
+    /**
+     * @brief Set up the test environment
+     *
+     * Creates a database connection and sets up test tables with sample data
+     * for query testing.
+     */
     void
     SetUp() override {
         db_ = std::make_unique<qb::pg::tcp::database>();
@@ -19,7 +62,7 @@ protected:
 
         // Create temporary test tables
         bool success = false;
-        auto status = db_->execute(
+        auto status  = db_->execute(
                              R"(
             CREATE TEMP TABLE test_users (
                 id SERIAL PRIMARY KEY,
@@ -37,7 +80,7 @@ protected:
         ASSERT_TRUE(success);
 
         success = false;
-        status = db_->execute(
+        status  = db_->execute(
                         R"(
             CREATE TEMP TABLE test_orders (
                 id SERIAL PRIMARY KEY,
@@ -56,7 +99,7 @@ protected:
 
         // Insert test data
         success = false;
-        status = db_->execute(
+        status  = db_->execute(
                         R"(
             INSERT INTO test_users (name, age, email) VALUES
             ('John Doe', 30, 'john@example.com'),
@@ -71,7 +114,7 @@ protected:
         ASSERT_TRUE(success);
 
         success = false;
-        status = db_->execute(
+        status  = db_->execute(
                         R"(
             INSERT INTO test_orders (user_id, amount, status) VALUES
             (1, 100.50, 'completed'),
@@ -87,11 +130,16 @@ protected:
         ASSERT_TRUE(success);
     }
 
+    /**
+     * @brief Clean up after tests
+     *
+     * Drops temporary tables and disconnects the database.
+     */
     void
     TearDown() override {
         if (db_) {
             bool success = false;
-            auto status = db_->execute("DROP TABLE IF EXISTS test_orders")
+            auto status  = db_->execute("DROP TABLE IF EXISTS test_orders")
                               .execute(
                                   "DROP TABLE IF EXISTS test_users",
                                   [&success](transaction &tr, results result) { success = true; },
@@ -108,6 +156,12 @@ protected:
     std::unique_ptr<qb::pg::tcp::database> db_;
 };
 
+/**
+ * @brief Test basic SELECT query functionality
+ *
+ * Verifies that a simple SELECT query can retrieve all rows
+ * from a table with correct data.
+ */
 TEST_F(PostgreSQLQueryTest, BasicSelect) {
     bool success = false;
     auto status =
@@ -127,6 +181,12 @@ TEST_F(PostgreSQLQueryTest, BasicSelect) {
     ASSERT_TRUE(success);
 }
 
+/**
+ * @brief Test conditional queries with WHERE clause
+ *
+ * Verifies that a SELECT query with a WHERE clause correctly
+ * filters results based on specified conditions.
+ */
 TEST_F(PostgreSQLQueryTest, WhereClause) {
     bool success = false;
     auto status =
@@ -142,6 +202,12 @@ TEST_F(PostgreSQLQueryTest, WhereClause) {
     ASSERT_TRUE(success);
 }
 
+/**
+ * @brief Test JOIN query functionality
+ *
+ * Verifies that JOIN operations correctly combine data from
+ * multiple tables based on specified relationships.
+ */
 TEST_F(PostgreSQLQueryTest, JoinQuery) {
     bool success = false;
     auto status =
@@ -166,6 +232,12 @@ TEST_F(PostgreSQLQueryTest, JoinQuery) {
     ASSERT_TRUE(success);
 }
 
+/**
+ * @brief Test aggregation query functionality
+ *
+ * Verifies that aggregation functions (COUNT, SUM) and GROUP BY clauses
+ * work correctly to produce summarized results.
+ */
 TEST_F(PostgreSQLQueryTest, Aggregation) {
     bool success = false;
     auto status =
@@ -191,6 +263,12 @@ TEST_F(PostgreSQLQueryTest, Aggregation) {
     ASSERT_TRUE(success);
 }
 
+/**
+ * @brief Test subquery functionality
+ *
+ * Verifies that subqueries can be correctly executed and their
+ * results incorporated into the main query.
+ */
 TEST_F(PostgreSQLQueryTest, Subquery) {
     bool success = false;
     auto status =
@@ -215,6 +293,12 @@ TEST_F(PostgreSQLQueryTest, Subquery) {
     ASSERT_TRUE(success);
 }
 
+/**
+ * @brief Test complex query with CTE and multiple operations
+ *
+ * Verifies that complex queries with Common Table Expressions (CTEs),
+ * multiple joins, aggregations, and conditional logic execute correctly.
+ */
 TEST_F(PostgreSQLQueryTest, ComplexQuery) {
     bool success = false;
     auto status =
@@ -260,10 +344,17 @@ TEST_F(PostgreSQLQueryTest, ComplexQuery) {
     ASSERT_TRUE(success);
 }
 
+/**
+ * @brief Test query performance and parameter handling
+ *
+ * Verifies query performance with different parameter passing methods,
+ * including single parameters, multiple explicit parameters, and
+ * vector parameters for batch operations.
+ */
 TEST_F(PostgreSQLQueryTest, QueryPerformance) {
     // Create test table
     bool success = false;
-    auto status = db_->execute(
+    auto status  = db_->execute(
                          R"(
         CREATE TEMP TABLE test_performance (
             id SERIAL PRIMARY KEY,
@@ -279,7 +370,7 @@ TEST_F(PostgreSQLQueryTest, QueryPerformance) {
     ASSERT_TRUE(status);
     ASSERT_TRUE(success);
 
-    // Préparer les requêtes
+    // Prepare the queries
     ASSERT_TRUE(db_->prepare("simple_insert", "INSERT INTO test_performance (value) VALUES ($1)")
                     .prepare("batch_insert",
                              "INSERT INTO test_performance (value) VALUES ($1),($2),($3),($4)")
@@ -287,42 +378,42 @@ TEST_F(PostgreSQLQueryTest, QueryPerformance) {
                              "INSERT INTO test_performance (value) VALUES ($1),($2),($3),($4)")
                     .await());
 
-    // MÉTHODE 1: Insertion simple avec un seul paramètre
+    // METHOD 1: Simple insertion with a single parameter
     ASSERT_TRUE(db_->execute("simple_insert", params{std::string("Test value single")}).await());
 
-    // MÉTHODE 2: Insertion avec plusieurs paramètres explicites
+    // METHOD 2: Insertion with multiple explicit parameters
     ASSERT_TRUE(db_->execute("batch_insert", params{std::string("Test value explicit 1"),
                                                     std::string("Test value explicit 2"),
                                                     std::string("Test value explicit 3"),
                                                     std::string("Test value explicit 4")})
                     .await());
 
-    // MÉTHODE 3: Insertion avec un vecteur de chaînes
+    // METHOD 3: Insertion with a vector of strings
     std::vector<std::string> values;
     for (int i = 1; i <= 4; ++i) {
         values.push_back("Test value vector " + std::to_string(i));
     }
     ASSERT_TRUE(db_->execute("multi_insert", params{values}).await());
 
-    // Vérifier que toutes les insertions ont fonctionné
+    // Verify that all insertions worked
     success = false;
     status =
         db_->execute(
                "SELECT value FROM test_performance ORDER BY id",
                [&success](transaction &tr, results result) {
-                   // Nous devrions avoir 9 lignes au total (1 + 4 + 4)
+                   // We should have 9 rows in total (1 + 4 + 4)
                    ASSERT_EQ(result.size(), 9);
 
-                   // Vérifier l'insertion simple
+                   // Verify simple insertion
                    ASSERT_EQ(result[0][0].as<std::string>(), "Test value single");
 
-                   // Vérifier l'insertion avec paramètres explicites
+                   // Verify insertion with explicit parameters
                    for (int i = 1; i <= 4; ++i) {
                        ASSERT_EQ(result[i][0].as<std::string>(),
                                  "Test value explicit " + std::to_string(i));
                    }
 
-                   // Vérifier l'insertion avec vecteur de chaînes
+                   // Verify insertion with string vector
                    for (int i = 1; i <= 4; ++i) {
                        ASSERT_EQ(result[i + 4][0].as<std::string>(),
                                  "Test value vector " + std::to_string(i));
@@ -335,23 +426,22 @@ TEST_F(PostgreSQLQueryTest, QueryPerformance) {
     ASSERT_TRUE(status);
     ASSERT_TRUE(success);
 
-    // Test de performance avec un grand nombre de paramètres
+    // Performance test with a large number of parameters
     std::vector<std::string> large_values;
     for (int i = 1; i <= 100; ++i) {
         large_values.push_back("Performance test value " + std::to_string(i));
     }
 
-    // Construire une requête d'insertion multivaluée dynamiquement
+    // Dynamically build a multi-value insert query
     std::string insert_query = "INSERT INTO test_performance (value) VALUES ";
     for (int i = 1; i <= 100; ++i) {
-        if (i > 1)
-            insert_query += ",";
+        if (i > 1) insert_query += ",";
         insert_query += "($" + std::to_string(i) + ")";
     }
 
-    // Insertion de masse avec un vecteur de 100 chaînes
+    // Mass insertion with a vector of 100 strings
     success = false;
-    status = db_->prepare("mass_insert", insert_query)
+    status  = db_->prepare("mass_insert", insert_query)
                  .execute(
                      "mass_insert", params{large_values},
                      [&success](transaction &tr, results result) { success = true; },
@@ -362,15 +452,15 @@ TEST_F(PostgreSQLQueryTest, QueryPerformance) {
     ASSERT_TRUE(status);
     ASSERT_TRUE(success);
 
-    // Mesurer les performances d'une requête
+    // Measure query performance
     auto start = std::chrono::steady_clock::now();
-    success = false;
+    success    = false;
     status =
         db_->execute(
                "SELECT COUNT(*) FROM test_performance WHERE value LIKE 'Performance test%'",
                [&success](transaction &tr, results result) {
                    ASSERT_EQ(result.size(), 1);
-                   ASSERT_EQ(result[0][0].as<int>(), 100); // On doit trouver 100 résultats
+                   ASSERT_EQ(result[0][0].as<int>(), 100); // We should find 100 results
                    success = true;
                },
                [](error::db_error error) { ASSERT_TRUE(false) << "Query failed: " << error.code; })

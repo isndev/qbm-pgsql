@@ -63,7 +63,7 @@ template <typename CB_SUCCESS, typename CB_ERROR, typename>
 Transaction &
 Transaction::begin(CB_SUCCESS &&on_success, CB_ERROR &&on_error, transaction_mode mode) {
     if (_parent) {
-        on_error((error::db_error)error::query_error("already in transaction"));
+        on_error((error::db_error) error::query_error("already in transaction"));
     } else {
         auto end = new End<CB_ERROR>(this, std::forward<CB_ERROR>(on_error));
         push_transaction(std::unique_ptr<Transaction>(new Begin<CB_SUCCESS, CB_ERROR>(

@@ -143,7 +143,7 @@ private:
     void check_row_index(uinteger row) const;
 
     row_description_type row_description_; ///< Metadata about the result columns
-    row_set_type rows_;                    ///< Collection of result rows
+    row_set_type         rows_;            ///< Collection of result rows
 };
 
 } /* namespace detail */

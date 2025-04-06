@@ -289,10 +289,9 @@ struct binary_reader<smallint> {
     template <typename InputIterator>
     static InputIterator
     read(InputIterator begin, InputIterator end, smallint &value) {
-        if (std::distance(begin, end) < sizeof(smallint))
-            return begin;
+        if (std::distance(begin, end) < sizeof(smallint)) return begin;
 
-        std::vector<byte> buffer(begin, begin + sizeof(smallint));
+        std::vector<byte>                buffer(begin, begin + sizeof(smallint));
         static detail::ParamUnserializer unserializer;
         value = unserializer.read_smallint(buffer);
         return begin + sizeof(smallint);
@@ -316,10 +315,9 @@ struct binary_reader<integer> {
     template <typename InputIterator>
     static InputIterator
     read(InputIterator begin, InputIterator end, integer &value) {
-        if (std::distance(begin, end) < sizeof(integer))
-            return begin;
+        if (std::distance(begin, end) < sizeof(integer)) return begin;
 
-        std::vector<byte> buffer(begin, begin + sizeof(integer));
+        std::vector<byte>                buffer(begin, begin + sizeof(integer));
         static detail::ParamUnserializer unserializer;
         value = unserializer.read_integer(buffer);
         return begin + sizeof(integer);
@@ -343,10 +341,9 @@ struct binary_reader<bigint> {
     template <typename InputIterator>
     static InputIterator
     read(InputIterator begin, InputIterator end, bigint &value) {
-        if (std::distance(begin, end) < sizeof(bigint))
-            return begin;
+        if (std::distance(begin, end) < sizeof(bigint)) return begin;
 
-        std::vector<byte> buffer(begin, begin + sizeof(bigint));
+        std::vector<byte>                buffer(begin, begin + sizeof(bigint));
         static detail::ParamUnserializer unserializer;
         value = unserializer.read_bigint(buffer);
         return begin + sizeof(bigint);
@@ -370,10 +367,9 @@ struct binary_reader<float> {
     template <typename InputIterator>
     static InputIterator
     read(InputIterator begin, InputIterator end, float &value) {
-        if (std::distance(begin, end) < sizeof(float))
-            return begin;
+        if (std::distance(begin, end) < sizeof(float)) return begin;
 
-        std::vector<byte> buffer(begin, begin + sizeof(float));
+        std::vector<byte>                buffer(begin, begin + sizeof(float));
         static detail::ParamUnserializer unserializer;
         value = unserializer.read_float(buffer);
         return begin + sizeof(float);
@@ -397,10 +393,9 @@ struct binary_reader<double> {
     template <typename InputIterator>
     static InputIterator
     read(InputIterator begin, InputIterator end, double &value) {
-        if (std::distance(begin, end) < sizeof(double))
-            return begin;
+        if (std::distance(begin, end) < sizeof(double)) return begin;
 
-        std::vector<byte> buffer(begin, begin + sizeof(double));
+        std::vector<byte>                buffer(begin, begin + sizeof(double));
         static detail::ParamUnserializer unserializer;
         value = unserializer.read_double(buffer);
         return begin + sizeof(double);
@@ -424,8 +419,7 @@ struct binary_reader<bool> {
     template <typename InputIterator>
     static InputIterator
     read(InputIterator begin, InputIterator end, bool &value) {
-        if (begin == end)
-            return begin;
+        if (begin == end) return begin;
 
         value = (*begin != 0);
         return begin + 1;
@@ -454,7 +448,7 @@ struct binary_reader<std::string> {
             return begin;
         }
 
-        std::vector<byte> buffer(begin, end);
+        std::vector<byte>                buffer(begin, end);
         static detail::ParamUnserializer unserializer;
         value = unserializer.read_string(buffer);
         return end;
@@ -537,8 +531,7 @@ struct text_reader<smallint> {
     read(InputIterator begin, InputIterator end, smallint &value) {
         // For TEXT format, we look for a NULL-terminated string
         InputIterator null_terminator = std::find(begin, end, '\0');
-        if (null_terminator == end)
-            return begin;
+        if (null_terminator == end) return begin;
 
         std::string text_value(begin, null_terminator);
         try {
@@ -569,8 +562,7 @@ struct text_reader<integer> {
     read(InputIterator begin, InputIterator end, integer &value) {
         // For TEXT format, we look for a NULL-terminated string
         InputIterator null_terminator = std::find(begin, end, '\0');
-        if (null_terminator == end)
-            return begin;
+        if (null_terminator == end) return begin;
 
         std::string text_value(begin, null_terminator);
         try {
@@ -601,8 +593,7 @@ struct text_reader<bigint> {
     read(InputIterator begin, InputIterator end, bigint &value) {
         // For TEXT format, we look for a NULL-terminated string
         InputIterator null_terminator = std::find(begin, end, '\0');
-        if (null_terminator == end)
-            return begin;
+        if (null_terminator == end) return begin;
 
         std::string text_value(begin, null_terminator);
         try {
@@ -633,8 +624,7 @@ struct text_reader<float> {
     read(InputIterator begin, InputIterator end, float &value) {
         // For TEXT format, we look for a NULL-terminated string
         InputIterator null_terminator = std::find(begin, end, '\0');
-        if (null_terminator == end)
-            return begin;
+        if (null_terminator == end) return begin;
 
         std::string text_value(begin, null_terminator);
         try {
@@ -665,8 +655,7 @@ struct text_reader<double> {
     read(InputIterator begin, InputIterator end, double &value) {
         // For TEXT format, we look for a NULL-terminated string
         InputIterator null_terminator = std::find(begin, end, '\0');
-        if (null_terminator == end)
-            return begin;
+        if (null_terminator == end) return begin;
 
         std::string text_value(begin, null_terminator);
         try {
@@ -700,8 +689,7 @@ struct text_reader<bool> {
     read(InputIterator begin, InputIterator end, bool &value) {
         // For TEXT format, we look for a NULL-terminated string
         InputIterator null_terminator = std::find(begin, end, '\0');
-        if (null_terminator == end)
-            return begin;
+        if (null_terminator == end) return begin;
 
         std::string text_value(begin, null_terminator);
 
@@ -734,8 +722,7 @@ struct text_reader<std::string> {
 
         value.assign(begin, null_terminator);
 
-        if (null_terminator == end)
-            return end;
+        if (null_terminator == end) return end;
 
         return null_terminator + 1; // Skip the \0
     }
@@ -762,8 +749,7 @@ struct text_reader<qb::uuid> {
     read(InputIterator begin, InputIterator end, qb::uuid &value) {
         // For TEXT format, we look for a null-terminated string
         InputIterator null_terminator = std::find(begin, end, '\0');
-        if (null_terminator == end)
-            return begin;
+        if (null_terminator == end) return begin;
 
         std::string text_value(begin, null_terminator);
         try {
@@ -825,8 +811,7 @@ copy_to_vector(InputIterator begin, InputIterator end) {
 template <protocol_data_format F, typename T, typename InputIterator>
 InputIterator
 protocol_read(InputIterator begin, InputIterator end, T &value) {
-    if (begin == end)
-        return begin;
+    if (begin == end) return begin;
 
     if constexpr (F == pg::protocol_data_format::Binary) {
         return traits::binary_reader<T>::read(begin, end, value);
