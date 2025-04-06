@@ -152,93 +152,93 @@ using nullable = std::optional<T>;
  * OIDs are used throughout the PostgreSQL system to identify types, tables, and other objects.
  */
 enum class oid : int {
-    boolean = 16,            /**< Boolean type (true/false) */
-    bytea = 17,              /**< Variable-length binary data */
-    char_ = 18,              /**< Single character */
-    name = 19,               /**< System identifier (limited-length string) */
-    int8 = 20,               /**< 8-byte integer (bigint) */
-    int2 = 21,               /**< 2-byte integer (smallint) */
-    int2_vector = 22,        /**< Array of int2, used in system tables */
-    int4 = 23,               /**< 4-byte integer (integer) */
-    regproc = 24,            /**< Registered procedure */
-    text = 25,               /**< Variable-length string */
-    oid_t = 26,              /**< Object identifier type (renamed to avoid conflicts) */
-    tid = 27,                /**< Tuple identifier (physical location of row) */
-    xid = 28,                /**< Transaction identifier */
-    cid = 29,                /**< Command identifier */
-    oid_vector = 30,         /**< Array of OIDs, used in system tables */
-    json = 114,              /**< JSON data */
-    xml = 142,               /**< XML data */
-    pg_node_tree = 194,      /**< PostgreSQL internal node tree representation */
-    pg_ddl_command = 32,     /**< PostgreSQL internal DDL command representation */
-    point = 600,             /**< Geometric point (x,y) */
-    lseg = 601,              /**< Geometric line segment */
-    path = 602,              /**< Geometric path */
-    box = 603,               /**< Geometric box */
-    polygon = 604,           /**< Geometric polygon */
-    line = 628,              /**< Geometric line */
-    float4 = 700,            /**< 4-byte floating-point number */
-    float8 = 701,            /**< 8-byte floating-point number */
-    abstime = 702,           /**< Absolute time (deprecated) */
-    reltime = 703,           /**< Relative time (deprecated) */
-    tinterval = 704,         /**< Time interval (deprecated) */
-    unknown = 705,           /**< Unknown type */
-    circle = 718,            /**< Geometric circle */
-    cash = 790,              /**< Monetary amount */
-    macaddr = 829,           /**< MAC address */
-    inet = 869,              /**< IPv4 or IPv6 address */
-    cidr = 650,              /**< IPv4 or IPv6 network */
-    int2_array = 1005,       /**< Array of int2 */
-    int4_array = 1007,       /**< Array of int4 */
-    text_array = 1009,       /**< Array of text */
-    oid_array = 1028,        /**< Array of OIDs */
-    float4_array = 1021,     /**< Array of float4 */
-    acl_item = 1033,         /**< Access control list item */
-    cstring_array = 1263,    /**< Array of C strings */
-    bpchar = 1042,           /**< Blank-padded string (char(n)) */
-    varchar = 1043,          /**< Variable-length string with limit (varchar(n)) */
-    date = 1082,             /**< Date */
-    time = 1083,             /**< Time of day */
-    timestamp = 1114,        /**< Date and time */
-    timestamptz = 1184,      /**< Date and time with time zone */
-    interval = 1186,         /**< Time interval */
-    timetz = 1266,           /**< Time of day with time zone */
-    bit = 1560,              /**< Fixed-length bit string */
-    varbit = 1562,           /**< Variable-length bit string */
-    numeric = 1700,          /**< Exact numeric with selectable precision */
-    refcursor = 1790,        /**< Reference to cursor */
-    regprocedure = 2202,     /**< Registered procedure (with args) */
-    regoper = 2203,          /**< Registered operator */
-    regoperator = 2204,      /**< Registered operator (with args) */
-    regclass = 2205,         /**< Registered class */
-    regtype = 2206,          /**< Registered type */
-    regrole = 4096,          /**< Registered role */
-    regtypearray = 2211,     /**< Array of registered types */
-    uuid = 2950,             /**< Universally unique identifier */
-    lsn = 3220,              /**< Log sequence number */
-    tsvector = 3614,         /**< Text search vector */
-    gtsvector = 3642,        /**< GiST index internal text search vector */
-    tsquery = 3615,          /**< Text search query */
-    regconfig = 3734,        /**< Registered text search configuration */
-    regdictionary = 3769,    /**< Registered text search dictionary */
-    jsonb = 3802,            /**< Binary JSON data */
-    int4_range = 3904,       /**< Range of integers */
-    record = 2249,           /**< Anonymous composite type */
-    record_array = 2287,     /**< Array of records */
-    cstring = 2275,          /**< C string */
-    any = 2276,              /**< Pseudo-type representing any type */
-    any_array = 2277,        /**< Pseudo-type representing any array */
-    void_ = 2278,            /**< Pseudo-type representing void */
-    trigger = 2279,          /**< Trigger function */
-    evttrigger = 3838,       /**< Event trigger function */
+    boolean          = 16,   /**< Boolean type (true/false) */
+    bytea            = 17,   /**< Variable-length binary data */
+    char_            = 18,   /**< Single character */
+    name             = 19,   /**< System identifier (limited-length string) */
+    int8             = 20,   /**< 8-byte integer (bigint) */
+    int2             = 21,   /**< 2-byte integer (smallint) */
+    int2_vector      = 22,   /**< Array of int2, used in system tables */
+    int4             = 23,   /**< 4-byte integer (integer) */
+    regproc          = 24,   /**< Registered procedure */
+    text             = 25,   /**< Variable-length string */
+    oid_t            = 26,   /**< Object identifier type (renamed to avoid conflicts) */
+    tid              = 27,   /**< Tuple identifier (physical location of row) */
+    xid              = 28,   /**< Transaction identifier */
+    cid              = 29,   /**< Command identifier */
+    oid_vector       = 30,   /**< Array of OIDs, used in system tables */
+    json             = 114,  /**< JSON data */
+    xml              = 142,  /**< XML data */
+    pg_node_tree     = 194,  /**< PostgreSQL internal node tree representation */
+    pg_ddl_command   = 32,   /**< PostgreSQL internal DDL command representation */
+    point            = 600,  /**< Geometric point (x,y) */
+    lseg             = 601,  /**< Geometric line segment */
+    path             = 602,  /**< Geometric path */
+    box              = 603,  /**< Geometric box */
+    polygon          = 604,  /**< Geometric polygon */
+    line             = 628,  /**< Geometric line */
+    float4           = 700,  /**< 4-byte floating-point number */
+    float8           = 701,  /**< 8-byte floating-point number */
+    abstime          = 702,  /**< Absolute time (deprecated) */
+    reltime          = 703,  /**< Relative time (deprecated) */
+    tinterval        = 704,  /**< Time interval (deprecated) */
+    unknown          = 705,  /**< Unknown type */
+    circle           = 718,  /**< Geometric circle */
+    cash             = 790,  /**< Monetary amount */
+    macaddr          = 829,  /**< MAC address */
+    inet             = 869,  /**< IPv4 or IPv6 address */
+    cidr             = 650,  /**< IPv4 or IPv6 network */
+    int2_array       = 1005, /**< Array of int2 */
+    int4_array       = 1007, /**< Array of int4 */
+    text_array       = 1009, /**< Array of text */
+    oid_array        = 1028, /**< Array of OIDs */
+    float4_array     = 1021, /**< Array of float4 */
+    acl_item         = 1033, /**< Access control list item */
+    cstring_array    = 1263, /**< Array of C strings */
+    bpchar           = 1042, /**< Blank-padded string (char(n)) */
+    varchar          = 1043, /**< Variable-length string with limit (varchar(n)) */
+    date             = 1082, /**< Date */
+    time             = 1083, /**< Time of day */
+    timestamp        = 1114, /**< Date and time */
+    timestamptz      = 1184, /**< Date and time with time zone */
+    interval         = 1186, /**< Time interval */
+    timetz           = 1266, /**< Time of day with time zone */
+    bit              = 1560, /**< Fixed-length bit string */
+    varbit           = 1562, /**< Variable-length bit string */
+    numeric          = 1700, /**< Exact numeric with selectable precision */
+    refcursor        = 1790, /**< Reference to cursor */
+    regprocedure     = 2202, /**< Registered procedure (with args) */
+    regoper          = 2203, /**< Registered operator */
+    regoperator      = 2204, /**< Registered operator (with args) */
+    regclass         = 2205, /**< Registered class */
+    regtype          = 2206, /**< Registered type */
+    regrole          = 4096, /**< Registered role */
+    regtypearray     = 2211, /**< Array of registered types */
+    uuid             = 2950, /**< Universally unique identifier */
+    lsn              = 3220, /**< Log sequence number */
+    tsvector         = 3614, /**< Text search vector */
+    gtsvector        = 3642, /**< GiST index internal text search vector */
+    tsquery          = 3615, /**< Text search query */
+    regconfig        = 3734, /**< Registered text search configuration */
+    regdictionary    = 3769, /**< Registered text search dictionary */
+    jsonb            = 3802, /**< Binary JSON data */
+    int4_range       = 3904, /**< Range of integers */
+    record           = 2249, /**< Anonymous composite type */
+    record_array     = 2287, /**< Array of records */
+    cstring          = 2275, /**< C string */
+    any              = 2276, /**< Pseudo-type representing any type */
+    any_array        = 2277, /**< Pseudo-type representing any array */
+    void_            = 2278, /**< Pseudo-type representing void */
+    trigger          = 2279, /**< Trigger function */
+    evttrigger       = 3838, /**< Event trigger function */
     language_handler = 2280, /**< Language handler */
-    internal = 2281,         /**< Internal data type */
-    opaque = 2282,           /**< Obsolete, used for function parameters */
-    any_element = 2283,      /**< Pseudo-type representing any array element */
-    any_non_array = 2776,    /**< Pseudo-type representing any non-array type */
-    any_enum = 3500,         /**< Pseudo-type representing any enum type */
-    fdw_handler = 3115,      /**< Foreign data wrapper handler */
-    any_range = 3831         /**< Pseudo-type representing any range type */
+    internal         = 2281, /**< Internal data type */
+    opaque           = 2282, /**< Obsolete, used for function parameters */
+    any_element      = 2283, /**< Pseudo-type representing any array element */
+    any_non_array    = 2776, /**< Pseudo-type representing any non-array type */
+    any_enum         = 3500, /**< Pseudo-type representing any enum type */
+    fdw_handler      = 3115, /**< Foreign data wrapper handler */
+    any_range        = 3831  /**< Pseudo-type representing any range type */
 };
 
 /**
@@ -270,12 +270,12 @@ std::istream &operator>>(std::istream &in, oid &val);
  * as defined in pg_type.typtype.
  */
 enum class code : char {
-    base = 'b',       /**< Base data type (e.g., int4) */
-    composite = 'c',  /**< Composite type (e.g., a table row type) */
-    domain = 'd',     /**< Domain over another type */
+    base       = 'b', /**< Base data type (e.g., int4) */
+    composite  = 'c', /**< Composite type (e.g., a table row type) */
+    domain     = 'd', /**< Domain over another type */
     enumerated = 'e', /**< Enumerated type */
-    pseudo = 'p',     /**< Pseudo-type (e.g., void, anyarray) */
-    range = 'r'       /**< Range type */
+    pseudo     = 'p', /**< Pseudo-type (e.g., void, anyarray) */
+    range      = 'r'  /**< Range type */
 };
 
 /**
@@ -285,22 +285,22 @@ enum class code : char {
  * as defined in pg_type.typcategory.
  */
 enum class code_category : char {
-    invalid = 0,          /**< Invalid or unknown category */
-    array = 'A',          /**< Array types */
-    boolean = 'B',        /**< Boolean types */
-    composite = 'C',      /**< Composite types */
-    datetime = 'D',       /**< Date/time types */
-    enumeration = 'E',    /**< Enum types */
-    geometric = 'G',      /**< Geometric types */
-    network = 'I',        /**< Network address types */
-    numeric = 'N',        /**< Numeric types */
-    pseudotype = 'P',     /**< Pseudo-types */
+    invalid        = 0,   /**< Invalid or unknown category */
+    array          = 'A', /**< Array types */
+    boolean        = 'B', /**< Boolean types */
+    composite      = 'C', /**< Composite types */
+    datetime       = 'D', /**< Date/time types */
+    enumeration    = 'E', /**< Enum types */
+    geometric      = 'G', /**< Geometric types */
+    network        = 'I', /**< Network address types */
+    numeric        = 'N', /**< Numeric types */
+    pseudotype     = 'P', /**< Pseudo-types */
     range_category = 'R', /**< Range types */
-    string = 'S',         /**< String types */
-    timespan = 'T',       /**< Timespan types */
-    user = 'U',           /**< User-defined types */
-    bitstring = 'V',      /**< Bit-string types */
-    unknown = 'X'         /**< Unknown type */
+    string         = 'S', /**< String types */
+    timespan       = 'T', /**< Timespan types */
+    user           = 'U', /**< User-defined types */
+    bitstring      = 'V', /**< Bit-string types */
+    unknown        = 'X'  /**< Unknown type */
 };
 
 /**
@@ -311,8 +311,8 @@ enum class code_category : char {
  * data is encoded and decoded during client-server communication.
  */
 enum class protocol_data_format : smallint {
-    Text = 0,  /**< Text format: data represented as ASCII strings */
-    Binary = 1 /**< Binary format: compact representation of data */
+    Text   = 0, /**< Text format: data represented as ASCII strings */
+    Binary = 1  /**< Binary format: compact representation of data */
 };
 
 } // namespace pg

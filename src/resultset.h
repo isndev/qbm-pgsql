@@ -102,7 +102,7 @@ public:
     //@{
     /** @name Size types definitions */
     typedef uinteger size_type;
-    typedef integer difference_type;
+    typedef integer  difference_type;
     //@}
 
     class row;
@@ -116,12 +116,12 @@ public:
 
     //@{
     /** @name Row container concept */
-    typedef const_row_iterator const_iterator;
+    typedef const_row_iterator                    const_iterator;
     typedef std::reverse_iterator<const_iterator> const_reverse_iterator;
 
-    typedef row value_type;
+    typedef row              value_type;
     typedef const value_type reference;
-    typedef const_iterator pointer;
+    typedef const_iterator   pointer;
     //@}
 
     //@{
@@ -130,6 +130,7 @@ public:
 
     typedef std::reverse_iterator<const_field_iterator> const_reverse_field_iterator;
     //@}
+
 private:
     typedef resultset const *result_pointer;
 
@@ -151,8 +152,8 @@ public:
     resultset(result_impl_ptr);
     //@{
     /** @name Row-wise container interface */
-    size_type size() const; /**< Number of rows */
-    bool empty() const;     /**< Is the result set empty */
+    size_type size() const;  /**< Number of rows */
+    bool      empty() const; /**< Is the result set empty */
 
     const_iterator begin() const; /**< Iterator to the beginning of rows sequence */
     const_iterator end() const;   /**< Iterator past the end of rows sequence. */
@@ -226,6 +227,7 @@ public:
         return *this;
     }
     //@}
+
 public:
     //@{
     /** @name Data access classes */
@@ -244,16 +246,16 @@ public:
      */
     class row {
     public:
-        typedef smallint size_type;
+        typedef smallint                   size_type;
         typedef resultset::difference_type difference_type;
 
         //@{
         /** @name Field container concept */
-        typedef const_field_iterator const_iterator;
+        typedef const_field_iterator         const_iterator;
         typedef const_reverse_field_iterator const_reverse_iterator;
 
-        typedef class field value_type;
-        typedef class field reference;
+        typedef class field    value_type;
+        typedef class field    reference;
         typedef const_iterator pointer;
         //@}
         static const size_type npos;
@@ -344,7 +346,7 @@ public:
             : result_(res)
             , row_index_(idx) {}
 
-        result_pointer result_;
+        result_pointer       result_;
         resultset::size_type row_index_;
     }; // row
     /**
@@ -443,8 +445,8 @@ public:
 
             // 2. Retrieve the data and format
             field_buffer buffer = input_buffer();
-            bool is_binary = (description().format_code == pg::protocol_data_format::Binary);
-            auto data_vector = buffer.to_vector();
+            bool is_binary      = (description().format_code == pg::protocol_data_format::Binary);
+            auto data_vector    = buffer.to_vector();
 
             // 3. Use the TypeConverter to convert according to format
             if (is_binary) {
@@ -452,7 +454,7 @@ public:
             } else {
                 // For text format, we first need to read the string
                 static detail::ParamUnserializer unserializer;
-                std::string text_value = unserializer.read_string(data_vector);
+                std::string                      text_value = unserializer.read_string(data_vector);
                 return detail::TypeConverter<result_type>::from_text(text_value);
             }
         }
@@ -473,8 +475,7 @@ public:
         template <typename T>
         bool
         to_nullable(T &val, std::false_type const &) const {
-            if (is_null())
-                throw error::value_is_null(name());
+            if (is_null()) throw error::value_is_null(name());
             return to_impl(val, io::traits::has_parser<T, pg::protocol_data_format::Binary>());
         }
 
@@ -511,7 +512,7 @@ public:
             , field_index_(col) {}
 
         result_pointer result_;
-        size_type row_index_;
+        size_type      row_index_;
         row::size_type field_index_;
     }; // field
     //@}
@@ -581,6 +582,7 @@ public:
             : base_type(res, row, col) {}
     }; // const_field_iterator
     //@}
+
 public:
     //@{
     /** @name Column-related interface */
@@ -619,13 +621,14 @@ public:
      */
     std::string const &field_name(size_type col_index) const;
     //@}
+
 private:
     friend class row;
 
     friend class field;
 
     typedef const detail::result_impl *const_result_impl_ptr;
-    const_result_impl_ptr pimpl_;
+    const_result_impl_ptr              pimpl_;
 
     field_buffer at(size_type r, row::size_type c) const;
 

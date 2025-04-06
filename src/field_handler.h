@@ -93,8 +93,8 @@ public:
             }
         }
 
-        field_buffer buffer = field.input_buffer();
-        bool is_binary = is_binary_format(field);
+        field_buffer buffer    = field.input_buffer();
+        bool         is_binary = is_binary_format(field);
 
         return ParamUnserializer::template deserialize<T>(buffer, is_binary);
     }
@@ -206,7 +206,7 @@ private:
     template <typename Tuple, std::size_t... Is>
     static void
     convert_row_to_tuple_impl(const resultset::row &row, Tuple &tuple, std::index_sequence<Is...>) {
-        (void)std::initializer_list<int>{(to(row[Is], std::get<Is>(tuple)), 0)...};
+        (void) std::initializer_list<int>{(to(row[Is], std::get<Is>(tuple)), 0)...};
     }
 
     /**

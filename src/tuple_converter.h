@@ -130,7 +130,7 @@ row_to_refs(const resultset::row &row, std::tuple<Ts &...> refs) {
     }
 
     // Assign values to the references
-    (void)std::initializer_list<int>{
+    (void) std::initializer_list<int>{
         (std::get<Ts &>(refs) = std::get<std::remove_reference_t<Ts>>(temp), 0)...};
 
     return true;

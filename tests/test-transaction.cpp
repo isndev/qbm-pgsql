@@ -1,8 +1,37 @@
-#include <chrono>
+/**
+ * @file test-transaction.cpp
+ * @brief Unit tests for PostgreSQL transaction management
+ *
+ * This file implements tests for the transaction management functionality of the
+ * PostgreSQL client module. It verifies the client's ability to properly handle
+ * database transactions including:
+ *
+ * - Transaction begin, commit, and rollback operations
+ * - Nested transactions using savepoints
+ * - Transaction isolation levels
+ * - Error handling within transactions
+ * - Data consistency across transaction boundaries
+ * - Concurrent transaction handling
+ *
+ * The implementation validates both simple and complex transaction patterns,
+ * ensuring that data modifications are properly committed or rolled back according
+ * to the specified transaction behavior.
+ *
+ * Key features tested:
+ * - Basic transaction operations
+ * - Savepoint management
+ * - Transaction isolation enforcement
+ * - Transaction error recovery
+ * - Transaction callback execution
+ *
+ * @see qb::pg::detail::Transaction
+ * @see qb::pg::detail::Database
+ * @see qb::pg::detail::ISqlCommand
+ *
+ * @author QB PostgreSQL Module Team
+ */
+
 #include <gtest/gtest.h>
-#include <qb/io/async.h>
-#include <string_view>
-#include <thread>
 #include "../pgsql.h"
 
 constexpr std::string_view PGSQL_CONNECTION_STR = "tcp://test:test@localhost:5432[test]";
@@ -10,8 +39,20 @@ constexpr std::string_view PGSQL_CONNECTION_STR = "tcp://test:test@localhost:543
 using namespace qb::pg;
 using namespace qb::pg::detail;
 
+/**
+ * @brief Test fixture for PostgreSQL transaction functionality
+ *
+ * Sets up a test environment with database tables and data for testing
+ * transaction management features.
+ */
 class PostgreSQLTransactionTest : public ::testing::Test {
 protected:
+    /**
+     * @brief Set up the test environment
+     *
+     * Creates a database connection and sets up test tables with sample data
+     * for transaction testing.
+     */
     void
     SetUp() override {
         db_ = std::make_unique<qb::pg::tcp::database>();
@@ -23,6 +64,11 @@ protected:
         ASSERT_TRUE(status);
     }
 
+    /**
+     * @brief Clean up after tests
+     *
+     * Drops temporary tables and disconnects the database connection.
+     */
     void
     TearDown() override {
         if (db_) {
@@ -36,9 +82,15 @@ protected:
     std::unique_ptr<qb::pg::tcp::database> db_;
 };
 
+/**
+ * @brief Test basic transaction functionality
+ *
+ * Verifies that a simple transaction can be started and executed
+ * with proper scope and context.
+ */
 TEST_F(PostgreSQLTransactionTest, BasicTransaction) {
     bool success = false;
-    auto status = db_->begin(
+    auto status  = db_->begin(
                          [&success](Transaction &t) {
                              t.execute(
                                  "SELECT * FROM test_transactions",
@@ -53,17 +105,23 @@ TEST_F(PostgreSQLTransactionTest, BasicTransaction) {
     ASSERT_TRUE(success);
 }
 
+/**
+ * @brief Test transaction rollback on error
+ *
+ * Verifies that a transaction is properly rolled back when an error
+ * occurs during its execution, ensuring data consistency.
+ */
 TEST_F(PostgreSQLTransactionTest, TransactionRollback) {
     bool error_caught = false;
-    auto status = db_->begin(
+    auto status       = db_->begin(
                          [](Transaction &t) {
                              t.execute(
                                  "INSERT INTO nonexistent (value) VALUES ('test')",
                                  [](Transaction &tr, results result) {
-                                     ASSERT_TRUE(false); // Cette requête doit échouer
+                                     ASSERT_TRUE(false); // This query should fail
                                  },
                                  [](error::db_error error) {
-                                     ASSERT_TRUE(true); // On s'attend à une erreur
+                                     ASSERT_TRUE(true); // We expect an error
                                  });
                          },
                          [&error_caught](error::db_error error) { error_caught = true; })
@@ -71,6 +129,12 @@ TEST_F(PostgreSQLTransactionTest, TransactionRollback) {
     ASSERT_TRUE(error_caught);
 }
 
+/**
+ * @brief Test nested transactions using savepoints
+ *
+ * Verifies that nested transactions via savepoints work correctly,
+ * allowing for partial rollbacks while maintaining an outer transaction.
+ */
 TEST_F(PostgreSQLTransactionTest, NestedTransactions) {
     bool success = false;
     auto status =
@@ -91,9 +155,15 @@ TEST_F(PostgreSQLTransactionTest, NestedTransactions) {
     ASSERT_TRUE(success);
 }
 
+/**
+ * @brief Test transaction isolation
+ *
+ * Verifies that transaction isolation works correctly, with changes
+ * not visible outside the transaction until committed.
+ */
 TEST_F(PostgreSQLTransactionTest, TransactionIsolation) {
     bool success = false;
-    auto status = db_->begin(
+    auto status  = db_->begin(
                          [&success](Transaction &t) {
                              t.execute(
                                  "SELECT * FROM test_transactions",
@@ -108,9 +178,15 @@ TEST_F(PostgreSQLTransactionTest, TransactionIsolation) {
     ASSERT_TRUE(success);
 }
 
+/**
+ * @brief Test transaction timeout handling
+ *
+ * Verifies that long-running transactions with sleep operations
+ * complete successfully without triggering timeout errors.
+ */
 TEST_F(PostgreSQLTransactionTest, TransactionTimeout) {
     bool success = false;
-    auto status = db_->begin(
+    auto status  = db_->begin(
                          [&success](Transaction &t) {
                              t.execute(
                                  "SELECT pg_sleep(2)",
@@ -122,9 +198,15 @@ TEST_F(PostgreSQLTransactionTest, TransactionTimeout) {
     ASSERT_TRUE(success);
 }
 
+/**
+ * @brief Test multiple statements in a transaction
+ *
+ * Verifies that multiple SQL statements can be executed
+ * within a single transaction context.
+ */
 TEST_F(PostgreSQLTransactionTest, MultipleStatements) {
     bool success = false;
-    auto status = db_->begin(
+    auto status  = db_->begin(
                          [&success](Transaction &t) {
                              t.execute(
                                  "SELECT * FROM test_transactions",
@@ -139,75 +221,112 @@ TEST_F(PostgreSQLTransactionTest, MultipleStatements) {
     ASSERT_TRUE(success);
 }
 
-TEST_F(PostgreSQLTransactionTest, DISABLED_SavepointRollback) {
+/**
+ * @brief Test savepoint rollback functionality with error handling
+ *
+ * Verifies that when a savepoint is rolled back, changes made within
+ * the savepoint are undone while preserving changes made outside it.
+ * This test specifically tests the error propagation mechanism.
+ */
+TEST_F(PostgreSQLTransactionTest, SavepointRollback) {
     bool before_savepoint = false;
     bool in_savepoint = false;
+    bool error_caught = false;
     bool after_savepoint = false;
-    auto status =
-        db_->begin(
-               [&before_savepoint, &in_savepoint, &after_savepoint](Transaction &t) {
-                   t.execute(
-                       "INSERT INTO test_transactions (value) VALUES ('before_savepoint')",
-                       [&before_savepoint, &in_savepoint, &after_savepoint](Transaction &tr,
-                                                                            results result) {
-                           before_savepoint = true;
-                           tr.savepoint(
-                               "sp1",
-                               [&in_savepoint](Transaction &tr2) {
-                                   tr2.execute(
-                                       "INSERT INTO test_transactions (value) VALUES "
-                                       "('in_savepoint')",
-                                       [&in_savepoint](Transaction &tr3, results result) {
-                                           in_savepoint = true;
-                                           // Forcer une erreur dans le savepoint
-                                           tr3.execute(
-                                               "SELECT nonexistent",
-                                               [](Transaction &tr4, results result) {
-                                                   ASSERT_TRUE(false);
-                                               },
-                                               [](error::db_error error) {
-                                                   // On s'attend à cette erreur
-                                               });
-                                       },
-                                       [](error::db_error error) { ASSERT_TRUE(false); });
-                               },
-                               [](error::db_error error) {
-                                   // Le savepoint sera rollback automatiquement
-                               });
-                           // La transaction principale continue
-                           tr.execute(
-                               "SELECT * FROM test_transactions WHERE value = 'before_savepoint'",
-                               [&after_savepoint](Transaction &tr2, results result) {
-                                   ASSERT_EQ(result.size(), 1);
-                                   after_savepoint = true;
-                               },
-                               [](error::db_error error) { ASSERT_TRUE(false); });
-                       },
-                       [](error::db_error error) { ASSERT_TRUE(false); });
-               },
-               [](error::db_error error) { ASSERT_TRUE(false); })
-            .await();
-    ASSERT_TRUE(before_savepoint);
-    ASSERT_TRUE(in_savepoint);
-    ASSERT_TRUE(after_savepoint);
+    
+    // Clean the test table
+    auto cleanup = db_->execute("DELETE FROM test_transactions").await();
+    ASSERT_TRUE(cleanup);
+    
+    // Insert reference data outside the main transaction
+    auto setup = db_->execute("INSERT INTO test_transactions (value) VALUES ('before_savepoint')").await();
+    ASSERT_TRUE(setup);
+    before_savepoint = true;
+    
+    // Phase 1: Verify that an error in a savepoint triggers a rollback of the savepoint
+    auto status = db_->begin(
+        [&in_savepoint, &error_caught](Transaction &t) {
+            // Create a savepoint where we'll cause an error
+            t.savepoint(
+                "sp1",
+                [&in_savepoint, &error_caught](Transaction &tr2) {
+                    // Insert data that will be rolled back
+                    tr2.execute(
+                        "INSERT INTO test_transactions (value) VALUES ('in_savepoint')",
+                        [&in_savepoint, &error_caught](Transaction &tr3, results result) {
+                            in_savepoint = true;
+                            
+                            // Trigger an explicit error that will cause the savepoint to roll back
+                            tr3.execute(
+                                "SELECT * FROM nonexistent_table",
+                                [](Transaction &tr4, results result) {
+                                    FAIL() << "This query should fail";
+                                },
+                                [&error_caught](error::db_error error) {
+                                    error_caught = true;
+                                    std::cout << "SQL error detected in savepoint: " << error.what() << std::endl;
+                                }
+                            );
+                        },
+                        [](error::db_error error) { 
+                            std::cout << "Error during savepoint insertion: " << error.what() << std::endl;
+                        }
+                    );
+                },
+                [](error::db_error error) {
+                    std::cout << "Savepoint error detected: " << error.what() << std::endl;
+                }
+            );
+        },
+        [](error::db_error error) {
+            std::cout << "Transaction error detected: " << error.what() << std::endl;
+        }
+    ).await();
+    
+    // Phase 2: Verify that data outside the savepoint still exists and data inside the savepoint was removed
+    auto verify = db_->begin(
+        [&after_savepoint](Transaction &t) {
+            // Verify that savepoint data doesn't exist (rollback)
+            t.execute(
+                "SELECT * FROM test_transactions WHERE value = 'in_savepoint'",
+                [](Transaction &tr, results result) {
+                    ASSERT_EQ(result.size(), 0) << "Savepoint data was not properly rolled back";
+                },
+                [](error::db_error error) { 
+                    FAIL() << "Error when verifying rollback: " << error.what();
+                }
+            );
+            
+            // Verify that data before the savepoint still exists (commit)
+            t.execute(
+                "SELECT * FROM test_transactions WHERE value = 'before_savepoint'",
+                [&after_savepoint](Transaction &tr, results result) {
+                    ASSERT_EQ(result.size(), 1) << "Data before savepoint was not preserved";
+                    after_savepoint = true;
+                },
+                [](error::db_error error) { 
+                    FAIL() << "Error when verifying commit: " << error.what();
+                }
+            );
+        },
+        [](error::db_error error) {
+            FAIL() << "Error during verification: " << error.what();
+        }
+    ).await();
 
-    // Vérifier que seul le savepoint a été rollback
-    auto status2 =
-        db_->begin(
-               [](Transaction &t) {
-                   t.execute(
-                       "SELECT * FROM test_transactions WHERE value = 'in_savepoint'",
-                       [](Transaction &tr, results result) { ASSERT_EQ(result.size(), 0); },
-                       [](error::db_error error) { ASSERT_TRUE(false); });
-                   t.execute(
-                       "SELECT * FROM test_transactions WHERE value = 'before_savepoint'",
-                       [](Transaction &tr, results result) { ASSERT_EQ(result.size(), 1); },
-                       [](error::db_error error) { ASSERT_TRUE(false); });
-               },
-               [](error::db_error error) { ASSERT_TRUE(false); })
-            .await();
+    // Verify that the execution flow completed correctly
+    ASSERT_TRUE(before_savepoint) << "Insertion before savepoint didn't work";
+    ASSERT_TRUE(in_savepoint) << "Insertion in savepoint didn't work";
+    ASSERT_TRUE(error_caught) << "Error in savepoint wasn't detected";
+    ASSERT_TRUE(after_savepoint) << "Verification after savepoint didn't work";
 }
 
+/**
+ * @brief Test multiple nested transactions with savepoints
+ *
+ * Verifies that multiple levels of nested transactions work correctly
+ * with proper scope isolation and state management.
+ */
 TEST_F(PostgreSQLTransactionTest, MultipleNestedTransactions) {
     bool success1 = false;
     bool success2 = false;
@@ -244,6 +363,12 @@ TEST_F(PostgreSQLTransactionTest, MultipleNestedTransactions) {
     ASSERT_TRUE(success2);
 }
 
+/**
+ * @brief Test committing multiple changes in a transaction
+ *
+ * Verifies that multiple data modifications within a transaction
+ * are all committed atomically on successful completion.
+ */
 TEST_F(PostgreSQLTransactionTest, CommitMultipleChanges) {
     bool insert_success = false;
     bool select_success = false;

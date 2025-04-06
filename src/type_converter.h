@@ -133,14 +133,14 @@ public:
         } else if constexpr (std::is_same_v<value_type, smallint>) {
             // PostgreSQL smallint: length (2) + network value
             write_integer(buffer, 2);
-            smallint netval = htons(value);
-            const byte *bytes = reinterpret_cast<const byte *>(&netval);
+            smallint    netval = htons(value);
+            const byte *bytes  = reinterpret_cast<const byte *>(&netval);
             buffer.insert(buffer.end(), bytes, bytes + sizeof(smallint));
         } else if constexpr (std::is_same_v<value_type, integer>) {
             // PostgreSQL integer: length (4) + network value
             write_integer(buffer, 4);
-            integer netval = htonl(value);
-            const byte *bytes = reinterpret_cast<const byte *>(&netval);
+            integer     netval = htonl(value);
+            const byte *bytes  = reinterpret_cast<const byte *>(&netval);
             buffer.insert(buffer.end(), bytes, bytes + sizeof(integer));
         } else if constexpr (std::is_same_v<value_type, bigint>) {
             // PostgreSQL bigint: length (8) + network value (manual swap)
@@ -148,10 +148,10 @@ public:
 
             union {
                 bigint i;
-                byte b[8];
+                byte   b[8];
             } src, dst;
 
-            src.i = value;
+            src.i    = value;
             dst.b[0] = src.b[7];
             dst.b[1] = src.b[6];
             dst.b[2] = src.b[5];
@@ -187,7 +187,7 @@ public:
 
             // Convert UUID to byte array (ensuring network byte order if needed)
             std::array<byte, 16> bytes;
-            const auto &uuid_bytes = value.as_bytes();
+            const auto          &uuid_bytes = value.as_bytes();
             for (size_t i = 0; i < uuid_bytes.size(); ++i) {
                 bytes[i] = static_cast<byte>(uuid_bytes[i]);
             }
@@ -214,10 +214,10 @@ public:
             // Convert to network byte order
             union {
                 int64_t i;
-                byte b[8];
+                byte    b[8];
             } src, dst;
 
-            src.i = pg_timestamp;
+            src.i    = pg_timestamp;
             dst.b[0] = src.b[7];
             dst.b[1] = src.b[6];
             dst.b[2] = src.b[5];
@@ -270,8 +270,7 @@ public:
             return std::to_string(value);
         } else if constexpr (std::is_floating_point_v<value_type>) {
             // Special values
-            if (std::isnan(value))
-                return "NaN";
+            if (std::isnan(value)) return "NaN";
             if (std::isinf(value)) {
                 return value > 0 ? "Infinity" : "-Infinity";
             }
@@ -279,7 +278,7 @@ public:
         } else if constexpr (std::is_same_v<value_type, bytea> ||
                              std::is_same_v<value_type, std::vector<byte>>) {
             std::string result = "\\x";
-            char hex[3];
+            char        hex[3];
 
             for (byte b : value) {
                 std::snprintf(hex, sizeof(hex), "%02x", static_cast<int>(b) & 0xFF);
@@ -295,7 +294,7 @@ public:
                              std::is_same_v<value_type, qb::LocalTimestamp>) {
             // Format: YYYY-MM-DD HH:MM:SS.MMMMMM
             std::time_t timestamp = static_cast<std::time_t>(value.seconds());
-            std::tm *tm_data = std::gmtime(&timestamp);
+            std::tm    *tm_data   = std::gmtime(&timestamp);
 
             std::ostringstream os;
             os << std::setfill('0') << std::setw(4) << (tm_data->tm_year + 1900) << '-'
@@ -376,7 +375,7 @@ public:
             int64_t pg_timestamp = 0;
             union {
                 int64_t i;
-                byte b[8];
+                byte    b[8];
             } val;
 
             // Convert from network byte order
@@ -397,7 +396,7 @@ public:
             constexpr int64_t POSTGRES_EPOCH_DIFF_SECONDS = 946684800;
 
             // Extract seconds and microseconds
-            int64_t seconds = (pg_timestamp / 1000000) + POSTGRES_EPOCH_DIFF_SECONDS;
+            int64_t seconds      = (pg_timestamp / 1000000) + POSTGRES_EPOCH_DIFF_SECONDS;
             int64_t microseconds = pg_timestamp % 1000000;
             if (microseconds < 0) {
                 seconds--;
@@ -451,19 +450,15 @@ public:
             return static_cast<bigint>(std::stoll(text));
         } else if constexpr (std::is_same_v<value_type, float>) {
             // Special values
-            if (text == "NaN")
-                return std::numeric_limits<float>::quiet_NaN();
-            if (text == "Infinity" || text == "inf")
-                return std::numeric_limits<float>::infinity();
+            if (text == "NaN") return std::numeric_limits<float>::quiet_NaN();
+            if (text == "Infinity" || text == "inf") return std::numeric_limits<float>::infinity();
             if (text == "-Infinity" || text == "-inf")
                 return -std::numeric_limits<float>::infinity();
             return std::stof(text);
         } else if constexpr (std::is_same_v<value_type, double>) {
             // Special values
-            if (text == "NaN")
-                return std::numeric_limits<double>::quiet_NaN();
-            if (text == "Infinity" || text == "inf")
-                return std::numeric_limits<double>::infinity();
+            if (text == "NaN") return std::numeric_limits<double>::quiet_NaN();
+            if (text == "Infinity" || text == "inf") return std::numeric_limits<double>::infinity();
             if (text == "-Infinity" || text == "-inf")
                 return -std::numeric_limits<double>::infinity();
             return std::stod(text);
@@ -495,7 +490,7 @@ public:
                              std::is_same_v<value_type, qb::LocalTimestamp>) {
             // Parse PostgreSQL timestamp format: YYYY-MM-DD HH:MM:SS[.MMMMMM]
             std::tm tm = {};
-            int year, month, day, hour, minute, second, microsecond = 0;
+            int     year, month, day, hour, minute, second, microsecond = 0;
 
             // Regular expression to match PostgreSQL timestamp format
             std::regex timestamp_regex(
@@ -503,10 +498,10 @@ public:
 
             std::smatch matches;
             if (std::regex_match(text, matches, timestamp_regex)) {
-                year = std::stoi(matches[1]);
-                month = std::stoi(matches[2]);
-                day = std::stoi(matches[3]);
-                hour = std::stoi(matches[4]);
+                year   = std::stoi(matches[1]);
+                month  = std::stoi(matches[2]);
+                day    = std::stoi(matches[3]);
+                hour   = std::stoi(matches[4]);
                 minute = std::stoi(matches[5]);
                 second = std::stoi(matches[6]);
 
@@ -519,13 +514,13 @@ public:
                 }
 
                 // Set tm structure
-                tm.tm_year = year - 1900; // Years since 1900
-                tm.tm_mon = month - 1;    // Months since January (0-11)
-                tm.tm_mday = day;         // Day of month (1-31)
-                tm.tm_hour = hour;        // Hours (0-23)
-                tm.tm_min = minute;       // Minutes (0-59)
-                tm.tm_sec = second;       // Seconds (0-61)
-                tm.tm_isdst = -1;         // Let system determine DST
+                tm.tm_year  = year - 1900; // Years since 1900
+                tm.tm_mon   = month - 1;   // Months since January (0-11)
+                tm.tm_mday  = day;         // Day of month (1-31)
+                tm.tm_hour  = hour;        // Hours (0-23)
+                tm.tm_min   = minute;      // Minutes (0-59)
+                tm.tm_sec   = second;      // Seconds (0-61)
+                tm.tm_isdst = -1;          // Let system determine DST
 
                 // Convert to Unix timestamp
                 std::time_t unix_timestamp = std::mktime(&tm);
@@ -563,8 +558,8 @@ private:
      */
     static void
     write_integer(std::vector<byte> &buffer, integer value) {
-        integer networkValue = htonl(value);
-        const byte *bytes = reinterpret_cast<const byte *>(&networkValue);
+        integer     networkValue = htonl(value);
+        const byte *bytes        = reinterpret_cast<const byte *>(&networkValue);
         buffer.insert(buffer.end(), bytes, bytes + sizeof(integer));
     }
 };
@@ -572,6 +567,67 @@ private:
 // Specialization for UUID type
 template <>
 struct TypeConverter<qb::uuid> {
+    using value_type = qb::uuid;
+
+    /**
+     * @brief Returns the PostgreSQL OID for UUID type
+     *
+     * @return integer PostgreSQL type OID for UUID
+     */
+    static integer
+    get_oid() {
+        return static_cast<integer>(oid::uuid);
+    }
+
+    /**
+     * @brief Converts a UUID to PostgreSQL binary format
+     *
+     * Creates a PostgreSQL binary representation of a UUID, following
+     * PostgreSQL format specifications:
+     * - 4-byte integer length prefix (16)
+     * - 16-byte UUID data
+     *
+     * @param value The UUID to convert
+     * @param buffer The buffer to store the PostgreSQL binary format
+     */
+    static void
+    to_binary(const qb::uuid &value, std::vector<byte> &buffer) {
+        // PostgreSQL binary format consists of:
+        // - 4-byte length prefix
+        // - 16-byte UUID
+
+        // Resize buffer to hold length prefix and UUID data
+        buffer.resize(4 + 16);
+
+        // Write length (16) in big-endian format
+        buffer[0] = 0;
+        buffer[1] = 0;
+        buffer[2] = 0;
+        buffer[3] = 16;
+
+        // Get UUID bytes
+        auto bytes_span = value.as_bytes();
+        
+        // Write UUID data after length prefix
+        for (size_t i = 0; i < 16; ++i) {
+            buffer[i + 4] = static_cast<byte>(bytes_span[i]);
+        }
+    }
+
+    /**
+     * @brief Converts a UUID to PostgreSQL text format
+     *
+     * Creates a standard text representation of a UUID in format:
+     * xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+     *
+     * @param value The UUID to convert
+     * @return std::string The PostgreSQL text representation of the UUID
+     */
+    static std::string
+    to_text(const qb::uuid &value) {
+        return uuids::to_string(value);
+    }
+
     /**
      * @brief Converts PostgreSQL binary format to a UUID
      *
@@ -635,6 +691,106 @@ struct TypeConverter<qb::uuid> {
 // Specialization for Timestamp type
 template <>
 struct TypeConverter<qb::Timestamp> {
+    using value_type = qb::Timestamp;
+
+    /**
+     * @brief Returns the PostgreSQL OID for timestamp type
+     *
+     * @return integer PostgreSQL type OID for timestamp
+     */
+    static integer
+    get_oid() {
+        return static_cast<integer>(oid::timestamp);
+    }
+    
+    /**
+     * @brief Converts a Timestamp to PostgreSQL binary format
+     *
+     * Creates a PostgreSQL binary representation of a timestamp,
+     * following PostgreSQL format specifications:
+     * - 4-byte integer length prefix (8)
+     * - 8-byte timestamp value in microseconds since 2000-01-01
+     *
+     * @param value The timestamp to convert
+     * @param buffer The buffer to store the PostgreSQL binary format
+     */
+    static void
+    to_binary(const qb::Timestamp &value, std::vector<byte> &buffer) {
+        // PostgreSQL binary format consists of:
+        // - 4-byte length prefix
+        // - 8-byte timestamp (microseconds since 2000-01-01)
+
+        // Resize buffer to hold length prefix and timestamp data
+        buffer.resize(4 + 8);
+
+        // Write length (8) in big-endian format
+        buffer[0] = 0;
+        buffer[1] = 0;
+        buffer[2] = 0;
+        buffer[3] = 8;
+
+        // Difference between PostgreSQL epoch (2000-01-01) and Unix epoch (1970-01-01)
+        constexpr int64_t POSTGRES_EPOCH_DIFF = 946684800LL; // seconds
+
+        // Convert Unix timestamp to PostgreSQL timestamp
+        int64_t unix_secs = value.seconds();
+        int64_t unix_usecs = value.microseconds() % 1000000;
+        int64_t pg_usecs = (unix_secs - POSTGRES_EPOCH_DIFF) * 1000000LL + unix_usecs;
+
+        // Convert to network byte order (big-endian)
+        union {
+            int64_t i;
+            byte    b[8];
+        } src, dst;
+
+        src.i = pg_usecs;
+
+        // Convert native to big-endian order
+        dst.b[0] = src.b[7];
+        dst.b[1] = src.b[6];
+        dst.b[2] = src.b[5];
+        dst.b[3] = src.b[4];
+        dst.b[4] = src.b[3];
+        dst.b[5] = src.b[2];
+        dst.b[6] = src.b[1];
+        dst.b[7] = src.b[0];
+
+        // Write timestamp data after length prefix
+        for (size_t i = 0; i < 8; ++i) {
+            buffer[i + 4] = dst.b[i];
+        }
+    }
+
+    /**
+     * @brief Converts a Timestamp to PostgreSQL text format
+     *
+     * Creates a standard text representation of a timestamp in ISO 8601 format:
+     * YYYY-MM-DD HH:MM:SS.ssssss
+     *
+     * @param value The timestamp to convert
+     * @return std::string The PostgreSQL text representation of the timestamp
+     */
+    static std::string
+    to_text(const qb::Timestamp &value) {
+        std::time_t unix_time = value.seconds();
+        std::tm    *time_info = std::localtime(&unix_time);
+        char        buf[32];
+
+        // Format the date and time parts
+        std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", time_info);
+        
+        // Add microseconds
+        std::string result(buf);
+        int64_t microsecs = value.microseconds() % 1000000;
+        if (microsecs > 0) {
+            char usec_buf[8];
+            std::snprintf(usec_buf, sizeof(usec_buf), ".%06ld", static_cast<long>(microsecs));
+            result += usec_buf;
+        }
+        
+        return result;
+    }
+
     /**
      * @brief Converts PostgreSQL binary format to a Timestamp
      *
@@ -663,7 +819,7 @@ struct TypeConverter<qb::Timestamp> {
         // Assemble timestamp value (8 bytes in big-endian)
         union {
             int64_t i;
-            byte b[8];
+            byte    b[8];
         } src, dst;
 
         // If buffer contains EXACTLY the timestamp (8 bytes), use it directly
@@ -687,7 +843,7 @@ struct TypeConverter<qb::Timestamp> {
         int64_t pg_usecs = dst.i;
 
         // Convert to Unix seconds and microseconds
-        int64_t unix_secs = (pg_usecs / 1000000) + POSTGRES_EPOCH_DIFF;
+        int64_t unix_secs  = (pg_usecs / 1000000) + POSTGRES_EPOCH_DIFF;
         int64_t unix_usecs = pg_usecs % 1000000;
 
         if (unix_usecs < 0) {
@@ -712,8 +868,8 @@ struct TypeConverter<qb::Timestamp> {
     static qb::Timestamp
     from_text(const std::string &text) {
         // Expected format: "YYYY-MM-DD HH:MM:SS.ssssss" or "YYYY-MM-DD HH:MM:SS"
-        std::tm tm = {};
-        int usec = 0;
+        std::tm tm   = {};
+        int     usec = 0;
 
         // Parse date and time
         if (text.empty()) {
@@ -734,7 +890,7 @@ struct TypeConverter<qb::Timestamp> {
         size_t dot_pos = text.find('.');
         if (dot_pos != std::string::npos && dot_pos + 1 < text.length()) {
             std::string usec_str = text.substr(dot_pos + 1);
-            usec = std::stoi(usec_str);
+            usec                 = std::stoi(usec_str);
 
             // Adjust to the correct scale (microseconds)
             int digits = usec_str.length();
@@ -745,11 +901,11 @@ struct TypeConverter<qb::Timestamp> {
 
         // Set up tm structure
         tm.tm_year = year - 1900;
-        tm.tm_mon = month - 1;
+        tm.tm_mon  = month - 1;
         tm.tm_mday = day;
         tm.tm_hour = hour;
-        tm.tm_min = min;
-        tm.tm_sec = sec;
+        tm.tm_min  = min;
+        tm.tm_sec  = sec;
 
         // Convert to timestamp
         std::time_t time_secs = std::mktime(&tm);
@@ -758,6 +914,183 @@ struct TypeConverter<qb::Timestamp> {
         }
 
         return qb::Timestamp::seconds(time_secs) + qb::Timespan::microseconds(usec);
+    }
+};
+
+// Specialization for UtcTimestamp type
+template <>
+struct TypeConverter<qb::UtcTimestamp> {
+    using value_type = qb::UtcTimestamp;
+
+    /**
+     * @brief Returns the PostgreSQL OID for timestamptz type
+     *
+     * @return integer PostgreSQL type OID for timestamptz
+     */
+    static integer
+    get_oid() {
+        return static_cast<integer>(oid::timestamptz);
+    }
+    
+    /**
+     * @brief Converts a UtcTimestamp to PostgreSQL binary format
+     *
+     * Creates a PostgreSQL binary representation of a timestamp with timezone,
+     * following PostgreSQL format specifications:
+     * - 4-byte integer length prefix (8)
+     * - 8-byte timestamp value in microseconds since 2000-01-01 UTC
+     *
+     * @param value The UTC timestamp to convert
+     * @param buffer The buffer to store the PostgreSQL binary format
+     */
+    static void
+    to_binary(const qb::UtcTimestamp &value, std::vector<byte> &buffer) {
+        // Convert to regular Timestamp and then serialize
+        // Use the value directly since UtcTimestamp is derived from Timestamp
+        TypeConverter<qb::Timestamp>::to_binary(
+            static_cast<qb::Timestamp>(value), buffer);
+    }
+
+    /**
+     * @brief Converts a UtcTimestamp to PostgreSQL text format
+     *
+     * Creates a standard text representation of a UTC timestamp in ISO 8601 format:
+     * YYYY-MM-DD HH:MM:SS.ssssss+00
+     *
+     * @param value The UTC timestamp to convert
+     * @return std::string The PostgreSQL text representation of the timestamp with timezone
+     */
+    static std::string
+    to_text(const qb::UtcTimestamp &value) {
+        std::time_t unix_time = value.seconds();
+        std::tm    *time_info = std::gmtime(&unix_time);
+        char        buf[40];
+
+        // Format the date and time parts
+        std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", time_info);
+        
+        // Add microseconds
+        std::string result(buf);
+        int64_t microsecs = value.microseconds() % 1000000;
+        if (microsecs > 0) {
+            char usec_buf[8];
+            std::snprintf(usec_buf, sizeof(usec_buf), ".%06ld", static_cast<long>(microsecs));
+            result += usec_buf;
+        }
+        
+        // Add UTC timezone indicator
+        result += "+00";
+        
+        return result;
+    }
+
+    /**
+     * @brief Converts PostgreSQL binary format to a UtcTimestamp
+     *
+     * Deserializes a PostgreSQL binary timestamp with timezone representation 
+     * into a qb::UtcTimestamp.
+     * PostgreSQL timestamptz are stored as UTC timestamps in microseconds since 2000-01-01.
+     *
+     * @param buffer Buffer containing the PostgreSQL binary timestamptz data
+     * @return qb::UtcTimestamp Converted UTC timestamp object
+     * @throws std::runtime_error If the buffer is too small or malformed
+     */
+    static qb::UtcTimestamp
+    from_binary(const std::vector<byte> &buffer) {
+        // Convert from binary to Timestamp, then to UtcTimestamp
+        qb::Timestamp ts = TypeConverter<qb::Timestamp>::from_binary(buffer);
+        return qb::UtcTimestamp(ts);
+    }
+
+    /**
+     * @brief Converts PostgreSQL text format to a UtcTimestamp
+     *
+     * Parses a PostgreSQL text representation of a timestamp with timezone into
+     * a qb::UtcTimestamp object. Handles formats with timezone information.
+     *
+     * @param text Text representation of a timestamp with timezone
+     * @return qb::UtcTimestamp Converted UTC timestamp object
+     * @throws std::runtime_error If the text is not a valid timestamptz format
+     */
+    static qb::UtcTimestamp
+    from_text(const std::string &text) {
+        // PostgreSQL will provide timestamps in various formats including timezone info
+        // We'll parse the basic timestamp part first
+        
+        // Expected format: "YYYY-MM-DD HH:MM:SS.ssssss±TZ" or variations
+        std::tm tm   = {};
+        int     usec = 0;
+
+        if (text.empty()) {
+            throw std::runtime_error("Empty timestamp string");
+        }
+
+        int year = 0, month = 0, day = 0, hour = 0, min = 0, sec = 0;
+
+        // Use a simpler approach to extract the date/time portion
+        int matched =
+            sscanf(text.c_str(), "%d-%d-%d %d:%d:%d", &year, &month, &day, &hour, &min, &sec);
+
+        if (matched != 6) {
+            throw std::runtime_error("Invalid timestamp format");
+        }
+
+        // Read fractional part if it exists (ignoring timezone for initial parsing)
+        size_t dot_pos = text.find('.');
+        if (dot_pos != std::string::npos && dot_pos + 1 < text.length()) {
+            // Find the first non-digit character after the dot
+            size_t end_pos = dot_pos + 1;
+            while (end_pos < text.length() && std::isdigit(text[end_pos])) {
+                end_pos++;
+            }
+            
+            std::string usec_str = text.substr(dot_pos + 1, end_pos - (dot_pos + 1));
+            usec = std::stoi(usec_str);
+
+            // Adjust to the correct scale (microseconds)
+            int digits = usec_str.length();
+            for (int i = digits; i < 6; i++) {
+                usec *= 10;
+            }
+        }
+
+        // Set up tm structure as UTC
+        tm.tm_year = year - 1900;
+        tm.tm_mon  = month - 1;
+        tm.tm_mday = day;
+        tm.tm_hour = hour;
+        tm.tm_min  = min;
+        tm.tm_sec  = sec;
+        tm.tm_isdst = 0;  // No DST for UTC
+
+        // Convert to timestamp
+        // Use timegm (GMT/UTC version of mktime) if available, otherwise approximate
+#ifdef _WIN32
+        // Windows doesn't have timegm, use _mkgmtime
+        std::time_t time_secs = _mkgmtime(&tm);
+#else
+        std::time_t time_secs;
+        // Check if we have timegm available
+#ifdef __APPLE__
+        // macOS doesn't have timegm in the standard library
+        time_secs = std::mktime(&tm);
+        // Adjust for local timezone offset
+        std::time_t local_time = std::mktime(&tm);
+        std::tm* gm_tm = std::gmtime(&local_time);
+        std::time_t gm_time = std::mktime(gm_tm);
+        time_secs += (local_time - gm_time);
+#else
+        // Linux and others might have timegm
+        time_secs = timegm(&tm);
+#endif
+#endif
+
+        if (time_secs == -1) {
+            throw std::runtime_error("Invalid timestamp conversion");
+        }
+
+        return qb::UtcTimestamp(qb::Timestamp::seconds(time_secs) + 
+                               qb::Timespan::microseconds(usec));
     }
 };
 

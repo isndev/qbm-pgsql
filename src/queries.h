@@ -59,9 +59,9 @@ using namespace qb::pg;
  * including its name, SQL expression, parameter types, and result description.
  */
 struct PreparedQuery {
-    std::string name;                     ///< Name of the prepared query
-    std::string expression;               ///< SQL expression
-    std::vector<oid> param_types;         ///< Types of parameters (was type_oid_sequence)
+    std::string          name;            ///< Name of the prepared query
+    std::string          expression;      ///< SQL expression
+    std::vector<oid>     param_types;     ///< Types of parameters (was type_oid_sequence)
     row_description_type row_description; ///< Description of result columns
 };
 
@@ -123,7 +123,7 @@ using PreparedQueryStorage = PreparedStorage;
  * type conversion and binary encoding according to PostgreSQL protocol.
  */
 class QueryParams {
-    std::vector<byte> _params;         ///< Serialized parameters
+    std::vector<byte>    _params;      ///< Serialized parameters
     std::vector<integer> _param_types; ///< OIDs for parameter types
 
 public:
@@ -151,7 +151,7 @@ public:
             serializer.serialize_params(std::forward<T>(args)...);
 
             // Retrieve serialized data
-            _params = serializer.params_buffer();
+            _params      = serializer.params_buffer();
             _param_types = serializer.param_types();
 
             // Check if the beginning of the parameter buffer contains a 'B'
@@ -218,20 +218,6 @@ public:
     empty() const {
         return _params.empty();
     }
-
-private:
-    /**
-     * @brief Write a smallint to a buffer
-     *
-     * @param buffer Target buffer
-     * @param value Smallint value
-     */
-    static void
-    write_smallint(std::vector<byte> &buffer, smallint value) {
-        smallint networkValue = htons(value);
-        const byte *bytes = reinterpret_cast<const byte *>(&networkValue);
-        buffer.insert(buffer.end(), bytes, bytes + sizeof(smallint));
-    }
 };
 
 /**
@@ -287,7 +273,7 @@ public:
 template <typename CB_SUCCESS, typename CB_ERROR>
 class SqlQuery : public ISqlQuery {
     CB_SUCCESS _on_success; ///< Success callback
-    CB_ERROR _on_error;     ///< Error callback
+    CB_ERROR   _on_error;   ///< Error callback
 
 public:
     /**
@@ -353,10 +339,11 @@ public:
      */
     message
     get() const final {
-        LOG_DEBUG("[pgsql] Send BEGIN");
+        ::std::ostringstream cmd;
+        cmd << "BEGIN " << _mode;
+        
+        LOG_DEBUG("[pgsql] Send BEGIN: \"" << cmd.str() << "\"");
         message m(query_tag);
-        ::std::ostringstream cmd{"begin"};
-        cmd << _mode;
         m.write(cmd.str());
         return m;
     }
@@ -372,7 +359,6 @@ public:
  */
 template <typename CB_SUCCESS, typename CB_ERROR>
 class CommitQuery final : public SqlQuery<CB_SUCCESS, CB_ERROR> {
-
 public:
     /**
      * @brief Constructs a COMMIT query
@@ -408,7 +394,6 @@ public:
  */
 template <typename CB_SUCCESS, typename CB_ERROR>
 class RollbackQuery final : public SqlQuery<CB_SUCCESS, CB_ERROR> {
-
 public:
     /**
      * @brief Constructs a ROLLBACK query
@@ -615,7 +600,7 @@ public:
         message cmd(parse_tag);
         cmd.write(_query.name);
         cmd.write(_query.expression);
-        cmd.write((smallint)_query.param_types.size());
+        cmd.write((smallint) _query.param_types.size());
         for (auto oid_val : _query.param_types) {
             cmd.write(static_cast<integer>(oid_val)); // déjà un integer, pas besoin de cast
         }
@@ -638,9 +623,9 @@ public:
  */
 template <typename CB_SUCCESS, typename CB_ERROR>
 class ExecuteQuery final : public SqlQuery<CB_SUCCESS, CB_ERROR> {
-    const PreparedStorage &_storage; ///< Prepared statement storage
-    std::string _query_name;         ///< Query name to execute
-    QueryParams _params;             ///< Query parameters
+    const PreparedStorage &_storage;    ///< Prepared statement storage
+    std::string            _query_name; ///< Query name to execute
+    QueryParams            _params;     ///< Query parameters
 
 public:
     /**
@@ -662,8 +647,7 @@ public:
 
     bool
     is_valid() const final {
-        if (qb::likely(_storage.has(_query_name)))
-            return true;
+        if (qb::likely(_storage.has(_query_name))) return true;
         LOG_CRIT("[pgsql] Error prepared query " << _query_name << " not registered");
         return false;
     }
@@ -671,7 +655,7 @@ public:
     message
     get() const final {
         const auto &query = _storage.get(_query_name);
-        message cmd(bind_tag);
+        message     cmd(bind_tag);
 
         // Exact format expected by PostgreSQL for a Bind message:
         // 1. Portal name (empty = unnamed)
@@ -682,8 +666,8 @@ public:
 
         // 3. Format codes section - 1 code for all parameters
         // Format 1 = binary
-        cmd.write((smallint)1); // Number of format codes
-        cmd.write((smallint)1); // Format = 1 (binary)
+        cmd.write((smallint) 1); // Number of format codes
+        cmd.write((smallint) 1); // Format = 1 (binary)
 
         // 4. Total number of parameters
         smallint param_count = _params.param_count();
@@ -694,8 +678,8 @@ public:
             // Skip the count in the parameters buffer
             const std::vector<byte> &param_buffer = _params.get();
             if (param_buffer.size() > sizeof(smallint)) {
-                const byte *data = param_buffer.data() + sizeof(smallint);
-                size_t data_size = param_buffer.size() - sizeof(smallint);
+                const byte *data      = param_buffer.data() + sizeof(smallint);
+                size_t      data_size = param_buffer.size() - sizeof(smallint);
 
                 // Copy the raw data
                 auto out = cmd.output();
@@ -704,7 +688,7 @@ public:
         }
 
         // 6. Result format = 0 (none)
-        cmd.write((smallint)0);
+        cmd.write((smallint) 0);
 
         // 7. Execute message (empty portal, no row limit)
         message execute(execute_tag);

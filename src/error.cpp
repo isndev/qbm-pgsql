@@ -140,7 +140,7 @@ query_error::query_error(std::string const &message, std::string s, std::string 
  * @param what_arg Error message describing the client-side issue
  */
 client_error::client_error(std::string const &what_arg)
-    : db_error(what_arg) {}
+    : db_error(what_arg, "ERROR", "00000", "client error") {}
 
 /**
  * @brief Implements the client error constructor (C-string version)
@@ -150,7 +150,7 @@ client_error::client_error(std::string const &what_arg)
  * @param what_arg Error message describing the client-side issue (C-string)
  */
 client_error::client_error(char const *what_arg)
-    : db_error(what_arg) {}
+    : db_error(what_arg, "ERROR", "00000", "client error") {}
 
 /**
  * @brief Implements the client error constructor from an existing exception
@@ -161,7 +161,7 @@ client_error::client_error(char const *what_arg)
  * @param ex Original exception to wrap
  */
 client_error::client_error(std::exception const &ex)
-    : db_error(std::string("Client thrown exception: ") + ex.what()) {}
+    : db_error(std::string("Client thrown exception: ") + ex.what(), "ERROR", "00000", "client error") {}
 
 /**
  * @brief Implements the NULL value error constructor

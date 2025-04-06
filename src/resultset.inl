@@ -144,8 +144,7 @@ struct field_by_name_extractor<util::indexes_tuple<Indexes...>, T...> {
     static void
     get_tuple(resultset::row const &row, ::std::initializer_list<::std::string> const &names,
               ::std::tuple<T...> &val) {
-        if (names.size() < size)
-            throw error::db_error{"Not enough names in row data extraction"};
+        if (names.size() < size) throw error::db_error{"Not enough names in row data extraction"};
         ::std::tuple<T...> tmp(row[*(names.begin() + Indexes)].template as<T>()...);
         tmp.swap(val);
     }
@@ -184,14 +183,14 @@ resultset::row::to(T &...val) const {
 template <typename... T>
 void
 resultset::row::to(::std::initializer_list<::std::string> const &names,
-                   ::std::tuple<T...> &val) const {
+                   ::std::tuple<T...>                           &val) const {
     detail::row_data_by_name_extractor<T...>::get_tuple(*this, names, val);
 }
 
 template <typename... T>
 void
 resultset::row::to(::std::initializer_list<::std::string> const &names,
-                   ::std::tuple<T &...> val) const {
+                   ::std::tuple<T &...>                          val) const {
     std::tuple<T...> non_ref;
     detail::row_data_by_name_extractor<T...>::get_tuple(*this, names, non_ref);
     val = non_ref;

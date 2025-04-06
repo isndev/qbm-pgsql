@@ -117,90 +117,88 @@ parse_header_attributes(const char *ptr, const size_t len) {
 
     // misc other variables used for parsing
     const char *const end = ptr + len;
-    std::string attribute_name;
-    std::string attribute_value;
-    char value_quote_character = '\0';
+    std::string       attribute_name;
+    std::string       attribute_value;
+    char              value_quote_character = '\0';
 
     // iterate through each character
     while (ptr < end) {
         switch (parse_state) {
-
-        case ATTRIBUTE_PARSE_NAME:
-            // parsing attribute name
-            if (*ptr == '=') {
-                // end of name found (OK if empty)
-                value_quote_character = '\0';
-                parse_state = ATTRIBUTE_PARSE_VALUE;
-            } else if (*ptr == ';' || *ptr == ',') {
-                // ignore empty attribute names since this may occur naturally
-                // when quoted values are encountered
-                if (!attribute_name.empty()) {
-                    // value is empty (OK)
-                    dict.emplace(attribute_name, attribute_value);
-                    attribute_name.erase();
+            case ATTRIBUTE_PARSE_NAME:
+                // parsing attribute name
+                if (*ptr == '=') {
+                    // end of name found (OK if empty)
+                    value_quote_character = '\0';
+                    parse_state           = ATTRIBUTE_PARSE_VALUE;
+                } else if (*ptr == ';' || *ptr == ',') {
+                    // ignore empty attribute names since this may occur naturally
+                    // when quoted values are encountered
+                    if (!attribute_name.empty()) {
+                        // value is empty (OK)
+                        dict.emplace(attribute_name, attribute_value);
+                        attribute_name.erase();
+                    }
+                } else if (*ptr != ' ') { // ignore whitespace
+                    // check if control character detected, or max sized exceeded
+                    if (is_control(*ptr) || attribute_name.size() >= ATTRIBUTE_NAME_MAX)
+                        throw std::runtime_error("ctrl in name found or max attribute name length");
+                    // character is part of the name
+                    attribute_name.push_back(*ptr);
                 }
-            } else if (*ptr != ' ') { // ignore whitespace
-                // check if control character detected, or max sized exceeded
-                if (is_control(*ptr) || attribute_name.size() >= ATTRIBUTE_NAME_MAX)
-                    throw std::runtime_error("ctrl in name found or max attribute name length");
-                // character is part of the name
-                attribute_name.push_back(*ptr);
-            }
-            break;
+                break;
 
-        case ATTRIBUTE_PARSE_VALUE:
-            // parsing attribute value
-            if (value_quote_character == '\0') {
-                // value is not (yet) quoted
-                if (*ptr == ';' || *ptr == ',') {
-                    // end of value found (OK if empty)
-                    dict.emplace(attribute_name, attribute_value);
-                    attribute_name.erase();
-                    attribute_value.erase();
-                    parse_state = ATTRIBUTE_PARSE_NAME;
-                } else if (*ptr == '\'' || *ptr == '"') {
-                    if (attribute_value.empty()) {
-                        // begin quoted value
-                        value_quote_character = *ptr;
-                    } else if (attribute_value.size() >= ATTRIBUTE_VALUE_MAX) {
-                        // max size exceeded
-                        throw std::runtime_error("max attribute size");
-                    } else {
-                        // assume character is part of the (unquoted) value
+            case ATTRIBUTE_PARSE_VALUE:
+                // parsing attribute value
+                if (value_quote_character == '\0') {
+                    // value is not (yet) quoted
+                    if (*ptr == ';' || *ptr == ',') {
+                        // end of value found (OK if empty)
+                        dict.emplace(attribute_name, attribute_value);
+                        attribute_name.erase();
+                        attribute_value.erase();
+                        parse_state = ATTRIBUTE_PARSE_NAME;
+                    } else if (*ptr == '\'' || *ptr == '"') {
+                        if (attribute_value.empty()) {
+                            // begin quoted value
+                            value_quote_character = *ptr;
+                        } else if (attribute_value.size() >= ATTRIBUTE_VALUE_MAX) {
+                            // max size exceeded
+                            throw std::runtime_error("max attribute size");
+                        } else {
+                            // assume character is part of the (unquoted) value
+                            attribute_value.push_back(*ptr);
+                        }
+                    } else if (*ptr != ' ' ||
+                               !attribute_value.empty()) { // ignore leading unquoted whitespace
+                        // check if control character detected, or max sized exceeded
+                        if (is_control(*ptr) || attribute_value.size() >= ATTRIBUTE_VALUE_MAX)
+                            throw std::runtime_error(
+                                "ctrl in value found or max attribute value length");
+                        // character is part of the (unquoted) value
                         attribute_value.push_back(*ptr);
                     }
-                } else if (*ptr != ' ' ||
-                           !attribute_value.empty()) { // ignore leading unquoted whitespace
-                    // check if control character detected, or max sized exceeded
-                    if (is_control(*ptr) || attribute_value.size() >= ATTRIBUTE_VALUE_MAX)
-                        throw std::runtime_error(
-                            "ctrl in value found or max attribute value length");
-                    // character is part of the (unquoted) value
-                    attribute_value.push_back(*ptr);
-                }
-            } else {
-                // value is quoted
-                if (*ptr == value_quote_character) {
-                    // end of value found (OK if empty)
-                    dict.emplace(attribute_name, attribute_value);
-                    attribute_name.erase();
-                    attribute_value.erase();
-                    parse_state = ATTRIBUTE_PARSE_IGNORE;
-                } else if (attribute_value.size() >= ATTRIBUTE_VALUE_MAX) {
-                    // max size exceeded
-                    throw std::runtime_error("max attribute value length");
                 } else {
-                    // character is part of the (quoted) value
-                    attribute_value.push_back(*ptr);
+                    // value is quoted
+                    if (*ptr == value_quote_character) {
+                        // end of value found (OK if empty)
+                        dict.emplace(attribute_name, attribute_value);
+                        attribute_name.erase();
+                        attribute_value.erase();
+                        parse_state = ATTRIBUTE_PARSE_IGNORE;
+                    } else if (attribute_value.size() >= ATTRIBUTE_VALUE_MAX) {
+                        // max size exceeded
+                        throw std::runtime_error("max attribute value length");
+                    } else {
+                        // character is part of the (quoted) value
+                        attribute_value.push_back(*ptr);
+                    }
                 }
-            }
-            break;
+                break;
 
-        case ATTRIBUTE_PARSE_IGNORE:
-            // ignore everything until we reach a comma "," or semicolon ";"
-            if (*ptr == ';' || *ptr == ',')
-                parse_state = ATTRIBUTE_PARSE_NAME;
-            break;
+            case ATTRIBUTE_PARSE_IGNORE:
+                // ignore everything until we reach a comma "," or semicolon ";"
+                if (*ptr == ';' || *ptr == ',') parse_state = ATTRIBUTE_PARSE_NAME;
+                break;
         }
 
         ++ptr;
@@ -243,7 +241,7 @@ public:
     using message = std::unique_ptr<pg::detail::message>;
 
 private:
-    message message_;        ///< Current message being processed
+    message     message_;    ///< Current message being processed
     std::size_t offset_ = 0; ///< Current offset in the input buffer
 
 public:
@@ -303,29 +301,26 @@ public:
     getMessageSize() noexcept final {
         constexpr const size_t header_size = sizeof(qb::pg::integer) + sizeof(qb::pg::byte);
 
-        if (this->_io.in().size() < header_size)
-            return 0; // read more
+        if (this->_io.in().size() < header_size) return 0; // read more
 
-        auto max_bytes = this->_io.in().size() - offset_;
-        const auto &in = this->_io.in();
+        auto        max_bytes = this->_io.in().size() - offset_;
+        const auto &in        = this->_io.in();
 
         if (!message_) {
             message_ = std::make_unique<pg::detail::message>();
 
             // copy header
             auto out = message_->output();
-            for (auto i = 0u; i < header_size; ++i)
-                *out++ = *(in.begin() + i);
+            for (auto i = 0u; i < header_size; ++i) *out++ = *(in.begin() + i);
             offset_ += header_size;
             max_bytes -= header_size;
         }
 
         if (message_->length() > message_->size()) {
             // Read the message body
-            auto out = message_->output();
+            auto              out     = message_->output();
             const std::size_t to_copy = std::min(message_->length() - message_->size(), max_bytes);
-            for (auto i = 0u; i < to_copy; ++i)
-                *out++ = *(in.begin() + offset_ + i);
+            for (auto i = 0u; i < to_copy; ++i) *out++ = *(in.begin() + offset_ + i);
 
             offset_ += to_copy;
             // max_bytes -= to_copy;
@@ -354,8 +349,7 @@ public:
      */
     void
     onMessage(std::size_t) noexcept final {
-        if (!this->ok())
-            return;
+        if (!this->ok()) return;
 
         message_->reset_read();
         this->_io.on(std::move(message_));
@@ -415,12 +409,12 @@ public:
     using pg_protocol = qb::protocol::pgsql<Database<QB_IO_>>;
 
 private:
-    connection_options conn_opts_;    ///< Database connection options
-    client_options_type client_opts_; ///< Client options
-    integer serverPid_{};             ///< Server process ID
-    integer serverSecret_{};          ///< Server secret for protocol operations
-    PreparedQueryStorage storage_;    ///< Storage for prepared statements
-    bool is_connected_ = false;       ///< Flag indicating if the connection is established
+    connection_options   conn_opts_;      ///< Database connection options
+    client_options_type  client_opts_;    ///< Client options
+    integer              serverPid_{};    ///< Server process ID
+    integer              serverSecret_{}; ///< Server secret for protocol operations
+    PreparedQueryStorage storage_;        ///< Storage for prepared statements
+    bool is_connected_ = false;           ///< Flag indicating if the connection is established
 
     /**
      * @brief Creates a startup message for PostgreSQL connection
@@ -477,9 +471,9 @@ private:
     void
     on_sub_command_status(bool) final {}
 
-    Transaction *_current_command = this; ///< Current transaction being processed
-    ISqlQuery *_current_query = nullptr;  ///< Current query being executed
-    bool _ready_for_query = false;        ///< Flag indicating if ready for next query
+    Transaction *_current_command = this;    ///< Current transaction being processed
+    ISqlQuery   *_current_query   = nullptr; ///< Current query being executed
+    bool         _ready_for_query = false;   ///< Flag indicating if ready for next query
 
     /**
      * @brief Finds the next transaction to execute
@@ -492,8 +486,7 @@ private:
      */
     static Transaction *
     next_transaction(Transaction *cmd) {
-        if (!cmd)
-            return nullptr;
+        if (!cmd) return nullptr;
 
         auto sub = cmd->next_transaction();
         if (!sub)
@@ -515,7 +508,7 @@ private:
     process_query(Transaction *cmd) {
         _ready_for_query = false;
         _current_command = next_transaction(cmd);
-        _current_query = _current_command->next_query();
+        _current_query   = _current_command->next_query();
 
         if (_current_query) {
             if (qb::likely(_current_query->is_valid())) {
@@ -523,9 +516,9 @@ private:
                 return true;
             } else {
                 LOG_DEBUG("[pgsql] error processing query not valid");
-                on_error_query(
-                    error::client_error{"query couldn't be processed check logs for more infos"});
-                return process_query(_current_command);
+                _error = error::client_error{"query couldn't be processed check logs for more infos"};
+                on_error_query(error());
+                return process_query(_current_command) || (_ready_for_query = true);
             }
         } else if (_current_command->parent()) {
             auto next_cmd = _current_command->parent();
@@ -577,9 +570,10 @@ private:
     }
 
 private:
-    std::string _nonce;                  ///< Client nonce for SCRAM authentication
+    std::string          _nonce;         ///< Client nonce for SCRAM authentication
     std::vector<uint8_t> _password_salt; ///< Salted password for SCRAM authentication
-    std::string _auth_message;           ///< Authentication message for SCRAM protocol
+    std::string          _auth_message;  ///< Authentication message for SCRAM protocol
+
 public:
     /**
      * @brief Handles authentication messages from the server
@@ -605,142 +599,144 @@ public:
 
         LOG_DEBUG("[pgsql] Handle auth_event");
         switch (auth_state) {
-        case OK: {
-            LOG_INFO("[pgsql] Authenticated with server");
-            is_connected_ = true;
-        } break;
-        case Cleartext: {
-            LOG_INFO("[pgsql] Clear text authentication requested");
-            message pm(password_message_tag);
-            pm.write(conn_opts_.password);
+            case OK: {
+                LOG_INFO("[pgsql] Authenticated with server");
+                is_connected_ = true;
+            } break;
+            case Cleartext: {
+                LOG_INFO("[pgsql] Clear text authentication requested");
+                message pm(password_message_tag);
+                pm.write(conn_opts_.password);
 
-            *this << pm;
-        } break;
-        case MD5Password: {
-            LOG_INFO("[pgsql] MD5 authentication requested");
-            // Read salt
-            std::string salt;
-            msg.read(salt, 4);
-            // Calculate hash
-            std::string pwdhash =
-                qb::crypto::to_hex_string(qb::crypto::md5(conn_opts_.password + conn_opts_.user),
-                                          qb::crypto::range_hex_lower);
-            std::string md5digest =
-                std::string("md5") + qb::crypto::to_hex_string(qb::crypto::md5(pwdhash + salt),
-                                                               qb::crypto::range_hex_lower);
-            // Construct and send message
-            message pm(password_message_tag);
-            pm.write(md5digest);
+                *this << pm;
+            } break;
+            case MD5Password: {
+                LOG_INFO("[pgsql] MD5 authentication requested");
+                // Read salt
+                std::string salt;
+                msg.read(salt, 4);
+                // Calculate hash
+                std::string pwdhash = qb::crypto::to_hex_string(
+                    qb::crypto::md5(conn_opts_.password + conn_opts_.user),
+                    qb::crypto::range_hex_lower);
+                std::string md5digest =
+                    std::string("md5") + qb::crypto::to_hex_string(qb::crypto::md5(pwdhash + salt),
+                                                                   qb::crypto::range_hex_lower);
+                // Construct and send message
+                message pm(password_message_tag);
+                pm.write(md5digest);
 
-            *this << pm;
-        } break;
-        case SCRAM_SHA256: {
-            LOG_INFO("[pgsql] SCRAM-SHA-256 authentication requested");
-            message pm(password_message_tag);
-            // Set new nonce
-            _nonce = qb::crypto::generate_random_string(32, qb::crypto::range_hex_lower);
-            const auto data = "n,,n=" + conn_opts_.user + ",r=" + _nonce;
-            // Add mechanism
-            pm.write("SCRAM-SHA-256");
-            // Add sasl data
-            pm.write(static_cast<qb::pg::integer>(data.size()));
-            pm.write_sv(data);
-            *this << pm;
-        } break;
-        case SCRAM_SHA256_CLIENT_PROOF: {
-            LOG_INFO("[pgsql] SCRAM-SHA-256 authentication client proof check");
-            std::string data;
-            msg.read(data);
-            auto params = parse_header_attributes(data.c_str(), data.size());
+                *this << pm;
+            } break;
+            case SCRAM_SHA256: {
+                LOG_INFO("[pgsql] SCRAM-SHA-256 authentication requested");
+                message pm(password_message_tag);
+                // Set new nonce
+                _nonce = qb::crypto::generate_random_string(32, qb::crypto::range_hex_lower);
+                const auto data = "n,,n=" + conn_opts_.user + ",r=" + _nonce;
+                // Add mechanism
+                pm.write("SCRAM-SHA-256");
+                // Add sasl data
+                pm.write(static_cast<qb::pg::integer>(data.size()));
+                pm.write_sv(data);
+                *this << pm;
+            } break;
+            case SCRAM_SHA256_CLIENT_PROOF: {
+                LOG_INFO("[pgsql] SCRAM-SHA-256 authentication client proof check");
+                std::string data;
+                msg.read(data);
+                auto params = parse_header_attributes(data.c_str(), data.size());
 
-            // SCRAM inputs
-            const std::string clientNonce = _nonce; // Nonce generated by client
-            const std::string username = conn_opts_.user;
-            const std::string password = conn_opts_.password;
-            const std::string serverNonce =
-                std::move(params["r"]); // Combined nonce (client + server)
-            const std::string salt_base64 = std::move(params["s"]); // Salt (base64)
-            const int iteration =
-                std::stoi(params["i"]); // Number of iterations received from server
+                // SCRAM inputs
+                const std::string clientNonce = _nonce; // Nonce generated by client
+                const std::string username    = conn_opts_.user;
+                const std::string password    = conn_opts_.password;
+                const std::string serverNonce =
+                    std::move(params["r"]); // Combined nonce (client + server)
+                const std::string salt_base64 = std::move(params["s"]); // Salt (base64)
+                const int         iteration =
+                    std::stoi(params["i"]); // Number of iterations received from server
 
-            // Client-first-message-bare
-            std::string client_first_message_bare = "n=" + username + ",r=" + clientNonce;
-            std::string server_first_message =
-                "r=" + serverNonce + ",s=" + salt_base64 + ",i=" + std::to_string(iteration);
-            std::string client_final_message_without_proof =
-                "c=biws,r=" + serverNonce; // "biws" is the base64 encoding of "n,,"
-            _auth_message = client_first_message_bare + "," + server_first_message + "," +
-                            client_final_message_without_proof;
-            // Compute SaltedPassword using PBKDF2-HMAC-SHA256
-            std::vector<unsigned char> salt = qb::crypto::base64_decode(salt_base64);
-            std::vector<unsigned char> saltedPassword(32); // 32 bytes for SHA256
-            if (PKCS5_PBKDF2_HMAC(password.c_str(), static_cast<int>(password.size()), salt.data(),
-                                  static_cast<int>(salt.size()), iteration, EVP_sha256(), 32,
-                                  saltedPassword.data()) != 1) {
-                throw std::runtime_error("error during PBKDF2 computing");
-            }
-            // Compute clientKey: HMAC(saltedPassword, "Client Key")
-            std::vector<unsigned char> clientKey =
-                qb::crypto::hmac_sha256(saltedPassword, "Client Key");
-            // Compute storedKey: SHA256(clientKey)
-            std::vector<unsigned char> storedKey = qb::crypto::sha256(clientKey);
-            // Compute clientSignature: HMAC(storedKey, authMessage)
-            std::vector<unsigned char> clientSignature =
-                qb::crypto::hmac_sha256(storedKey, _auth_message);
-            // Compute clientProof: XOR(clientKey, clientSignature)
-            std::vector<unsigned char> clientProof =
-                qb::crypto::xor_bytes(clientKey, clientSignature);
-            // Encode clientProof in base64
-            std::string clientProofBase64 =
-                qb::crypto::base64_encode(clientProof.data(), clientProof.size());
-            // Construction of final message to send
-            std::string client_final_message =
-                "c=biws,r=" + serverNonce + ",p=" + clientProofBase64;
-
-            message pm(password_message_tag);
-            pm.write_sv(client_final_message);
-            *this << pm;
-            _password_salt = std::move(saltedPassword);
-        } break;
-        case SCRAM_SHA256_SERVER_CHECK: {
-            try {
-                std::string serverFinalMessage;
-
-                msg.read(serverFinalMessage);
-                // Extract the server signature from the final message
-                const std::string prefix = "v=";
-                size_t pos = serverFinalMessage.find(prefix);
-                if (pos == std::string::npos) {
-                    throw std::runtime_error("server final message does not contain a signature");
+                // Client-first-message-bare
+                std::string client_first_message_bare = "n=" + username + ",r=" + clientNonce;
+                std::string server_first_message =
+                    "r=" + serverNonce + ",s=" + salt_base64 + ",i=" + std::to_string(iteration);
+                std::string client_final_message_without_proof =
+                    "c=biws,r=" + serverNonce; // "biws" is the base64 encoding of "n,,"
+                _auth_message = client_first_message_bare + "," + server_first_message + "," +
+                                client_final_message_without_proof;
+                // Compute SaltedPassword using PBKDF2-HMAC-SHA256
+                std::vector<unsigned char> salt = qb::crypto::base64_decode(salt_base64);
+                std::vector<unsigned char> saltedPassword(32); // 32 bytes for SHA256
+                if (PKCS5_PBKDF2_HMAC(password.c_str(), static_cast<int>(password.size()),
+                                      salt.data(), static_cast<int>(salt.size()), iteration,
+                                      EVP_sha256(), 32, saltedPassword.data()) != 1) {
+                    throw std::runtime_error("error during PBKDF2 computing");
                 }
-                std::string receivedServerSignatureBase64 =
-                    serverFinalMessage.substr(pos + prefix.size());
-                // Compute the ServerKey: HMAC(saltedPassword, "Server Key")
-                std::vector<unsigned char> serverKey =
-                    qb::crypto::hmac_sha256(_password_salt, "Server Key");
-                // Compute the ServerSignature: HMAC(serverKey, authMessage)
-                std::vector<unsigned char> computedServerSignature =
-                    qb::crypto::hmac_sha256(serverKey, _auth_message);
-                // Encode the computed server signature in Base64
-                std::string computedServerSignatureBase64 = qb::crypto::base64_encode(
-                    computedServerSignature.data(), computedServerSignature.size());
-                // Compare the computed server signature with the received one
-                if (computedServerSignatureBase64 != receivedServerSignatureBase64) {
-                    throw std::runtime_error(
-                        "server signature does not match. Authentication failed");
+                // Compute clientKey: HMAC(saltedPassword, "Client Key")
+                std::vector<unsigned char> clientKey =
+                    qb::crypto::hmac_sha256(saltedPassword, "Client Key");
+                // Compute storedKey: SHA256(clientKey)
+                std::vector<unsigned char> storedKey = qb::crypto::sha256(clientKey);
+                // Compute clientSignature: HMAC(storedKey, authMessage)
+                std::vector<unsigned char> clientSignature =
+                    qb::crypto::hmac_sha256(storedKey, _auth_message);
+                // Compute clientProof: XOR(clientKey, clientSignature)
+                std::vector<unsigned char> clientProof =
+                    qb::crypto::xor_bytes(clientKey, clientSignature);
+                // Encode clientProof in base64
+                std::string clientProofBase64 =
+                    qb::crypto::base64_encode(clientProof.data(), clientProof.size());
+                // Construction of final message to send
+                std::string client_final_message =
+                    "c=biws,r=" + serverNonce + ",p=" + clientProofBase64;
+
+                message pm(password_message_tag);
+                pm.write_sv(client_final_message);
+                *this << pm;
+                _password_salt = std::move(saltedPassword);
+            } break;
+            case SCRAM_SHA256_SERVER_CHECK: {
+                try {
+                    std::string serverFinalMessage;
+
+                    msg.read(serverFinalMessage);
+                    // Extract the server signature from the final message
+                    const std::string prefix = "v=";
+                    size_t            pos    = serverFinalMessage.find(prefix);
+                    if (pos == std::string::npos) {
+                        throw std::runtime_error(
+                            "server final message does not contain a signature");
+                    }
+                    std::string receivedServerSignatureBase64 =
+                        serverFinalMessage.substr(pos + prefix.size());
+                    // Compute the ServerKey: HMAC(saltedPassword, "Server Key")
+                    std::vector<unsigned char> serverKey =
+                        qb::crypto::hmac_sha256(_password_salt, "Server Key");
+                    // Compute the ServerSignature: HMAC(serverKey, authMessage)
+                    std::vector<unsigned char> computedServerSignature =
+                        qb::crypto::hmac_sha256(serverKey, _auth_message);
+                    // Encode the computed server signature in Base64
+                    std::string computedServerSignatureBase64 = qb::crypto::base64_encode(
+                        computedServerSignature.data(), computedServerSignature.size());
+                    // Compare the computed server signature with the received one
+                    if (computedServerSignatureBase64 != receivedServerSignatureBase64) {
+                        throw std::runtime_error(
+                            "server signature does not match. Authentication failed");
+                    }
+                    LOG_INFO("[pgsql] SCRAM-SHA-256 Authentication successful: server "
+                             "signature verified");
+                    break;
+                } catch (std::exception &ex) {
+                    LOG_CRIT(
+                        "[pgsql] SCRAM-SHA-256 Failed verifying server signature: " << ex.what());
                 }
-                LOG_INFO("[pgsql] SCRAM-SHA-256 Authentication successful: server "
-                         "signature verified");
-                break;
-            } catch (std::exception &ex) {
-                LOG_CRIT("[pgsql] SCRAM-SHA-256 Failed verifying server signature: " << ex.what());
+            } break;
+            default: {
+                LOG_CRIT("[pgsql] Unsupported authentication scheme " << auth_state
+                                                                      << "requested by server");
+                throw std::runtime_error("[pgsql] fatal error: check logs");
             }
-        } break;
-        default: {
-            LOG_CRIT("[pgsql] Unsupported authentication scheme " << auth_state
-                                                                  << "requested by server");
-            throw std::runtime_error("[pgsql] fatal error: check logs");
-        }
         }
     }
 
@@ -841,7 +837,7 @@ public:
     void
     on_row_description(message &msg) {
         row_description_type fields;
-        smallint col_cnt;
+        smallint             col_cnt;
         msg.read(col_cnt);
         fields.reserve(col_cnt);
         for (int i = 0; i < col_cnt; ++i) {
@@ -930,7 +926,7 @@ public:
      */
     void
     on_unhandled_message(message &msg) {
-        LOG_DEBUG("[pgsql] Unhandled message tag " << (char)msg.tag());
+        LOG_DEBUG("[pgsql] Unhandled message tag " << (char) msg.tag());
     }
 
     /**
@@ -999,22 +995,18 @@ public:
      */
     bool
     connect() {
-        if (is_connected_)
-            return true;
+        if (is_connected_) return true;
 
         _error = error::db_error{"unknown error"};
 
         if (!this->transport().connect(qb::io::uri{conn_opts_.schema + "://" + conn_opts_.uri})) {
-
-            if (this->protocol())
-                this->clear_protocols();
+            if (this->protocol()) this->clear_protocols();
 
             this->template switch_protocol<pg_protocol>(*this);
             this->start();
             send_startup_message();
 
-            while (!is_connected_ && !has_error())
-                qb::io::async::run_once();
+            while (!is_connected_ && !has_error()) qb::io::async::run_once();
 
             return is_connected_;
         }
@@ -1050,7 +1042,7 @@ public:
      */
     bool
     connect(std::string const &conn_opts, typename QB_IO_::transport_io_type &&raw_io) {
-        conn_opts_ = connection_options::parse(conn_opts);
+        conn_opts_        = connection_options::parse(conn_opts);
         this->transport() = std::move(raw_io);
 
         return connect();

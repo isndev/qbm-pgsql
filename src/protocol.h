@@ -58,42 +58,42 @@ namespace detail {
  * @see https://www.postgresql.org/docs/current/protocol-message-formats.html
  */
 enum message_tag {
-    empty_tag = '\0',                /** (F) Startup message, SSL request, cancel request */
-    authentication_tag = 'R',        /**< (B) All authentication requests begin with 'R' */
-    backend_key_data_tag = 'K',      /**< (B) Backend key data (cancellation key data) */
-    bind_tag = 'B',                  /**< (F) Bind parameters command */
-    bind_complete_tag = '2',         /**< (B) Server's reply to bind complete command */
-    close_tag = 'C',                 /**< (F) Close prepared statement or a portal */
-    close_complete_tag = '3',        /**< (B) Server's acknowledgment of close command */
-    command_complete_tag = 'C',      /**< (B) Command completed normally */
-    copy_data_tag = 'd',             /**< (B&F) Data for COPY operation */
-    copy_done_tag = 'c',             /**< (B&F) COPY data transfer completed */
-    copy_fail_tag = 'f',             /**< (F) COPY failed */
-    copy_in_response_tag = 'G',      /**< (B) Server ready for COPY from client */
-    copy_out_response_tag = 'H',     /**< (B) Server ready for COPY to client */
-    copy_both_response_tag = 'W',    /**< (B) Server ready for bidirectional COPY */
-    data_row_tag = 'D',              /**< (B) Data row in a query result */
-    describe_tag = 'D',              /**< (F) Request detail about a prepared statement or portal */
-    empty_query_response_tag = 'I',  /**< (B) Response to an empty query string */
-    error_response_tag = 'E',        /**< (B) Error report */
-    execute_tag = 'E',               /**< (F) Execute a prepared statement */
-    flush_tag = 'H',                 /**< (F) Force server to deliver pending output */
-    function_call_tag = 'F',         /**< (F) Function call request */
-    function_call_resp_tag = 'V',    /**< (B) Function call result */
-    no_data_tag = 'n',               /**< (B) No data to return */
-    notice_response_tag = 'N',       /**< (B) Notice report */
-    notification_resp_tag = 'A',     /**< (B) Asynchronous notification */
+    empty_tag                 = '\0', /** (F) Startup message, SSL request, cancel request */
+    authentication_tag        = 'R',  /**< (B) All authentication requests begin with 'R' */
+    backend_key_data_tag      = 'K',  /**< (B) Backend key data (cancellation key data) */
+    bind_tag                  = 'B',  /**< (F) Bind parameters command */
+    bind_complete_tag         = '2',  /**< (B) Server's reply to bind complete command */
+    close_tag                 = 'C',  /**< (F) Close prepared statement or a portal */
+    close_complete_tag        = '3',  /**< (B) Server's acknowledgment of close command */
+    command_complete_tag      = 'C',  /**< (B) Command completed normally */
+    copy_data_tag             = 'd',  /**< (B&F) Data for COPY operation */
+    copy_done_tag             = 'c',  /**< (B&F) COPY data transfer completed */
+    copy_fail_tag             = 'f',  /**< (F) COPY failed */
+    copy_in_response_tag      = 'G',  /**< (B) Server ready for COPY from client */
+    copy_out_response_tag     = 'H',  /**< (B) Server ready for COPY to client */
+    copy_both_response_tag    = 'W',  /**< (B) Server ready for bidirectional COPY */
+    data_row_tag              = 'D',  /**< (B) Data row in a query result */
+    describe_tag              = 'D', /**< (F) Request detail about a prepared statement or portal */
+    empty_query_response_tag  = 'I', /**< (B) Response to an empty query string */
+    error_response_tag        = 'E', /**< (B) Error report */
+    execute_tag               = 'E', /**< (F) Execute a prepared statement */
+    flush_tag                 = 'H', /**< (F) Force server to deliver pending output */
+    function_call_tag         = 'F', /**< (F) Function call request */
+    function_call_resp_tag    = 'V', /**< (B) Function call result */
+    no_data_tag               = 'n', /**< (B) No data to return */
+    notice_response_tag       = 'N', /**< (B) Notice report */
+    notification_resp_tag     = 'A', /**< (B) Asynchronous notification */
     parameter_description_tag = 't', /**< (B) Statement parameter description */
-    parameter_status_tag = 'S',      /**< (B) Server parameter status report */
-    parse_tag = 'P',                 /**< (F) Parse a prepared statement */
-    parse_complete_tag = '1',        /**< (B) Parse complete */
-    password_message_tag = 'p',      /**< (F) Password response */
-    portal_suspended_tag = 's',      /**< (B) Portal execution suspended (partial result) */
-    query_tag = 'Q',                 /**< (F) Simple query */
-    ready_for_query_tag = 'Z',       /**< (B) Server is ready for a new query */
-    row_description_tag = 'T',       /**< (B) Row description for query results */
-    sync_tag = 'S',                  /**< (F) Synchronize command sequence */
-    terminate_tag = 'X',             /**< (F) Terminate session */
+    parameter_status_tag      = 'S', /**< (B) Server parameter status report */
+    parse_tag                 = 'P', /**< (F) Parse a prepared statement */
+    parse_complete_tag        = '1', /**< (B) Parse complete */
+    password_message_tag      = 'p', /**< (F) Password response */
+    portal_suspended_tag      = 's', /**< (B) Portal execution suspended (partial result) */
+    query_tag                 = 'Q', /**< (F) Simple query */
+    ready_for_query_tag       = 'Z', /**< (B) Server is ready for a new query */
+    row_description_tag       = 'T', /**< (B) Row description for query results */
+    sync_tag                  = 'S', /**< (F) Synchronize command sequence */
+    terminate_tag             = 'X', /**< (F) Terminate session */
 };
 typedef std::set<message_tag> tag_set_type;
 
@@ -106,23 +106,23 @@ typedef std::set<message_tag> tag_set_type;
  * @see https://www.postgresql.org/docs/current/protocol-flow.html#PROTOCOL-FLOW-AUTH
  */
 enum auth_states {
-    OK = 0,         /**< Specifies that the authentication was successful. */
+    OK         = 0, /**< Specifies that the authentication was successful. */
     KerberosV5 = 2, /**< Specifies that Kerberos V5 authentication is required. */
-    Cleartext = 3,  /**< Specifies that a clear-text password is required. */
+    Cleartext  = 3, /**< Specifies that a clear-text password is required. */
     /**
      * Specifies that an MD5-encrypted password is required.
      * Message contains additional 4 bytes of salt
      */
-    MD5Password = 5,
+    MD5Password   = 5,
     SCMCredential = 6, /**< Specifies that an SCM credentials message is required. */
-    GSS = 7,           /**< Specifies that GSSAPI authentication is required. */
+    GSS           = 7, /**< Specifies that GSSAPI authentication is required. */
     /**
      * Specifies that this message contains GSSAPI or SSPI data.
      * Message contains additional bytes with GSSAPI or SSPI authentication data.
      */
-    GSSContinue = 8,
-    SSPI = 9,                       /**< Specifies that SSPI authentication is required. */
-    SCRAM_SHA256 = 10,              /**< Specifies that SCRAM-SHA-256 authentication is required. */
+    GSSContinue               = 8,
+    SSPI                      = 9,  /**< Specifies that SSPI authentication is required. */
+    SCRAM_SHA256              = 10, /**< Specifies that SCRAM-SHA-256 authentication is required. */
     SCRAM_SHA256_CLIENT_PROOF = 11, /**< Message contains SCRAM-SHA-256 client proof. */
     SCRAM_SHA256_SERVER_CHECK = 12  /**< Message contains SCRAM-SHA-256 server signature. */
 };
@@ -354,8 +354,8 @@ public:
 
 private:
     mutable buffer_type payload;
-    const_iterator curr_;
-    bool packed_;
+    const_iterator      curr_;
+    bool                packed_;
 };
 
 /** @brief Shared pointer to message */

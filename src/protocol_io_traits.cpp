@@ -53,8 +53,7 @@ namespace {
 template <typename T>
 T
 convert_from_text(const char *data, size_t size) {
-    if (!data || size == 0)
-        throw std::runtime_error("Empty data for text conversion");
+    if (!data || size == 0) throw std::runtime_error("Empty data for text conversion");
 
     std::string text(data, size);
 
@@ -91,8 +90,7 @@ template <>
 detail::message::const_iterator
 protocol_read<pg::protocol_data_format::Binary, qb::uuid>(detail::message::const_iterator begin,
                                                           detail::message::const_iterator end,
-                                                          qb::uuid &value) {
-
+                                                          qb::uuid                       &value) {
     if (std::distance(begin, end) < 16) {
         return begin;
     }
@@ -123,8 +121,7 @@ template <>
 detail::message::const_iterator
 protocol_read<pg::protocol_data_format::Text, qb::uuid>(detail::message::const_iterator begin,
                                                         detail::message::const_iterator end,
-                                                        qb::uuid &value) {
-
+                                                        qb::uuid                       &value) {
     if (begin == end) {
         return begin;
     }

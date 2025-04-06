@@ -104,7 +104,7 @@ message::message(message_tag tag)
     : payload(5, 0)
     , packed_(false) {
     // TODO Check the tag
-    payload[0] = (char)tag;
+    payload[0] = (char) tag;
 }
 
 /**
@@ -141,11 +141,11 @@ message::tag() const {
 message::size_type
 message::length() const {
     const size_t header_size = sizeof(integer) + sizeof(byte);
-    size_type len(0);
+    size_type    len(0);
     if (payload.size() >= header_size) {
         // Decode length of message
         unsigned char *p = reinterpret_cast<unsigned char *>(&len);
-        auto q = payload.begin() + 1;
+        auto           q = payload.begin() + 1;
         std::copy(q, q + sizeof(size_type), p);
         len = boost::endian::big_to_native(len);
     }
@@ -168,14 +168,13 @@ message::buffer() const {
         integer len = size();
         // Manual conversion instead of using protocol_write
         unsigned char *p = reinterpret_cast<unsigned char *>(&len);
-        len = boost::endian::native_to_big(len);
+        len              = boost::endian::native_to_big(len);
         for (size_t i = 0; i < sizeof(len); ++i) {
             payload[i + 1] = p[i];
         }
     }
 
-    if (payload.front() == 0)
-        return std::make_pair(payload.begin() + 1, payload.end());
+    if (payload.front() == 0) return std::make_pair(payload.begin() + 1, payload.end());
     return std::make_pair(payload.begin(), payload.end());
 }
 
@@ -259,8 +258,8 @@ template <typename T>
 void
 write_int(message::buffer_type &payload, T val) {
     // Manual conversion instead of using protocol_write
-    T converted = boost::endian::native_to_big(val);
-    unsigned char *p = reinterpret_cast<unsigned char *>(&converted);
+    T              converted = boost::endian::native_to_big(val);
+    unsigned char *p         = reinterpret_cast<unsigned char *>(&converted);
     for (size_t i = 0; i < sizeof(T); ++i) {
         payload.push_back(p[i]);
     }
@@ -276,8 +275,7 @@ bool
 message::read(smallint &val) {
     const_iterator c =
         io::protocol_read<pg::protocol_data_format::Binary>(curr_, payload.cend(), val);
-    if (curr_ == c)
-        return false;
+    if (curr_ == c) return false;
     curr_ = c;
     return true;
 }
@@ -292,8 +290,7 @@ bool
 message::read(integer &val) {
     const_iterator c =
         io::protocol_read<pg::protocol_data_format::Binary>(curr_, payload.cend(), val);
-    if (curr_ == c)
-        return false;
+    if (curr_ == c) return false;
     curr_ = c;
     return true;
 }
@@ -308,8 +305,7 @@ bool
 message::read(std::string &val) {
     const_iterator c =
         io::protocol_read<pg::protocol_data_format::Text>(curr_, payload.cend(), val);
-    if (curr_ == c)
-        return false;
+    if (curr_ == c) return false;
     curr_ = c;
     return true;
 }
@@ -344,13 +340,13 @@ bool
 message::read(field_description &fd) {
     field_description tmp;
     tmp.max_size = 0;
-    integer type_oid;
+    integer  type_oid;
     smallint fmt;
     if (read(tmp.name) && read(tmp.table_oid) && read(tmp.attribute_number) && read(type_oid) &&
         read(tmp.type_size) && read(tmp.type_mod) && read(fmt)) {
-        tmp.type_oid = static_cast<oid>(type_oid);
+        tmp.type_oid    = static_cast<oid>(type_oid);
         tmp.format_code = static_cast<protocol_data_format>(fmt);
-        fd = tmp;
+        fd              = tmp;
         return true;
     }
     return false;
@@ -381,13 +377,12 @@ message::read(row_data &row) {
         for (int16_t i = 0; i < col_count; ++i) {
             tmp.offsets.push_back(tmp.data.size());
             integer col_size(0);
-            if (!read(col_size))
-                return false;
+            if (!read(col_size)) return false;
             if (col_size == -1) {
                 tmp.null_map.insert(i);
             } else if (col_size > 0) {
-                const_iterator in = curr_;
-                auto out = std::back_inserter(tmp.data);
+                const_iterator in  = curr_;
+                auto           out = std::back_inserter(tmp.data);
                 for (; in != curr_ + col_size; ++in) {
                     *out++ = *in;
                 }

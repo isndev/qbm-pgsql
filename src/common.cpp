@@ -89,18 +89,16 @@ operator<<(::std::ostream &os, transaction_mode const &val) {
     if (s) {
         bool need_comma = false;
         if (val.isolation != isolation_level::read_committed) {
-            os << " " << val.isolation;
+            os << " ISOLATION LEVEL " << val.isolation;
             need_comma = true;
         }
         if (val.read_only) {
-            if (need_comma)
-                os << ",";
+            if (need_comma) os << ",";
             os << " READ ONLY";
             need_comma = true;
         }
         if (val.deferrable) {
-            if (need_comma)
-                os << ",";
+            if (need_comma) os << ",";
             os << " DEFERRABLE";
         }
     }
@@ -158,87 +156,78 @@ struct connect_string_parser {
      */
     connection_options
     operator()(std::string const &literal) {
-        std::string current;
+        std::string        current;
         connection_options opts;
         for (auto p = literal.begin(); p != literal.end(); ++p) {
             switch (state) {
-            case schema_slash1:
-            case schema_slash2:
-                if (*p != '/')
-                    throw std::runtime_error("invalid connection string");
-                state = static_cast<state_type>(state + 1);
-                break;
-            default: {
-                if (*p == '=') {
-                    if (state == alias) {
-                        opts.alias.swap(current);
-                        state = schema;
-                    }
-                } else if (*p == ':') {
-                    // current string is a scheme or a user or host
-                    switch (state) {
-                    case alias:
-                    case schema:
-                        opts.schema.swap(current);
-                        state = schema_slash1;
-                        break;
-                    case user:
-                        opts.user.swap(current);
-                        state = password;
-                        break;
-                    case url:
-                        current.push_back(*p);
-                        break;
-                    default:
-                        current.push_back(*p);
-                        break;
-                    }
-                } else if (*p == '@') {
-                    // current string is a user or a password
-                    switch (state) {
-                    case user:
-                        opts.user.swap(current);
-                        state = url;
-                        break;
-                    case password:
-                        opts.password.swap(current);
-                        state = url;
-                        break;
-                    default:
-                        current.push_back(*p);
-                        break;
-                    }
-                } else if (*p == '[') {
-                    switch (state) {
-                    case user:
-                    case url:
-                        opts.uri.swap(current);
-                        state = database;
-                        break;
-                    case password:
-                        opts.uri.swap(opts.user);
-                        opts.uri.push_back(':');
-                        opts.uri += current;
-                        current.clear();
-                        state = database;
-                        break;
-                    default:
-                        current.push_back(*p);
-                        break;
-                    }
-                } else if (*p == ']') {
-                    // current string is database
-                    if (state == database) {
-                        opts.database.swap(current);
-                        state = done;
-                    } else {
+                case schema_slash1:
+                case schema_slash2:
+                    if (*p != '/') throw std::runtime_error("invalid connection string");
+                    state = static_cast<state_type>(state + 1);
+                    break;
+                default: {
+                    if (*p == '=') {
+                        if (state == alias) {
+                            opts.alias.swap(current);
+                            state = schema;
+                        }
+                    } else if (*p == ':') {
+                        // current string is a scheme or a user or host
+                        switch (state) {
+                            case alias:
+                            case schema:
+                                opts.schema.swap(current);
+                                state = schema_slash1;
+                                break;
+                            case user:
+                                opts.user.swap(current);
+                                state = password;
+                                break;
+                            case url: current.push_back(*p); break;
+                            default: current.push_back(*p); break;
+                        }
+                    } else if (*p == '@') {
+                        // current string is a user or a password
+                        switch (state) {
+                            case user:
+                                opts.user.swap(current);
+                                state = url;
+                                break;
+                            case password:
+                                opts.password.swap(current);
+                                state = url;
+                                break;
+                            default: current.push_back(*p); break;
+                        }
+                    } else if (*p == '[') {
+                        switch (state) {
+                            case user:
+                            case url:
+                                opts.uri.swap(current);
+                                state = database;
+                                break;
+                            case password:
+                                opts.uri.swap(opts.user);
+                                opts.uri.push_back(':');
+                                opts.uri += current;
+                                current.clear();
+                                state = database;
+                                break;
+                            default: current.push_back(*p); break;
+                        }
+                    } else if (*p == ']') {
+                        // current string is database
+                        if (state == database) {
+                            opts.database.swap(current);
+                            state = done;
+                        } else {
+                            current.push_back(*p);
+                        }
+                    } else if (!std::isspace(*p)) {
+                        // Add any non-whitespace character to the current token
                         current.push_back(*p);
                     }
-                } else if (!std::isspace(*p)) {
-                    // Add any non-whitespace character to the current token
-                    current.push_back(*p);
                 }
-            }
             }
         }
         return opts;

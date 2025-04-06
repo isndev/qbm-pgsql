@@ -59,10 +59,10 @@ public:
     /**
      * @brief Type definitions required by STL iterator concept
      */
-    typedef std::ptrdiff_t difference_type;
-    typedef T value_type;
-    typedef T reference;
-    typedef Derived pointer;
+    typedef std::ptrdiff_t                  difference_type;
+    typedef T                               value_type;
+    typedef T                               reference;
+    typedef Derived                         pointer;
     typedef std::bidirectional_iterator_tag iterator_category;
 
     /**

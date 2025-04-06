@@ -113,8 +113,9 @@ Transaction::pop_query() {
 void
 Transaction::on_sub_command_status(bool status) {
     _result &= status;
-    if (_parent)
+    if (_parent) {
         _parent->on_sub_command_status(status);
+    }
 }
 
 void
@@ -163,14 +164,10 @@ Transaction::results() {
 Transaction::status
 Transaction::await() {
     results() = {};
-    error::db_error err{"unknown error"};
 
-    error([this, &err](auto &) { err = error(); });
+    while (!_sub_commands.empty() || !_queries.empty()) qb::io::async::run_once();
 
-    while (!_sub_commands.empty() || !_queries.empty())
-        qb::io::async::run_once();
-
-    return {std::move(results()), std::move(err)};
+    return {std::move(results()), std::move(_error)};
 }
 
 } // namespace qb::pg::detail

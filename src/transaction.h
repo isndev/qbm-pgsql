@@ -75,12 +75,12 @@ using namespace qb::pg;
 class Transaction {
 protected:
     Transaction *_parent{nullptr}; ///< Parent transaction (for nested transactions)
-    std::queue<std::unique_ptr<Transaction>> _sub_commands; ///< Queue of sub-transactions
-    std::queue<std::unique_ptr<ISqlQuery>> _queries;        ///< Queue of SQL queries to execute
-    PreparedQueryStorage &_query_storage;                   ///< Storage for prepared queries
-    bool _result{true};                                     ///< Result status of the transaction
-    error::db_error _error;                                 ///< Error message of the transaction
-    result_impl _results;                                   ///< Last results of the transaction
+    std::queue<std::unique_ptr<Transaction>> _sub_commands;  ///< Queue of sub-transactions
+    std::queue<std::unique_ptr<ISqlQuery>>   _queries;       ///< Queue of SQL queries to execute
+    PreparedQueryStorage                    &_query_storage; ///< Storage for prepared queries
+    bool                                     _result{true};  ///< Result status of the transaction
+    error::db_error                          _error;         ///< Error message of the transaction
+    result_impl                              _results;       ///< Last results of the transaction
 
     Transaction() = delete;
 
@@ -443,7 +443,7 @@ public:
     class status {
         friend class Transaction;
 
-        result_impl _results;
+        result_impl     _results;
         error::db_error _error{"unknown error"};
 
     public:
