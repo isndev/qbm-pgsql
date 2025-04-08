@@ -129,7 +129,8 @@ Transaction::on_new_data_row(row_data &&) {}
 
 Transaction &
 Transaction::execute(std::string_view expr) {
-    return this->execute(expr, [](Transaction &, auto) {}, [](error::db_error const &) {});
+    return this->execute(
+        expr, [](Transaction &, auto) {}, [](error::db_error const &) {});
 }
 
 Transaction &
@@ -143,7 +144,8 @@ Transaction::prepare(std::string_view query_name, std::string_view expr,
 Transaction &
 Transaction::execute(std::string_view query_name, QueryParams &&params) {
     return this->execute(
-        query_name, std::move(params), [](Transaction &, auto) {}, [](error::db_error const &) {});
+        query_name, std::move(params), [](Transaction &, auto) {},
+        [](error::db_error const &) {});
 }
 
 bool
@@ -165,7 +167,8 @@ Transaction::status
 Transaction::await() {
     results() = {};
 
-    while (!_sub_commands.empty() || !_queries.empty()) qb::io::async::run_once();
+    while (!_sub_commands.empty() || !_queries.empty())
+        qb::io::async::run_once();
 
     return {std::move(results()), std::move(_error)};
 }

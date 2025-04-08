@@ -2,9 +2,9 @@
  * @file result_impl.cpp
  * @brief Implementation of PostgreSQL result set internal handling
  *
- * This file contains the implementation of the result_impl class defined in result_impl.h.
- * It provides the low-level data access and manipulation functionality used by the
- * resultset class to handle PostgreSQL query results.
+ * This file contains the implementation of the result_impl class defined in
+ * result_impl.h. It provides the low-level data access and manipulation functionality
+ * used by the resultset class to handle PostgreSQL query results.
  *
  * Implementation details include:
  * - Row and field data access

@@ -205,7 +205,8 @@ private:
      */
     template <typename Tuple, std::size_t... Is>
     static void
-    convert_row_to_tuple_impl(const resultset::row &row, Tuple &tuple, std::index_sequence<Is...>) {
+    convert_row_to_tuple_impl(const resultset::row &row, Tuple &tuple,
+                              std::index_sequence<Is...>) {
         (void) std::initializer_list<int>{(to(row[Is], std::get<Is>(tuple)), 0)...};
     }
 

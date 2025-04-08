@@ -32,6 +32,7 @@
 #include <netinet/in.h> // for htons, htonl
 #include <optional>
 #include <qb/io.h>
+#include <qb/system/endian.h>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -48,17 +49,17 @@ namespace qb::pg::detail {
 /**
  * @brief Modern parameter serializer for PostgreSQL binary protocol
  *
- * This class provides methods to serialize C++ types into the PostgreSQL binary protocol format.
- * It handles endianness conversion, proper binary formatting, and maintains buffers for the
- * serialized format codes, parameter data, and parameter types.
+ * This class provides methods to serialize C++ types into the PostgreSQL binary protocol
+ * format. It handles endianness conversion, proper binary formatting, and maintains
+ * buffers for the serialized format codes, parameter data, and parameter types.
  */
 class ParamSerializer {
 public:
     /**
      * @brief Initialize a parameter serializer
      *
-     * Constructs a new parameter serializer with empty buffers for format codes, parameters,
-     * and parameter types.
+     * Constructs a new parameter serializer with empty buffers for format codes,
+     * parameters, and parameter types.
      */
     ParamSerializer()
         : format_codes_buffer_{}
@@ -68,7 +69,8 @@ public:
     /**
      * @brief Get the serialized format codes buffer
      *
-     * @return const std::vector<byte>& Buffer containing binary format codes for parameters
+     * @return const std::vector<byte>& Buffer containing binary format codes for
+     * parameters
      */
     const std::vector<byte> &
     format_codes_buffer() const {
@@ -267,8 +269,8 @@ public:
     /**
      * @brief Add a C-string parameter
      *
-     * Adds a null-terminated C-string parameter to the serializer in PostgreSQL text format.
-     * Handles null pointer case by writing a NULL value.
+     * Adds a null-terminated C-string parameter to the serializer in PostgreSQL text
+     * format. Handles null pointer case by writing a NULL value.
      *
      * @param value C-string value to serialize, can be nullptr
      */
@@ -313,7 +315,8 @@ public:
      */
     template <typename T>
     void
-    add_optional(const std::optional<T> &value, void (ParamSerializer::*adder)(const T &)) {
+    add_optional(const std::optional<T> &value,
+                 void (ParamSerializer::*adder)(const T &)) {
         if (value.has_value()) {
             (this->*adder)(*value);
         } else {
@@ -373,7 +376,8 @@ public:
             else if constexpr (std::is_same_v<value_type, std::vector<char>> ||
                                std::is_same_v<value_type, std::vector<unsigned char>>) {
                 if (!param.empty()) {
-                    add_byte_array(reinterpret_cast<const byte *>(param.data()), param.size());
+                    add_byte_array(reinterpret_cast<const byte *>(param.data()),
+                                   param.size());
                 } else {
                     add_null();
                 }
@@ -474,7 +478,8 @@ public:
         write_smallint(final_buffer, actual_count);
 
         // Copy the rest of the buffer
-        final_buffer.insert(final_buffer.end(), params_buffer_.begin(), params_buffer_.end());
+        final_buffer.insert(final_buffer.end(), params_buffer_.begin(),
+                            params_buffer_.end());
 
         // Replace the original buffer
         params_buffer_ = std::move(final_buffer);
@@ -551,7 +556,8 @@ private:
 
     // Specialization for floating-point types
     template <typename T>
-    struct param_serializer_traits<T, std::enable_if_t<std::is_floating_point_v<T>, void>> {
+    struct param_serializer_traits<T,
+                                   std::enable_if_t<std::is_floating_point_v<T>, void>> {
         static void
         add_param(ParamSerializer &serializer, const T &param) {
             if constexpr (sizeof(T) <= 4) {
@@ -763,23 +769,10 @@ private:
         // Write length (8 bytes)
         write_integer(params_buffer_, 8);
 
-        // Manual byte swapping for 64-bit integers
-        union {
-            bigint i;
-            byte   b[8];
-        } src, dst;
-
-        src.i    = value;
-        dst.b[0] = src.b[7];
-        dst.b[1] = src.b[6];
-        dst.b[2] = src.b[5];
-        dst.b[3] = src.b[4];
-        dst.b[4] = src.b[3];
-        dst.b[5] = src.b[2];
-        dst.b[6] = src.b[1];
-        dst.b[7] = src.b[0];
-
-        params_buffer_.insert(params_buffer_.end(), dst.b, dst.b + sizeof(bigint));
+        // Use endian utility for 64-bit conversion
+        bigint      networkValue = qb::endian::to_big_endian(value);
+        const byte *bytes        = reinterpret_cast<const byte *>(&networkValue);
+        params_buffer_.insert(params_buffer_.end(), bytes, bytes + sizeof(bigint));
     }
 
     /**
@@ -828,7 +821,8 @@ private:
         // 2. Write the raw data WITHOUT null terminator
         if (!value.empty()) {
             // Use data() + size() to avoid any potential null terminators
-            params_buffer_.insert(params_buffer_.end(), value.data(), value.data() + value.size());
+            params_buffer_.insert(params_buffer_.end(), value.data(),
+                                  value.data() + value.size());
         }
     }
 
@@ -848,7 +842,8 @@ private:
         // 2. Write the raw data WITHOUT null terminator
         if (!value.empty()) {
             // String views have no null terminators by design
-            params_buffer_.insert(params_buffer_.end(), value.data(), value.data() + value.size());
+            params_buffer_.insert(params_buffer_.end(), value.data(),
+                                  value.data() + value.size());
         }
     }
 
@@ -919,14 +914,30 @@ private:
 
         // Array type determination - common array OIDs
         switch (element_oid) {
-            case 16: array_oid = 1000; break;  // boolean array
-            case 21: array_oid = 1005; break;  // int2 array
-            case 23: array_oid = 1007; break;  // int4 array
-            case 20: array_oid = 1016; break;  // int8 array
-            case 700: array_oid = 1021; break; // float4 array
-            case 701: array_oid = 1022; break; // float8 array
-            case 25: array_oid = 1009; break;  // text array
-            default: array_oid = 2277; break;  // Use anyarray as fallback
+            case 16:
+                array_oid = 1000;
+                break; // boolean array
+            case 21:
+                array_oid = 1005;
+                break; // int2 array
+            case 23:
+                array_oid = 1007;
+                break; // int4 array
+            case 20:
+                array_oid = 1016;
+                break; // int8 array
+            case 700:
+                array_oid = 1021;
+                break; // float4 array
+            case 701:
+                array_oid = 1022;
+                break; // float8 array
+            case 25:
+                array_oid = 1009;
+                break; // text array
+            default:
+                array_oid = 2277;
+                break; // Use anyarray as fallback
         }
 
         // Add the array OID type
@@ -972,14 +983,16 @@ private:
             TypeConverter<element_type>::to_binary(elem, elem_buffer);
 
             // Add element data to array buffer
-            array_buffer.insert(array_buffer.end(), elem_buffer.begin(), elem_buffer.end());
+            array_buffer.insert(array_buffer.end(), elem_buffer.begin(),
+                                elem_buffer.end());
         }
 
         // Write the total array length
         write_integer(params_buffer_, static_cast<integer>(array_buffer.size()));
 
         // Write the array data
-        params_buffer_.insert(params_buffer_.end(), array_buffer.begin(), array_buffer.end());
+        params_buffer_.insert(params_buffer_.end(), array_buffer.begin(),
+                              array_buffer.end());
     }
 
     // Specialization for vector types
@@ -1008,7 +1021,8 @@ private:
  */
 template <typename... Args>
 void
-serialize_params(std::vector<byte> &params_buffer, std::vector<byte> &format_codes_buffer,
+serialize_params(std::vector<byte>    &params_buffer,
+                 std::vector<byte>    &format_codes_buffer,
                  std::vector<integer> &param_types, Args &&...args) {
     // Créer un nouveau sérialiseur
     ParamSerializer serializer;

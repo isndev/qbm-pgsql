@@ -40,8 +40,8 @@
 
 #pragma once
 
+#include <qb/utility/type_traits.h>
 #include "./resultset.h"
-#include "./util/meta_helpers.h"
 
 namespace qb {
 namespace pg {
@@ -55,7 +55,9 @@ namespace resultset_ext {
 template <typename Tuple, std::size_t... I>
 inline void
 row_to_impl(resultset::row const &row, Tuple &t, std::index_sequence<I...>) {
-    ((std::get<I>(t) = row[I].template as<typename std::tuple_element<I, Tuple>::type>()), ...);
+    ((std::get<I>(t) =
+          row[I].template as<typename std::tuple_element<I, Tuple>::type>()),
+     ...);
 }
 
 // Convert row to tuple
@@ -77,7 +79,8 @@ template <typename Tuple, std::size_t... Is>
 inline void
 row_to_impl(Tuple &t, resultset::row const &row, std::index_sequence<Is...>) {
     ((std::get<Is>(t) =
-          row[Is].template as<std::tuple_element_t<Is, std::remove_reference_t<Tuple>>>()),
+          row[Is]
+              .template as<std::tuple_element_t<Is, std::remove_reference_t<Tuple>>>()),
      ...);
 }
 
@@ -116,7 +119,7 @@ template <typename IndexTuple, typename... T>
 struct row_data_extractor_base;
 
 template <size_t... Indexes, typename... T>
-struct row_data_extractor_base<util::indexes_tuple<Indexes...>, T...> {
+struct row_data_extractor_base<qb::indexes_tuple<Indexes...>, T...> {
     static constexpr ::std::size_t size = sizeof...(T);
 
     static void
@@ -132,33 +135,35 @@ struct row_data_extractor_base<util::indexes_tuple<Indexes...>, T...> {
 
 template <typename... T>
 struct row_data_extractor
-    : row_data_extractor_base<typename util::index_builder<sizeof...(T)>::type, T...> {};
+    : row_data_extractor_base<typename qb::index_builder<sizeof...(T)>::type, T...> {};
 
 template <typename IndexTuple, typename... T>
 struct field_by_name_extractor;
 
 template <::std::size_t... Indexes, typename... T>
-struct field_by_name_extractor<util::indexes_tuple<Indexes...>, T...> {
+struct field_by_name_extractor<qb::indexes_tuple<Indexes...>, T...> {
     static constexpr ::std::size_t size = sizeof...(T);
 
     static void
-    get_tuple(resultset::row const &row, ::std::initializer_list<::std::string> const &names,
-              ::std::tuple<T...> &val) {
-        if (names.size() < size) throw error::db_error{"Not enough names in row data extraction"};
+    get_tuple(resultset::row const                         &row,
+              ::std::initializer_list<::std::string> const &names,
+              ::std::tuple<T...>                           &val) {
+        if (names.size() < size)
+            throw error::db_error{"Not enough names in row data extraction"};
         ::std::tuple<T...> tmp(row[*(names.begin() + Indexes)].template as<T>()...);
         tmp.swap(val);
     }
 
     static void
-    get_values(resultset::row const &row, ::std::initializer_list<::std::string> const &names,
-               T &...val) {
-        util::expand{row[*(names.begin() + Indexes)].to(val)...};
+    get_values(resultset::row const                         &row,
+               ::std::initializer_list<::std::string> const &names, T &...val) {
+        qb::expand{row[*(names.begin() + Indexes)].to(val)...};
     }
 };
 
 template <typename... T>
 struct row_data_by_name_extractor
-    : field_by_name_extractor<typename util::index_builder<sizeof...(T)>::type, T...> {};
+    : field_by_name_extractor<typename qb::index_builder<sizeof...(T)>::type, T...> {};
 
 } // namespace detail
 
@@ -198,7 +203,8 @@ resultset::row::to(::std::initializer_list<::std::string> const &names,
 
 template <typename... T>
 void
-resultset::row::to(::std::initializer_list<::std::string> const &names, T &...val) const {
+resultset::row::to(::std::initializer_list<::std::string> const &names,
+                   T &...val) const {
     detail::row_data_by_name_extractor<T...>::get_values(*this, names, val...);
 }
 

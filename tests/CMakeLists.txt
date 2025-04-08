@@ -29,7 +29,6 @@ set(QB_PGSQL_TESTS
         queries
         params
         error-handling
-        #performance
 )
 
 # Register each test

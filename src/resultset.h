@@ -89,7 +89,8 @@ class result_impl;
  *         // Oldschool iteration
  *        for (resultset::const_iterator row = res.begin(); row != res.end(); ++row) {
  *            // Do something with the row
- *            for (resultset::const_field_iterator f = row.begin(); f != row.end(); ++f) {
+ *            for (resultset::const_field_iterator f = row.begin(); f != row.end(); ++f)
+ * {
  *               // Process each field
  *            }
  *        }
@@ -315,10 +316,12 @@ public:
         void to(T &...) const;
 
         template <typename... T>
-        void to(::std::initializer_list<::std::string> const &names, ::std::tuple<T...> &) const;
+        void to(::std::initializer_list<::std::string> const &names,
+                ::std::tuple<T...> &) const;
 
         template <typename... T>
-        void to(::std::initializer_list<::std::string> const &names, ::std::tuple<T &...>) const;
+        void to(::std::initializer_list<::std::string> const &names,
+                ::std::tuple<T &...>) const;
 
         template <typename... T>
         void to(::std::initializer_list<::std::string> const &names, T &...val) const;
@@ -413,7 +416,8 @@ public:
                 return true;
             } else {
                 typename std::decay<T>::type tmp;
-                to_impl(tmp, io::traits::has_parser<T, pg::protocol_data_format::Binary>());
+                to_impl(tmp,
+                        io::traits::has_parser<T, pg::protocol_data_format::Binary>());
                 val = std::optional<T>(tmp);
                 return true;
             }
@@ -445,8 +449,9 @@ public:
 
             // 2. Retrieve the data and format
             field_buffer buffer = input_buffer();
-            bool is_binary      = (description().format_code == pg::protocol_data_format::Binary);
-            auto data_vector    = buffer.to_vector();
+            bool         is_binary =
+                (description().format_code == pg::protocol_data_format::Binary);
+            auto data_vector = buffer.to_vector();
 
             // 3. Use the TypeConverter to convert according to format
             if (is_binary) {
@@ -454,7 +459,7 @@ public:
             } else {
                 // For text format, we first need to read the string
                 static detail::ParamUnserializer unserializer;
-                std::string                      text_value = unserializer.read_string(data_vector);
+                std::string text_value = unserializer.read_string(data_vector);
                 return detail::TypeConverter<result_type>::from_text(text_value);
             }
         }
@@ -469,14 +474,17 @@ public:
                 nullable_traits::set_null(val);
                 return true;
             }
-            return to_impl(val, io::traits::has_parser<T, pg::protocol_data_format::Binary>());
+            return to_impl(
+                val, io::traits::has_parser<T, pg::protocol_data_format::Binary>());
         }
 
         template <typename T>
         bool
         to_nullable(T &val, std::false_type const &) const {
-            if (is_null()) throw error::value_is_null(name());
-            return to_impl(val, io::traits::has_parser<T, pg::protocol_data_format::Binary>());
+            if (is_null())
+                throw error::value_is_null(name());
+            return to_impl(
+                val, io::traits::has_parser<T, pg::protocol_data_format::Binary>());
         }
 
         template <typename T>
@@ -492,7 +500,8 @@ public:
             field_description const &fd = description();
             if (fd.format_code == pg::protocol_data_format::Binary) {
                 throw error::db_error{
-                    "Cannot find pg::protocol_data_format::Binary parser for field " + fd.name};
+                    "Cannot find pg::protocol_data_format::Binary parser for field " +
+                    fd.name};
             }
 
             field_buffer b = input_buffer();
@@ -550,7 +559,8 @@ public:
     /**
      * Iterator over the fields in a data row
      */
-    class const_field_iterator : public detail::data_iterator<const_field_iterator, field> {
+    class const_field_iterator
+        : public detail::data_iterator<const_field_iterator, field> {
         using base_type = detail::data_iterator<const_field_iterator, field>;
 
     public:

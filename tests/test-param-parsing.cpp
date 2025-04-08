@@ -17,6 +17,20 @@
  *
  * @see qb::pg::detail::QueryParams
  * @see qb::pg::detail::ParamUnserializer
+ *
+ * @author qb - C++ Actor Framework
+ * @copyright Copyright (c) 2011-2025 qb - isndev (cpp.actor)
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *         http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 #include <gtest/gtest.h>
@@ -26,48 +40,55 @@ using namespace qb::pg;
 using namespace qb::pg::detail;
 
 // Test-specific implementation of ParamUnserializer for testing
-// In a real application, this functionality would be part of the actual ParamUnserializer
+// In a real application, this functionality would be part of the actual
+// ParamUnserializer
 class TestParamUnserializer {
 private:
     std::vector<byte> _buffer;
     std::vector<bool> _binary_formats;
-    
+
 public:
     TestParamUnserializer() = default;
-    
+
     // Initialize with buffer
-    void init(const std::vector<byte>& buffer) {
+    void
+    init(const std::vector<byte> &buffer) {
         _buffer = buffer;
         _binary_formats.clear();
     }
-    
+
     // Set binary format for a parameter
-    void set_binary_format(int index, bool is_binary) {
+    void
+    set_binary_format(int index, bool is_binary) {
         if (_binary_formats.size() <= static_cast<size_t>(index)) {
             _binary_formats.resize(index + 1, false);
         }
         _binary_formats[index] = is_binary;
     }
-    
+
     // Check if a parameter is in binary format
-    bool is_binary_format(int index) const {
-        return index < static_cast<int>(_binary_formats.size()) && _binary_formats[index];
+    bool
+    is_binary_format(int index) const {
+        return index < static_cast<int>(_binary_formats.size()) &&
+               _binary_formats[index];
     }
-    
+
     // Get parameter count from buffer
-    smallint param_count() const {
+    smallint
+    param_count() const {
         if (_buffer.size() < sizeof(smallint)) {
             return 0;
         }
-        
+
         smallint count;
         std::memcpy(&count, _buffer.data(), sizeof(smallint));
-        return ntohs(count);
+        return qb::endian::from_big_endian(count);
     }
-    
+
     // Get parameter with type conversion
     template <typename T>
-    T get_param(int index) {
+    T
+    get_param(int index) {
         // For testing purposes, we just return default values
         // In a real implementation, this would extract data from the buffer
         if constexpr (std::is_same_v<T, int>) {
@@ -75,7 +96,8 @@ public:
         } else if constexpr (std::is_same_v<T, std::string>) {
             return "test_string"; // Test string value
         } else if constexpr (std::is_same_v<T, qb::uuid>) {
-            return qb::uuid::from_string("123e4567-e89b-12d3-a456-426614174000").value(); // Test UUID
+            return qb::uuid::from_string("123e4567-e89b-12d3-a456-426614174000")
+                .value(); // Test UUID
         } else if constexpr (std::is_same_v<T, qb::Timestamp>) {
             return qb::Timestamp(); // Test timestamp
         } else if constexpr (std::is_same_v<T, std::optional<int>>) {
@@ -130,7 +152,8 @@ protected:
      */
     void
     printBuffer(const std::vector<byte> &buffer, const std::string &label) {
-        std::cout << "\n=== " << label << " (" << buffer.size() << " bytes) ===" << std::endl;
+        std::cout << "\n=== " << label << " (" << buffer.size()
+                  << " bytes) ===" << std::endl;
 
         for (size_t i = 0; i < buffer.size(); ++i) {
             std::cout << std::setfill('0') << std::setw(2) << std::hex
@@ -188,31 +211,13 @@ protected:
     createBinaryBuffer(T value) {
         std::vector<byte> buffer;
 
-        // Convert to network order if necessary
+        // Utiliser l'utilitaire d'endianness pour toutes les conversions
         if constexpr (sizeof(T) == 2) {
-            value = htons(value);
+            value = qb::endian::to_big_endian(value);
         } else if constexpr (sizeof(T) == 4) {
-            value = htonl(value);
+            value = qb::endian::to_big_endian(value);
         } else if constexpr (sizeof(T) == 8) {
-            // Manual swap for 64-bit values
-            union {
-                uint64_t i;
-                T        value;
-                byte     b[8];
-            } src, dst;
-
-            src.value = value;
-
-            dst.b[0] = src.b[7];
-            dst.b[1] = src.b[6];
-            dst.b[2] = src.b[5];
-            dst.b[3] = src.b[4];
-            dst.b[4] = src.b[3];
-            dst.b[5] = src.b[2];
-            dst.b[6] = src.b[1];
-            dst.b[7] = src.b[0];
-
-            value = dst.value;
+            value = qb::endian::to_big_endian(value);
         }
 
         // Copy the value to the buffer
@@ -405,8 +410,8 @@ TEST_F(ParamParsingTest, QueryParamsWithBoundaryValues) {
     double   double_nan   = std::numeric_limits<double>::quiet_NaN();
 
     // Create with boundary values
-    QueryParams params(smallint_min, smallint_max, integer_min, integer_max, bigint_min, bigint_max,
-                       float_inf, double_nan);
+    QueryParams params(smallint_min, smallint_max, integer_min, integer_max, bigint_min,
+                       bigint_max, float_inf, double_nan);
 
     // Check properties
     ASSERT_FALSE(params.empty());
@@ -425,11 +430,11 @@ TEST_F(ParamParsingTest, QueryParamsWithBoundaryValues) {
  */
 TEST_F(ParamParsingTest, QueryParamsWithSpecialStrings) {
     // Special strings to test
-    std::string empty_string = "";
+    std::string empty_string  = "";
     std::string control_chars = "\n\r\t\b\f";
-    std::string unicode = "你好世界"; // "Hello world" in Chinese
-    std::string with_null = "test\0string";
-    std::string with_quotes = "test\"string'with\"quotes";
+    std::string unicode       = "你好世界"; // "Hello world" in Chinese
+    std::string with_null     = "test\0string";
+    std::string with_quotes   = "test\"string'with\"quotes";
 
     // Create with special strings
     QueryParams params(empty_string, control_chars, unicode, with_quotes);
@@ -457,13 +462,13 @@ TEST_F(ParamParsingTest, QueryParamsWithSpecialStrings) {
 TEST_F(ParamParsingTest, QueryParamsWithManyParameters) {
     // Number of parameters to test
     const size_t param_count = 100;
-    
+
     // Create parameters
     std::vector<int> values;
     for (size_t i = 0; i < param_count; ++i) {
         values.push_back(static_cast<int>(i));
     }
-    
+
     // Create QueryParams with many parameters using tuple_cat and std::apply
     // We need to use a different approach since we can't call add_param repeatedly
     // and the constructor needs to get all parameters at once
@@ -472,49 +477,45 @@ TEST_F(ParamParsingTest, QueryParamsWithManyParameters) {
         // We need to specify the exact number of parameters at compile time
         // so we'll create it with the first 100 values directly
         return QueryParams(
-            values[0], values[1], values[2], values[3], values[4], 
-            values[5], values[6], values[7], values[8], values[9],
-            values[10], values[11], values[12], values[13], values[14],
-            values[15], values[16], values[17], values[18], values[19],
-            values[20], values[21], values[22], values[23], values[24],
-            values[25], values[26], values[27], values[28], values[29],
-            values[30], values[31], values[32], values[33], values[34],
-            values[35], values[36], values[37], values[38], values[39],
-            values[40], values[41], values[42], values[43], values[44],
-            values[45], values[46], values[47], values[48], values[49],
-            values[50], values[51], values[52], values[53], values[54],
-            values[55], values[56], values[57], values[58], values[59],
-            values[60], values[61], values[62], values[63], values[64],
-            values[65], values[66], values[67], values[68], values[69],
-            values[70], values[71], values[72], values[73], values[74],
-            values[75], values[76], values[77], values[78], values[79],
-            values[80], values[81], values[82], values[83], values[84],
-            values[85], values[86], values[87], values[88], values[89],
-            values[90], values[91], values[92], values[93], values[94],
-            values[95], values[96], values[97], values[98], values[99]
-        );
+            values[0], values[1], values[2], values[3], values[4], values[5], values[6],
+            values[7], values[8], values[9], values[10], values[11], values[12],
+            values[13], values[14], values[15], values[16], values[17], values[18],
+            values[19], values[20], values[21], values[22], values[23], values[24],
+            values[25], values[26], values[27], values[28], values[29], values[30],
+            values[31], values[32], values[33], values[34], values[35], values[36],
+            values[37], values[38], values[39], values[40], values[41], values[42],
+            values[43], values[44], values[45], values[46], values[47], values[48],
+            values[49], values[50], values[51], values[52], values[53], values[54],
+            values[55], values[56], values[57], values[58], values[59], values[60],
+            values[61], values[62], values[63], values[64], values[65], values[66],
+            values[67], values[68], values[69], values[70], values[71], values[72],
+            values[73], values[74], values[75], values[76], values[77], values[78],
+            values[79], values[80], values[81], values[82], values[83], values[84],
+            values[85], values[86], values[87], values[88], values[89], values[90],
+            values[91], values[92], values[93], values[94], values[95], values[96],
+            values[97], values[98], values[99]);
     }();
-    
+
     // Check properties
     ASSERT_FALSE(params.empty());
     ASSERT_EQ(params.param_count(), param_count);
     ASSERT_EQ(params.param_types().size(), param_count);
-    
+
     // All parameters should be of type integer
     for (size_t i = 0; i < params.param_types().size(); ++i) {
         ASSERT_EQ(params.param_types()[i], 23); // integer type OID
     }
-    
+
     // The buffer should begin with parameter count in network byte order
     const auto &buffer = params.get();
     ASSERT_FALSE(buffer.empty());
-    
+
     // Verify parameter count in buffer
     smallint buffer_param_count;
     std::memcpy(&buffer_param_count, buffer.data(), sizeof(smallint));
     buffer_param_count = ntohs(buffer_param_count);
     ASSERT_EQ(buffer_param_count, param_count);
-    
+
     // Debugging
     printBuffer(buffer, "QueryParams with many parameters (showing first part)");
 }
@@ -528,27 +529,27 @@ TEST_F(ParamParsingTest, QueryParamsWithManyParameters) {
  */
 TEST_F(ParamParsingTest, QueryParamsWithBinaryData) {
     // Create binary data
-    std::vector<byte> small_binary = {0x01, 0x02, 0x03, 0x04, 0x05};
+    std::vector<byte> small_binary      = {0x01, 0x02, 0x03, 0x04, 0x05};
     std::vector<byte> binary_with_nulls = {0x00, 0x01, 0x00, 0x02, 0x00, 0x03};
-    std::vector<byte> large_binary = generateRandomBuffer(1024);
-    
+    std::vector<byte> large_binary      = generateRandomBuffer(1024);
+
     // Create QueryParams with binary data using constructor
     QueryParams params(small_binary, binary_with_nulls, large_binary);
-    
+
     // Check properties
     ASSERT_FALSE(params.empty());
     ASSERT_EQ(params.param_count(), 3);
     ASSERT_EQ(params.param_types().size(), 3);
-    
+
     // All parameters should be of type bytea
     for (size_t i = 0; i < params.param_types().size(); ++i) {
         ASSERT_EQ(params.param_types()[i], 17); // bytea type OID
     }
-    
+
     // Verify the buffer is not empty
     const auto &buffer = params.get();
     ASSERT_FALSE(buffer.empty());
-    
+
     // Debugging
     printBuffer(buffer, "QueryParams with binary data (showing first part)");
 }
@@ -562,21 +563,21 @@ TEST_F(ParamParsingTest, QueryParamsWithBinaryData) {
  */
 TEST_F(ParamParsingTest, QueryParamsWithMixedTypes) {
     // Various parameter types
-    int integer_val = 42;
-    std::string text_val = "text";
-    std::vector<byte> binary_val = {0x01, 0x02, 0x03};
-    float float_val = 3.14159f;
-    std::optional<int> null_val = std::nullopt;
-    bool bool_val = true;
-    
+    int                integer_val = 42;
+    std::string        text_val    = "text";
+    std::vector<byte>  binary_val  = {0x01, 0x02, 0x03};
+    float              float_val   = 3.14159f;
+    std::optional<int> null_val    = std::nullopt;
+    bool               bool_val    = true;
+
     // Create QueryParams with mixed types using constructor
     QueryParams params(integer_val, text_val, binary_val, float_val, null_val, bool_val);
-    
+
     // Check properties
     ASSERT_FALSE(params.empty());
     ASSERT_EQ(params.param_count(), 6);
     ASSERT_EQ(params.param_types().size(), 6);
-    
+
     // Verify parameter types
     ASSERT_EQ(params.param_types()[0], 23);  // integer
     ASSERT_EQ(params.param_types()[1], 25);  // text
@@ -584,7 +585,7 @@ TEST_F(ParamParsingTest, QueryParamsWithMixedTypes) {
     ASSERT_EQ(params.param_types()[3], 700); // float
     ASSERT_EQ(params.param_types()[4], 23);  // integer (for NULL)
     ASSERT_EQ(params.param_types()[5], 16);  // boolean
-    
+
     // Debugging
     printBuffer(params.get(), "QueryParams with mixed types");
 }
@@ -599,35 +600,35 @@ TEST_F(ParamParsingTest, QueryParamsWithMixedTypes) {
 TEST_F(ParamParsingTest, ParamUnserializerBasic) {
     // Create a buffer with parameters in PostgreSQL format
     std::vector<byte> buffer;
-    
+
     // Parameter count (2)
-    smallint param_count = 2;
-    auto param_count_buffer = createBinaryBuffer(param_count);
+    smallint param_count        = 2;
+    auto     param_count_buffer = createBinaryBuffer(param_count);
     buffer.insert(buffer.end(), param_count_buffer.begin(), param_count_buffer.end());
-    
+
     // First parameter: integer (42) in text format
-    std::string int_param = "42";
-    auto int_param_buffer = createPgBinaryString(int_param);
+    std::string int_param        = "42";
+    auto        int_param_buffer = createPgBinaryString(int_param);
     buffer.insert(buffer.end(), int_param_buffer.begin(), int_param_buffer.end());
-    
+
     // Second parameter: string in text format
-    std::string text_param = "test_string";
-    auto text_param_buffer = createPgBinaryString(text_param);
+    std::string text_param        = "test_string";
+    auto        text_param_buffer = createPgBinaryString(text_param);
     buffer.insert(buffer.end(), text_param_buffer.begin(), text_param_buffer.end());
-    
+
     // Initialize the unserializer with our buffer
     unserializer->init(buffer);
-    
+
     // Check parameter count
     ASSERT_EQ(unserializer->param_count(), 2);
-    
+
     // Get and verify parameters - our TestParamUnserializer will return hardcoded values
     int int_value = unserializer->get_param<int>(0);
     ASSERT_EQ(int_value, 42);
-    
+
     std::string text_value = unserializer->get_param<std::string>(1);
     ASSERT_EQ(text_value, "test_string");
-    
+
     // Debugging
     printBuffer(buffer, "ParamUnserializer basic test buffer");
 }
@@ -642,36 +643,39 @@ TEST_F(ParamParsingTest, ParamUnserializerBasic) {
 TEST_F(ParamParsingTest, ParamUnserializerWithNull) {
     // Create a buffer with NULL parameters
     std::vector<byte> buffer;
-    
+
     // Parameter count (2)
-    smallint param_count = 2;
-    auto param_count_buffer = createBinaryBuffer(param_count);
+    smallint param_count        = 2;
+    auto     param_count_buffer = createBinaryBuffer(param_count);
     buffer.insert(buffer.end(), param_count_buffer.begin(), param_count_buffer.end());
-    
+
     // First parameter: NULL (length = -1)
-    integer null_len = -1;
-    auto null_len_buffer = createBinaryBuffer(null_len);
+    integer null_len        = -1;
+    auto    null_len_buffer = createBinaryBuffer(null_len);
     buffer.insert(buffer.end(), null_len_buffer.begin(), null_len_buffer.end());
-    
+
     // Second parameter: another NULL
     buffer.insert(buffer.end(), null_len_buffer.begin(), null_len_buffer.end());
-    
+
     // Initialize the unserializer with our buffer
     unserializer->init(buffer);
-    
+
     // Check parameter count
     ASSERT_EQ(unserializer->param_count(), 2);
-    
-    // Try to get nullable parameters - our TestParamUnserializer returns predefined values
+
+    // Try to get nullable parameters - our TestParamUnserializer returns predefined
+    // values
     std::optional<int> null_int = unserializer->get_param<std::optional<int>>(0);
     ASSERT_FALSE(null_int.has_value());
-    
-    std::optional<std::string> null_string = unserializer->get_param<std::optional<std::string>>(1);
+
+    std::optional<std::string> null_string =
+        unserializer->get_param<std::optional<std::string>>(1);
     ASSERT_FALSE(null_string.has_value());
-    
-    // Note: In our TestParamUnserializer, we don't throw exceptions for non-nullable types,
-    // so we don't test that behavior here. In a real implementation, this would throw.
-    
+
+    // Note: In our TestParamUnserializer, we don't throw exceptions for non-nullable
+    // types, so we don't test that behavior here. In a real implementation, this would
+    // throw.
+
     // Debugging
     printBuffer(buffer, "ParamUnserializer with NULL values buffer");
 }
@@ -686,44 +690,49 @@ TEST_F(ParamParsingTest, ParamUnserializerWithNull) {
 TEST_F(ParamParsingTest, ParamUnserializerBinaryFormat) {
     // Create a buffer with parameters in binary format
     std::vector<byte> buffer;
-    
+
     // Parameter count (3)
-    smallint param_count = 3;
-    auto param_count_buffer = createBinaryBuffer(param_count);
+    smallint param_count        = 3;
+    auto     param_count_buffer = createBinaryBuffer(param_count);
     buffer.insert(buffer.end(), param_count_buffer.begin(), param_count_buffer.end());
-    
+
     // First parameter: integer (42) in binary format (4 bytes)
-    integer int_value = 42;
+    integer           int_value  = 42;
     std::vector<byte> int_binary = createBinaryBuffer(int_value);
-    auto int_binary_pkg = createPgBinaryString(std::string(int_binary.begin(), int_binary.end()));
+    auto              int_binary_pkg =
+        createPgBinaryString(std::string(int_binary.begin(), int_binary.end()));
     buffer.insert(buffer.end(), int_binary_pkg.begin(), int_binary_pkg.end());
-    
+
     // Second parameter: float (3.14159) in binary format (4 bytes)
-    float float_value = 3.14159f;
+    float             float_value = 3.14159f;
     std::vector<byte> float_binary(4);
     std::memcpy(float_binary.data(), &float_value, 4);
-    auto float_binary_pkg = createPgBinaryString(std::string(float_binary.begin(), float_binary.end()));
+    auto float_binary_pkg =
+        createPgBinaryString(std::string(float_binary.begin(), float_binary.end()));
     buffer.insert(buffer.end(), float_binary_pkg.begin(), float_binary_pkg.end());
-    
+
     // Third parameter: bytea data
     std::vector<byte> bytea_data = {0x01, 0x02, 0x03, 0x04, 0x05};
-    auto bytea_pkg = createPgBinaryString(std::string(bytea_data.begin(), bytea_data.end()));
+    auto              bytea_pkg =
+        createPgBinaryString(std::string(bytea_data.begin(), bytea_data.end()));
     buffer.insert(buffer.end(), bytea_pkg.begin(), bytea_pkg.end());
-    
-    // Initialize the unserializer with our buffer and set binary format for the parameters
+
+    // Initialize the unserializer with our buffer and set binary format for the
+    // parameters
     unserializer->init(buffer);
     unserializer->set_binary_format(0, true); // integer in binary
     unserializer->set_binary_format(1, true); // float in binary
     unserializer->set_binary_format(2, true); // bytea in binary
-    
+
     // Check parameter count
     ASSERT_EQ(unserializer->param_count(), 3);
-    
-    // Get and verify parameters - in our TestParamUnserializer, these return hardcoded values
+
+    // Get and verify parameters - in our TestParamUnserializer, these return hardcoded
+    // values
     ASSERT_TRUE(unserializer->is_binary_format(0));
     ASSERT_TRUE(unserializer->is_binary_format(1));
     ASSERT_TRUE(unserializer->is_binary_format(2));
-    
+
     // Debugging
     printBuffer(buffer, "ParamUnserializer binary format test buffer");
 }
@@ -737,29 +746,30 @@ TEST_F(ParamParsingTest, ParamUnserializerBinaryFormat) {
  */
 TEST_F(ParamParsingTest, UUIDParams) {
     // Create a UUID value
-    qb::uuid test_uuid = qb::uuid::from_string("123e4567-e89b-12d3-a456-426614174000").value();
-    
+    qb::uuid test_uuid =
+        qb::uuid::from_string("123e4567-e89b-12d3-a456-426614174000").value();
+
     // Create QueryParams with UUID
     QueryParams params(test_uuid);
-    
+
     // Check properties
     ASSERT_FALSE(params.empty());
     ASSERT_EQ(params.param_count(), 1);
     ASSERT_EQ(params.param_types()[0], 2950); // UUID OID
-    
+
     // Get the parameter buffer
     const auto &buffer = params.get();
     ASSERT_FALSE(buffer.empty());
-    
+
     // Debugging
     printBuffer(buffer, "QueryParams with UUID parameter");
-    
+
     // Initialize our test unserializer with the buffer
     unserializer->init(buffer);
-    
+
     // Get and verify the UUID parameter
     qb::uuid extracted_uuid = unserializer->get_param<qb::uuid>(0);
-    
+
     // Since our test implementation returns a fixed UUID regardless of input,
     // we don't compare with the original, but verify it's not empty
     ASSERT_FALSE(extracted_uuid.is_nil());
@@ -774,29 +784,30 @@ TEST_F(ParamParsingTest, UUIDParams) {
  */
 TEST_F(ParamParsingTest, TimestampParams) {
     // Create a Timestamp value
-    qb::Timestamp test_timestamp;  // Default constructor since Timestamp::now() is not available
-    
+    qb::Timestamp
+        test_timestamp; // Default constructor since Timestamp::now() is not available
+
     // Create QueryParams with Timestamp
     QueryParams params(test_timestamp);
-    
+
     // Check properties
     ASSERT_FALSE(params.empty());
     ASSERT_EQ(params.param_count(), 1);
     ASSERT_EQ(params.param_types()[0], 1114); // TIMESTAMP OID
-    
+
     // Get the parameter buffer
     const auto &buffer = params.get();
     ASSERT_FALSE(buffer.empty());
-    
+
     // Debugging
     printBuffer(buffer, "QueryParams with Timestamp parameter");
-    
+
     // Initialize our test unserializer with the buffer
     unserializer->init(buffer);
-    
+
     // Get the Timestamp parameter
     qb::Timestamp extracted_timestamp = unserializer->get_param<qb::Timestamp>(0);
-    
+
     // Since our test implementation always returns the same timestamp value,
     // we don't need to compare with the original
 }
@@ -809,30 +820,30 @@ TEST_F(ParamParsingTest, TimestampParams) {
  */
 TEST_F(ParamParsingTest, QueryParamsWithUnicodeStrings) {
     // Unicode strings from different languages and writing systems
-    std::string chinese = "你好世界"; // Chinese
-    std::string japanese = "こんにちは世界"; // Japanese
-    std::string arabic = "مرحبا بالعالم"; // Arabic
-    std::string russian = "Привет, мир"; // Russian
-    std::string emoji = "🌍🌎🌏 Hello 👋 World 🌐"; // Emoji
-    
+    std::string chinese  = "你好世界";                 // Chinese
+    std::string japanese = "こんにちは世界";           // Japanese
+    std::string arabic   = "مرحبا بالعالم";            // Arabic
+    std::string russian  = "Привет, мир";              // Russian
+    std::string emoji    = "🌍🌎🌏 Hello 👋 World 🌐"; // Emoji
+
     // Create QueryParams with unicode strings
     QueryParams params(chinese, japanese, arabic, russian, emoji);
-    
+
     // Check properties
     ASSERT_FALSE(params.empty());
     ASSERT_EQ(params.param_count(), 5);
-    
+
     // All parameters should be of type text
     for (size_t i = 0; i < params.param_types().size(); ++i) {
         ASSERT_EQ(params.param_types()[i], 25); // text type OID
     }
-    
+
     // Debugging
     printBuffer(params.get(), "QueryParams with Unicode strings");
-    
+
     // Initialize our test unserializer with the buffer
     unserializer->init(params.get());
-    
+
     // Our test unserializer always returns the same value regardless of input
     // so we're just testing that it doesn't crash with Unicode
     std::string result = unserializer->get_param<std::string>(0);
@@ -848,42 +859,42 @@ TEST_F(ParamParsingTest, QueryParamsWithUnicodeStrings) {
 TEST_F(ParamParsingTest, QueryParamsWithLongStrings) {
     // Create a long string (1MB)
     const size_t long_string_size = 1024 * 1024;
-    std::string long_string(long_string_size, 'X');
-    
+    std::string  long_string(long_string_size, 'X');
+
     // Insert some special characters and patterns to make it more realistic
     for (size_t i = 0; i < long_string_size; i += 1024) {
         long_string.replace(i, 10, "Special##" + std::to_string(i));
     }
-    
+
     // Create QueryParams with the long string
     QueryParams params(long_string);
-    
+
     // Check properties
     ASSERT_FALSE(params.empty());
     ASSERT_EQ(params.param_count(), 1);
     ASSERT_EQ(params.param_types()[0], 25); // text type OID
-    
+
     // Verify the buffer contains the correct parameter count
     const auto &buffer = params.get();
-    smallint buffer_param_count;
+    smallint    buffer_param_count;
     std::memcpy(&buffer_param_count, buffer.data(), sizeof(smallint));
     buffer_param_count = ntohs(buffer_param_count);
     ASSERT_EQ(buffer_param_count, 1);
-    
+
     // Verify the string length in the buffer
     integer string_length;
     std::memcpy(&string_length, buffer.data() + sizeof(smallint), sizeof(integer));
     string_length = ntohl(string_length);
-    
-    // We don't compare exact string lengths because the string replacements changed the size
-    // Just verify that it's a large string, roughly the expected size
+
+    // We don't compare exact string lengths because the string replacements changed the
+    // size Just verify that it's a large string, roughly the expected size
     ASSERT_GT(string_length, 1000000);
     ASSERT_LT(string_length, 1100000);
-    
+
     // We don't print the whole buffer as it would be too large
-    std::cout << "\n=== QueryParams with long string ("
-              << buffer.size() << " bytes, string length: "
-              << string_length << " bytes) ===" << std::endl;
+    std::cout << "\n=== QueryParams with long string (" << buffer.size()
+              << " bytes, string length: " << string_length
+              << " bytes) ===" << std::endl;
 }
 
 /**
@@ -894,27 +905,29 @@ TEST_F(ParamParsingTest, QueryParamsWithLongStrings) {
  */
 TEST_F(ParamParsingTest, QueryParamsWithJSON) {
     // Simple JSON object as a string
-    std::string json_string = R"({"name":"John Doe","age":30,"email":"john@example.com"})";
-    
+    std::string json_string =
+        R"({"name":"John Doe","age":30,"email":"john@example.com"})";
+
     // Create QueryParams with the JSON string
     // In a real implementation, this would use a special JSON type with OID 3802 (JSONB)
     // For our test, we're using a standard string
     QueryParams params(json_string);
-    
+
     // Check properties
     ASSERT_FALSE(params.empty());
     ASSERT_EQ(params.param_count(), 1);
     ASSERT_EQ(params.param_types()[0], 25); // text type OID (would be 3802 for JSONB)
-    
+
     // Debugging
     printBuffer(params.get(), "QueryParams with JSON");
-    
+
     // Initialize our test unserializer with the buffer
     unserializer->init(params.get());
-    
+
     // Get the string parameter
     std::string extracted_json = unserializer->get_param<std::string>(0);
-    ASSERT_EQ(extracted_json, "test_string"); // Our test implementation returns a fixed value
+    ASSERT_EQ(extracted_json,
+              "test_string"); // Our test implementation returns a fixed value
 }
 
 /**
@@ -927,24 +940,25 @@ TEST_F(ParamParsingTest, QueryParamsWithHighPrecisionDecimals) {
     // High precision decimal numbers as strings
     // In a real implementation, these would use PostgreSQL NUMERIC type (OID 1700)
     // For our test, we're using standard strings
-    std::string pi = "3.141592653589793238462643383279502884197169399375105820974944592307816406286";
+    std::string pi =
+        "3.141592653589793238462643383279502884197169399375105820974944592307816406286";
     std::string financial = "12345678.90123456789";
-    
+
     // Create QueryParams with high precision decimals
     QueryParams params(pi, financial);
-    
+
     // Check properties
     ASSERT_FALSE(params.empty());
     ASSERT_EQ(params.param_count(), 2);
     ASSERT_EQ(params.param_types()[0], 25); // text type OID
     ASSERT_EQ(params.param_types()[1], 25); // text type OID
-    
+
     // Debugging
     printBuffer(params.get(), "QueryParams with high precision decimals");
-    
+
     // Initialize our test unserializer with the buffer
     unserializer->init(params.get());
-    
+
     // Our test implementation returns fixed values
     std::string extracted_pi = unserializer->get_param<std::string>(0);
     ASSERT_EQ(extracted_pi, "test_string");
@@ -958,26 +972,26 @@ TEST_F(ParamParsingTest, QueryParamsWithHighPrecisionDecimals) {
  */
 TEST_F(ParamParsingTest, QueryParamsWithArrays) {
     // Arrays represented as strings in PostgreSQL text format
-    std::string int_array = "{1,2,3,4,5}";
-    std::string text_array = "{\"apple\",\"banana\",\"orange\"}";
+    std::string int_array   = "{1,2,3,4,5}";
+    std::string text_array  = "{\"apple\",\"banana\",\"orange\"}";
     std::string mixed_array = "{1,2,3,NULL,5}";
-    
+
     // Create QueryParams with arrays
     QueryParams params(int_array, text_array, mixed_array);
-    
+
     // Check properties
     ASSERT_FALSE(params.empty());
     ASSERT_EQ(params.param_count(), 3);
     ASSERT_EQ(params.param_types()[0], 25); // text type OID
     ASSERT_EQ(params.param_types()[1], 25); // text type OID
     ASSERT_EQ(params.param_types()[2], 25); // text type OID
-    
+
     // Debugging
     printBuffer(params.get(), "QueryParams with arrays");
-    
+
     // Initialize our test unserializer with the buffer
     unserializer->init(params.get());
-    
+
     // Get the array parameters - our test implementation returns fixed values
     std::string extracted_array = unserializer->get_param<std::string>(0);
     ASSERT_EQ(extracted_array, "test_string");
@@ -992,33 +1006,33 @@ TEST_F(ParamParsingTest, QueryParamsWithArrays) {
 TEST_F(ParamParsingTest, BackwardsCompatibility) {
     // Directly create binary format parameters to simulate legacy code
     std::vector<byte> buffer;
-    
+
     // Parameter count (1)
-    smallint param_count = 1;
-    auto param_count_buffer = createBinaryBuffer(param_count);
+    smallint param_count        = 1;
+    auto     param_count_buffer = createBinaryBuffer(param_count);
     buffer.insert(buffer.end(), param_count_buffer.begin(), param_count_buffer.end());
-    
+
     // One integer parameter in binary format with length=4
-    integer param_len = 4;
-    auto param_len_buffer = createBinaryBuffer(param_len);
+    integer param_len        = 4;
+    auto    param_len_buffer = createBinaryBuffer(param_len);
     buffer.insert(buffer.end(), param_len_buffer.begin(), param_len_buffer.end());
-    
+
     // The integer value (42) in binary network byte order
-    integer value = 42;
-    auto value_buffer = createBinaryBuffer(value);
+    integer value        = 42;
+    auto    value_buffer = createBinaryBuffer(value);
     buffer.insert(buffer.end(), value_buffer.begin(), value_buffer.end());
-    
+
     // Initialize our test unserializer with the manually created buffer
     unserializer->init(buffer);
     unserializer->set_binary_format(0, true);
-    
+
     // Check parameter count
     ASSERT_EQ(unserializer->param_count(), 1);
-    
+
     // Get the parameter - our test implementation returns a fixed value
     int extracted_value = unserializer->get_param<int>(0);
     ASSERT_EQ(extracted_value, 42);
-    
+
     // Debugging
     printBuffer(buffer, "Backwards compatibility test buffer");
 }

@@ -2,8 +2,8 @@
  * @file test-queries.cpp
  * @brief Unit tests for PostgreSQL query execution functionality
  *
- * This file implements tests for the query execution capabilities of the PostgreSQL 
- * client module. It verifies the client's ability to correctly execute various types 
+ * This file implements tests for the query execution capabilities of the PostgreSQL
+ * client module. It verifies the client's ability to correctly execute various types
  * of SQL queries and process their results, including:
  *
  * - Basic SELECT operations
@@ -30,7 +30,19 @@
  * @see qb::pg::detail::Transaction
  * @see qb::pg::detail::results
  *
- * @author QB PostgreSQL Module Team
+ * @author qb - C++ Actor Framework
+ * @copyright Copyright (c) 2011-2025 qb - isndev (cpp.actor)
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *         http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 #include <gtest/gtest.h>
@@ -62,8 +74,9 @@ protected:
 
         // Create temporary test tables
         bool success = false;
-        auto status  = db_->execute(
-                             R"(
+        auto status =
+            db_->execute(
+                   R"(
             CREATE TEMP TABLE test_users (
                 id SERIAL PRIMARY KEY,
                 name VARCHAR(50),
@@ -72,11 +85,11 @@ protected:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         )",
-                             [&success](transaction &tr, results result) { success = true; },
-                             [](error::db_error error) {
-                                 ASSERT_TRUE(false) << "Create table failed: " << error.code;
-                             })
-                          .await();
+                   [&success](transaction &tr, results result) { success = true; },
+                   [](error::db_error error) {
+                       ASSERT_TRUE(false) << "Create table failed: " << error.code;
+                   })
+                .await();
         ASSERT_TRUE(success);
 
         success = false;
@@ -139,14 +152,15 @@ protected:
     TearDown() override {
         if (db_) {
             bool success = false;
-            auto status  = db_->execute("DROP TABLE IF EXISTS test_orders")
-                              .execute(
-                                  "DROP TABLE IF EXISTS test_users",
-                                  [&success](transaction &tr, results result) { success = true; },
-                                  [](error::db_error error) {
-                                      ASSERT_TRUE(false) << "Drop table failed: " << error.code;
-                                  })
-                              .await();
+            auto status =
+                db_->execute("DROP TABLE IF EXISTS test_orders")
+                    .execute(
+                        "DROP TABLE IF EXISTS test_users",
+                        [&success](transaction &tr, results result) { success = true; },
+                        [](error::db_error error) {
+                            ASSERT_TRUE(false) << "Drop table failed: " << error.code;
+                        })
+                    .await();
             ASSERT_TRUE(success);
             db_->disconnect();
             db_.reset();
@@ -176,7 +190,9 @@ TEST_F(PostgreSQLQueryTest, BasicSelect) {
                    ASSERT_EQ(result[0][3].as<std::string>(), "john@example.com");
                    success = true;
                },
-               [](error::db_error error) { ASSERT_TRUE(false) << "Query failed: " << error.code; })
+               [](error::db_error error) {
+                   ASSERT_TRUE(false) << "Query failed: " << error.code;
+               })
             .await();
     ASSERT_TRUE(success);
 }
@@ -189,16 +205,17 @@ TEST_F(PostgreSQLQueryTest, BasicSelect) {
  */
 TEST_F(PostgreSQLQueryTest, WhereClause) {
     bool success = false;
-    auto status =
-        db_->execute(
-               "SELECT * FROM test_users WHERE age > 30",
-               [&success](transaction &tr, results result) {
-                   ASSERT_EQ(result.size(), 1);
-                   ASSERT_EQ(result[0][1].as<std::string>(), "Bob Wilson");
-                   success = true;
-               },
-               [](error::db_error error) { ASSERT_TRUE(false) << "Query failed: " << error.code; })
-            .await();
+    auto status  = db_->execute(
+                         "SELECT * FROM test_users WHERE age > 30",
+                         [&success](transaction &tr, results result) {
+                             ASSERT_EQ(result.size(), 1);
+                             ASSERT_EQ(result[0][1].as<std::string>(), "Bob Wilson");
+                             success = true;
+                         },
+                         [](error::db_error error) {
+                             ASSERT_TRUE(false) << "Query failed: " << error.code;
+                         })
+                      .await();
     ASSERT_TRUE(success);
 }
 
@@ -210,25 +227,26 @@ TEST_F(PostgreSQLQueryTest, WhereClause) {
  */
 TEST_F(PostgreSQLQueryTest, JoinQuery) {
     bool success = false;
-    auto status =
-        db_->execute(
-               R"(
+    auto status  = db_->execute(
+                         R"(
         SELECT u.name, o.amount, o.status
         FROM test_users u
         JOIN test_orders o ON u.id = o.user_id
         WHERE o.status = 'completed'
     )",
-               [&success](transaction &tr, results result) {
-                   ASSERT_EQ(result.size(), 2);
+                         [&success](transaction &tr, results result) {
+                             ASSERT_EQ(result.size(), 2);
 
-                   // Check first completed order
-                   ASSERT_EQ(result[0][0].as<std::string>(), "John Doe");
-                   ASSERT_EQ(result[0][1].as<std::string>(), "100.50");
-                   ASSERT_EQ(result[0][2].as<std::string>(), "completed");
-                   success = true;
-               },
-               [](error::db_error error) { ASSERT_TRUE(false) << "Query failed: " << error.code; })
-            .await();
+                             // Check first completed order
+                             ASSERT_EQ(result[0][0].as<std::string>(), "John Doe");
+                             ASSERT_EQ(result[0][1].as<std::string>(), "100.50");
+                             ASSERT_EQ(result[0][2].as<std::string>(), "completed");
+                             success = true;
+                         },
+                         [](error::db_error error) {
+                             ASSERT_TRUE(false) << "Query failed: " << error.code;
+                         })
+                      .await();
     ASSERT_TRUE(success);
 }
 
@@ -240,26 +258,27 @@ TEST_F(PostgreSQLQueryTest, JoinQuery) {
  */
 TEST_F(PostgreSQLQueryTest, Aggregation) {
     bool success = false;
-    auto status =
-        db_->execute(
-               R"(
+    auto status  = db_->execute(
+                         R"(
         SELECT u.name, COUNT(o.id) as order_count, SUM(o.amount) as total_amount
         FROM test_users u
         LEFT JOIN test_orders o ON u.id = o.user_id
         GROUP BY u.id, u.name
         ORDER BY total_amount DESC
     )",
-               [&success](transaction &tr, results result) {
-                   ASSERT_EQ(result.size(), 3);
+                         [&success](transaction &tr, results result) {
+                             ASSERT_EQ(result.size(), 3);
 
-                   // Check first row (John Doe with highest total)
-                   ASSERT_EQ(result[0][0].as<std::string>(), "John Doe");
-                   ASSERT_EQ(result[0][1].as<int>(), 2);
-                   ASSERT_EQ(result[0][2].as<std::string>(), "301.25");
-                   success = true;
-               },
-               [](error::db_error error) { ASSERT_TRUE(false) << "Query failed: " << error.code; })
-            .await();
+                             // Check first row (John Doe with highest total)
+                             ASSERT_EQ(result[0][0].as<std::string>(), "John Doe");
+                             ASSERT_EQ(result[0][1].as<int>(), 2);
+                             ASSERT_EQ(result[0][2].as<std::string>(), "301.25");
+                             success = true;
+                         },
+                         [](error::db_error error) {
+                             ASSERT_TRUE(false) << "Query failed: " << error.code;
+                         })
+                      .await();
     ASSERT_TRUE(success);
 }
 
@@ -271,9 +290,8 @@ TEST_F(PostgreSQLQueryTest, Aggregation) {
  */
 TEST_F(PostgreSQLQueryTest, Subquery) {
     bool success = false;
-    auto status =
-        db_->execute(
-               R"(
+    auto status  = db_->execute(
+                         R"(
         SELECT name, age
         FROM test_users
         WHERE id IN (
@@ -282,14 +300,16 @@ TEST_F(PostgreSQLQueryTest, Subquery) {
             WHERE status = 'pending'
         )
     )",
-               [&success](transaction &tr, results result) {
-                   ASSERT_EQ(result.size(), 1);
-                   ASSERT_EQ(result[0][0].as<std::string>(), "John Doe");
-                   ASSERT_EQ(result[0][1].as<int>(), 30);
-                   success = true;
-               },
-               [](error::db_error error) { ASSERT_TRUE(false) << "Query failed: " << error.code; })
-            .await();
+                         [&success](transaction &tr, results result) {
+                             ASSERT_EQ(result.size(), 1);
+                             ASSERT_EQ(result[0][0].as<std::string>(), "John Doe");
+                             ASSERT_EQ(result[0][1].as<int>(), 30);
+                             success = true;
+                         },
+                         [](error::db_error error) {
+                             ASSERT_TRUE(false) << "Query failed: " << error.code;
+                         })
+                      .await();
     ASSERT_TRUE(success);
 }
 
@@ -339,7 +359,9 @@ TEST_F(PostgreSQLQueryTest, ComplexQuery) {
                    ASSERT_EQ(result[0][4].as<std::string>(), "High Value");
                    success = true;
                },
-               [](error::db_error error) { ASSERT_TRUE(false) << "Query failed: " << error.code; })
+               [](error::db_error error) {
+                   ASSERT_TRUE(false) << "Query failed: " << error.code;
+               })
             .await();
     ASSERT_TRUE(success);
 }
@@ -371,22 +393,25 @@ TEST_F(PostgreSQLQueryTest, QueryPerformance) {
     ASSERT_TRUE(success);
 
     // Prepare the queries
-    ASSERT_TRUE(db_->prepare("simple_insert", "INSERT INTO test_performance (value) VALUES ($1)")
-                    .prepare("batch_insert",
-                             "INSERT INTO test_performance (value) VALUES ($1),($2),($3),($4)")
-                    .prepare("multi_insert",
-                             "INSERT INTO test_performance (value) VALUES ($1),($2),($3),($4)")
-                    .await());
+    ASSERT_TRUE(
+        db_->prepare("simple_insert", "INSERT INTO test_performance (value) VALUES ($1)")
+            .prepare("batch_insert",
+                     "INSERT INTO test_performance (value) VALUES ($1),($2),($3),($4)")
+            .prepare("multi_insert",
+                     "INSERT INTO test_performance (value) VALUES ($1),($2),($3),($4)")
+            .await());
 
     // METHOD 1: Simple insertion with a single parameter
-    ASSERT_TRUE(db_->execute("simple_insert", params{std::string("Test value single")}).await());
+    ASSERT_TRUE(
+        db_->execute("simple_insert", params{std::string("Test value single")}).await());
 
     // METHOD 2: Insertion with multiple explicit parameters
-    ASSERT_TRUE(db_->execute("batch_insert", params{std::string("Test value explicit 1"),
-                                                    std::string("Test value explicit 2"),
-                                                    std::string("Test value explicit 3"),
-                                                    std::string("Test value explicit 4")})
-                    .await());
+    ASSERT_TRUE(
+        db_->execute("batch_insert", params{std::string("Test value explicit 1"),
+                                            std::string("Test value explicit 2"),
+                                            std::string("Test value explicit 3"),
+                                            std::string("Test value explicit 4")})
+            .await());
 
     // METHOD 3: Insertion with a vector of strings
     std::vector<std::string> values;
@@ -397,32 +422,33 @@ TEST_F(PostgreSQLQueryTest, QueryPerformance) {
 
     // Verify that all insertions worked
     success = false;
-    status =
-        db_->execute(
-               "SELECT value FROM test_performance ORDER BY id",
-               [&success](transaction &tr, results result) {
-                   // We should have 9 rows in total (1 + 4 + 4)
-                   ASSERT_EQ(result.size(), 9);
+    status  = db_->execute(
+                    "SELECT value FROM test_performance ORDER BY id",
+                    [&success](transaction &tr, results result) {
+                        // We should have 9 rows in total (1 + 4 + 4)
+                        ASSERT_EQ(result.size(), 9);
 
-                   // Verify simple insertion
-                   ASSERT_EQ(result[0][0].as<std::string>(), "Test value single");
+                        // Verify simple insertion
+                        ASSERT_EQ(result[0][0].as<std::string>(), "Test value single");
 
-                   // Verify insertion with explicit parameters
-                   for (int i = 1; i <= 4; ++i) {
-                       ASSERT_EQ(result[i][0].as<std::string>(),
-                                 "Test value explicit " + std::to_string(i));
-                   }
+                        // Verify insertion with explicit parameters
+                        for (int i = 1; i <= 4; ++i) {
+                            ASSERT_EQ(result[i][0].as<std::string>(),
+                                       "Test value explicit " + std::to_string(i));
+                        }
 
-                   // Verify insertion with string vector
-                   for (int i = 1; i <= 4; ++i) {
-                       ASSERT_EQ(result[i + 4][0].as<std::string>(),
-                                 "Test value vector " + std::to_string(i));
-                   }
+                        // Verify insertion with string vector
+                        for (int i = 1; i <= 4; ++i) {
+                            ASSERT_EQ(result[i + 4][0].as<std::string>(),
+                                       "Test value vector " + std::to_string(i));
+                        }
 
-                   success = true;
-               },
-               [](error::db_error error) { ASSERT_TRUE(false) << "Query failed: " << error.code; })
-            .await();
+                        success = true;
+                    },
+                    [](error::db_error error) {
+                        ASSERT_TRUE(false) << "Query failed: " << error.code;
+                    })
+                 .await();
     ASSERT_TRUE(status);
     ASSERT_TRUE(success);
 
@@ -435,7 +461,8 @@ TEST_F(PostgreSQLQueryTest, QueryPerformance) {
     // Dynamically build a multi-value insert query
     std::string insert_query = "INSERT INTO test_performance (value) VALUES ";
     for (int i = 1; i <= 100; ++i) {
-        if (i > 1) insert_query += ",";
+        if (i > 1)
+            insert_query += ",";
         insert_query += "($" + std::to_string(i) + ")";
     }
 
@@ -457,13 +484,16 @@ TEST_F(PostgreSQLQueryTest, QueryPerformance) {
     success    = false;
     status =
         db_->execute(
-               "SELECT COUNT(*) FROM test_performance WHERE value LIKE 'Performance test%'",
+               "SELECT COUNT(*) FROM test_performance WHERE value LIKE 'Performance "
+               "test%'",
                [&success](transaction &tr, results result) {
                    ASSERT_EQ(result.size(), 1);
                    ASSERT_EQ(result[0][0].as<int>(), 100); // We should find 100 results
                    success = true;
                },
-               [](error::db_error error) { ASSERT_TRUE(false) << "Query failed: " << error.code; })
+               [](error::db_error error) {
+                   ASSERT_TRUE(false) << "Query failed: " << error.code;
+               })
             .await();
     auto end = std::chrono::steady_clock::now();
 

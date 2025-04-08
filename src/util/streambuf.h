@@ -48,7 +48,7 @@ public:
     typedef charT                                   char_type;      ///< Character type
     typedef container                               container_type; ///< Container type
     typedef typename container_type::const_iterator const_iterator; ///< Iterator type
-    typedef std::ios_base                           ios_base;       ///< Base IO class type
+    typedef std::ios_base                           ios_base; ///< Base IO class type
 
     typedef std::basic_streambuf<charT, traits> base;     ///< Base streambuf type
     typedef typename base::pos_type             pos_type; ///< Position type
@@ -151,13 +151,22 @@ protected:
         (void) which;
         char_type *tgt(nullptr);
         switch (way) {
-            case ios_base::beg: tgt = start_ + off; break;
-            case ios_base::cur: tgt = base::gptr() + off; break;
-            case ios_base::end: tgt = start_ + count_ - 1 + off; break;
-            default: break;
+            case ios_base::beg:
+                tgt = start_ + off;
+                break;
+            case ios_base::cur:
+                tgt = base::gptr() + off;
+                break;
+            case ios_base::end:
+                tgt = start_ + count_ - 1 + off;
+                break;
+            default:
+                break;
         }
-        if (!tgt) return -1;
-        if (tgt < start_ || start_ + count_ < tgt) return -1;
+        if (!tgt)
+            return -1;
+        if (tgt < start_ || start_ + count_ < tgt)
+            return -1;
         base::setg(start_, tgt, start_ + count_);
         return tgt - start_;
     }
@@ -176,7 +185,8 @@ protected:
     seekpos(pos_type pos, ios_base::openmode which = ios_base::in | ios_base::out) {
         (void) which;
         char_type *tgt = start_ + pos;
-        if (tgt < start_ || start_ + count_ < tgt) return -1;
+        if (tgt < start_ || start_ + count_ < tgt)
+            return -1;
         base::setg(start_, tgt, start_ + count_);
         return tgt - start_;
     }

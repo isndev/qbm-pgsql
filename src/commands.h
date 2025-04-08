@@ -117,7 +117,8 @@ public:
      * @param mode Transaction mode
      * @param on_success Callback for successful transaction start
      */
-    Begin(Transaction *parent, End<CB_ERROR> *end, transaction_mode mode, CB_SUCCESS &&on_success)
+    Begin(Transaction *parent, End<CB_ERROR> *end, transaction_mode mode,
+          CB_SUCCESS &&on_success)
         : Transaction(parent)
         , _end(end)
         , _mode(mode)
@@ -129,7 +130,8 @@ public:
                     _on_success(*this);
                 } catch (std::exception const &e) {
                     _result = false;
-                    _end->get_error_callback()((error::db_error) error::client_error{e.what()});
+                    _end->get_error_callback()(
+                        (error::db_error) error::client_error{e.what()});
                 }
             },
             [this](auto &&err) { _end->get_error_callback()(err); })));
@@ -170,8 +172,8 @@ public:
  */
 template <typename CB_ERROR>
 class EndSavePoint final : public Transaction {
-    const std::string _name;     ///< Savepoint name
-    CB_ERROR          _on_error; ///< Error callback
+    const std::string _name;                  ///< Savepoint name
+    CB_ERROR          _on_error;              ///< Error callback
     bool              _force_rollback{false}; ///< Flag to force rollback
 
 public:
@@ -209,11 +211,11 @@ public:
 
     /**
      * @brief Force rollback of this savepoint
-     * 
+     *
      * This method can be called to explicitly force rollback
      * of the savepoint regardless of the result status.
      */
-    void 
+    void
     force_rollback() {
         _force_rollback = true;
     }
@@ -227,22 +229,21 @@ public:
     void
     on_end_savepoint() {
         bool should_release = _result && !_force_rollback;
-        push_query(should_release ? 
-            std::unique_ptr<ISqlQuery>(new ReleaseSavePointQuery(
-                _name,
-                []() {
-                    // committed
-                },
-                [this](auto const &err) { _on_error(err); }))
-            : 
-            std::unique_ptr<ISqlQuery>(new RollbackSavePointQuery(
-                _name,
-                [this]() {
-                    _on_error((error::db_error) error::query_error(
-                        "savepoint rollback processed due to a "
-                        "query failure"));
-                },
-                [this](auto const &err) { _on_error(err); })));
+        push_query(should_release
+                       ? std::unique_ptr<ISqlQuery>(new ReleaseSavePointQuery(
+                             _name,
+                             []() {
+                                 // committed
+                             },
+                             [this](auto const &err) { _on_error(err); }))
+                       : std::unique_ptr<ISqlQuery>(new RollbackSavePointQuery(
+                             _name,
+                             [this]() {
+                                 _on_error((error::db_error) error::query_error(
+                                     "savepoint rollback processed due to a "
+                                     "query failure"));
+                             },
+                             [this](auto const &err) { _on_error(err); })));
     }
 };
 
@@ -279,14 +280,15 @@ public:
                     _on_success(*this);
                 } catch (std::exception const &e) {
                     _result = false;
-                    _end->force_rollback();  // Force rollback on exception
-                    _end->get_error_callback()((error::db_error) error::client_error{e.what()});
+                    _end->force_rollback(); // Force rollback on exception
+                    _end->get_error_callback()(
+                        (error::db_error) error::client_error{e.what()});
                 }
             },
-            [this](auto const &err) { 
-                _result = false;  // Mark explicitly as failed on error
-                _end->force_rollback();  // Force rollback on SQL error
-                _end->get_error_callback()(err); 
+            [this](auto const &err) {
+                _result = false;        // Mark explicitly as failed on error
+                _end->force_rollback(); // Force rollback on SQL error
+                _end->get_error_callback()(err);
             })));
     }
 
@@ -313,7 +315,7 @@ public:
     on_sub_command_status(bool status) final {
         _result &= status;
         if (!status) {
-            _end->force_rollback();  // Force rollback on sub-command failure
+            _end->force_rollback(); // Force rollback on sub-command failure
         }
         _parent->on_sub_command_status(status);
     }
@@ -341,7 +343,8 @@ public:
      * @param on_success Callback for successful query execution
      * @param on_error Callback for query execution errors
      */
-    Query(Transaction *parent, std::string &&expr, CB_SUCCESS &&on_success, CB_ERROR &&on_error)
+    Query(Transaction *parent, std::string &&expr, CB_SUCCESS &&on_success,
+          CB_ERROR &&on_error)
         : Transaction(parent)
         , _on_success(std::forward<CB_SUCCESS>(on_success))
         , _on_error(std::forward<CB_ERROR>(on_error)) {
@@ -353,13 +356,16 @@ public:
                 } catch (std::exception const &e) {
                     _result = false;
                     _on_error((error::db_error) error::client_error{e.what()});
-                    if (_parent) _parent->on_sub_command_status(false);  // Propager l'erreur au parent
+                    if (_parent)
+                        _parent->on_sub_command_status(
+                            false); // Propager l'erreur au parent
                 }
             },
-            [this](auto const &err) { 
+            [this](auto const &err) {
                 _result = false;
-                _on_error(err); 
-                if (_parent) _parent->on_sub_command_status(false);  // Propager l'erreur au parent
+                _on_error(err);
+                if (_parent)
+                    _parent->on_sub_command_status(false); // Propager l'erreur au parent
             })));
     }
 
@@ -406,13 +412,15 @@ public:
                 } catch (std::exception const &e) {
                     _result = false;
                     _on_error((error::db_error) error::client_error{e.what()});
-                    if (_parent) _parent->on_sub_command_status(false);
+                    if (_parent)
+                        _parent->on_sub_command_status(false);
                 }
             },
-            [this](auto const &err) { 
+            [this](auto const &err) {
                 _result = false;
-                _on_error(err); 
-                if (_parent) _parent->on_sub_command_status(false);
+                _on_error(err);
+                if (_parent)
+                    _parent->on_sub_command_status(false);
             })));
     }
 
@@ -473,7 +481,8 @@ public:
      * will be caught and will cause the parent transaction to be marked as failed.
      */
     ~Then() {
-        if (!parent()->result()) return;
+        if (!parent()->result())
+            return;
         try {
             _on_success(*(parent()));
         } catch (...) {
@@ -516,7 +525,8 @@ public:
      * will be caught and will cause the parent transaction to be marked as failed.
      */
     ~Error() {
-        if (parent()->result()) return;
+        if (parent()->result())
+            return;
 
         try {
             _on_error(*(parent()));
@@ -655,8 +665,8 @@ public:
      * @param on_success Callback for successful execution with results
      * @param on_error Callback for execution errors
      */
-    QueryPrepared(Transaction *parent, std::string const &query_name, QueryParams &&params,
-                  CB_SUCCESS &&on_success, CB_ERROR &&on_error)
+    QueryPrepared(Transaction *parent, std::string const &query_name,
+                  QueryParams &&params, CB_SUCCESS &&on_success, CB_ERROR &&on_error)
         : Transaction(parent)
         , _on_success(std::forward<CB_SUCCESS>(on_success))
         , _on_error(std::forward<CB_ERROR>(on_error))
@@ -665,7 +675,8 @@ public:
             _query_storage, _query_name, std::move(params),
             [this]() {
                 try {
-                    _results.row_description() = _query_storage.get(_query_name).row_description;
+                    _results.row_description() =
+                        _query_storage.get(_query_name).row_description;
                     _on_success(*this, resultset(&_results));
                     _parent->results() = std::move(_results);
                 } catch (std::exception const &e) {
