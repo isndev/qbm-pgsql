@@ -35,6 +35,7 @@
 #pragma once
 
 #include <optional>
+#include <qb/json.h>
 #include <qb/system/timestamp.h>
 #include <qb/uuid.h>
 #include <string>
@@ -128,6 +129,17 @@ template <>
 struct type_mapping<qb::uuid> {
     static constexpr integer type_oid = 2950;
 }; // uuid
+
+// JSON types
+template <>
+struct type_mapping<qb::json> {
+    static constexpr integer type_oid = 114;
+}; // json type
+
+template <>
+struct type_mapping<qb::jsonb> {
+    static constexpr integer type_oid = 3802;
+}; // jsonb type
 
 // Date and timestamp types
 template <>

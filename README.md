@@ -23,7 +23,6 @@ and error handling.
 - QB C++ Actor Framework
 - C++17 compatible compiler
 - CMake 3.14 or newer
-- Boost libraries
 - OpenSSL (for secure connections and SCRAM authentication)
 
 ## Integration

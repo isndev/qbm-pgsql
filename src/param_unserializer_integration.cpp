@@ -52,13 +52,15 @@ tuple_conversion_wrapper(const resultset::row &row, Tuple &tuple) {
 /**
  * @brief Explicit instantiation for single integer tuple
  */
-template void tuple_conversion_wrapper<std::tuple<int>>(const resultset::row &, std::tuple<int> &);
+template void tuple_conversion_wrapper<std::tuple<int>>(const resultset::row &,
+                                                        std::tuple<int> &);
 
 /**
  * @brief Explicit instantiation for single string tuple
  */
-template void tuple_conversion_wrapper<std::tuple<std::string>>(const resultset::row &,
-                                                                std::tuple<std::string> &);
+template void
+tuple_conversion_wrapper<std::tuple<std::string>>(const resultset::row &,
+                                                  std::tuple<std::string> &);
 
 /**
  * @brief Explicit instantiation for int, string tuple
@@ -89,13 +91,15 @@ template void tuple_conversion_wrapper<std::tuple<std::string, std::string>>(
 /**
  * @brief Explicit instantiation for int, int, int tuple
  */
-template void tuple_conversion_wrapper<std::tuple<int, int, int>>(const resultset::row &,
-                                                                  std::tuple<int, int, int> &);
+template void
+tuple_conversion_wrapper<std::tuple<int, int, int>>(const resultset::row &,
+                                                    std::tuple<int, int, int> &);
 
 /**
  * @brief Explicit instantiation for string, string, string tuple
  */
-template void tuple_conversion_wrapper<std::tuple<std::string, std::string, std::string>>(
+template void
+tuple_conversion_wrapper<std::tuple<std::string, std::string, std::string>>(
     const resultset::row &, std::tuple<std::string, std::string, std::string> &);
 
 /**
@@ -190,7 +194,8 @@ template void resultset::row::to(std::tuple<int, int, int> &tuple) const;
 /**
  * @brief Explicit instantiation for string, string, string tuple
  */
-template void resultset::row::to(std::tuple<std::string, std::string, std::string> &tuple) const;
+template void
+resultset::row::to(std::tuple<std::string, std::string, std::string> &tuple) const;
 
 /**
  * @brief Explicit instantiation for int, string, int tuple
@@ -240,7 +245,8 @@ template void resultset::row::to(std::tuple<std::string &, std::string &> &tuple
 template void resultset::row::to(std::tuple<int &, int &, int &> &tuple) const;
 
 /**
- * @brief Explicit instantiation for string reference, string reference, string reference tuple
+ * @brief Explicit instantiation for string reference, string reference, string reference
+ * tuple
  */
 template void
 resultset::row::to(std::tuple<std::string &, std::string &, std::string &> &tuple) const;
@@ -251,8 +257,10 @@ resultset::row::to(std::tuple<std::string &, std::string &, std::string &> &tupl
 template void resultset::row::to(std::tuple<int &, std::string &, int &> &tuple) const;
 
 /**
- * @brief Explicit instantiation for string reference, int reference, string reference tuple
+ * @brief Explicit instantiation for string reference, int reference, string reference
+ * tuple
  */
-template void resultset::row::to(std::tuple<std::string &, int &, std::string &> &tuple) const;
+template void
+resultset::row::to(std::tuple<std::string &, int &, std::string &> &tuple) const;
 
 } // namespace qb::pg

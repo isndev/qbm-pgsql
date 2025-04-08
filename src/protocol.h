@@ -58,22 +58,22 @@ namespace detail {
  * @see https://www.postgresql.org/docs/current/protocol-message-formats.html
  */
 enum message_tag {
-    empty_tag                 = '\0', /** (F) Startup message, SSL request, cancel request */
-    authentication_tag        = 'R',  /**< (B) All authentication requests begin with 'R' */
-    backend_key_data_tag      = 'K',  /**< (B) Backend key data (cancellation key data) */
-    bind_tag                  = 'B',  /**< (F) Bind parameters command */
-    bind_complete_tag         = '2',  /**< (B) Server's reply to bind complete command */
-    close_tag                 = 'C',  /**< (F) Close prepared statement or a portal */
-    close_complete_tag        = '3',  /**< (B) Server's acknowledgment of close command */
-    command_complete_tag      = 'C',  /**< (B) Command completed normally */
-    copy_data_tag             = 'd',  /**< (B&F) Data for COPY operation */
-    copy_done_tag             = 'c',  /**< (B&F) COPY data transfer completed */
-    copy_fail_tag             = 'f',  /**< (F) COPY failed */
-    copy_in_response_tag      = 'G',  /**< (B) Server ready for COPY from client */
-    copy_out_response_tag     = 'H',  /**< (B) Server ready for COPY to client */
-    copy_both_response_tag    = 'W',  /**< (B) Server ready for bidirectional COPY */
-    data_row_tag              = 'D',  /**< (B) Data row in a query result */
-    describe_tag              = 'D', /**< (F) Request detail about a prepared statement or portal */
+    empty_tag             = '\0', /** (F) Startup message, SSL request, cancel request */
+    authentication_tag    = 'R',  /**< (B) All authentication requests begin with 'R' */
+    backend_key_data_tag  = 'K',  /**< (B) Backend key data (cancellation key data) */
+    bind_tag              = 'B',  /**< (F) Bind parameters command */
+    bind_complete_tag     = '2',  /**< (B) Server's reply to bind complete command */
+    close_tag             = 'C',  /**< (F) Close prepared statement or a portal */
+    close_complete_tag    = '3',  /**< (B) Server's acknowledgment of close command */
+    command_complete_tag  = 'C',  /**< (B) Command completed normally */
+    copy_data_tag         = 'd',  /**< (B&F) Data for COPY operation */
+    copy_done_tag         = 'c',  /**< (B&F) COPY data transfer completed */
+    copy_fail_tag         = 'f',  /**< (F) COPY failed */
+    copy_in_response_tag  = 'G',  /**< (B) Server ready for COPY from client */
+    copy_out_response_tag = 'H',  /**< (B) Server ready for COPY to client */
+    copy_both_response_tag = 'W', /**< (B) Server ready for bidirectional COPY */
+    data_row_tag           = 'D', /**< (B) Data row in a query result */
+    describe_tag = 'D', /**< (F) Request detail about a prepared statement or portal */
     empty_query_response_tag  = 'I', /**< (B) Response to an empty query string */
     error_response_tag        = 'E', /**< (B) Error report */
     execute_tag               = 'E', /**< (F) Execute a prepared statement */
@@ -88,12 +88,12 @@ enum message_tag {
     parse_tag                 = 'P', /**< (F) Parse a prepared statement */
     parse_complete_tag        = '1', /**< (B) Parse complete */
     password_message_tag      = 'p', /**< (F) Password response */
-    portal_suspended_tag      = 's', /**< (B) Portal execution suspended (partial result) */
-    query_tag                 = 'Q', /**< (F) Simple query */
-    ready_for_query_tag       = 'Z', /**< (B) Server is ready for a new query */
-    row_description_tag       = 'T', /**< (B) Row description for query results */
-    sync_tag                  = 'S', /**< (F) Synchronize command sequence */
-    terminate_tag             = 'X', /**< (F) Terminate session */
+    portal_suspended_tag = 's', /**< (B) Portal execution suspended (partial result) */
+    query_tag            = 'Q', /**< (F) Simple query */
+    ready_for_query_tag  = 'Z', /**< (B) Server is ready for a new query */
+    row_description_tag  = 'T', /**< (B) Row description for query results */
+    sync_tag             = 'S', /**< (F) Synchronize command sequence */
+    terminate_tag        = 'X', /**< (F) Terminate session */
 };
 typedef std::set<message_tag> tag_set_type;
 
@@ -120,11 +120,12 @@ enum auth_states {
      * Specifies that this message contains GSSAPI or SSPI data.
      * Message contains additional bytes with GSSAPI or SSPI authentication data.
      */
-    GSSContinue               = 8,
-    SSPI                      = 9,  /**< Specifies that SSPI authentication is required. */
-    SCRAM_SHA256              = 10, /**< Specifies that SCRAM-SHA-256 authentication is required. */
+    GSSContinue  = 8,
+    SSPI         = 9,  /**< Specifies that SSPI authentication is required. */
+    SCRAM_SHA256 = 10, /**< Specifies that SCRAM-SHA-256 authentication is required. */
     SCRAM_SHA256_CLIENT_PROOF = 11, /**< Message contains SCRAM-SHA-256 client proof. */
-    SCRAM_SHA256_SERVER_CHECK = 12  /**< Message contains SCRAM-SHA-256 server signature. */
+    SCRAM_SHA256_SERVER_CHECK =
+        12 /**< Message contains SCRAM-SHA-256 server signature. */
 };
 
 struct row_data;
@@ -477,12 +478,13 @@ private:
  * @see https://www.postgresql.org/docs/current/protocol-error-fields.html
  */
 struct notice_message {
-    std::string severity; /**< Error severity (S): ERROR, FATAL, PANIC, WARNING, NOTICE, etc. */
-    std::string sqlstate; /**< SQL state code (C): SQLSTATE code */
-    std::string message;  /**< Primary error message (M) */
-    std::string detail;   /**< Detailed error message (D) */
-    std::string hint;     /**< Suggestion for resolving the problem (H) */
-    std::string position; /**< Error position in original query (P) */
+    std::string
+        severity; /**< Error severity (S): ERROR, FATAL, PANIC, WARNING, NOTICE, etc. */
+    std::string sqlstate;          /**< SQL state code (C): SQLSTATE code */
+    std::string message;           /**< Primary error message (M) */
+    std::string detail;            /**< Detailed error message (D) */
+    std::string hint;              /**< Suggestion for resolving the problem (H) */
+    std::string position;          /**< Error position in original query (P) */
     std::string internal_position; /**< Error position in internal query (p) */
     std::string internal_query;    /**< Text of internal query (q) */
     std::string where;             /**< Context of error occurrence (W) */

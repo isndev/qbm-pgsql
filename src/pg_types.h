@@ -33,6 +33,7 @@
 
 #include <cstdint>
 #include <iosfwd>
+#include <qb/json.h>
 #include <qb/uuid.h>
 
 namespace qb {
@@ -70,7 +71,23 @@ using ubigint = uint64_t;
  * Maps PostgreSQL's UUID type to qb's UUID implementation.
  * Standard 128-bit universally unique identifier.
  */
-using uuid_t = qb::uuid;
+using uuid = qb::uuid;
+
+/**
+ * @brief JSON type definition
+ *
+ * Maps PostgreSQL's JSON type to qb's JSON implementation.
+ * Represents JSON data stored in a vector.
+ */
+using json = qb::json;
+
+/**
+ * @brief JSONB type definition
+ *
+ * Maps PostgreSQL's JSONB type to qb's JSON implementation.
+ * Represents JSON data stored in a vector.
+ */
+using jsonb = qb::jsonb;
 
 /**
  * @brief PostgreSQL protocol version
@@ -149,7 +166,8 @@ using nullable = std::optional<T>;
  *
  * Contains the standard OIDs for all built-in PostgreSQL data types.
  * These values match those in the pg_type system catalog table.
- * OIDs are used throughout the PostgreSQL system to identify types, tables, and other objects.
+ * OIDs are used throughout the PostgreSQL system to identify types, tables, and other
+ * objects.
  */
 enum class oid : int {
     boolean          = 16,   /**< Boolean type (true/false) */

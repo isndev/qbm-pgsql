@@ -4,7 +4,8 @@
  *
  * This file defines bidirectional iterators for navigating PostgreSQL query results.
  * It provides a template base class that implements common iterator functionality
- * that can be specialized for different iteration patterns (row iteration and field iteration).
+ * that can be specialized for different iteration patterns (row iteration and field
+ * iteration).
  *
  * The iterators follow the STL iterator requirements and can be used with standard
  * algorithms and range-based for loops to process PostgreSQL result data efficiently.
@@ -41,8 +42,9 @@ namespace detail {
  * @brief Base class for PostgreSQL result data iterators
  *
  * This template class provides a bidirectional iterator implementation for traversing
- * PostgreSQL result data (rows and fields). It follows the Curiously Recurring Template Pattern
- * (CRTP) to allow derived classes to specialize behavior while sharing common functionality.
+ * PostgreSQL result data (rows and fields). It follows the Curiously Recurring Template
+ * Pattern (CRTP) to allow derived classes to specialize behavior while sharing common
+ * functionality.
  *
  * The iterator provides functionality for:
  * - Moving forward and backward through result data
@@ -115,7 +117,8 @@ public:
      * @param row_index The index of the row containing the field
      * @param field_index The index of the field to position the iterator at
      */
-    data_iterator(const resultset *result, std::size_t row_index, std::size_t field_index)
+    data_iterator(const resultset *result, std::size_t row_index,
+                  std::size_t field_index)
         : result_(result)
         , row_index_(row_index)
         , field_index_(field_index) {}
@@ -154,8 +157,9 @@ public:
     /**
      * @brief Pre-increment operator
      *
-     * Advances the iterator to the next position and returns a reference to the updated iterator.
-     * The actual advancement logic is provided by the derived class's advance() method.
+     * Advances the iterator to the next position and returns a reference to the updated
+     * iterator. The actual advancement logic is provided by the derived class's
+     * advance() method.
      *
      * @return Reference to this iterator after advancement
      */
@@ -183,8 +187,9 @@ public:
     /**
      * @brief Pre-decrement operator
      *
-     * Moves the iterator to the previous position and returns a reference to the updated iterator.
-     * The actual movement logic is provided by the derived class's advance() method.
+     * Moves the iterator to the previous position and returns a reference to the updated
+     * iterator. The actual movement logic is provided by the derived class's advance()
+     * method.
      *
      * @return Reference to this iterator after movement
      */

@@ -38,7 +38,8 @@
 namespace qb {
 namespace pg {
 
-const resultset::size_type      resultset::npos = std::numeric_limits<resultset::size_type>::max();
+const resultset::size_type resultset::npos =
+    std::numeric_limits<resultset::size_type>::max();
 const resultset::row::size_type resultset::row::npos =
     std::numeric_limits<resultset::row::size_type>::max();
 
@@ -97,8 +98,10 @@ int
 resultset::const_row_iterator::compare(const_row_iterator const &rhs) const {
     if (!(*this) && !rhs) // invalid iterators are equal
         return 0;
-    assert(result_ == rhs.result_ && "Cannot compare iterators in different result sets");
-    if (row_index_ != rhs.row_index_) return (row_index_ < rhs.row_index_) ? -1 : 1;
+    assert(result_ == rhs.result_ &&
+           "Cannot compare iterators in different result sets");
+    if (row_index_ != rhs.row_index_)
+        return (row_index_ < rhs.row_index_) ? -1 : 1;
     return 0;
 }
 
@@ -163,9 +166,12 @@ int
 resultset::const_field_iterator::compare(const_field_iterator const &rhs) const {
     if (!(*this) && !rhs) // invalid iterators are equal
         return 0;
-    assert(result_ == rhs.result_ && "Cannot compare iterators in different result sets");
-    assert(row_index_ == rhs.row_index_ && "Cannot compare iterators in different data rows");
-    if (field_index_ != rhs.field_index_) return field_index_ < rhs.field_index_ ? -1 : 1;
+    assert(result_ == rhs.result_ &&
+           "Cannot compare iterators in different result sets");
+    assert(row_index_ == rhs.row_index_ &&
+           "Cannot compare iterators in different data rows");
+    if (field_index_ != rhs.field_index_)
+        return field_index_ < rhs.field_index_ ? -1 : 1;
     return 0;
 }
 
@@ -274,8 +280,9 @@ resultset::size_type
 resultset::index_of_name(std::string const &name) const {
     row_description_type const &descriptions = pimpl_->row_description();
     // Find the field description with the matching name
-    auto f = std::find_if(descriptions.begin(), descriptions.end(),
-                          [name](field_description const &fd) { return fd.name == name; });
+    auto f =
+        std::find_if(descriptions.begin(), descriptions.end(),
+                     [name](field_description const &fd) { return fd.name == name; });
     if (f != descriptions.end()) {
         // Return the index (position) of the field in the result set
         return f - descriptions.begin();
@@ -294,7 +301,8 @@ field_description const &
 resultset::field(std::string const &name) const {
     // Linear search for the field description by name
     for (field_description const &fd : pimpl_->row_description()) {
-        if (fd.name == name) return fd;
+        if (fd.name == name)
+            return fd;
     }
     // Throw an exception if no field with the given name exists
     throw std::runtime_error("No field with name '" + name + "' found in result set");

@@ -59,9 +59,9 @@ using namespace qb::pg;
  * including its name, SQL expression, parameter types, and result description.
  */
 struct PreparedQuery {
-    std::string          name;            ///< Name of the prepared query
-    std::string          expression;      ///< SQL expression
-    std::vector<oid>     param_types;     ///< Types of parameters (was type_oid_sequence)
+    std::string          name;        ///< Name of the prepared query
+    std::string          expression;  ///< SQL expression
+    std::vector<oid>     param_types; ///< Types of parameters (was type_oid_sequence)
     row_description_type row_description; ///< Description of result columns
 };
 
@@ -341,7 +341,7 @@ public:
     get() const final {
         ::std::ostringstream cmd;
         cmd << "BEGIN " << _mode;
-        
+
         LOG_DEBUG("[pgsql] Send BEGIN: \"" << cmd.str() << "\"");
         message m(query_tag);
         m.write(cmd.str());
@@ -478,7 +478,8 @@ public:
      * @param success Success callback
      * @param error Error callback
      */
-    ReleaseSavePointQuery(std::string const &name, CB_SUCCESS &&success, CB_ERROR &&error)
+    ReleaseSavePointQuery(std::string const &name, CB_SUCCESS &&success,
+                          CB_ERROR &&error)
         : SqlQuery<CB_SUCCESS, CB_ERROR>(std::forward<CB_SUCCESS>(success),
                                          std::forward<CB_ERROR>(error))
         , _name(name) {}
@@ -517,7 +518,8 @@ public:
      * @param success Success callback
      * @param error Error callback
      */
-    RollbackSavePointQuery(std::string const &name, CB_SUCCESS &&success, CB_ERROR &&error)
+    RollbackSavePointQuery(std::string const &name, CB_SUCCESS &&success,
+                           CB_ERROR &&error)
         : SqlQuery<CB_SUCCESS, CB_ERROR>(std::forward<CB_SUCCESS>(success),
                                          std::forward<CB_ERROR>(error))
         , _name(name) {}
@@ -602,7 +604,8 @@ public:
         cmd.write(_query.expression);
         cmd.write((smallint) _query.param_types.size());
         for (auto oid_val : _query.param_types) {
-            cmd.write(static_cast<integer>(oid_val)); // déjà un integer, pas besoin de cast
+            cmd.write(
+                static_cast<integer>(oid_val)); // déjà un integer, pas besoin de cast
         }
 
         message describe(describe_tag);
@@ -637,8 +640,8 @@ public:
      * @param success Success callback
      * @param error Error callback
      */
-    ExecuteQuery(const PreparedStorage &storage, std::string_view query_name, QueryParams &&params,
-                 CB_SUCCESS &&success, CB_ERROR &&error)
+    ExecuteQuery(const PreparedStorage &storage, std::string_view query_name,
+                 QueryParams &&params, CB_SUCCESS &&success, CB_ERROR &&error)
         : SqlQuery<CB_SUCCESS, CB_ERROR>(std::forward<CB_SUCCESS>(success),
                                          std::forward<CB_ERROR>(error))
         , _storage(storage)
@@ -647,7 +650,8 @@ public:
 
     bool
     is_valid() const final {
-        if (qb::likely(_storage.has(_query_name))) return true;
+        if (qb::likely(_storage.has(_query_name)))
+            return true;
         LOG_CRIT("[pgsql] Error prepared query " << _query_name << " not registered");
         return false;
     }

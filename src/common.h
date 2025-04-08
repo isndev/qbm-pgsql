@@ -140,9 +140,10 @@ struct dbalias : std::string {
  */
 struct connection_options {
     dbalias     alias;  /**< Database alias for convenient reference */
-    std::string schema; /**< Database connection schema. Currently supported are tcp and socket */
-    std::string
-        uri; /**< Database connection URI. `host:port` for tcp, `/path/to/file` for socket */
+    std::string schema; /**< Database connection schema. Currently supported are tcp and
+                           socket */
+    std::string uri; /**< Database connection URI. `host:port` for tcp, `/path/to/file`
+                        for socket */
     std::string database; /**< Database name to connect to */
     std::string user;     /**< Database user name for authentication */
     std::string password; /**< Database user's password for authentication */
@@ -193,13 +194,13 @@ struct connection_options {
  * documentation](http://www.postgresql.org/docs/current/static/sql-set-transaction.html)
  */
 enum class isolation_level {
-    read_committed,  /**< Each statement in the transaction sees only rows committed before it began
-                        (default) */
-    repeatable_read, /**< All statements in the transaction see only rows committed before the first
-                        query is executed */
-    serializable     /**< All statements in the transaction see only rows committed before the first
-                        query, and     transactions can only be committed if they could be executed one
-                        at a     time */
+    read_committed,  /**< Each statement in the transaction sees only rows committed
+                        before it began  (default) */
+    repeatable_read, /**< All statements in the transaction see only rows committed
+                        before the first query is executed */
+    serializable /**< All statements in the transaction see only rows committed before
+                    the first query, and     transactions can only be committed if they
+                    could be executed one at a     time */
 };
 
 /**
@@ -223,7 +224,8 @@ enum class isolation_level {
 struct transaction_mode {
     isolation_level isolation =
         isolation_level::read_committed; /**< Isolation level for the transaction */
-    bool read_only  = false; /**< Whether the transaction is read-only (no writes allowed) */
+    bool read_only =
+        false; /**< Whether the transaction is read-only (no writes allowed) */
     bool deferrable = false; /**< Whether the transaction is deferrable (only applies to
                                 serializable transactions) */
 
@@ -245,7 +247,8 @@ struct transaction_mode {
      * @param ro Whether the transaction is read-only (true) or read-write (false)
      * @param def Whether the transaction is deferrable (true) or non-deferrable (false)
      */
-    explicit constexpr transaction_mode(isolation_level i, bool ro = false, bool def = false)
+    explicit constexpr transaction_mode(isolation_level i, bool ro = false,
+                                        bool def = false)
         : isolation{i}
         , read_only{ro}
         , deferrable{def} {}
@@ -254,7 +257,8 @@ struct transaction_mode {
 /**
  * @brief Stream output operator for transaction mode
  *
- * Converts a transaction mode structure to its string representation for display or logging.
+ * Converts a transaction mode structure to its string representation for display or
+ * logging.
  *
  * @param os The output stream
  * @param val The transaction mode to output

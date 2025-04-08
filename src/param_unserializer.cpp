@@ -24,6 +24,7 @@
 #include <cstring>
 #include <iostream>
 #include <netinet/in.h> // For ntohl, ntohs
+#include <qb/system/endian.h>
 #include <stdexcept>
 
 #include "./param_unserializer.h"
@@ -87,8 +88,7 @@ ParamUnserializer::read_integer(const std::vector<byte> &buffer) {
 /**
  * @brief Reads an 8-byte integer from a binary buffer
  *
- * Performs manual byte swapping for 64-bit integers as standard
- * network functions don't handle 64-bit values. Converts from big-endian
+ * Uses endian utility to convert from big-endian (network byte order)
  * to host byte order.
  *
  * @param buffer The binary buffer containing the bigint value
@@ -102,31 +102,18 @@ ParamUnserializer::read_bigint(const std::vector<byte> &buffer) {
         throw std::runtime_error("Buffer too small for bigint");
     }
 
-    // Manual byte swapping for 64-bit integers (network byte order)
-    union {
-        bigint i;
-        byte   b[8];
-    } src, dst;
-
-    std::memcpy(src.b, buffer.data(), sizeof(bigint));
+    // Create a temporary bigint value from the buffer
+    bigint value;
+    std::memcpy(&value, buffer.data(), sizeof(bigint));
 
     // Convert from big-endian to host byte order
-    dst.b[0] = src.b[7];
-    dst.b[1] = src.b[6];
-    dst.b[2] = src.b[5];
-    dst.b[3] = src.b[4];
-    dst.b[4] = src.b[3];
-    dst.b[5] = src.b[2];
-    dst.b[6] = src.b[1];
-    dst.b[7] = src.b[0];
-
-    return dst.i;
+    return qb::endian::from_big_endian(value);
 }
 
 /**
  * @brief Reads a single-precision floating point value from a binary buffer
  *
- * Performs byte swapping for 32-bit floats to convert from network byte order
+ * Uses endian utility for 32-bit floats to convert from network byte order
  * (big-endian) to host byte order.
  *
  * @param buffer The binary buffer containing the float value
@@ -140,29 +127,24 @@ ParamUnserializer::read_float(const std::vector<byte> &buffer) {
         throw std::runtime_error("Buffer too small for float");
     }
 
-    // For floats, once we read the integer with correct endianness,
-    // we can interpret it directly
-    union {
-        uint32_t i;
-        float    f;
-        byte     b[4];
-    } src, dst;
-
-    std::memcpy(src.b, buffer.data(), sizeof(float));
+    // Create a temporary value to hold the bytes
+    uint32_t value;
+    std::memcpy(&value, buffer.data(), sizeof(float));
 
     // Convert from big-endian to host byte order
-    dst.b[0] = src.b[3];
-    dst.b[1] = src.b[2];
-    dst.b[2] = src.b[1];
-    dst.b[3] = src.b[0];
+    uint32_t host_value = qb::endian::from_big_endian(value);
 
-    return dst.f;
+    // Convert to float
+    float result;
+    std::memcpy(&result, &host_value, sizeof(float));
+
+    return result;
 }
 
 /**
  * @brief Reads a double-precision floating point value from a binary buffer
  *
- * Performs manual byte swapping for 64-bit doubles to convert from network byte order
+ * Uses endian utility for 64-bit doubles to convert from network byte order
  * (big-endian) to host byte order.
  *
  * @param buffer The binary buffer containing the double value
@@ -176,25 +158,18 @@ ParamUnserializer::read_double(const std::vector<byte> &buffer) {
         throw std::runtime_error("Buffer too small for double");
     }
 
-    // Manual byte swap for 64-bit doubles
-    union {
-        uint64_t i;
-        double   d;
-        byte     b[8];
-    } src, dst;
+    // Create a temporary value to hold the bytes
+    uint64_t value;
+    std::memcpy(&value, buffer.data(), sizeof(double));
 
-    std::memcpy(src.b, buffer.data(), sizeof(src.b));
+    // Convert from big-endian to host byte order
+    uint64_t host_value = qb::endian::from_big_endian(value);
 
-    dst.b[0] = src.b[7];
-    dst.b[1] = src.b[6];
-    dst.b[2] = src.b[5];
-    dst.b[3] = src.b[4];
-    dst.b[4] = src.b[3];
-    dst.b[5] = src.b[2];
-    dst.b[6] = src.b[1];
-    dst.b[7] = src.b[0];
+    // Convert to double
+    double result;
+    std::memcpy(&result, &host_value, sizeof(double));
 
-    return dst.d;
+    return result;
 }
 
 /**
@@ -293,10 +268,12 @@ ParamUnserializer::read_binary_string(const std::vector<byte> &buffer) {
 bool
 ParamUnserializer::read_bool(const std::vector<byte> &buffer) {
     // Text format ("true"/"false")
-    if (buffer.size() >= 4 && (buffer[0] == 't' || buffer[0] == 'T' || buffer[0] == 'f' ||
-                               buffer[0] == 'F' || buffer[0] == '1' || buffer[0] == '0')) {
+    if (buffer.size() >= 4 &&
+        (buffer[0] == 't' || buffer[0] == 'T' || buffer[0] == 'f' || buffer[0] == 'F' ||
+         buffer[0] == '1' || buffer[0] == '0')) {
         std::string text = read_text_string(buffer);
-        return (text == "true" || text == "t" || text == "1" || text == "y" || text == "yes");
+        return (text == "true" || text == "t" || text == "1" || text == "y" ||
+                text == "yes");
     }
 
     // Binary format (1 byte)
@@ -328,7 +305,8 @@ ParamUnserializer::read_bytea(const std::vector<byte> &buffer) {
         }
 
         // Read the length
-        integer length = read_integer(std::vector<byte>(buffer.begin(), buffer.begin() + 4));
+        integer length =
+            read_integer(std::vector<byte>(buffer.begin(), buffer.begin() + 4));
 
         // Verify the length
         if (length < 0) {

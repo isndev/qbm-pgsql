@@ -79,7 +79,8 @@ convert_tuple_impl(const FromTuple &from, ToTuple &to, std::index_sequence<Indic
 template <typename FromTuple, typename ToTuple>
 void
 convert_tuple(const FromTuple &from, ToTuple &to) {
-    constexpr std::size_t size = std::min(std::tuple_size_v<FromTuple>, std::tuple_size_v<ToTuple>);
+    constexpr std::size_t size =
+        std::min(std::tuple_size_v<FromTuple>, std::tuple_size_v<ToTuple>);
 
     convert_tuple_impl(from, to, std::make_index_sequence<size>{});
 }
