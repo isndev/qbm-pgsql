@@ -695,7 +695,7 @@ TEST_F(PostgreSQLPreparedStatementsTest, PerformanceComparison) {
  * of batching database operations.
  */
 TEST_F(PostgreSQLPreparedStatementsTest, AsyncPerformanceComparison) {
-    const int iterations = 1000;
+    constexpr int iterations = 1000;
 
     // Clear table before test
     auto status = db_->execute("DELETE FROM test_prepared").await();
@@ -707,7 +707,7 @@ TEST_F(PostgreSQLPreparedStatementsTest, AsyncPerformanceComparison) {
     // Use a transaction to batch all non-prepared statements
     bool non_prepared_success = false;
     db_->begin(
-        [iterations, &non_prepared_success](Transaction &tr) {
+        [&non_prepared_success](Transaction &tr) {
             for (int i = 0; i < iterations; i++) {
                 std::string sql =
                     "INSERT INTO test_prepared (value) VALUES ('non_prepared_" +
@@ -753,7 +753,7 @@ TEST_F(PostgreSQLPreparedStatementsTest, AsyncPerformanceComparison) {
     // Use a transaction for prepared statements
     bool prepared_success = false;
     db_->begin(
-        [iterations, &prepared_success](Transaction &tr) {
+        [&prepared_success](Transaction &tr) {
             for (int i = 0; i < iterations; i++) {
                 std::string value = "prepared_" + std::to_string(i);
                 tr.execute(

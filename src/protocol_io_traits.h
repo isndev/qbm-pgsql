@@ -269,7 +269,7 @@ struct binary_reader {
      */
     template <typename InputIterator>
     static InputIterator
-    read(InputIterator begin, InputIterator end, T &value) {
+    read(InputIterator begin, InputIterator, T &) {
         // Default version - does nothing
         return begin;
     }
@@ -292,7 +292,7 @@ struct binary_reader<smallint> {
     template <typename InputIterator>
     static InputIterator
     read(InputIterator begin, InputIterator end, smallint &value) {
-        if (std::distance(begin, end) < sizeof(smallint))
+        if (static_cast<std::size_t>(std::distance(begin, end)) < sizeof(smallint))
             return begin;
 
         std::vector<byte>                buffer(begin, begin + sizeof(smallint));
@@ -319,7 +319,7 @@ struct binary_reader<integer> {
     template <typename InputIterator>
     static InputIterator
     read(InputIterator begin, InputIterator end, integer &value) {
-        if (std::distance(begin, end) < sizeof(integer))
+        if (static_cast<std::size_t>(std::distance(begin, end)) < sizeof(integer))
             return begin;
 
         std::vector<byte>                buffer(begin, begin + sizeof(integer));
@@ -515,7 +515,7 @@ struct text_reader {
      */
     template <typename InputIterator>
     static InputIterator
-    read(InputIterator begin, InputIterator end, T &value) {
+    read(InputIterator begin, InputIterator, T &) {
         // Default version - does nothing
         return begin;
     }

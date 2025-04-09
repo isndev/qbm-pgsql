@@ -514,7 +514,7 @@ private:
     template <typename T, typename Enable = void>
     struct param_serializer_traits {
         static void
-        add_param(ParamSerializer &serializer, const T &param) {
+        add_param(ParamSerializer &, const T &) {
             // Fallback for unsupported types
             static_assert(!sizeof(T), "Unsupported parameter type");
         }
@@ -659,7 +659,7 @@ private:
      * @param format Format code
      */
     void
-    add_format_code(protocol_data_format format) {
+    add_format_code(protocol_data_format) {
         // NO-OP - We don't add format codes in the serializer anymore
         // This avoids the extra format codes problem
     }

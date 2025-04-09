@@ -110,7 +110,7 @@ private:
      */
     template <typename T>
     static bool
-    read_value(const std::vector<byte> &buffer, T &value) {
+    read_value(const std::vector<byte> &, T &) {
         // Default implementation returns false for unsupported types
         return false;
     }

@@ -1837,7 +1837,7 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, JSONBType) {
         auto select_status =
             db_->execute(
                    "select_jsonb", QueryParams(inserted_id),
-                   [&select_success, &retrieved_jsonb, &test_jsonb](Transaction &tr,
+                   [&select_success, &retrieved_jsonb](Transaction &tr,
                                                                     results result) {
                        ASSERT_EQ(result.size(), 1);
                        ASSERT_EQ(result[0].size(), 1);
