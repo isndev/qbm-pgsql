@@ -489,14 +489,14 @@ public:
 
         template <typename T>
         bool
-        to_impl(T &val, std::true_type const &) const {
+        to_impl(T &, std::true_type const &) const {
             field_buffer b = input_buffer();
             return true;
         }
 
         template <typename T>
         bool
-        to_impl(T &val, std::false_type const &) const {
+        to_impl(T &, std::false_type const &) const {
             field_description const &fd = description();
             if (fd.format_code == pg::protocol_data_format::Binary) {
                 throw error::db_error{
@@ -582,7 +582,7 @@ public:
         bool
         valid() const {
             return result_ && row_index_ < result_->size() &&
-                   field_index_ <= result_->columns_size();
+                   field_index_ <= static_cast<std::size_t>(result_->columns_size());
         }
 
     private:

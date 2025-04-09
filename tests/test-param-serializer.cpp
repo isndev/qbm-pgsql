@@ -45,8 +45,6 @@
 #include <gtest/gtest.h>
 #include "../pgsql.h"
 
-constexpr std::string_view PGSQL_CONNECTION_STR = "tcp://test:test@localhost:5432[test]";
-
 using namespace qb::pg;
 using namespace qb::pg::detail;
 
@@ -902,7 +900,6 @@ TEST_F(ParamSerializerTest, VeryLongStringSerialization) {
 TEST_F(ParamSerializerTest, StringWithNullCharacters) {
     // Create a string that explicitly contains null characters
     std::string testString   = "This string\0contains\0null\0characters";
-    size_t      explicitSize = 35; // Actual size including the '\0' characters
 
     // Serialize with explicit size
     serializer->add_cstring(testString.c_str());
@@ -1499,7 +1496,6 @@ TEST_F(ParamSerializerTest, TimestampBinaryFormat) {
     int64_t pgTimestampMicros = 631197296789012LL;
 
     // Serialize timestamp in network byte order (big-endian)
-    byte timestampBytes[8];
     union {
         int64_t i;
         byte    b[8];
