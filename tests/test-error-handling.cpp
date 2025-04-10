@@ -241,7 +241,6 @@ TEST_F(PostgreSQLErrorHandlingTest, ConnectionError) {
 
 // Test handling of prepared statement parameter errors
 TEST_F(PostgreSQLErrorHandlingTest, PreparedStatementParameterError) {
-    bool statement_prepared = false;
     bool error_caught       = false;
 
     auto prepare_status =
