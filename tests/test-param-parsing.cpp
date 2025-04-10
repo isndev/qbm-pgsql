@@ -806,7 +806,7 @@ TEST_F(ParamParsingTest, TimestampParams) {
     unserializer->init(buffer);
 
     // Get the Timestamp parameter
-    qb::Timestamp extracted_timestamp = unserializer->get_param<qb::Timestamp>(0);
+    // qb::Timestamp extracted_timestamp = unserializer->get_param<qb::Timestamp>(0);
 
     // Since our test implementation always returns the same timestamp value,
     // we don't need to compare with the original

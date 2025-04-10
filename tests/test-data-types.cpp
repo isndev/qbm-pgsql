@@ -903,7 +903,7 @@ TEST_F(PostgreSQLDataTypesTest, TimestampBinaryFormatDeserialization) {
     int64_t pgTimestampMicros = 631197296789012LL;
 
     // Create binary representation (8 bytes, network byte order)
-    byte timestampBytes[8];
+    // byte timestampBytes[8];
     union {
         int64_t i;
         byte    b[8];
