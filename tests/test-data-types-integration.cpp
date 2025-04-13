@@ -1334,7 +1334,7 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, TimestampType) {
             std::time_t unix_time = std::mktime(&time_data);
 
             qb::Timestamp test_timestamp =
-                qb::Timestamp::seconds(unix_time) + qb::Timespan::microseconds(789000);
+                qb::Timestamp::from_seconds(unix_time) + qb::Timespan::from_microseconds(789000);
             test_cases.emplace_back("Standard", test_timestamp);
         }
 
@@ -1350,7 +1350,7 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, TimestampType) {
             std::time_t unix_time = std::mktime(&time_data);
 
             qb::Timestamp test_timestamp =
-                qb::Timestamp::seconds(unix_time) + qb::Timespan::microseconds(999999);
+                qb::Timestamp::from_seconds(unix_time) + qb::Timespan::from_microseconds(999999);
             test_cases.emplace_back("Max microseconds", test_timestamp);
         }
 
@@ -1450,7 +1450,7 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, TimestampTZType) {
         // Case 1: Current time
         {
             qb::UtcTimestamp test_timestamp =
-                qb::UtcTimestamp(qb::Timestamp::seconds(std::time(nullptr)));
+                qb::UtcTimestamp(qb::Timestamp::from_seconds(std::time(nullptr)).nanoseconds());
             test_cases.emplace_back("Current time", test_timestamp);
         }
 
@@ -1466,8 +1466,8 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, TimestampTZType) {
             std::time_t unix_time = std::mktime(&time_data);
 
             qb::Timestamp local_timestamp =
-                qb::Timestamp::seconds(unix_time) + qb::Timespan::microseconds(789000);
-            qb::UtcTimestamp test_timestamp = qb::UtcTimestamp(local_timestamp);
+                qb::Timestamp::from_seconds(unix_time) + qb::Timespan::from_microseconds(789000);
+            qb::UtcTimestamp test_timestamp = qb::UtcTimestamp(local_timestamp.nanoseconds());
             test_cases.emplace_back("Specific date", test_timestamp);
         }
 
@@ -1550,8 +1550,8 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, TimestampTZType) {
 
         // Get current time and create both timestamp types
         std::time_t      now             = std::time(nullptr);
-        qb::Timestamp    local_timestamp = qb::Timestamp::seconds(now);
-        qb::UtcTimestamp utc_timestamp   = qb::UtcTimestamp(local_timestamp);
+        qb::Timestamp    local_timestamp = qb::Timestamp::from_seconds(now);
+        qb::UtcTimestamp utc_timestamp   = qb::UtcTimestamp(local_timestamp.nanoseconds());
 
         // Insert a local timestamp
         bool local_insert_success = false;

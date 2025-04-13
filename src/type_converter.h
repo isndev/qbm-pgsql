@@ -203,12 +203,16 @@ public:
             constexpr int64_t POSTGRES_EPOCH_DIFF_SECONDS = 946684800;
 
             // Get seconds since Unix epoch from the timestamp
-            int64_t unix_seconds = value.seconds();
+            double unix_seconds = value.seconds_float();
+
+            // Calculate the whole seconds and fractional part
+            int64_t whole_seconds = static_cast<int64_t>(unix_seconds);
+            double fractional_seconds = unix_seconds - whole_seconds;
+            int64_t microseconds = static_cast<int64_t>(fractional_seconds * 1000000);
 
             // Convert to PostgreSQL timestamp (microseconds since 2000-01-01)
             int64_t pg_timestamp =
-                (unix_seconds - POSTGRES_EPOCH_DIFF_SECONDS) * 1000000 +
-                (value.microseconds() % 1000000);
+                (whole_seconds - POSTGRES_EPOCH_DIFF_SECONDS) * 1000000 + microseconds;
 
             // Convert to network byte order using the endian utility
             int64_t network_timestamp = qb::endian::to_big_endian(pg_timestamp);
@@ -388,8 +392,8 @@ public:
                 unix_usecs += 1000000;
             }
 
-            return qb::Timestamp::seconds(unix_secs) +
-                   qb::Timespan::microseconds(unix_usecs);
+            return qb::Timestamp::from_seconds(unix_secs) +
+                   qb::Timespan::from_microseconds(unix_usecs);
         } else if constexpr (detail::ParamUnserializer::is_optional<value_type>::value) {
             using inner_type = typename value_type::value_type;
 
@@ -480,7 +484,7 @@ public:
                              std::is_same_v<value_type, qb::UtcTimestamp> ||
                              std::is_same_v<value_type, qb::LocalTimestamp>) {
             // Parse PostgreSQL timestamp format: YYYY-MM-DD HH:MM:SS[.MMMMMM]
-            std::tm tm = {};
+            std::tm tm   = {};
             int     year, month, day, hour, minute, second, microsecond = 0;
 
             // Regular expression to match PostgreSQL timestamp format
@@ -517,8 +521,8 @@ public:
                 std::time_t unix_timestamp = std::mktime(&tm);
 
                 // Create timestamp from seconds and microseconds
-                return value_type(qb::Timestamp::seconds(unix_timestamp) +
-                                  qb::Timespan::microseconds(microsecond));
+                return value_type(qb::Timestamp::from_seconds(unix_timestamp) +
+                                  qb::Timespan::from_microseconds(microsecond));
             }
 
             throw std::runtime_error("Invalid timestamp format");
@@ -722,10 +726,13 @@ struct TypeConverter<qb::Timestamp> {
         // Difference between PostgreSQL epoch (2000-01-01) and Unix epoch (1970-01-01)
         constexpr int64_t POSTGRES_EPOCH_DIFF = 946684800LL; // seconds
 
-        // Convert Unix timestamp to PostgreSQL timestamp
-        int64_t unix_secs  = value.seconds();
-        int64_t unix_usecs = value.microseconds() % 1000000;
-        int64_t pg_usecs   = (unix_secs - POSTGRES_EPOCH_DIFF) * 1000000LL + unix_usecs;
+        // Convert Unix timestamp to PostgreSQL timestamp using float for higher precision
+        double unix_secs_float = value.seconds_float();
+        int64_t whole_seconds = static_cast<int64_t>(unix_secs_float);
+        double fractional_part = unix_secs_float - whole_seconds;
+        int64_t unix_usecs = static_cast<int64_t>(fractional_part * 1000000LL);
+        
+        int64_t pg_usecs = (whole_seconds - POSTGRES_EPOCH_DIFF) * 1000000LL + unix_usecs;
 
         // Convert to network byte order (big-endian) using the endian utility
         int64_t network_usecs = qb::endian::to_big_endian(pg_usecs);
@@ -746,20 +753,23 @@ struct TypeConverter<qb::Timestamp> {
      */
     static std::string
     to_text(const qb::Timestamp &value) {
-        std::time_t unix_time = value.seconds();
+        // Get the whole seconds part
+        double unix_secs_float = value.seconds_float();
+        std::time_t unix_time = static_cast<std::time_t>(unix_secs_float);
         std::tm    *time_info = std::localtime(&unix_time);
         char        buf[32];
 
         // Format the date and time parts
         std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", time_info);
 
-        // Add microseconds
+        // Add microseconds with higher precision using fractional part
         std::string result(buf);
-        int64_t     microsecs = value.microseconds() % 1000000;
+        double fractional_part = unix_secs_float - std::floor(unix_secs_float);
+        int64_t microsecs = static_cast<int64_t>(fractional_part * 1000000);
         if (microsecs > 0) {
             char usec_buf[8];
             std::snprintf(usec_buf, sizeof(usec_buf), ".%06ld",
-                          static_cast<long>(microsecs));
+                         static_cast<long>(microsecs));
             result += usec_buf;
         }
 
@@ -814,8 +824,8 @@ struct TypeConverter<qb::Timestamp> {
             unix_usecs += 1000000;
         }
 
-        return qb::Timestamp::seconds(unix_secs) +
-               qb::Timespan::microseconds(unix_usecs);
+        return qb::Timestamp::from_seconds(unix_secs) +
+               qb::Timespan::from_microseconds(unix_usecs);
     }
 
     /**
@@ -877,8 +887,8 @@ struct TypeConverter<qb::Timestamp> {
             throw std::runtime_error("Invalid timestamp conversion");
         }
 
-        return value_type(qb::Timestamp::seconds(time_secs) +
-                          qb::Timespan::microseconds(usec));
+        return value_type(qb::Timestamp::from_seconds(time_secs) +
+                          qb::Timespan::from_microseconds(usec));
     }
 };
 
@@ -967,7 +977,10 @@ struct TypeConverter<qb::UtcTimestamp> {
     from_binary(const std::vector<byte> &buffer) {
         // Convert from binary to Timestamp, then to UtcTimestamp
         qb::Timestamp ts = TypeConverter<qb::Timestamp>::from_binary(buffer);
-        return qb::UtcTimestamp(ts);
+        // Create a new UtcTimestamp and assign the epoch value from the timestamp
+        qb::UtcTimestamp result;
+        result = qb::UtcTimestamp(ts.nanoseconds());
+        return result;
     }
 
     /**
@@ -1057,8 +1070,14 @@ struct TypeConverter<qb::UtcTimestamp> {
             throw std::runtime_error("Invalid timestamp conversion");
         }
 
-        return qb::UtcTimestamp(qb::Timestamp::seconds(time_secs) +
-                                qb::Timespan::microseconds(usec));
+        // Create a timestamp with the seconds and microseconds
+        auto ts = qb::Timestamp::from_seconds(time_secs) +
+                  qb::Timespan::from_microseconds(usec);
+                  
+        // Create a new UtcTimestamp and assign the epoch value from the timestamp
+        qb::UtcTimestamp result;
+        result = qb::UtcTimestamp(ts.nanoseconds());
+        return result;
     }
 };
 
