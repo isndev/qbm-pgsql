@@ -23,7 +23,6 @@
 
 #include <cstring>
 #include <iostream>
-#include <netinet/in.h> // For ntohl, ntohs
 #include <qb/system/endian.h>
 #include <stdexcept>
 
@@ -267,21 +266,34 @@ ParamUnserializer::read_binary_string(const std::vector<byte> &buffer) {
  */
 bool
 ParamUnserializer::read_bool(const std::vector<byte> &buffer) {
-    // Text format ("true"/"false")
-    if (buffer.size() >= 4 &&
+    // Empty buffer check
+    if (buffer.empty()) {
+        throw std::runtime_error("Empty buffer for boolean value");
+    }
+
+    // PostgreSQL binary format for bool (length + value)
+    // Buffer format: [length (4 bytes)][value (1 byte)]
+    if (buffer.size() >= 5) {
+        // Check if this is a binary format with length prefix
+        integer length = read_integer(std::vector<byte>(buffer.begin(), buffer.begin() + 4));
+        
+        if (length == 1) {
+            // This is the formal binary format with length=1
+            return buffer[4] != 0;
+        }
+    }
+    
+    // Text format ("true"/"false", "t"/"f", "1"/"0", etc.)
+    if (buffer.size() >= 1 &&
         (buffer[0] == 't' || buffer[0] == 'T' || buffer[0] == 'f' || buffer[0] == 'F' ||
-         buffer[0] == '1' || buffer[0] == '0')) {
+         buffer[0] == '1' || buffer[0] == '0' || buffer[0] == 'y' || buffer[0] == 'n')) {
         std::string text = read_text_string(buffer);
         return (text == "true" || text == "t" || text == "1" || text == "y" ||
-                text == "yes");
+                text == "yes" || text == "on");
     }
 
-    // Binary format (1 byte)
-    if (buffer.size() >= 1) {
-        return (buffer[0] != 0);
-    }
-
-    throw std::runtime_error("Invalid boolean format");
+    // Raw binary format (single byte) - last resort
+    return buffer[0] != 0;
 }
 
 /**

@@ -35,7 +35,6 @@
 
 #include <iomanip>
 #include <iostream>
-#include <netinet/in.h>
 #include <qb/io.h>
 #include <qb/system/container/unordered_map.h>
 #include <qb/utility/branch_hints.h>
