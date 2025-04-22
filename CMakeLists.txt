@@ -15,14 +15,17 @@
 #         limitations under the License.
 #
 
+project(qbm-pgsql)
+
 if (NOT QB_FOUND)
     message(STATUS "qb project not found, skipping PostgreSQL module")
     return()
 endif ()
 
-project(qbm-pgsql)
-
-include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+if (NOT OPENSSL_FOUND OR NOT QB_IO_WITH_SSL)
+    message(INFO: qbm-pgsql will not be loaded, missing openssl)
+    return()
+endif ()
 
 qb_register_module(
         NAME pgsql

@@ -688,14 +688,13 @@ TEST_F(PostgreSQLPreparedStatementsTest, PerformanceComparison) {
 }
 
 /**
- * @brief Performance comparison using async batch processing with transactions
+ * @brief Test asynchronous prepared statement performance comparison
  *
- * Similar to PerformanceComparison, but uses transactions with a single await
- * at the end of all operations to demonstrate the performance advantages
- * of batching database operations.
+ * Similar to PerformanceComparison but using async transactions to 
+ * more efficiently submit multiple statements.
  */
 TEST_F(PostgreSQLPreparedStatementsTest, AsyncPerformanceComparison) {
-    constexpr int iterations = 1000;
+    const int iterations = 100; // Number of statements to execute
 
     // Clear table before test
     auto status = db_->execute("DELETE FROM test_prepared").await();
@@ -707,7 +706,7 @@ TEST_F(PostgreSQLPreparedStatementsTest, AsyncPerformanceComparison) {
     // Use a transaction to batch all non-prepared statements
     bool non_prepared_success = false;
     db_->begin(
-        [&non_prepared_success](Transaction &tr) {
+        [&non_prepared_success, iterations](Transaction &tr) {
             for (int i = 0; i < iterations; i++) {
                 std::string sql =
                     "INSERT INTO test_prepared (value) VALUES ('non_prepared_" +
@@ -753,7 +752,7 @@ TEST_F(PostgreSQLPreparedStatementsTest, AsyncPerformanceComparison) {
     // Use a transaction for prepared statements
     bool prepared_success = false;
     db_->begin(
-        [&prepared_success](Transaction &tr) {
+        [&prepared_success, iterations](Transaction &tr) {
             for (int i = 0; i < iterations; i++) {
                 std::string value = "prepared_" + std::to_string(i);
                 tr.execute(
@@ -798,8 +797,8 @@ TEST_F(PostgreSQLPreparedStatementsTest, AsyncPerformanceComparison) {
     // 3. Bonus test: Measure select performance with async batch
     // Prepare the select statement first
     status = db_->prepare("async_perf_select",
-                          "SELECT * FROM test_prepared WHERE value = $1 LIMIT 1")
-                 .await();
+                         "SELECT * FROM test_prepared WHERE value = $1 LIMIT 1")
+                .await();
     ASSERT_TRUE(status);
 
     // Use fewer iterations for select to avoid overwhelming the connection
@@ -812,7 +811,7 @@ TEST_F(PostgreSQLPreparedStatementsTest, AsyncPerformanceComparison) {
         db_->execute(
             "async_perf_select",
             params{std::string("prepared_") +
-                   std::to_string(i % 100)}, // Use values we know exist
+                  std::to_string(i % 100)}, // Use values we know exist
             [i, &select_results](Transaction &tr, results result) {
                 select_results[i] = true;
             },

@@ -810,6 +810,12 @@ copy_to_vector(InputIterator begin, InputIterator end) {
 }
 } // namespace detail
 
+// Adding a namespace detail to contain utility components and make ParamUnserializer available
+namespace detail {
+    // Import ParamUnserializer from the parent namespace to make it available here
+    using qb::pg::detail::ParamUnserializer;
+} // namespace detail
+
 /**
  * @brief Main read function for PostgreSQL protocol
  *

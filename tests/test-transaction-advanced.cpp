@@ -764,7 +764,7 @@ TEST_F(PostgreSQLAdvancedTransactionTest, TransactionWithCursor) {
 
     // Insert test data in batches
     auto insert_status =
-        db1_->begin([](Transaction &t) {
+        db1_->begin([CURSOR_TEST_ROWS](Transaction &t) {
                 for (int i = 0; i < CURSOR_TEST_ROWS; i++) {
                     t.execute("INSERT INTO test_advanced_transactions (value, counter) "
                               "VALUES ('cursor_row_" +
@@ -785,7 +785,7 @@ TEST_F(PostgreSQLAdvancedTransactionTest, TransactionWithCursor) {
     std::cout << "Starting transaction with cursor" << std::endl;
 
     auto cursor_status =
-        db1_->begin([&cursor_created, &fetch_executed, &rows_fetched](Transaction &t) {
+        db1_->begin([&cursor_created, &fetch_executed, &rows_fetched, FETCH_SIZE](Transaction &t) {
                 // Declare a cursor
                 t.execute(
                     "DECLARE test_cursor CURSOR FOR SELECT * FROM "
@@ -805,7 +805,7 @@ TEST_F(PostgreSQLAdvancedTransactionTest, TransactionWithCursor) {
                 for (int i = 0; i < 3; i++) {
                     t.execute(
                         "FETCH " + std::to_string(FETCH_SIZE) + " FROM test_cursor",
-                        [&fetch_executed, &rows_fetched, i](Transaction &tr,
+                        [&fetch_executed, &rows_fetched, i, FETCH_SIZE](Transaction &tr,
                                                                         results result) {
                             fetch_executed = true;
                             rows_fetched += result.size();

@@ -41,6 +41,11 @@
 #include <qb/uuid.h>
 #include <string>
 #include <vector>
+#ifndef _WIN32
+#include <netinet/in.h> // For htons, htonl
+#else
+#include <winsock2.h>
+#endif
 
 #include "./pg_types.h"
 #include "./util/streambuf.h"

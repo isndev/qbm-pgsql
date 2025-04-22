@@ -49,7 +49,6 @@
 #include <limits>
 #include <list>
 #include <map>
-#include <netinet/in.h>
 #include <optional>
 #include <qb/io.h>
 #include <qb/system/endian.h>
@@ -341,7 +340,23 @@ public:
         } else if constexpr (std::is_same_v<value_type, double>) {
             return unserializer.read_double(buffer);
         } else if constexpr (std::is_same_v<value_type, bool>) {
-            return !buffer.empty() && buffer[0] != 0;
+            // In PostgreSQL binary format, booleans are represented as:
+            // - 4-byte length prefix (usually 1)
+            // - 1 byte value (1 for true, 0 for false)
+            
+            // Check if the buffer size is sufficient for a boolean value
+            if (buffer.empty()) {
+                throw std::runtime_error("Empty buffer for boolean value");
+            }
+            
+            // PostgreSQL binary format for bool includes a 4-byte length header
+            if (buffer.size() >= 5) {
+                // If full binary format (with length header), check the 5th byte
+                return buffer[4] != 0;
+            }
+            
+            // For result field values, sometimes we just get the raw boolean value
+            return buffer[0] != 0;
         } else if constexpr (std::is_same_v<value_type, bytea> ||
                              std::is_same_v<value_type, std::vector<byte>>) {
             value_type result;
