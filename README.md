@@ -1,281 +1,258 @@
-# QB PostgreSQL Module (qbm-pgsql)
+# QB PostgreSQL Module (`qbm-pgsql`)
 
-Le module PostgreSQL pour le framework QB C++ Actor fournit une implémentation asynchrone et performante pour les bases de données PostgreSQL. Il offre une API complète pour les opérations SQL intégrée de manière transparente avec l'architecture événementielle du framework QB Actor.
+**High-Performance, Asynchronous PostgreSQL Client for the QB C++ Actor Framework**
 
-## Fonctionnalités
+This module provides a robust, asynchronous client for interacting with PostgreSQL databases, seamlessly integrated with the QB Actor Framework's event-driven architecture.
 
-- **API Asynchrone**: Opérations non-bloquantes intégrées avec la boucle d'événements de QB
-- **Transactions**: Support ACID complet, transactions imbriquées (savepoints), isolation configurable
-- **Requêtes Préparées**: Mise en cache et réutilisation des requêtes préparées
-- **Gestion des Connexions**: Pooling, reconnexion automatique, timeout configurable
-- **Sécurité**: Support de SSL/TLS, authentifications multiples (MD5, SCRAM-SHA-256)
-- **Conception Moderne**: Interface fluide chainable, typage fort, gestion RAII des ressources
+Leveraging the non-blocking I/O foundation of `qb-io`, `qbm-pgsql` allows your actors to perform database operations without stalling their event loop, enabling highly concurrent and responsive applications.
 
-## Prérequis
+## Features
 
-- Framework QB C++ Actor
-- Compilateur compatible C++17
-- CMake 3.14+
-- OpenSSL (pour connexions sécurisées et authentification SCRAM)
+*   🚀 **Fully Asynchronous:** Executes all database operations non-blockingly, integrating perfectly with the QB event loop (`qb::io::async`).
+*   ⛓️ **Fluent Transaction API:** Manage transactions (`BEGIN`, `COMMIT`, `ROLLBACK`), including nested transactions via `SAVEPOINT`s, using a clean, chainable interface.
+*   🛡️ **Prepared Statements:** Prepare SQL statements once and execute them multiple times with different parameters for optimal performance and security against SQL injection.
+*   ⚙️ **Type-Safe Parameter Binding:** Automatically maps C++ types (`int`, `std::string`, `double`, `bool`, `qb::uuid`, `qb::Timestamp`, `std::vector`, `std::optional`, JSON, etc.) to their corresponding PostgreSQL types using a modern type conversion system.
+*   📄 **Rich Result Set Handling:** Access query results through a container-like interface (`qb::pg::results`) with iterators (`row`, `field`) and type-safe value extraction (`.as<T>()`, `.is_null()`).
+*   🔒 **Secure Connections:** Supports SSL/TLS encrypted connections (`qb::pg::tcp::ssl::database`) when built with OpenSSL.
+*   🔑 **Multiple Authentication Methods:** Handles Password (cleartext, MD5) and SCRAM-SHA-256 authentication.
+*   ❗ **Comprehensive Error Handling:** Provides detailed error information (`qb::pg::error::db_error`, `query_error`) including PostgreSQL error codes and SQLSTATE values.
+*   🔄 **Connection Management:** Handles connection establishment and protocol negotiation.
+*   ⏳ **Synchronous `await()`:** Provides an optional blocking `await()` method on transactions for simpler sequential workflows or testing scenarios.
 
-## Intégration
+## Prerequisites
+
+*   QB C++ Actor Framework (`qb-core`, `qb-io`)
+*   C++17 Compiler
+*   CMake (3.14+)
+*   **OpenSSL Development Libraries:** Required for SSL connections and SCRAM authentication.
+
+## Integration
+
+To use this module in your CMake project after finding the main `qb` package:
 
 ```cmake
-# Dans votre CMakeLists.txt
-qb_use_module(pgsql)
+# Assuming find_package(qb REQUIRED) or add_subdirectory(path/to/qb) was done
+
+# Link your target against the pgsql module
+# The module target is typically namespaced, e.g., qb::qbm-pgsql
+# You might need to adjust based on your qb_register_module setup
+
+# Find the specific module package if QB was installed
+find_package(qbm-pgsql CONFIG)
+
+# Link (replace my_target and potentially qb::qbm-pgsql)
+target_link_libraries(my_target PRIVATE qb::qbm-pgsql)
 ```
 
-## Utilisation de Base
+Ensure your main QB build includes OpenSSL (`QB_IO_WITH_SSL=ON` during CMake configuration).
 
-### Connexion
+## Basic Usage
+
+*(See examples and tests for more advanced usage)*
+
+### 1. Include Header
 
 ```cpp
 #include <pgsql/pgsql.h>
+```
 
-// Création d'une connexion
-qb::pg::tcp::database db("tcp://user:password@localhost:5432[mydb]");
+### 2. Connection
 
-// Connexion à la base
+```cpp
+#include <qb/io/async.h> // For qb::io::async::run()
+
+// Use the TCP database client (or tcp::ssl::database for SSL)
+// The connection string format: "schema://user:password@host:port[database]"
+qb::pg::tcp::database db("tcp://test:test@localhost:5432[test]");
+
 if (!db.connect()) {
-    std::cerr << "Échec de connexion: " << db.error().message << std::endl;
-    return 1;
+    std::cerr << "Connection failed: " << db.error().what() << std::endl;
+    // Handle error
 }
 
-// Lancement de la boucle d'événements
-qb::io::async::run();
+// Start the QB event loop if running outside an actor
+// qb::io::async::run();
 ```
 
-### Requête Simple
+### 3. Simple Query (Asynchronous Callback)
 
 ```cpp
-// Exécution d'une requête simple
-db.execute("SELECT * FROM users",
-    [](auto& tr, qb::pg::results results) {
-        for (const auto& row : results) {
-            std::cout << "ID: " << row["id"].as<int>() << std::endl;
-            std::cout << "Nom: " << row["name"].as<std::string>() << std::endl;
-        }
-    },
-    [](const qb::pg::error::db_error& err) {
-        std::cerr << "Erreur: " << err.message << std::endl;
-    }
-);
-```
-
-### Requête Préparée
-
-```cpp
-// Préparation d'une requête (le typage est automatique)
-db.prepare("insert_user", "INSERT INTO users (username, email) VALUES ($1, $2) RETURNING id")
-  .execute("insert_user", {"john_doe", "john@example.com"},
-    [](auto& tr, qb::pg::results results) {
-        std::cout << "ID utilisateur inséré: " << results[0][0].as<int>() << std::endl;
-    },
-    [](const qb::pg::error::db_error& err) {
-        std::cerr << "Erreur d'insertion: " << err.message << std::endl;
-    }
-);
-```
-
-### Utilisation de params
-
-```cpp
-// Création de paramètres explicites
-qb::pg::params params;
-params.add("john_doe");
-params.add("john@example.com");
-
-db.execute("insert_user", std::move(params),
-    [](auto& tr, qb::pg::results results) {
-        // Traitement des résultats
-    }
-);
-
-// Alternative plus concise
-db.execute("SELECT * FROM users WHERE id > $1", {100},
-    [](auto& tr, qb::pg::results results) {
-        // Traitement des résultats
-    }
-);
-```
-
-## Gestion des Transactions
-
-### Transaction Simple
-
-```cpp
-db.begin(
-    [](qb::pg::transaction& tr) {
-        // Les requêtes sont exécutées dans une transaction
-        tr.execute("INSERT INTO users (username) VALUES ('user1')")
-          .execute("INSERT INTO users (username) VALUES ('user2')");
-    },
-    [](const qb::pg::error::db_error& err) {
-        std::cerr << "Erreur de transaction: " << err.message << std::endl;
-    }
-);
-```
-
-### Transaction avec Savepoint
-
-```cpp
-db.begin(
-    [](qb::pg::transaction& tr) {
-        tr.execute("INSERT INTO users (username) VALUES ('user1')");
-        
-        // Création d'un savepoint
-        tr.savepoint("user_2",
-            [](qb::pg::transaction& tr) {
-                // Cette partie peut être annulée indépendamment
-                tr.execute("INSERT INTO users (username) VALUES ('user2')");
-                
-                // Force un rollback du savepoint
-                throw std::runtime_error("Annulation intentionnelle");
-            }
-        );
-        
-        // Cette partie sera toujours exécutée même si le savepoint échoue
-        tr.execute("INSERT INTO users (username) VALUES ('user3')");
-    }
-);
-```
-
-### Chaînage d'Opérations
-
-```cpp
-db.begin(
-    [](qb::pg::transaction& tr) {
-        tr.execute("INSERT INTO logs (message) VALUES ('Début')")
-          .then([](qb::pg::transaction& tr) {
-              // Exécuté seulement si l'opération précédente réussit
-              return tr.execute("UPDATE stats SET count = count + 1");
-          })
-          .success([](qb::pg::transaction& tr) {
-              // Exécuté si toutes les opérations précédentes réussissent
-              std::cout << "Transaction réussie" << std::endl;
-          })
-          .error([](const qb::pg::error::db_error& err) {
-              // Exécuté si une opération échoue
-              std::cerr << "Échec: " << err.message << std::endl;
-          });
-    }
-);
-```
-
-## API Synchrone avec Await
-
-```cpp
-// Exécution d'une requête et attente du résultat
-auto status = db.execute("SELECT * FROM users WHERE id = $1", {1}).await();
-
-if (status) {
-    auto results = status.results();
-    if (results.rows_count() > 0) {
-        std::cout << "Utilisateur: " << results[0]["username"].as<std::string>() << std::endl;
-    }
-} else {
-    std::cerr << "Erreur: " << status.error().message << std::endl;
-}
-```
-
-## Traitement des Résultats
-
-```cpp
-db.execute("SELECT * FROM users",
-    [](auto& tr, qb::pg::results results) {
-        // Informations sur les colonnes
-        for (const auto& col : results.columns()) {
-            std::cout << "Colonne: " << col.name << std::endl;
-        }
-        
-        // Accès par index
-        for (size_t i = 0; i < results.rows_count(); ++i) {
-            std::cout << "Ligne " << i << ": " << results[i]["username"].as<std::string>() << std::endl;
-        }
-        
-        // Itération sur les lignes
-        for (const auto& row : results) {
-            std::cout << "Utilisateur: " << row["username"].as<std::string>() << std::endl;
-            std::cout << "Email: " << row["email"].as<std::string>() << std::endl;
-        }
-    }
-);
-```
-
-## Types de Données Supportés
-
-- Types numériques: int16, int32, int64, float, double
-- Texte: text, varchar, char
-- Binaire: bytea
-- JSON et JSONB
-- Date et temps: timestamp, date, time
-- Booléen
-- Types tableau
-- Types personnalisés
-
-```cpp
-// Exemple avec différents types
-db.execute("SELECT * FROM data",
-    [](auto& tr, qb::pg::results results) {
-        for (const auto& row : results) {
-            // Types simples
+db.execute("SELECT id, name FROM users WHERE age > $1", {30},
+    // Success Callback (receives results)
+    [](qb::pg::transaction& tr, qb::pg::results result) {
+        std::cout << "Found " << result.size() << " users older than 30:\n";
+        for (const auto& row : result) {
             int id = row["id"].as<int>();
             std::string name = row["name"].as<std::string>();
-            bool active = row["active"].as<bool>();
-            
-            // Date/Heure
-            auto created_at = row["created_at"].as<std::chrono::system_clock::time_point>();
-            
-            // Tableaux
-            auto numbers = row["numbers"].as<std::vector<int>>();
-            
-            // JSON
-            auto data = row["data"].as<qb::json>();
+            std::cout << "  ID: " << id << ", Name: " << name << "\n";
         }
+    },
+    // Error Callback
+    [](const qb::pg::error::db_error& err) {
+        std::cerr << "Query failed: " << err.what() << " (SQLSTATE: " << err.code << ")\n";
     }
 );
+
+// Keep the event loop running for callbacks to execute
+// qb::io::async::run();
 ```
 
-## Optimisations et Performances
-
-- Mise en cache et réutilisation des requêtes préparées
-- Optimisation des conversions de types
-- Gestion efficace de la mémoire
-- Paramètres binaires pour transfert optimisé
-
-## Sécurité
-
-- Sanitisation automatique des paramètres contre les injections SQL
-- Support SSL/TLS pour les communications chiffrées
-- Gestion détaillée des erreurs
-- Méthodes d'authentification sécurisées
-
-## Exemple d'Utilisation Avancée
+### 4. Prepared Statement (Asynchronous Callback)
 
 ```cpp
-// Requête avec CTE et agrégation
-db.execute(R"(
-    WITH user_stats AS (
-        SELECT user_id, COUNT(*) as order_count, SUM(amount) as total_spent
-        FROM orders
-        GROUP BY user_id
-    )
-    SELECT u.name, u.email, s.order_count, s.total_spent
-    FROM users u
-    JOIN user_stats s ON u.id = s.user_id
-    WHERE s.total_spent > $1
-    ORDER BY s.total_spent DESC
-)", {1000.0},
-    [](auto& tr, qb::pg::results results) {
-        for (const auto& row : results) {
-            std::cout << "Client: " << row["name"].as<std::string>() << std::endl;
-            std::cout << "Commandes: " << row["order_count"].as<int>() << std::endl;
-            std::cout << "Total: " << row["total_spent"].as<double>() << " €" << std::endl;
+// Prepare the statement once
+db.prepare("get_user_by_id", "SELECT email FROM users WHERE id = $1", {qb::pg::oid::int4})
+  .await(); // Use await for simplicity here, could be async
+
+// Execute the prepared statement
+db.execute("get_user_by_id", {42}, // Parameter {user_id = 42}
+    [](qb::pg::transaction& tr, qb::pg::results result) {
+        if (!result.empty()) {
+            std::optional<std::string> email = result[0][0].as<std::optional<std::string>>();
+            if (email) {
+                std::cout << "Email for user 42: " << *email << "\n";
+            } else {
+                std::cout << "User 42 has no email.\n";
+            }
+        } else {
+            std::cout << "User 42 not found.\n";
         }
+    },
+    [](const qb::pg::error::db_error& err) {
+        std::cerr << "Prepared statement execution failed: " << err.what() << "\n";
     }
 );
+
+// qb::io::async::run();
 ```
 
-## Licence
+### 5. Transaction (Asynchronous Callbacks)
 
-Le module PostgreSQL QB est sous licence Apache 2.0.
+```cpp
+db.begin(
+    // Transaction Success Callback
+    [](qb::pg::transaction& tr) {
+        std::cout << "Transaction started.\n";
+        tr.execute("INSERT INTO audit_log (message) VALUES ($1)", {"User logged in"})
+          .then([](qb::pg::transaction& tr2) {
+              // This executes only if the first execute succeeded
+              return tr2.execute("UPDATE users SET last_login = NOW() WHERE id = $1", {123});
+          })
+          .success([](qb::pg::transaction& tr_final) {
+              std::cout << "Transaction committed successfully!\n";
+          })
+          .error([](const qb::pg::error::db_error& err) {
+              // Error callback for any step in the chain
+              std::cerr << "Transaction step failed: " << err.what() << ", rolling back.\n";
+          });
+    },
+    // Transaction Begin Error Callback
+    [](const qb::pg::error::db_error& err) {
+        std::cerr << "Failed to begin transaction: " << err.what() << "\n";
+    }
+);
+
+// Example with Savepoint
+db.begin([](qb::pg::transaction& tr_outer) {
+    tr_outer.execute("INSERT INTO operations (status) VALUES ('started')");
+
+    // Create a savepoint
+    tr_outer.savepoint("my_savepoint",
+        // Savepoint Success Callback
+        [](qb::pg::transaction& tr_inner) {
+            std::cout << "Savepoint created. Performing operation...\n";
+            // Perform operations within the savepoint
+            tr_inner.execute("UPDATE products SET stock = stock - 1 WHERE id = $1", {10});
+            // If something goes wrong here, only this savepoint rolls back
+            // For example, trigger an error:
+            // tr_inner.execute("SELECT * from non_existent_table_in_savepoint");
+        },
+        // Savepoint Error Callback (if savepoint creation fails)
+        [](const qb::pg::error::db_error& err) {
+            std::cerr << "Failed to create savepoint: " << err.what() << "\n";
+        }
+    )
+    .then([](qb::pg::transaction& tr) {
+        // This executes if the savepoint logic (or its rollback) completed
+        std::cout << "Continuing outer transaction after savepoint block.\n";
+        tr.execute("UPDATE operations SET status = 'post_savepoint' WHERE status = 'started'");
+    })
+    .error([](const qb::pg::error::db_error& err) {
+        // This catches errors *within* the savepoint block or subsequent .then()
+        std::cerr << "Error within savepoint or following steps: " << err.what() << "\n";
+    });
+});
+
+// qb::io::async::run();
+```
+
+### 6. Synchronous Execution with `await()`
+
+For simpler scripts, testing, or specific sequential workflows, use `.await()` after chaining operations.
+
+```cpp
+auto status = db.execute("SELECT version() AS pg_version").await();
+
+if (status) { // Check if the operation succeeded (no errors)
+    auto results = status.results(); // Get the result set
+    if (!results.empty()) {
+        std::cout << "PostgreSQL Version: " << results[0]["pg_version"].as<std::string>() << std::endl;
+    }
+} else {
+    // Access error details
+    const auto& err = status.error();
+    std::cerr << "Await query failed: " << err.what()
+              << " (SQLSTATE: " << err.code << ", Severity: " << err.severity << ")\n";
+}
+
+// Transaction with await
+auto tx_status = db.begin([](qb::pg::transaction& tr) {
+                        tr.execute("INSERT INTO logs (message) VALUES ($1)", {"Awaited Insert"});
+                     })
+                    .await();
+
+if (tx_status) {
+    std::cout << "Awaited transaction committed." << std::endl;
+} else {
+    std::cerr << "Awaited transaction failed: " << tx_status.error().what() << std::endl;
+}
+```
+
+## Data Type Handling
+
+`qbm-pgsql` automatically handles conversion between C++ types and PostgreSQL types during parameter binding and result fetching.
+
+*   **Standard Types:** `int`, `short`, `long long`, `float`, `double`, `bool`, `std::string`, `const char*`, `std::string_view`.
+*   **Binary Data:** `std::vector<qb::pg::byte>` or `qb::pg::bytea` map to `BYTEA`.
+*   **UUID:** `qb::uuid` maps to `UUID`.
+*   **Timestamps:** `qb::Timestamp` maps to `TIMESTAMP`, `qb::UtcTimestamp` maps to `TIMESTAMPTZ`.
+*   **JSON:** `qb::json` maps to `JSON`, `qb::jsonb` maps to `JSONB`.
+*   **NULL Values:** Use `std::optional<T>` in C++ to handle nullable PostgreSQL columns gracefully.
+*   **Arrays:** `std::vector<T>` (where T is a supported type) maps to PostgreSQL arrays (e.g., `std::vector<int>` maps to `INTEGER[]`).
+
+See `src/type_mapping.h` and `src/type_converter.h` for details.
+
+## Further Information
+
+*   **Examples:** Explore the `examples/` directory within the main QB repository for practical usage patterns.
+*   **Tests:** The `qbm/pgsql/tests/` directory contains detailed unit and integration tests covering most features.
+*   **Source Code:** Refer to the header files (`.h`) in `qbm/pgsql/src/` for the definitive API reference.
+
+## License
+
+This module is licensed under the Apache License 2.0. See the [LICENSE](./LICENSE) file.
+
+## Dive Deeper 📚
+
+For comprehensive technical details, explore the specific documentation:
+
+➡️ **[Detailed Module Documentation](./readme/README.md)**
+
+*   **[Connection Management](./readme/connection.md)**
+*   **[Transaction Handling](./readme/transaction.md)**
+*   **[Query Execution](./readme/queries.md)**
+*   **[Result Set Processing](./readme/results.md)**
+*   **[Data Type Handling](./readme/types.md)**
+*   **[Error Handling](./readme/error_handling.md)**
+
+## Contributing ❤️
