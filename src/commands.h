@@ -529,7 +529,7 @@ public:
             return;
 
         try {
-            _on_error(*(parent()));
+            _on_error((parent()->error()));
         } catch (...) {
             if (parent() && parent()->parent()) {
                 parent()->result(false);
