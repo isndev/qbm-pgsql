@@ -51,6 +51,7 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <filesystem>
 
 #include "./queries.h"
 #include "./result_impl.h"
@@ -344,6 +345,56 @@ public:
                          type_oid_sequence &&types = {});
 
     /**
+     * @brief Prepares a SQL query from a file with parameter types and callbacks
+     *
+     * @tparam CB_SUCCESS Type of success callback function
+     * @tparam CB_ERROR Type of error callback function
+     * @param query_name Name for the prepared query
+     * @param file_path Path to the file containing the SQL query
+     * @param types Sequence of parameter types
+     * @param on_success Callback called when query is prepared successfully
+     * @param on_error Callback called if query preparation fails
+     * @return Transaction& Reference to this transaction for chaining
+     */
+    template <typename CB_SUCCESS, typename CB_ERROR,
+              typename = std::enable_if<std::is_function_v<CB_SUCCESS> &&
+                                        std::is_function_v<CB_ERROR>>>
+    Transaction &prepare_file(std::string_view query_name, 
+                             const std::filesystem::path& file_path,
+                             type_oid_sequence &&types, 
+                             CB_SUCCESS &&on_success,
+                             CB_ERROR &&on_error);
+
+    /**
+     * @brief Prepares a SQL query from a file with parameter types and success callback
+     *
+     * @tparam CB_SUCCESS Type of success callback function
+     * @param query_name Name for the prepared query
+     * @param file_path Path to the file containing the SQL query
+     * @param types Sequence of parameter types
+     * @param on_success Callback called when query is prepared successfully
+     * @return Transaction& Reference to this transaction for chaining
+     */
+    template <typename CB_SUCCESS,
+              typename = std::enable_if<std::is_function_v<CB_SUCCESS>>>
+    Transaction &prepare_file(std::string_view query_name, 
+                             const std::filesystem::path& file_path,
+                             type_oid_sequence &&types, 
+                             CB_SUCCESS &&on_success);
+
+    /**
+     * @brief Prepares a SQL query from a file with parameter types without callbacks
+     *
+     * @param query_name Name for the prepared query
+     * @param file_path Path to the file containing the SQL query
+     * @param types Sequence of parameter types
+     * @return Transaction& Reference to this transaction for chaining
+     */
+    Transaction &prepare_file(std::string_view query_name, 
+                             const std::filesystem::path& file_path,
+                             type_oid_sequence &&types = {});
+
+    /**
      * @brief Executes a prepared query with parameters and callbacks
      *
      * @tparam CB_SUCCESS Type of success callback function
@@ -397,6 +448,44 @@ public:
      * @return Transaction& Reference to this transaction for chaining
      */
     Transaction &execute(std::string_view query_name, QueryParams &&params);
+
+    /**
+     * @brief Executes a SQL query from a file
+     *
+     * @tparam CB_SUCCESS Type of success callback function
+     * @tparam CB_ERROR Type of error callback function
+     * @param file_path Path to the file containing the SQL query
+     * @param on_success Callback called when query is executed successfully
+     * @param on_error Callback called if query execution fails
+     * @return Transaction& Reference to this transaction for chaining
+     */
+    template <typename CB_SUCCESS, typename CB_ERROR,
+              typename = std::enable_if<std::is_function_v<CB_SUCCESS> &&
+                                        std::is_function_v<CB_ERROR>>>
+    Transaction &execute_file(const std::filesystem::path& file_path,
+                             CB_SUCCESS &&on_success,
+                             CB_ERROR &&on_error);
+
+    /**
+     * @brief Executes a SQL query from a file with success callback
+     *
+     * @tparam CB_SUCCESS Type of success callback function
+     * @param file_path Path to the file containing the SQL query
+     * @param on_success Callback called when query is executed successfully
+     * @return Transaction& Reference to this transaction for chaining
+     */
+    template <typename CB_SUCCESS,
+              typename = std::enable_if<std::is_function_v<CB_SUCCESS>>>
+    Transaction &execute_file(const std::filesystem::path& file_path,
+                             CB_SUCCESS &&on_success);
+
+    /**
+     * @brief Executes a SQL query from a file without callbacks
+     *
+     * @param file_path Path to the file containing the SQL query
+     * @return Transaction& Reference to this transaction for chaining
+     */
+    Transaction &execute_file(const std::filesystem::path& file_path);
 
     /**
      * @brief Adds a callback to be executed after the next operation

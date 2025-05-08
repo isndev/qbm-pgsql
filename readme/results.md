@@ -2,6 +2,81 @@
 
 This document explains how to access and process data returned from PostgreSQL queries using the `qb::pg::results` class and its associated components.
 
+## Modern Usage Examples
+
+Here are some modern, concise ways to work with PostgreSQL results:
+
+### Range-based For Loops
+
+```cpp
+db.execute("SELECT id, name, email FROM users", 
+    [](qb::pg::transaction& tr, qb::pg::results result) {
+        // Iterate rows with range-based for loop
+        for (auto row : result) {
+            // Access fields by name
+            int id = row["id"].as<int>();
+            std::string name = row["name"].as<std::string>();
+            std::string email = row["email"].as<std::string>();
+            
+            std::cout << "User: " << name << " <" << email << ">" << std::endl;
+            
+            // Or iterate through all fields in a row
+            for (auto field : row) {
+                std::cout << field.name() << ": " << field.as<std::string>() << std::endl;
+            }
+        }
+    }
+);
+```
+
+### Convert Results to JSON
+
+```cpp
+db.execute("SELECT id, name, email, created_at FROM users", 
+    [](qb::pg::transaction& tr, qb::pg::results result) {
+        // Convert entire result set to JSON array of objects
+        qb::json json_result = result.json();
+        
+        // Use the JSON result
+        std::cout << "JSON result: " << json_result.dump(2) << std::endl;
+        
+        // Access specific values from the JSON
+        if (!json_result.empty()) {
+            std::cout << "First user name: " << json_result[0]["name"] << std::endl;
+        }
+    }
+);
+```
+
+### Map Results to Structures
+
+```cpp
+// Define a structure to hold the data
+struct User {
+    int id;
+    std::string name;
+    std::string email;
+};
+
+db.execute("SELECT id, name, email FROM users", 
+    [](qb::pg::transaction& tr, qb::pg::results result) {
+        std::vector<User> users;
+        
+        for (auto row : result) {
+            User user;
+            // Map row directly to structure fields
+            row.to(std::tie(user.id, user.name, user.email));
+            users.push_back(user);
+        }
+        
+        // Use the populated vector of structures
+        for (const auto& user : users) {
+            std::cout << "User " << user.id << ": " << user.name << std::endl;
+        }
+    }
+);
+```
+
 ## Core Class: `qb::pg::results`
 
 *(Defined in `src/resultset.h`, uses `src/result_impl.h` internally)*
@@ -13,6 +88,7 @@ This class represents the entire result set returned by a query (e.g., a `SELECT
 *   **Container Interface:** Supports range-based for loops, `begin()`, `end()`, `size()`, `empty()`, `front()`, `back()`, `operator[]` for row access.
 *   **Metadata:** Provides access to column information (names, types) via `columns_size()` and `row_description()`.
 *   **Row Access:** Access individual rows using iterators or `operator[]`.
+*   **JSON Conversion:** Convert the entire result set to JSON via `results.json()`.
 
 ```cpp
 db.execute("SELECT id, name, age FROM users",

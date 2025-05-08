@@ -48,6 +48,8 @@
 #include <memory>
 #include <string_view>
 #include "../pgsql.h"
+#include <filesystem>
+#include <fstream>
 
 constexpr std::string_view PGSQL_CONNECTION_STR = "tcp://test:test@localhost:5432[test]";
 
@@ -706,7 +708,7 @@ TEST_F(PostgreSQLPreparedStatementsTest, AsyncPerformanceComparison) {
     // Use a transaction to batch all non-prepared statements
     bool non_prepared_success = false;
     db_->begin(
-        [&non_prepared_success, iterations](Transaction &tr) {
+        [&non_prepared_success](Transaction &tr) {
             for (int i = 0; i < iterations; i++) {
                 std::string sql =
                     "INSERT INTO test_prepared (value) VALUES ('non_prepared_" +
@@ -752,7 +754,7 @@ TEST_F(PostgreSQLPreparedStatementsTest, AsyncPerformanceComparison) {
     // Use a transaction for prepared statements
     bool prepared_success = false;
     db_->begin(
-        [&prepared_success, iterations](Transaction &tr) {
+        [&prepared_success](Transaction &tr) {
             for (int i = 0; i < iterations; i++) {
                 std::string value = "prepared_" + std::to_string(i);
                 tr.execute(
@@ -1118,6 +1120,142 @@ TEST_F(PostgreSQLPreparedStatementsTest, ParameterTypeEdgeCases) {
     // Clean up
     auto cleanup = db_->execute("DROP TABLE IF EXISTS test_param_types").await();
     ASSERT_TRUE(cleanup);
+}
+
+/**
+ * @brief Test preparation of SQL queries from files
+ *
+ * Verifies that the prepare_file function can correctly load and prepare
+ * SQL queries from external files. This tests the convenience API for
+ * managing large or complex SQL statements in separate files.
+ */
+TEST_F(PostgreSQLPreparedStatementsTest, PrepareFromFile) {
+    // Define a temporary file path
+    std::filesystem::path temp_file = std::filesystem::temp_directory_path() / "test_query.sql";
+    
+    // Clear any existing test data
+    auto setup = db_->execute("DELETE FROM test_prepared").await();
+    ASSERT_TRUE(setup);
+    
+    // Create SQL file with a simple query
+    {
+        std::ofstream sql_file(temp_file);
+        ASSERT_TRUE(sql_file.is_open());
+        sql_file << "-- This is a test SQL file for prepare_file\n"
+                 << "INSERT INTO test_prepared (value) VALUES ($1)\n"
+                 << "RETURNING id, value";
+        sql_file.close();
+        ASSERT_TRUE(std::filesystem::exists(temp_file));
+    }
+    
+    // Test prepare_file with callbacks
+    bool prepare_success = false;
+    auto status = db_->prepare_file(
+        "file_prepared_stmt", temp_file, {oid::text},
+        [&prepare_success](Transaction& tr, PreparedQuery const& query) {
+            prepare_success = true;
+            ASSERT_EQ(query.name, "file_prepared_stmt");
+
+            // Verify the query string contains our SQL
+            ASSERT_NE(query.expression.find("INSERT INTO test_prepared"), std::string::npos);
+        },
+        [](error::db_error const& err) {
+            ASSERT_TRUE(false) << "Failed to prepare from file: " << err.what();
+        }
+    ).await();
+    
+    ASSERT_TRUE(status);
+    ASSERT_TRUE(prepare_success);
+    
+    // Execute the prepared statement
+    bool execute_success = false;
+    status = db_->execute(
+        "file_prepared_stmt", params{std::string("from_file_test")},
+        [&execute_success](Transaction& tr, results result) {
+            ASSERT_EQ(result.size(), 1);
+            ASSERT_EQ(result[0][1].as<std::string>(), "from_file_test");
+            execute_success = true;
+        },
+        [](error::db_error const& err) {
+            ASSERT_TRUE(false) << "Failed to execute file-prepared statement: " << err.what();
+        }
+    ).await();
+    
+    ASSERT_TRUE(status);
+    ASSERT_TRUE(execute_success);
+    
+    // Test the simplified version with just success callback
+    std::filesystem::path temp_file2 = std::filesystem::temp_directory_path() / "test_query2.sql";
+    {
+        std::ofstream sql_file(temp_file2);
+        ASSERT_TRUE(sql_file.is_open());
+        sql_file << "SELECT value FROM test_prepared WHERE value = $1";
+        sql_file.close();
+    }
+    
+    bool prepare2_success = false;
+    status = db_->prepare_file(
+        "file_select_stmt", temp_file2, {oid::text},
+        [&prepare2_success](Transaction& tr, PreparedQuery const& query) {
+            prepare2_success = true;
+        }
+    ).await();
+    
+    ASSERT_TRUE(status);
+    ASSERT_TRUE(prepare2_success);
+    
+    // Test the version without callbacks
+    std::filesystem::path temp_file3 = std::filesystem::temp_directory_path() / "test_query3.sql";
+    {
+        std::ofstream sql_file(temp_file3);
+        ASSERT_TRUE(sql_file.is_open());
+        sql_file << "SELECT COUNT(*) FROM test_prepared";
+        sql_file.close();
+    }
+    
+    status = db_->prepare_file("file_count_stmt", temp_file3).await();
+    ASSERT_TRUE(status);
+    
+    // Execute the statement prepared without callbacks
+    bool count_success = false;
+    status = db_->execute(
+        "file_count_stmt", params{},
+        [&count_success](Transaction& tr, results result) {
+            ASSERT_EQ(result.size(), 1);
+            ASSERT_GT(result[0][0].as<int>(), 0); // Should have at least one row
+            count_success = true;
+        }
+    ).await();
+    
+    ASSERT_TRUE(status);
+    ASSERT_TRUE(count_success);
+    
+    // Test with non-existent file (should fail)
+    bool error_caught = false;
+    try {
+        // This should throw an exception since the file doesn't exist
+        db_->prepare_file(
+            "nonexistent_file", std::filesystem::temp_directory_path() / "nonexistent.sql",
+            {oid::text},
+            [](Transaction& tr, PreparedQuery const& query) {
+                ASSERT_TRUE(false) << "Should not succeed with non-existent file";
+            },
+            [&error_caught](error::db_error const& err) {
+                error_caught = true;
+                std::cout << "Error on non-existent file (expected): " << err.what() << std::endl;
+            }
+        );
+        ASSERT_TRUE(false) << "Should have thrown an exception for non-existent file";
+    } catch (const error::db_error& e) {
+        std::cout << "Exception caught as expected: " << e.what() << std::endl;
+    }
+    
+    ASSERT_TRUE(error_caught) << "Error callback should have been called before the exception was thrown";
+    
+    // Cleanup temporary files
+    std::filesystem::remove(temp_file);
+    std::filesystem::remove(temp_file2);
+    std::filesystem::remove(temp_file3);
 }
 
 int

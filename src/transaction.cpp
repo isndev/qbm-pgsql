@@ -142,10 +142,26 @@ Transaction::prepare(std::string_view query_name, std::string_view expr,
 }
 
 Transaction &
+Transaction::prepare_file(std::string_view query_name, 
+                         const std::filesystem::path& file_path,
+                         type_oid_sequence &&types) {
+    return prepare_file(query_name, file_path, std::move(types), 
+                       [](Transaction&, PreparedQuery const&) {},
+                       [](error::db_error const &) {});
+}
+
+Transaction &
 Transaction::execute(std::string_view query_name, QueryParams &&params) {
     return this->execute(
         query_name, std::move(params), [](Transaction &, auto) {},
         [](error::db_error const &) {});
+}
+
+Transaction &
+Transaction::execute_file(const std::filesystem::path& file_path) {
+    return execute_file(file_path, 
+                       [](Transaction&, auto) {},
+                       [](error::db_error const &) {});
 }
 
 bool

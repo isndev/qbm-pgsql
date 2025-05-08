@@ -326,5 +326,21 @@ resultset::is_null(size_type r, row::size_type c) const {
     return pimpl_->is_null(r, c);
 }
 
+qb::json
+resultset::json() const {
+    qb::json result = qb::json::array();
+
+    for (const auto row : *this) {
+        qb::json row_obj = qb::json::object();
+        for (const auto field : row) {
+            auto opt = field.as<std::optional<std::string>>();
+            row_obj[field.name()] = opt;
+        }
+        result.push_back(row_obj);
+    }
+    
+    return result;
+}
+
 } // namespace pg
 } // namespace qb

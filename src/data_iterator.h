@@ -152,7 +152,9 @@ public:
      *
      * @return The data element at the current position
      */
-    value_type operator*() const;
+    value_type operator*() const {
+        return static_cast<Derived &>(*this).operator*();
+    }
 
     /**
      * @brief Pre-increment operator
