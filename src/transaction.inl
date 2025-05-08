@@ -39,6 +39,9 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <fstream>
+#include <filesystem>
+#include <sstream>
 
 #include "./commands.h"
 #include "./transaction.h"
@@ -365,6 +368,151 @@ Transaction::error(CB_ERROR &&on_error) {
     push_transaction(std::unique_ptr<Transaction>(
         new Error<CB_ERROR>(this, std::forward<CB_ERROR>(on_error))));
     return *this;
+}
+
+/**
+ * @brief Prepares a SQL query from a file with success and error callbacks
+ *
+ * This method reads the SQL query from a file and prepares it with the specified
+ * parameter types. If the file cannot be read, the error callback is invoked
+ * and an exception is thrown.
+ *
+ * @tparam CB_SUCCESS Type of success callback function
+ * @tparam CB_ERROR Type of error callback function
+ * @tparam Dummy SFINAE enabler (not used in implementation)
+ * @param query_name Name to assign to the prepared statement
+ * @param file_path Path to the file containing the SQL query
+ * @param types Sequence of PostgreSQL OIDs for parameter types
+ * @param on_success Callback invoked when preparation succeeds
+ * @param on_error Callback invoked if preparation fails (called before exception is thrown)
+ * @return Reference to this transaction for method chaining
+ * @throws error::query_error If file doesn't exist, can't be opened, or there's an error reading it
+ */
+template <typename CB_SUCCESS, typename CB_ERROR, typename>
+Transaction &
+Transaction::prepare_file(std::string_view query_name, 
+                         const std::filesystem::path& file_path,
+                         type_oid_sequence &&types, 
+                         CB_SUCCESS &&on_success,
+                         CB_ERROR &&on_error) {
+    try {
+        // Check if file exists
+        if (!std::filesystem::exists(file_path))
+            throw error::query_error("SQL file not found: " + file_path.string());
+
+        // Open and read the file
+        std::ifstream file(file_path);
+        if (!file.is_open())
+            throw error::query_error("Cannot open SQL file: " + file_path.string());
+
+        // Read the entire file content into a string
+        std::stringstream buffer;
+        buffer << file.rdbuf();
+        std::string sql_query = buffer.str();
+
+        // Call the regular prepare method with the file content
+        return prepare(query_name, sql_query, std::move(types), 
+                     std::forward<CB_SUCCESS>(on_success),
+                     std::forward<CB_ERROR>(on_error));
+    }
+    catch (const std::exception& e) {
+        auto err = error::query_error("Error reading SQL file: " + std::string(e.what()));
+        on_error(err);
+        throw err;
+    }
+}
+
+/**
+ * @brief Prepares a SQL query from a file with only success callback
+ *
+ * Simplified version that uses an empty error callback.
+ *
+ * @tparam CB_SUCCESS Type of success callback function
+ * @tparam Dummy SFINAE enabler (not used in implementation)
+ * @param query_name Name to assign to the prepared statement
+ * @param file_path Path to the file containing the SQL query
+ * @param types Sequence of PostgreSQL OIDs for parameter types
+ * @param on_success Callback invoked when preparation succeeds
+ * @return Reference to this transaction for method chaining
+ */
+template <typename CB_SUCCESS, typename>
+Transaction &
+Transaction::prepare_file(std::string_view query_name, 
+                         const std::filesystem::path& file_path,
+                         type_oid_sequence &&types, 
+                         CB_SUCCESS &&on_success) {
+    return prepare_file(query_name, file_path, std::move(types), 
+                       std::forward<CB_SUCCESS>(on_success),
+                       [](error::db_error const &) {});
+}
+
+/**
+ * @brief Executes a SQL query from a file with success and error callbacks
+ *
+ * This method reads the SQL query from a file and executes it.
+ * If the file cannot be read, the error callback is invoked
+ * and an exception is thrown.
+ *
+ * @tparam CB_SUCCESS Type of success callback function
+ * @tparam CB_ERROR Type of error callback function
+ * @tparam Dummy SFINAE enabler (not used in implementation)
+ * @param file_path Path to the file containing the SQL query
+ * @param on_success Callback invoked when execution succeeds
+ * @param on_error Callback invoked if execution fails (called before exception is thrown)
+ * @return Reference to this transaction for method chaining
+ * @throws error::query_error If file doesn't exist, can't be opened, or there's an error reading it
+ */
+template <typename CB_SUCCESS, typename CB_ERROR, typename>
+Transaction &
+Transaction::execute_file(const std::filesystem::path& file_path,
+                         CB_SUCCESS &&on_success,
+                         CB_ERROR &&on_error) {
+    try {
+        // Check if file exists
+        if (!std::filesystem::exists(file_path))
+            throw error::query_error("SQL file not found: " + file_path.string());
+
+        // Open and read the file
+        std::ifstream file(file_path);
+        if (!file.is_open())
+            throw error::query_error("Cannot open SQL file: " + file_path.string());
+
+        // Read the entire file content into a string
+        std::stringstream buffer;
+        buffer << file.rdbuf();
+        std::string sql_query = buffer.str();
+
+        // Call the regular execute method with the file content
+        return execute(sql_query, 
+                     std::forward<CB_SUCCESS>(on_success),
+                     std::forward<CB_ERROR>(on_error));
+    }
+    catch (const std::exception& e) {
+        auto err = error::query_error("Error reading SQL file: " + std::string(e.what()));
+        on_error(err);
+        throw err;
+    }
+}
+
+/**
+ * @brief Executes a SQL query from a file with only success callback
+ *
+ * Simplified version that uses an empty error callback.
+ *
+ * @tparam CB_SUCCESS Type of success callback function
+ * @tparam Dummy SFINAE enabler (not used in implementation)
+ * @param file_path Path to the file containing the SQL query
+ * @param on_success Callback invoked when execution succeeds
+ * @return Reference to this transaction for method chaining
+ * @throws error::query_error If file doesn't exist, can't be opened, or there's an error reading it
+ */
+template <typename CB_SUCCESS, typename>
+Transaction &
+Transaction::execute_file(const std::filesystem::path& file_path,
+                         CB_SUCCESS &&on_success) {
+    return execute_file(file_path, 
+                       std::forward<CB_SUCCESS>(on_success),
+                       [](error::db_error const &) {});
 }
 
 } // namespace qb::pg::detail

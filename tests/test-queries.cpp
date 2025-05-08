@@ -47,6 +47,8 @@
 
 #include <gtest/gtest.h>
 #include "../pgsql.h"
+#include <filesystem>
+#include <fstream>
 
 using namespace qb::pg;
 using namespace qb::io;
@@ -501,6 +503,105 @@ TEST_F(PostgreSQLQueryTest, QueryPerformance) {
     ASSERT_TRUE(success);
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
     ASSERT_LT(duration.count(), 100); // Should complete within 100ms
+}
+
+/**
+ * @brief Test execution of SQL queries from files
+ *
+ * Verifies that the execute_file function can correctly load and execute
+ * SQL queries from external files. This tests the convenience API for
+ * managing large or complex SQL statements in separate files.
+ */
+TEST_F(PostgreSQLQueryTest, ExecuteFromFile) {
+    // Define a temporary file path
+    std::filesystem::path temp_file = std::filesystem::temp_directory_path() / "test_query.sql";
+    
+    // Create a temporary SQL file with a test query
+    {
+        std::ofstream file(temp_file);
+        ASSERT_TRUE(file.is_open());
+        file << "SELECT name, email FROM test_users WHERE age > 25";
+        ASSERT_TRUE(file.good());
+        file.close();
+    }
+
+    // Execute query from file with explicit callbacks
+    bool success = false;
+    auto status = db_->execute_file(
+        temp_file,
+        [&success](transaction &tr, results result) {
+            ASSERT_EQ(result.size(), 2); // Should find 2 users older than 25
+            
+            // Verify results contain expected data
+            bool found_john = false;
+            bool found_bob = false;
+            
+            for (size_t i = 0; i < result.size(); ++i) {
+                std::string name = result[i][0].as<std::string>();
+                if (name == "John Doe") {
+                    found_john = true;
+                    ASSERT_EQ(result[i][1].as<std::string>(), "john@example.com");
+                } else if (name == "Bob Wilson") {
+                    found_bob = true;
+                    ASSERT_EQ(result[i][1].as<std::string>(), "bob@example.com");
+                }
+            }
+            
+            ASSERT_TRUE(found_john);
+            ASSERT_TRUE(found_bob);
+            success = true;
+        },
+        [](error::db_error const& err) {
+            ASSERT_TRUE(false) << "Query execution failed: " << err.code << " - " << err.what();
+        }
+    ).await();
+    
+    ASSERT_TRUE(status);
+    ASSERT_TRUE(success);
+
+    // Execute query from file with only success callback
+    success = false;
+    status = db_->execute_file(
+        temp_file,
+        [&success](transaction &tr, results result) {
+            ASSERT_EQ(result.size(), 2);
+            success = true;
+        }
+    ).await();
+    
+    ASSERT_TRUE(status);
+    ASSERT_TRUE(success);
+
+    // Execute query from file without callbacks
+    status = db_->execute_file(temp_file).await();
+    ASSERT_TRUE(status);
+
+    // Test with non-existent file (should throw an exception)
+    bool error_caught = false;
+    bool exception_caught = false;
+    try {
+        status = db_->execute_file(
+            std::filesystem::temp_directory_path() / "nonexistent.sql",
+            [](transaction &tr, results result) {
+                ASSERT_TRUE(false) << "Should not succeed with non-existent file";
+            },
+            [&error_caught](error::db_error const& err) {
+                error_caught = true;
+                std::cout << "Error on non-existent file (expected): " << err.what() << std::endl;
+            }
+        ).await();
+        
+        ASSERT_TRUE(false) << "Should have thrown an exception for non-existent file";
+    } catch (const error::query_error& e) {
+        exception_caught = true;
+        std::cout << "Exception caught as expected: " << e.what() << std::endl;
+    }
+    
+    ASSERT_TRUE(error_caught) << "Error callback should have been called";
+    ASSERT_TRUE(exception_caught) << "Exception should have been thrown";
+
+    // Clean up temporary file
+    std::filesystem::remove(temp_file);
 }
 
 int

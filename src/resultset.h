@@ -45,6 +45,7 @@
 #include <iterator>
 #include <memory>
 #include <tuple>
+#include <qb/json.h>
 #include "./common.h"
 #include "./data_iterator.h"
 #include "./error.h"
@@ -228,6 +229,18 @@ public:
         return *this;
     }
     //@}
+
+    /**
+     * @brief Convert the result set to a JSON array
+     * 
+     * Converts the entire result set to a JSON array of objects where each object
+     * represents a row and contains field name/value pairs.
+     * All values are converted to strings using as<std::string>().
+     * NULL values are represented as JSON null.
+     * 
+     * @return qb::json JSON array containing the result set data
+     */
+    qb::json json() const;
 
 public:
     //@{
@@ -544,6 +557,10 @@ public:
 
         const_row_iterator &advance(difference_type);
 
+        value_type operator*() const {
+            return result_->operator[](row_index_);
+        }
+
         bool
         valid() const {
             return result_ && row_index_ <= result_->size();
@@ -573,6 +590,10 @@ public:
         int compare(const_field_iterator const &rhs) const;
 
         const_field_iterator &advance(difference_type distance);
+
+        value_type operator*() const {
+            return result_->operator[](row_index_)[field_index_];
+        }
         //@{
         /**
          * The field index is valid when it is equal to the row size

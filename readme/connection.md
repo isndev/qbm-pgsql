@@ -38,10 +38,9 @@ if (!db2.connect("tcp://test:test@localhost:5432[test]")) {
 
 **Connection String Format:**
 
-`[alias=]schema://[user[:password]@]host[:port][database]`
+`schema://[user[:password]@]host[:port][database]`
 
-*   `alias` (Optional): A short name for the connection (e.g., `mydb=`).
-*   `schema`: `tcp` (for plain TCP) or `ssl` (for SSL/TLS - requires `qb::pg::tcp::ssl::database`).
+*   `schema`: `tcp` (for plain TCP) or `tcp` (for SSL/TLS - requires `qb::pg::tcp::ssl::database`).
 *   `user`, `password` (Optional): Credentials for authentication.
 *   `host`: Hostname or IP address of the PostgreSQL server.
 *   `port` (Optional): Port number (defaults to 5432).
@@ -116,5 +115,5 @@ To use SSL/TLS:
 
 1.  Ensure QB was built with OpenSSL (`QB_IO_WITH_SSL=ON`).
 2.  Use the `qb::pg::tcp::ssl::database` class instead of `qb::pg::tcp::database`.
-3.  Use the `ssl://` schema in the connection string or set `opts.schema = "ssl";`.
+3.  Use the `tcp://` schema in the connection string or set `opts.schema = "ssl";`.
 4.  The underlying `qb::io::transport::stcp` handles the SSL handshake during connection. 

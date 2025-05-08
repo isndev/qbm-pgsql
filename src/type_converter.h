@@ -470,7 +470,7 @@ public:
                 return std::numeric_limits<double>::infinity();
             if (text == "-Infinity" || text == "-inf")
                 return -std::numeric_limits<double>::infinity();
-            return std::stod(text);
+            return std::strtod(text.c_str(), nullptr);;
         } else if constexpr (std::is_same_v<value_type, bool>) {
             return (text == "t" || text == "true" || text == "1" || text == "yes" ||
                     text == "y" || text == "on");

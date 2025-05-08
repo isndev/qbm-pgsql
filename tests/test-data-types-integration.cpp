@@ -2032,6 +2032,77 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, JSONBType) {
     }
 }
 
+/**
+ * @brief Test for converting result sets to JSON
+ *
+ * Tests the resultset.json() method to ensure it properly converts
+ * PostgreSQL results to a JSON array with the expected structure.
+ */
+TEST_F(PostgreSQLDataTypesIntegrationTest, JSONResultSetConversion) {
+    // Skip if no connection
+    if (!db_)
+        GTEST_SKIP();
+
+    // Create rows with different types of data
+    auto status = db_->execute(R"(
+        DELETE FROM data_types_test;
+        INSERT INTO data_types_test (
+            smallint_val, integer_val, float_val, text_val, boolean_val, null_val
+        ) VALUES
+        (123, 456789, 3.14159, 'Text value', true, NULL),
+        (456, 789012, 2.71828, 'Another text', false, NULL);
+    )").await();
+
+    ASSERT_TRUE(status);
+
+    // Query the data
+    bool success = false;
+    status = db_->execute(
+        "SELECT id, smallint_val, integer_val, float_val, text_val, boolean_val, null_val FROM data_types_test ORDER BY id",
+        [&success](Transaction &tr, results result) {
+            ASSERT_FALSE(result.empty());
+            ASSERT_GE(result.size(), 2);
+            
+            // Convert resultset to JSON
+            qb::json json_result = result.json();
+            
+            // Print the JSON result for debugging
+            std::cout << "JSON Result: " << json_result.dump(2) << std::endl;
+            
+            // Verify JSON structure and content
+            ASSERT_TRUE(json_result.is_array());
+            ASSERT_EQ(json_result.size(), result.size());
+            
+            // Check first row values
+            ASSERT_TRUE(json_result[0].is_object());
+            ASSERT_EQ(json_result[0]["smallint_val"], "123");
+            ASSERT_EQ(json_result[0]["integer_val"], "456789");
+            // Float might have varying precision, so just check it exists
+            ASSERT_TRUE(json_result[0]["float_val"].is_string());
+            ASSERT_EQ(json_result[0]["text_val"], "Text value");
+            ASSERT_EQ(json_result[0]["boolean_val"], "t");
+            ASSERT_TRUE(json_result[0]["null_val"].is_null());
+            
+            // Check second row values
+            ASSERT_TRUE(json_result[1].is_object());
+            ASSERT_EQ(json_result[1]["smallint_val"], "456");
+            ASSERT_EQ(json_result[1]["integer_val"], "789012");
+            ASSERT_TRUE(json_result[1]["float_val"].is_string());
+            ASSERT_EQ(json_result[1]["text_val"], "Another text");
+            ASSERT_EQ(json_result[1]["boolean_val"], "f");
+            ASSERT_TRUE(json_result[1]["null_val"].is_null());
+            
+            success = true;
+        },
+        [](error::db_error error) {
+            FAIL() << "Select failed: " << error.code;
+        }
+    ).await();
+
+    ASSERT_TRUE(status);
+    ASSERT_TRUE(success);
+}
+
 int
 main(int argc, char **argv) {
     testing::InitGoogleTest(&argc, argv);
