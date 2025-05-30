@@ -40,7 +40,7 @@ if (!db2.connect("tcp://test:test@localhost:5432[test]")) {
 
 `schema://[user[:password]@]host[:port][database]`
 
-*   `schema`: `tcp` (for plain TCP) or `tcp` (for SSL/TLS - requires `qb::pg::tcp::ssl::database`).
+*   `schema`: `tcp` (for plain TCP) or `tcp` + (for SSL/TLS - requires `qb::pg::tcp::ssl::database`).
 *   `user`, `password` (Optional): Credentials for authentication.
 *   `host`: Hostname or IP address of the PostgreSQL server.
 *   `port` (Optional): Port number (defaults to 5432).
