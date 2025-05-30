@@ -1020,11 +1020,42 @@ public:
 
         _error = error::db_error{"unknown error"};
 
-        if (!this->transport().connect(
+        if (!static_cast<qb::io::tcp::socket &>(this->transport()).connect(
                 qb::io::uri{conn_opts_.schema + "://" + conn_opts_.uri})) {
             if (this->protocol())
                 this->clear_protocols();
+            using tpt = std::decay_t<decltype(this->transport())>;
+            if constexpr (tpt::is_secure()) {
+                uint32_t len = htonl(8);
+                uint32_t code = htonl(0x04D2162F);
+                std::array<uint8_t, 8> ssl_request{};
+                std::memcpy(ssl_request.data(), &len, 4);
+                std::memcpy(ssl_request.data() + 4, &code, 4);
 
+                if (send(this->transport().native_handle(), ssl_request.data(), ssl_request.size(), 0) != 8) {
+                    LOG_CRIT("[pgsql] Failed to send SSL request");
+                    return false;
+                }
+
+                uint8_t response;
+                ssize_t n = recv(this->transport().native_handle(), &response, 1, 0);
+                if (n != 1) {
+                    LOG_CRIT("[pgsql] Failed to receive SSL response");
+                    return false;
+                }
+
+                if (response == 'S') {
+                    LOG_INFO("[pgsql] Server supports SSL");
+                    if (!this->transport().connect(
+                            qb::io::uri{conn_opts_.schema + "://" + conn_opts_.uri})) {
+                        LOG_CRIT("[pgsql] Failed to connect to SSL server");
+                        return false;
+                    }
+                } else if (response == 'N') {
+                    LOG_CRIT("[pgsql] Server does NOT support SSL");
+                    return false;
+                }
+            }
             this->template switch_protocol<pg_protocol>(*this);
             this->start();
             send_startup_message();

@@ -20,6 +20,7 @@ set(QB_PGSQL_TESTS
         param-unserializer
         param-parsing
         connection
+#        connection-ssl
         data-types
         data-types-integration
         prepared-statements
