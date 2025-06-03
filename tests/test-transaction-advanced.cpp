@@ -756,10 +756,10 @@ TEST_F(PostgreSQLAdvancedTransactionTest, ConstraintViolationHandling) {
  * Verifies that PostgreSQL cursors can be used properly within transactions
  * to efficiently process large result sets.
  */
+// First, insert additional test data
+constexpr int CURSOR_TEST_ROWS = 100;
+constexpr int FETCH_SIZE       = 10;
 TEST_F(PostgreSQLAdvancedTransactionTest, TransactionWithCursor) {
-    // First, insert additional test data
-    constexpr int CURSOR_TEST_ROWS = 100;
-
     std::cout << "Beginning cursor test - inserting test data" << std::endl;
 
     // Insert test data in batches
@@ -780,7 +780,6 @@ TEST_F(PostgreSQLAdvancedTransactionTest, TransactionWithCursor) {
     bool          cursor_created = false;
     bool          fetch_executed = false;
     int           rows_fetched   = 0;
-    constexpr int FETCH_SIZE     = 10;
 
     std::cout << "Starting transaction with cursor" << std::endl;
 

@@ -1032,13 +1032,14 @@ public:
                 std::memcpy(ssl_request.data(), &len, 4);
                 std::memcpy(ssl_request.data() + 4, &code, 4);
 
-                if (send(this->transport().native_handle(), ssl_request.data(), ssl_request.size(), 0) != 8) {
+                if (send(this->transport().native_handle(), reinterpret_cast<const char *>(ssl_request.data()), ssl_request.size(), 0) != 8) {
                     LOG_CRIT("[pgsql] Failed to send SSL request");
                     return false;
                 }
 
                 uint8_t response;
-                ssize_t n = recv(this->transport().native_handle(), &response, 1, 0);
+                auto    n = recv(this->transport().native_handle(),
+                                 reinterpret_cast<char *>(&response), 1, 0);
                 if (n != 1) {
                     LOG_CRIT("[pgsql] Failed to receive SSL response");
                     return false;

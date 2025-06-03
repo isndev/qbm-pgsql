@@ -695,8 +695,8 @@ TEST_F(PostgreSQLPreparedStatementsTest, PerformanceComparison) {
  * Similar to PerformanceComparison but using async transactions to 
  * more efficiently submit multiple statements.
  */
+constexpr int iterations = 100; // Number of statements to execute
 TEST_F(PostgreSQLPreparedStatementsTest, AsyncPerformanceComparison) {
-    const int iterations = 100; // Number of statements to execute
 
     // Clear table before test
     auto status = db_->execute("DELETE FROM test_prepared").await();
