@@ -15,6 +15,8 @@
 #         limitations under the License.
 #
 
+include(CTest)
+
 set(QB_PGSQL_TESTS
         param-serializer
         param-unserializer
@@ -34,9 +36,9 @@ set(QB_PGSQL_TESTS
 
 # Register each test
 foreach (TEST ${QB_PGSQL_TESTS})
-    qb_register_module_gtest(
-            NAME pgsql
-            TESTNAME ${TEST}
-            SOURCES test-${TEST}.cpp
+    qb_register_module_test(
+        MODULE_NAME pgsql
+        TEST_NAME ${TEST}
+        SOURCES test-${TEST}.cpp
     )
 endforeach ()

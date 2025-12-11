@@ -1205,7 +1205,7 @@ struct tcp {
      * Suitable for local networks or when using an external encryption layer.
      */
     using database = detail::Database<qb::io::transport::tcp>;
-#ifdef QB_IO_WITH_SSL
+#ifdef QB_HAS_SSL
     /**
      * @brief SSL transport namespace
      *
