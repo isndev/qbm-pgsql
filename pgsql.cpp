@@ -84,7 +84,7 @@ pipe<char>::put<qb::pg::detail::message>(const qb::pg::detail::message &msg) {
 // Explicit template instantiations for Database class with different transport types
 template class qb::pg::detail::Database<qb::io::transport::tcp>;
 
-#ifdef QB_IO_WITH_SSL
+#ifdef QB_HAS_SSL
 
 template class qb::pg::detail::Database<qb::io::transport::stcp>;
 
