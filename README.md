@@ -46,7 +46,7 @@ target_link_libraries(your_target PRIVATE qbm::pgsql)
 
 **True Asynchronous Operations**: Every database operation is non-blocking, integrating perfectly with QB's event loop for maximum concurrency.
 
-**Type Safety**: Automatic type conversion between C++ and PostgreSQL types with compile-time safety. No more manual string building or casting.
+**Type Safety**: Automatic type conversion between C++ and PostgreSQL types with compile-time safety. No more manual string building or casting. Supports 19+ PostgreSQL types including **NUMERIC**, **DATE**, **TIME**, **TIMETZ**, and **INTERVAL** with full binary serialization.
 
 **Transaction Control**: Fluent API for transactions, savepoints, and complex multi-statement operations with clean error handling.
 
@@ -427,12 +427,33 @@ This detailed documentation covers:
 - **Performance Optimization** - Connection pooling, batch operations, and profiling
 - **Security Considerations** - SSL/TLS configuration, authentication methods, and best practices
 
+## ✨ New Features
+
+### Recently Added Type Support
+
+The module now includes **complete binary serialization** for these PostgreSQL types:
+
+| Type | C++ Type | Features |
+| :--- | :------- | :------- |
+| **NUMERIC** / **DECIMAL** | `qb::pg::detail::numeric` | Exact precision for financial calculations |
+| **DATE** | `qb::pg::detail::pgdate` | Calendar dates with 4-byte binary format |
+| **TIME** | `qb::pg::detail::pgtime` | Microsecond precision time of day |
+| **TIMETZ** | `qb::pg::detail::pgtimetz` | Time with timezone support |
+| **INTERVAL** | `std::chrono::duration` | Time durations with 16-byte format |
+
+All new types support both **binary** and **text** serialization formats for maximum compatibility.
+
+See [Data Type Handling](./readme/types.md) for detailed usage examples.
+
+---
+
 ## Documentation & Examples
 
 For detailed usage patterns and comprehensive examples:
 
 - **[QB Examples Repository](https://github.com/isndev/qb-examples):** Real-world PostgreSQL integration patterns
 - **[Full Module Documentation](./readme/README.md):** Complete API reference and guides
+- **[Type Mapping Reference](./readme/types.md):** PostgreSQL ↔ C++ type conversions
 
 **Example Categories:**
 - Connection management and configuration

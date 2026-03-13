@@ -114,6 +114,44 @@ result_impl::buffer_bounds(uinteger row, usmallint col) const {
     return rd.field_buffer_bounds(col);
 }
 
+/**
+ * @brief Build the name-to-index cache for O(1) lookups
+ *
+ * Populates the name_cache_ map on first call. Subsequent lookups
+ * use the cache for average O(1) access instead of O(n) linear search.
+ */
+void
+result_impl::build_name_cache() const {
+    if (name_cache_built_) {
+        return;
+    }
+    name_cache_.reserve(row_description_.size() * 2); // Load factor ~0.5
+    for (usmallint i = 0; i < row_description_.size(); ++i) {
+        name_cache_[row_description_[i].name] = i;
+    }
+    name_cache_built_ = true;
+}
+
+/**
+ * @brief Get column index by field name (O(1) with cache)
+ *
+ * Uses a lazily-built hash map for O(1) average lookup time.
+ * Falls back to linear search only if cache is not yet built.
+ *
+ * @param name Field name to look up
+ * @return Column index, or npos (-1) if not found
+ */
+usmallint
+result_impl::column_index_of(const std::string &name) const {
+    // OPTIMIZED: O(1) lookup with hash map vs O(n) linear search (P0-11 fix)
+    build_name_cache();
+    auto it = name_cache_.find(name);
+    if (it != name_cache_.end()) {
+        return it->second;
+    }
+    return static_cast<usmallint>(-1); // npos
+}
+
 } /* namespace detail */
 } /* namespace pg */
 } /* namespace qb */

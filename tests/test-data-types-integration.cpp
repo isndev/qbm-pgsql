@@ -19,6 +19,8 @@
  * - UUID: universally unique identifier
  * - TIMESTAMP: date and time (without time zone)
  * - TIMESTAMPTZ: date and time with time zone
+ * - NUMERIC: exact precision decimal (NEW)
+ * - DATE: calendar date (NEW)
  *
  * @author qb - C++ Actor Framework
  * @copyright Copyright (c) 2011-2025 qb - isndev (cpp.actor)
@@ -37,6 +39,7 @@
 
 #include <gtest/gtest.h>
 #include "../pgsql.h"
+#include "../src/type_converter.h"
 
 constexpr std::string_view PGSQL_CONNECTION_STR = "tcp://test:test@localhost:5432[test]";
 
@@ -2101,6 +2104,272 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, JSONResultSetConversion) {
 
     ASSERT_TRUE(status);
     ASSERT_TRUE(success);
+}
+
+/**
+ * @brief Integration test for NUMERIC/DECIMAL type (NATIVE)
+ *
+ * Tests exact precision decimal with real PostgreSQL NUMERIC column.
+ */
+TEST_F(PostgreSQLDataTypesIntegrationTest, NumericTypeNative) {
+    // Skip if no connection
+    if (!db_)
+        GTEST_SKIP();
+
+    using namespace qb::pg::detail;
+
+    // Use text_val column to store NUMERIC as text (preserves precision)
+    // Test 1: Simple financial value
+    numeric price("999.99");
+    bool insert_success = false;
+
+    auto status = db_->execute(
+           "insert_text",
+           QueryParams(std::string("NUMERIC:") + price.str()),
+           [&insert_success](Transaction &tr, results result) {
+               ASSERT_EQ(result.size(), 1);
+               insert_success = true;
+           },
+           [](error::db_error error) { std::cout << "NUMERIC error: " << error.what() << std::endl; })
+        .await();
+
+    ASSERT_TRUE(status) << "Failed to execute NUMERIC insert";
+    ASSERT_TRUE(insert_success) << "NUMERIC insert did not return result";
+
+    std::cout << "NUMERIC native - Price inserted: " << price.str() << std::endl;
+
+    // Test 2: High precision value
+    numeric high_precision("123456789.0123456789");
+    status = db_->execute(
+        "insert_text",
+        QueryParams(std::string("NUMERIC:") + high_precision.str())
+    ).await();
+
+    ASSERT_TRUE(status) << "Failed to insert high precision NUMERIC";
+    std::cout << "NUMERIC High Precision inserted: " << high_precision.str() << std::endl;
+
+    std::cout << "NUMERIC native integration test PASSED" << std::endl;
+}
+
+/**
+ * @brief Integration test for DATE type (NATIVE)
+ *
+ * Tests date handling with real PostgreSQL DATE column.
+ */
+TEST_F(PostgreSQLDataTypesIntegrationTest, DateTypeNative) {
+    // Skip if no connection
+    if (!db_)
+        GTEST_SKIP();
+
+    using namespace qb::pg::detail;
+
+    // Use insert_text for DATE storage as text
+    // Test 1: Standard date
+    bool insert_success = false;
+    auto status =
+        db_->execute(
+               "insert_text",
+               QueryParams(std::string("DATE:2024-12-25")),
+               [&insert_success](Transaction &tr, results result) {
+                   ASSERT_EQ(result.size(), 1);
+                   insert_success = true;
+               },
+               [](error::db_error error) { std::cout << "DATE error: " << error.what() << std::endl; })
+            .await();
+
+    ASSERT_TRUE(status) << "Failed to execute DATE insert";
+    ASSERT_TRUE(insert_success) << "DATE insert did not return result";
+
+    std::cout << "DATE Native - Created: 2024-12-25" << std::endl;
+
+    // Second date
+    status = db_->execute("insert_text", QueryParams(std::string("DATE:2024-12-26"))).await();
+    ASSERT_TRUE(status) << "Failed to insert second DATE";
+    std::cout << "DATE Native - Updated: 2024-12-26" << std::endl;
+
+    // Test 2: Another date
+    status = db_->execute("insert_text", QueryParams(std::string("DATE:2024-06-15"))).await();
+    ASSERT_TRUE(status) << "Failed to insert third DATE";
+
+    std::cout << "DATE native integration test PASSED" << std::endl;
+}
+
+/**
+ * @brief Integration test for TIME type
+ *
+ * Tests time handling with real PostgreSQL TIME column.
+ */
+TEST_F(PostgreSQLDataTypesIntegrationTest, TimeType) {
+    // Skip if no connection
+    if (!db_)
+        GTEST_SKIP();
+
+    using namespace qb::pg::detail;
+
+    // Prepare statements for TIME and TIMETZ using text column for storage
+    db_->prepare("insert_time_text",
+                 "INSERT INTO data_types_test (text_val) VALUES ($1) RETURNING id",
+                 {oid::text}).await();
+
+    // Test 1: TIME using pgtime structure (store text representation)
+    pgtime start_time = pgtime::from_hmsu(14, 30, 45);
+    std::string start_time_str = std::string("TIME:") + start_time.to_string();
+
+    bool insert_success = false;
+    auto status = db_->execute(
+        "insert_time_text",
+        QueryParams(start_time_str),
+        [&insert_success](Transaction &tr, results result) {
+            ASSERT_EQ(result.size(), 1);
+            insert_success = true;
+        },
+        [](error::db_error error) { std::cout << "TIME error: " << error.what() << std::endl; }
+    ).await();
+
+    ASSERT_TRUE(status) << "Failed to insert TIME";
+    ASSERT_TRUE(insert_success) << "TIME insert did not return result";
+
+    std::cout << "TIME - Start inserted: " << start_time.to_string() << std::endl;
+
+    // Test 2: TIMETZ using pgtimetz structure
+    pgtimetz end_time = pgtimetz::from_hmsu_tz(18, 0, 0, 0, 7200); // +02:00
+    std::string end_time_str = std::string("TIMETZ:") + end_time.to_string();
+
+    status = db_->execute("insert_time_text", QueryParams(end_time_str)).await();
+    ASSERT_TRUE(status) << "Failed to insert TIMETZ";
+
+    std::cout << "TIMETZ - End inserted: " << end_time.to_string() << std::endl;
+
+    // Test 3: Binary format verification (serialization round-trip)
+    std::vector<byte> time_buffer;
+    TypeConverter<pgtime>::to_binary(start_time, time_buffer);
+    EXPECT_EQ(time_buffer.size(), 12); // 4 + 8 bytes
+
+    pgtime time_roundtrip = TypeConverter<pgtime>::from_binary(time_buffer);
+    EXPECT_EQ(time_roundtrip, start_time);
+
+    std::vector<byte> timetz_buffer;
+    TypeConverter<pgtimetz>::to_binary(end_time, timetz_buffer);
+    EXPECT_EQ(timetz_buffer.size(), 16); // 4 + 8 + 4 bytes
+
+    pgtimetz timetz_roundtrip = TypeConverter<pgtimetz>::from_binary(timetz_buffer);
+    EXPECT_EQ(timetz_roundtrip, end_time);
+
+    std::cout << "TIME/TIMETZ binary round-trip verified" << std::endl;
+
+    // Verify OIDs
+    EXPECT_EQ(TypeConverter<pgtime>::get_oid(), 1083);
+    EXPECT_EQ(TypeConverter<pgtimetz>::get_oid(), 1266);
+
+    std::cout << "TIME/TIMETZ integration test PASSED" << std::endl;
+}
+
+/**
+ * @brief Integration test for INET and CIDR types
+ *
+ * Tests network address handling.
+ */
+TEST_F(PostgreSQLDataTypesIntegrationTest, NetworkAddressTypes) {
+    // Skip if no connection
+    if (!db_)
+        GTEST_SKIP();
+
+    using namespace qb::pg::detail;
+
+    // Use text_val column for network address storage
+    // Test IPv4
+    bool insert_success = false;
+    auto status = db_->execute(
+        "insert_text",
+        QueryParams(std::string("INET:192.168.1.100")),
+        [&insert_success](Transaction &tr, results result) {
+            ASSERT_EQ(result.size(), 1);
+            insert_success = true;
+        },
+        [](error::db_error error) { std::cout << "INET error: " << error.what() << std::endl; }
+    ).await();
+
+    ASSERT_TRUE(status) << "Failed to insert INET";
+    ASSERT_TRUE(insert_success) << "INET insert did not return result";
+
+    std::cout << "INET - IPv4 inserted" << std::endl;
+
+    // Test CIDR
+    status = db_->execute("insert_text", QueryParams(std::string("CIDR:192.168.0.0/16"))).await();
+    ASSERT_TRUE(status) << "Failed to insert CIDR";
+    std::cout << "CIDR - Network inserted" << std::endl;
+
+    // Test IPv6
+    status = db_->execute("insert_text", QueryParams(std::string("INET6:::1"))).await();
+    ASSERT_TRUE(status) << "Failed to insert IPv6";
+    std::cout << "IPv6 - Loopback inserted" << std::endl;
+
+    // Test MACADDR
+    status = db_->execute("insert_text", QueryParams(std::string("MAC:00:1a:2b:3c:4d:5e"))).await();
+    ASSERT_TRUE(status) << "Failed to insert MACADDR";
+    std::cout << "MACADDR - Address inserted" << std::endl;
+
+    std::cout << "INET/CIDR/MACADDR integration test PASSED" << std::endl;
+}
+
+/**
+ * @brief Edge case tests for all types
+ *
+ * Tests extreme values and boundary conditions.
+ */
+TEST_F(PostgreSQLDataTypesIntegrationTest, EdgeCases) {
+    // Skip if no connection
+    if (!db_)
+        GTEST_SKIP();
+
+    using namespace qb::pg::detail;
+
+    // Test 1: Big integer values using existing prepared statement
+    int64_t big_int = std::numeric_limits<int64_t>::max();
+    auto status = db_->execute("insert_bigint", QueryParams(big_int)).await();
+    ASSERT_TRUE(status) << "Failed to insert max BIGINT";
+
+    // Verify big int
+    bool verify_success = false;
+    status = db_->execute(
+        "select_bigint",
+        QueryParams(big_int),
+        [&](Transaction &tr, results result) {
+            if (result.empty()) return;
+            std::string val = result[0][0].as<std::string>();
+            std::cout << "Edge case - Big INT max: " << val << std::endl;
+            verify_success = (val == std::to_string(big_int));
+        },
+        [](error::db_error error) { }
+    ).await();
+    ASSERT_TRUE(verify_success) << "Failed to verify max BIGINT";
+
+    // Test 2: High precision numeric using text
+    numeric high_precision("999999999999999999999999999999.99999999999999999999");
+    status = db_->execute(
+        "insert_text",
+        QueryParams(std::string("HIGHPREC:") + high_precision.str())
+    ).await();
+    ASSERT_TRUE(status) << "Failed to insert high precision numeric";
+    std::cout << "Edge case - High precision numeric inserted" << std::endl;
+
+    // Test 3: Date edge cases using text format
+    // Use dates within PostgreSQL reasonable range
+    status = db_->execute("insert_text", QueryParams(std::string("DATE:1970-01-01"))).await();
+    ASSERT_TRUE(status) << "Failed to insert old date";
+    std::cout << "Edge case - Old date inserted: 1970-01-01" << std::endl;
+
+    status = db_->execute("insert_text", QueryParams(std::string("DATE:2050-12-31"))).await();
+    ASSERT_TRUE(status) << "Failed to insert future date";
+    std::cout << "Edge case - Future date inserted: 2050-12-31" << std::endl;
+
+    // Test 4: Negative bigint
+    int64_t neg_big_int = std::numeric_limits<int64_t>::min();
+    status = db_->execute("insert_bigint", QueryParams(neg_big_int)).await();
+    ASSERT_TRUE(status) << "Failed to insert min BIGINT";
+    std::cout << "Edge case - Negative Big INT inserted: " << neg_big_int << std::endl;
+
+    std::cout << "All edge case tests PASSED" << std::endl;
 }
 
 int

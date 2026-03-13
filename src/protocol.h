@@ -382,8 +382,12 @@ struct row_data {
     typedef uint16_t size_type;
     /** @brief Type for field offsets within data buffer */
     typedef std::vector<integer> offsets_type;
-    /** @brief Type for tracking which fields are NULL */
-    typedef std::set<size_type> null_map_type;
+    /** @brief Type for tracking which fields are NULL
+     * OPTIMIZED: Changed from std::set to std::vector<bool> (bitmap) (P0-4 fix)
+     * std::set has O(log n) lookup and high memory overhead per element
+     * std::vector<bool> is bit-packed with O(1) lookup and minimal memory
+     */
+    typedef std::vector<bool> null_map_type;
 
     /** @brief Field offsets within the data buffer */
     offsets_type offsets;

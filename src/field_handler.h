@@ -120,12 +120,13 @@ public:
     template <typename T>
     static bool
     to(const typename resultset::field &field, T &value) {
-        try {
-            value = as<T>(field);
-            return true;
-        } catch (const field_is_null &) {
+        // OPTIMIZED: Check for null without throwing exception (P0-5 fix)
+        // Previously used try/catch which is expensive for normal control flow
+        if (field.is_null()) {
             return false;
         }
+        value = as<T>(field);
+        return true;
     }
 
     /**

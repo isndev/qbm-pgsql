@@ -24,6 +24,7 @@
  * @note Portions of this code adapted from project: https://github.com/zmij/pg_async.git
  */
 
+#include <array>
 #include <exception>
 #include <iostream>
 #include <sstream>
@@ -38,15 +39,37 @@ namespace {
 /**
  * @brief Mapping from isolation level enum values to their string representations
  *
- * This map provides the PostgreSQL-compatible string representation for each
- * isolation level enum value, used when generating SQL statements or
- * logging transaction information.
+ * OPTIMIZED: Replaced std::map (3 elements, O(log n) + allocations) with
+ * std::array and linear search (O(n) but much faster for tiny n, no allocations).
+ *
+ * For only 3 elements, linear search is significantly faster than tree lookups.
  */
-const std::map<isolation_level, std::string> ISOLATION_TO_STRING{
+struct IsolationLevelEntry {
+    isolation_level level;
+    const char      *name;
+};
+
+constexpr std::array<IsolationLevelEntry, 3> ISOLATION_TO_STRING{{
     {isolation_level::read_committed, "read committed"},
     {isolation_level::repeatable_read, "repeatable read"},
     {isolation_level::serializable, "serializable"},
-}; // ISOLATION_TO_STRING
+}};
+
+/**
+ * @brief Linear search for isolation level name
+ *
+ * @param val Isolation level to find
+ * @return Pointer to name if found, nullptr otherwise
+ */
+constexpr const char *
+isolation_level_name(isolation_level val) {
+    for (const auto &entry : ISOLATION_TO_STRING) {
+        if (entry.level == val) {
+            return entry.name;
+        }
+    }
+    return nullptr;
+}
 } // namespace
 
 /**
@@ -62,9 +85,8 @@ const std::map<isolation_level, std::string> ISOLATION_TO_STRING{
 operator<<(::std::ostream &os, isolation_level val) {
     std::ostream::sentry s(os);
     if (s) {
-        auto f = ISOLATION_TO_STRING.find(val);
-        if (f != ISOLATION_TO_STRING.end()) {
-            os << f->second;
+        if (const char *name = isolation_level_name(val)) {
+            os << name;
         } else {
             os << "Unknown transaction isolation level " << static_cast<int>(val);
         }
@@ -105,6 +127,13 @@ operator<<(::std::ostream &os, transaction_mode const &val) {
         }
     }
     return os;
+}
+
+::std::string
+to_string(transaction_mode const &val) {
+    ::std::ostringstream os;
+    os << val;
+    return os.str();
 }
 
 /**

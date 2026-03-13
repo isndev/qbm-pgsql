@@ -80,9 +80,7 @@ public:
     void
     on_end_transaction() {
         push_query(_result ? std::unique_ptr<ISqlQuery>(new CommitQuery(
-                                 []() {
-                                     // commited
-                                 },
+                                 []() {},
                                  [this](auto const &err) { _on_error(err); }))
                            : std::unique_ptr<ISqlQuery>(new RollbackQuery(
                                  [this]() {
@@ -232,9 +230,7 @@ public:
         push_query(should_release
                        ? std::unique_ptr<ISqlQuery>(new ReleaseSavePointQuery(
                              _name,
-                             []() {
-                                 // committed
-                             },
+                             []() {},
                              [this](auto const &err) { _on_error(err); }))
                        : std::unique_ptr<ISqlQuery>(new RollbackSavePointQuery(
                              _name,
@@ -357,22 +353,16 @@ public:
                     _result = false;
                     _on_error((error::db_error) error::client_error{e.what()});
                     if (_parent)
-                        _parent->on_sub_command_status(
-                            false); // Propager l'erreur au parent
+                        _parent->on_sub_command_status(false);
                 }
             },
             [this](auto const &err) {
                 _result = false;
                 _on_error(err);
                 if (_parent)
-                    _parent->on_sub_command_status(false); // Propager l'erreur au parent
+                    _parent->on_sub_command_status(false);
             })));
     }
-
-    //    void
-    //    on_sub_command_status(bool status) final {
-    //        _parent->on_sub_command_status(status);
-    //    }
 };
 
 /**
@@ -439,13 +429,21 @@ public:
     /**
      * @brief Handles a data row from the query result
      *
-     * Adds a row of data to the result set.
-     *
      * @param data Row data
      */
     void
     on_new_data_row(row_data &&data) final {
         _results.rows().push_back(std::move(data));
+    }
+
+    /**
+     * @brief Stores the CommandComplete tag for rows_affected() reporting
+     *
+     * @param tag CommandComplete tag string
+     */
+    void
+    on_command_complete(const std::string &tag) final {
+        _results.set_command_tag(tag);
     }
 };
 
@@ -690,13 +688,21 @@ public:
     /**
      * @brief Handles a data row from the query result
      *
-     * Adds a row of data to the result set.
-     *
      * @param data Row data
      */
     void
     on_new_data_row(row_data &&data) final {
         _results.rows().push_back(std::move(data));
+    }
+
+    /**
+     * @brief Stores the CommandComplete tag for rows_affected() reporting
+     *
+     * @param tag CommandComplete tag string
+     */
+    void
+    on_command_complete(const std::string &tag) final {
+        _results.set_command_tag(tag);
     }
 };
 

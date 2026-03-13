@@ -35,11 +35,12 @@
 #include <cstdint>
 #include <functional>
 #include <iosfwd>
-#include <map>
 #include <memory>
 #include <optional>
+#include <qb/system/container/unordered_map.h>
 #include <qb/uuid.h>
 #include <string>
+#include <string_view>
 #include <vector>
 #ifndef _WIN32
 #include <netinet/in.h> // For htons, htonl
@@ -152,6 +153,12 @@ struct connection_options {
     std::string database; /**< Database name to connect to */
     std::string user;     /**< Database user name for authentication */
     std::string password; /**< Database user's password for authentication */
+    int         connect_timeout{10}; /**< Connection timeout in seconds (default: 10s) */
+
+    // P1-1: Connection health check / keepalive settings
+    int keepalive_interval{0}; /**< TCP keepalive interval in seconds (0 = disabled) */
+    int keepalive_probes{3};  /**< Number of keepalive probes before considering dead */
+    int keepalive_idle{60};    /**< Seconds of idle time before sending keepalive probes */
 
     /**
      * @brief Generate an alias from connection parameters
@@ -269,7 +276,8 @@ struct transaction_mode {
  * @param val The transaction mode to output
  * @return Reference to the output stream after writing
  */
-::std::ostream &operator<<(::std::ostream &os, transaction_mode const &val);
+::std::ostream    &operator<<(::std::ostream &os, transaction_mode const &val);
+::std::string      to_string(transaction_mode const &val);
 
 /**
  * @brief Description of a field returned by the PostgreSQL backend
@@ -408,9 +416,10 @@ using connection_ptr = std::shared_ptr<basic_connection>;
 /**
  * @brief Client configuration options
  *
- * Map of key-value pairs for configuring client behavior.
+ * Hash map of key-value pairs for configuring client behavior.
+ * Uses qb::unordered_map for O(1) average-case lookup.
  */
-using client_options_type = std::map<std::string, std::string>;
+using client_options_type = qb::unordered_map<std::string, std::string>;
 
 /**
  * @brief Sequence of PostgreSQL type OIDs
@@ -444,38 +453,28 @@ using query_error_callback = std::function<void(error::query_error const &)>;
  * @brief Namespace containing connection option constants
  *
  * Standard option names for connection configuration.
+ * Defined as inline constexpr string_view to avoid ODR violations
+ * when this header is included in multiple translation units.
  */
 namespace options {
 
-/**
- * @brief Database server hostname or IP address
- */
-const std::string HOST = "host";
+/** @brief Database server hostname or IP address */
+inline constexpr std::string_view HOST = "host";
 
-/**
- * @brief Database server port number
- */
-const std::string PORT = "port";
+/** @brief Database server port number */
+inline constexpr std::string_view PORT = "port";
 
-/**
- * @brief Database user name for authentication
- */
-const std::string USER = "user";
+/** @brief Database user name for authentication */
+inline constexpr std::string_view USER = "user";
 
-/**
- * @brief Database name to connect to
- */
-const std::string DATABASE = "database";
+/** @brief Database name to connect to */
+inline constexpr std::string_view DATABASE = "database";
 
-/**
- * @brief Character encoding for client-server communication
- */
-const std::string CLIENT_ENCODING = "client_encoding";
+/** @brief Character encoding for client-server communication */
+inline constexpr std::string_view CLIENT_ENCODING = "client_encoding";
 
-/**
- * @brief Application name for identification in server logs
- */
-const std::string APPLICATION_NAME = "application_name";
+/** @brief Application name for identification in server logs */
+inline constexpr std::string_view APPLICATION_NAME = "application_name";
 
 } // namespace options
 
