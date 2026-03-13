@@ -168,12 +168,9 @@ message::buffer() const {
     if (!packed_) {
         // Encode length of message
         integer len = size();
-        // Manual conversion instead of using protocol_write
-        unsigned char *p = reinterpret_cast<unsigned char *>(&len);
-        len              = qb::endian::to_big_endian(len);
-        for (size_t i = 0; i < sizeof(len); ++i) {
-            payload[i + 1] = p[i];
-        }
+        // OPTIMIZED: Use endian utility for direct write (P0-14 fix)
+        integer network_len = qb::endian::to_big_endian(len);
+        std::memcpy(&payload[1], &network_len, sizeof(integer));
     }
 
     if (payload.front() == 0)
@@ -260,12 +257,10 @@ message::read(char &c) {
 template <typename T>
 void
 write_int(message::buffer_type &payload, T val) {
-    // Manual conversion instead of using protocol_write
-    T              converted = qb::endian::to_big_endian(val);
-    unsigned char *p         = reinterpret_cast<unsigned char *>(&converted);
-    for (size_t i = 0; i < sizeof(T); ++i) {
-        payload.push_back(p[i]);
-    }
+    // OPTIMIZED: Use std::memcpy for batch copy instead of byte-by-byte (P0-14 fix)
+    T converted = qb::endian::to_big_endian(val);
+    const auto *bytes = reinterpret_cast<const message::buffer_type::value_type *>(&converted);
+    payload.insert(payload.end(), bytes, bytes + sizeof(T));
 }
 
 /**
@@ -326,9 +321,9 @@ message::read(std::string &val) {
 bool
 message::read(std::string &val, size_t n) {
     if (payload.end() - curr_ >= ::std::make_signed<size_t>::type(n)) {
-        for (size_t i = 0; i < n; ++i) {
-            val.push_back(*curr_++);
-        }
+        // OPTIMIZED: Use iterator range insert instead of byte-by-byte (P0-14 fix)
+        val.append(curr_, curr_ + n);
+        curr_ += n;
         return true;
     }
     return false;
@@ -378,6 +373,8 @@ message::read(row_data &row) {
     if (read(col_count)) {
         row_data tmp;
         tmp.offsets.reserve(col_count);
+        // OPTIMIZED: Pre-allocate null_map with correct size (P0-4 fix)
+        tmp.null_map.resize(col_count, false);
         size_t expected_sz = len - sizeof(integer) * (col_count + 1) - sizeof(int16_t);
         tmp.data.reserve(expected_sz);
         for (int16_t i = 0; i < col_count; ++i) {
@@ -386,14 +383,12 @@ message::read(row_data &row) {
             if (!read(col_size))
                 return false;
             if (col_size == -1) {
-                tmp.null_map.insert(i);
+                // OPTIMIZED: Direct bitmap set instead of set insert (P0-4 fix)
+                tmp.null_map[i] = true;
             } else if (col_size > 0) {
-                const_iterator in  = curr_;
-                auto           out = std::back_inserter(tmp.data);
-                for (; in != curr_ + col_size; ++in) {
-                    *out++ = *in;
-                }
-                curr_ = in;
+                // OPTIMIZED: Use insert with iterator range instead of byte-by-byte (P0-14 fix)
+                tmp.data.insert(tmp.data.end(), curr_, curr_ + col_size);
+                curr_ += col_size;
             }
         }
         row.swap(tmp);
@@ -546,7 +541,8 @@ row_data::check_index(size_type index) const {
 bool
 row_data::is_null(size_type index) const {
     check_index(index);
-    return null_map.count(index);
+    // OPTIMIZED: O(1) bitmap access instead of O(log n) set lookup (P0-4 fix)
+    return null_map[index];
 }
 
 /**

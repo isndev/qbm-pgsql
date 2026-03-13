@@ -127,6 +127,11 @@ Transaction::on_new_row_description(row_description_type &&) {}
 void
 Transaction::on_new_data_row(row_data &&) {}
 
+void
+Transaction::on_command_complete(const std::string &tag) {
+    _results.set_command_tag(tag);
+}
+
 Transaction &
 Transaction::execute(std::string_view expr) {
     return this->execute(

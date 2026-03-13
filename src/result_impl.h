@@ -34,6 +34,7 @@
 
 #pragma once
 
+#include <unordered_map>
 #include <vector>
 
 #include "./common.h"
@@ -70,6 +71,37 @@ public:
 
     /// Move assignment operator
     result_impl &operator=(result_impl &&) = default;
+
+    /**
+     * @brief Store the command tag and parse rows-affected count
+     *
+     * Called by the protocol layer when a CommandComplete message arrives.
+     * The tag has the form "INSERT 0 5", "DELETE 3", "SELECT 10", "UPDATE 2", etc.
+     *
+     * @param tag CommandComplete tag string from the server
+     */
+    void
+    set_command_tag(std::string tag) {
+        command_tag_ = std::move(tag);
+        // Parse the last whitespace-delimited token as the row count.
+        const auto pos = command_tag_.rfind(' ');
+        if (pos != std::string::npos) {
+            try {
+                rows_affected_ = std::stoll(command_tag_.substr(pos + 1));
+            } catch (...) {
+                rows_affected_ = 0;
+            }
+        }
+    }
+
+    /**
+     * @brief Get the number of rows affected by the last command
+     * @return int64_t Rows affected or returned
+     */
+    int64_t
+    rows_affected() const {
+        return rows_affected_;
+    }
 
     /**
      * @brief Get mutable reference to row description
@@ -134,6 +166,17 @@ public:
      */
     bool is_null(uinteger row, usmallint col) const;
 
+    /**
+     * @brief Get column index by field name
+     *
+     * OPTIMIZED: O(1) average lookup with hash map vs O(n) linear search (P0-11 fix)
+     * Builds the name cache on first call for this result set.
+     *
+     * @param name Field name to look up
+     * @return Column index, or npos if not found
+     */
+    usmallint column_index_of(const std::string &name) const;
+
 private:
     /**
      * @brief Verify that a row index is valid
@@ -142,8 +185,22 @@ private:
      */
     void check_row_index(uinteger row) const;
 
-    row_description_type row_description_; ///< Metadata about the result columns
-    row_set_type         rows_;            ///< Collection of result rows
+    /**
+     * @brief Build the name-to-index cache for O(1) lookups
+     *
+     * Called lazily on first column_index_of() invocation.
+     */
+    void build_name_cache() const;
+
+    row_description_type row_description_;          ///< Metadata about the result columns
+    row_set_type         rows_;                     ///< Collection of result rows
+    std::string          command_tag_;              ///< Raw CommandComplete tag
+    int64_t              rows_affected_{0};         ///< Rows affected/returned
+
+    // OPTIMIZED: Name cache for O(1) column lookups (P0-11)
+    // Using unordered_map for average O(1) lookup vs O(n) linear search
+    mutable std::unordered_map<std::string, usmallint> name_cache_;
+    mutable bool name_cache_built_{false};          ///< Flag to track if cache is populated
 };
 
 } /* namespace detail */

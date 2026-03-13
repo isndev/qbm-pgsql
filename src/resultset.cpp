@@ -81,7 +81,13 @@ resultset::row::rend() const {
 
 resultset::row::reference
 resultset::row::operator[](size_type col_index) const {
-    // TODO check the index
+    // OPTIMIZED: Added bounds checking (P0-12 fix)
+    // Previously had TODO to check index - now implemented
+    size_type col_count = size();
+    if (col_index >= col_count) {
+        throw std::out_of_range("Column index " + std::to_string(col_index) +
+                                " is out of bounds [0.." + std::to_string(col_count) + ")");
+    }
     return reference(result_, row_index_, col_index);
 }
 
@@ -260,7 +266,15 @@ resultset::back() const {
 resultset::reference
 resultset::operator[](size_type index) const {
     assert(index < size() && "Index is out of bounds");
-    // Access a row by index without bounds checking (checked by assertion in debug mode)
+    return row(this, index);
+}
+
+resultset::reference
+resultset::at(size_type index) const {
+    if (index >= size()) {
+        throw std::out_of_range("resultset::at: index " + std::to_string(index) +
+                                " out of range [0.." + std::to_string(size()) + ")");
+    }
     return row(this, index);
 }
 
@@ -278,17 +292,13 @@ resultset::row_description() const {
 
 resultset::size_type
 resultset::index_of_name(std::string const &name) const {
-    row_description_type const &descriptions = pimpl_->row_description();
-    // Find the field description with the matching name
-    auto f =
-        std::find_if(descriptions.begin(), descriptions.end(),
-                     [name](field_description const &fd) { return fd.name == name; });
-    if (f != descriptions.end()) {
-        // Return the index (position) of the field in the result set
-        return f - descriptions.begin();
+    // OPTIMIZED: O(1) cached lookup vs O(n) linear search (P0-11 fix)
+    // Uses lazily-built hash map in result_impl for average O(1) access
+    usmallint index = pimpl_->column_index_of(name);
+    if (index == static_cast<usmallint>(-1)) {
+        return npos;
     }
-    // Return npos if no field with the given name exists
-    return npos;
+    return static_cast<size_type>(index);
 }
 
 field_description const &
@@ -324,6 +334,11 @@ bool
 resultset::is_null(size_type r, row::size_type c) const {
     // Check if the value at the specified row and column is NULL
     return pimpl_->is_null(r, c);
+}
+
+int64_t
+resultset::rows_affected() const {
+    return pimpl_->rows_affected();
 }
 
 qb::json

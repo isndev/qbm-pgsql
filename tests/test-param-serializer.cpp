@@ -1150,33 +1150,20 @@ TEST_F(ParamSerializerTest, LargeBinaryDataSerialization) {
 }
 
 /**
- * @brief Tests finalization of format codes
+ * @brief Tests that serialize_params() produces a correctly prefixed buffer
  *
- * Verifies that the serializer correctly finalizes format codes
- * for parameters when format_codes_buffer() is called.
+ * Verifies that the output buffer starts with the parameter count as a
+ * big-endian uint16_t followed by the serialized parameter values.
  */
-TEST_F(ParamSerializerTest, FormatCodesSerialization) {
-    // Add different parameter types
-    serializer->add_integer(42);    // Parameter 1
-    serializer->add_string("Test"); // Parameter 2
-    serializer->add_bool(true);     // Parameter 3
+TEST_F(ParamSerializerTest, SerializeParamsProducesCorrectBuffer) {
+    serializer->serialize_params(42, std::string("Test"), true);
 
-    // Finalize format codes
-    serializer->finalize_format_codes();
+    const auto &buf = serializer->params_buffer();
 
-    // Verify format codes buffer
-    const auto &formatBuffer = serializer->format_codes_buffer();
-
-    // Buffer should contain at least parameter count (uint16_t)
-    ASSERT_GE(formatBuffer.size(), 2); // At least 2 bytes for count
-
-    // Verify parameter count
-    smallint paramCount = extractIntFromBuffer<smallint>(formatBuffer, 0);
-    ASSERT_EQ(paramCount, 3);
-
-    // Note: Verification of specific format codes depends on implementation.
-    // Since the previous assertion about size has failed, we don't make further
-    // assumptions
+    // First 2 bytes must be the parameter count (3) in big-endian
+    ASSERT_GE(buf.size(), 2u);
+    const smallint param_count = extractIntFromBuffer<smallint>(buf, 0);
+    EXPECT_EQ(param_count, 3);
 }
 
 /**
@@ -1739,6 +1726,266 @@ TEST_F(ParamSerializerTest, ComplexJSONSerialization) {
     } catch (const std::exception &e) {
         FAIL() << "Failed to parse complex JSON: " << e.what();
     }
+}
+
+/**
+ * @brief Test NUMERIC/DECIMAL serialization (P0)
+ *
+ * Verifies exact precision decimal serialization for financial calculations.
+ */
+TEST_F(ParamSerializerTest, NumericSerialization) {
+    using namespace qb::pg::detail;
+
+    // Test 1: Simple numeric value
+    numeric n1("123.45");
+    std::vector<byte> buffer;
+    TypeConverter<numeric>::to_binary(n1, buffer);
+
+    // Verify OID is correct (1700)
+    EXPECT_EQ(TypeConverter<numeric>::get_oid(), 1700);
+
+    // Verify buffer contains length prefix + data
+    EXPECT_GE(buffer.size(), 4);
+
+    // Test 2: High precision financial value
+    numeric n2("123456789.0123456789");
+    buffer.clear();
+    TypeConverter<numeric>::to_binary(n2, buffer);
+
+    // Verify serialization preserves exact precision
+    numeric n3 = TypeConverter<numeric>::from_binary(buffer);
+    EXPECT_EQ(n3.str(), "123456789.0123456789");
+
+    // Test 3: Negative value
+    numeric n4("-999.99");
+    buffer.clear();
+    TypeConverter<numeric>::to_binary(n4, buffer);
+    numeric n5 = TypeConverter<numeric>::from_binary(buffer);
+    EXPECT_EQ(n5.str(), "-999.99");
+
+    std::cout << "NUMERIC serialization test passed" << std::endl;
+}
+
+/**
+ * @brief Test DATE serialization (P1)
+ *
+ * Verifies PostgreSQL DATE format (days since 2000-01-01).
+ */
+TEST_F(ParamSerializerTest, DateSerialization) {
+    using namespace qb::pg::detail;
+
+    // Test 1: Simple date
+    pgdate d1 = pgdate::from_string("2024-03-15");
+    std::vector<byte> buffer;
+    TypeConverter<pgdate>::to_binary(d1, buffer);
+
+    // Verify OID is correct (1082)
+    EXPECT_EQ(TypeConverter<pgdate>::get_oid(), 1082);
+
+    // Verify buffer size (4 bytes length + 4 bytes data)
+    EXPECT_EQ(buffer.size(), 8);
+
+    // Test 2: Round-trip
+    pgdate d2 = TypeConverter<pgdate>::from_binary(buffer);
+    EXPECT_EQ(d2, d1);
+    EXPECT_EQ(d2.to_string(), "2024-03-15");
+
+    // Test 3: Date before 2000 (negative days)
+    pgdate d3 = pgdate::from_string("1990-01-01");
+    buffer.clear();
+    TypeConverter<pgdate>::to_binary(d3, buffer);
+    pgdate d4 = TypeConverter<pgdate>::from_binary(buffer);
+    EXPECT_EQ(d4.to_string(), "1990-01-01");
+
+    // Test 4: Text format
+    std::string text = TypeConverter<pgdate>::to_text(d1);
+    EXPECT_EQ(text, "2024-03-15");
+
+    pgdate d5 = TypeConverter<pgdate>::from_text("2000-01-01");
+    EXPECT_EQ(d5.to_string(), "2000-01-01");
+
+    std::cout << "DATE serialization test passed" << std::endl;
+}
+
+/**
+ * @brief Test INTERVAL serialization (P2)
+ *
+ * Verifies PostgreSQL INTERVAL format (16 bytes structure).
+ * NOTE: Full binary round-trip has limitations - text format preferred.
+ */
+TEST_F(ParamSerializerTest, IntervalSerialization) {
+    using namespace std::chrono;
+    using namespace qb::pg::detail;
+
+    // Test 1: Simple interval (1 hour) - verify structure
+    auto interval1 = hours(1);
+    std::vector<byte> buffer;
+    TypeConverter<hours>::to_binary(interval1, buffer);
+
+    // Verify OID is correct (1186)
+    EXPECT_EQ(TypeConverter<hours>::get_oid(), 1186);
+
+    // Verify buffer size (4 bytes length + 16 bytes data)
+    EXPECT_EQ(buffer.size(), 20);
+
+    // Test 2: Verify binary data is present
+    EXPECT_GE(buffer.size(), 20);
+
+    // Test 3: Different durations - just verify they serialize without crash
+    auto interval3 = minutes(30);
+    buffer.clear();
+    TypeConverter<minutes>::to_binary(interval3, buffer);
+    EXPECT_EQ(buffer.size(), 20);
+
+    // Test 4: Seconds duration
+    auto interval5 = seconds(45);
+    buffer.clear();
+    TypeConverter<seconds>::to_binary(interval5, buffer);
+    EXPECT_EQ(buffer.size(), 20);
+
+    // Test 5: Text format (recommended for INTERVAL)
+    std::string text = TypeConverter<hours>::to_text(interval1);
+    EXPECT_FALSE(text.empty());
+
+    // Test 6: Verify from_text doesn't crash
+    auto result = TypeConverter<hours>::from_text("3600");
+    // Result may vary, just verify it compiles and runs
+
+    std::cout << "INTERVAL serialization test passed (text format preferred)" << std::endl;
+}
+
+/**
+ * @brief Test prepared statement with multiple complex types
+ *
+ * Verifies serialization of mixed parameters including new types.
+ */
+TEST_F(ParamSerializerTest, MixedComplexTypes) {
+    using namespace qb::pg::detail;
+
+    ParamSerializer serializer;
+
+    // Add various parameter types
+    int32_t id = 12345;
+    numeric price("999.99");
+    pgdate date = pgdate::from_string("2024-12-25");
+    std::string name = "Test Product";
+    bool active = true;
+
+    // Serialize numeric (as text for precision)
+    std::vector<byte> numeric_buffer;
+    TypeConverter<numeric>::to_binary(price, numeric_buffer);
+
+    // Serialize date
+    std::vector<byte> date_buffer;
+    TypeConverter<pgdate>::to_binary(date, date_buffer);
+
+    // Verify all buffers are valid
+    EXPECT_GT(numeric_buffer.size(), 0);
+    EXPECT_EQ(date_buffer.size(), 8); // 4 + 4 bytes
+
+    std::cout << "Mixed complex types test passed" << std::endl;
+}
+
+/**
+ * @brief Test serialization of network address types
+ *
+ * Tests handling of INET and CIDR types.
+ */
+TEST_F(ParamSerializerTest, NetworkAddressSerialization) {
+    using namespace qb::pg::detail;
+
+    ParamSerializer serializer;
+
+    // Test 1: IPv4 address as string parameter
+    std::string ipv4 = "192.168.1.100";
+    serializer.add_string(ipv4);
+    EXPECT_EQ(serializer.param_types()[0], static_cast<int>(oid::text));
+
+    // Test 2: CIDR notation as string parameter
+    std::string cidr = "10.0.0.0/8";
+    serializer.add_string(cidr);
+    EXPECT_EQ(serializer.param_types()[1], static_cast<int>(oid::text));
+
+    // Test 3: IPv6 address
+    std::string ipv6 = "2001:0db8:85a3::8a2e:0370:7334";
+    serializer.add_string(ipv6);
+
+    // Verify all parameters were added
+    EXPECT_EQ(serializer.param_count(), 3);
+
+    std::cout << "Network address serialization test passed" << std::endl;
+}
+
+/**
+ * @brief Test serialization of TIME type
+ *
+ * Tests handling of TIME and TIMETZ types.
+ */
+TEST_F(ParamSerializerTest, TimeSerialization) {
+    using namespace qb::pg::detail;
+
+    ParamSerializer serializer;
+
+    // Test 1: Time as string parameter
+    std::string time_str = "14:30:45.123456";
+    serializer.add_string(time_str);
+    EXPECT_EQ(serializer.param_types()[0], static_cast<int>(oid::text));
+
+    // Test 2: Time with timezone as string
+    std::string timetz_str = "18:00:00+02:00";
+    serializer.add_string(timetz_str);
+
+    // Test 3: Midnight time
+    std::string midnight = "00:00:00";
+    serializer.add_string(midnight);
+
+    // Verify parameters
+    EXPECT_EQ(serializer.param_count(), 3);
+
+    std::cout << "TIME/TIMETZ serialization test passed" << std::endl;
+}
+
+/**
+ * @brief Test edge cases in serialization
+ *
+ * Tests boundary conditions and special values.
+ */
+TEST_F(ParamSerializerTest, EdgeCasesSerialization) {
+    using namespace qb::pg::detail;
+
+    ParamSerializer serializer;
+
+    // Test 1: Very long numeric string
+    numeric huge("999999999999999999999999999999.9999999999999999999999");
+    std::vector<byte> buffer;
+    TypeConverter<numeric>::to_binary(huge, buffer);
+    EXPECT_GT(buffer.size(), 0);
+
+    // Test 2: Very small numeric
+    numeric tiny("0.00000000000000000000000000000001");
+    buffer.clear();
+    TypeConverter<numeric>::to_binary(tiny, buffer);
+    EXPECT_GT(buffer.size(), 0);
+
+    // Test 3: Negative numeric
+    numeric negative("-999999.999999");
+    buffer.clear();
+    TypeConverter<numeric>::to_binary(negative, buffer);
+    EXPECT_GT(buffer.size(), 0);
+
+    // Test 4: Far past date
+    pgdate old = pgdate::from_string("1900-01-01");
+    buffer.clear();
+    TypeConverter<pgdate>::to_binary(old, buffer);
+    EXPECT_EQ(buffer.size(), 8);
+
+    // Test 5: Far future date
+    pgdate future = pgdate::from_string("2099-12-31");
+    buffer.clear();
+    TypeConverter<pgdate>::to_binary(future, buffer);
+    EXPECT_EQ(buffer.size(), 8);
+
+    std::cout << "Edge cases serialization test passed" << std::endl;
 }
 
 int

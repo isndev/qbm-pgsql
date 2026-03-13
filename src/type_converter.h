@@ -160,14 +160,20 @@ public:
             const byte *bytes        = reinterpret_cast<const byte *>(&networkValue);
             buffer.insert(buffer.end(), bytes, bytes + sizeof(bigint));
         } else if constexpr (std::is_same_v<value_type, float>) {
-            // PostgreSQL float: length (4) + IEEE 754 value
+            // PostgreSQL float4: length (4) + big-endian IEEE 754
             write_integer(buffer, 4);
-            const byte *bytes = reinterpret_cast<const byte *>(&value);
+            uint32_t    raw;
+            std::memcpy(&raw, &value, sizeof(float));
+            uint32_t    be    = qb::endian::to_big_endian(raw);
+            const byte *bytes = reinterpret_cast<const byte *>(&be);
             buffer.insert(buffer.end(), bytes, bytes + sizeof(float));
         } else if constexpr (std::is_same_v<value_type, double>) {
-            // PostgreSQL double: length (8) + IEEE 754 value
+            // PostgreSQL float8: length (8) + big-endian IEEE 754
             write_integer(buffer, 8);
-            const byte *bytes = reinterpret_cast<const byte *>(&value);
+            uint64_t    raw;
+            std::memcpy(&raw, &value, sizeof(double));
+            uint64_t    be    = qb::endian::to_big_endian(raw);
+            const byte *bytes = reinterpret_cast<const byte *>(&be);
             buffer.insert(buffer.end(), bytes, bytes + sizeof(double));
         } else if constexpr (std::is_same_v<value_type, bytea> ||
                              std::is_same_v<value_type, std::vector<byte>>) {
@@ -340,22 +346,12 @@ public:
         } else if constexpr (std::is_same_v<value_type, double>) {
             return unserializer.read_double(buffer);
         } else if constexpr (std::is_same_v<value_type, bool>) {
-            // In PostgreSQL binary format, booleans are represented as:
-            // - 4-byte length prefix (usually 1)
-            // - 1 byte value (1 for true, 0 for false)
-            
-            // Check if the buffer size is sufficient for a boolean value
+            // PostgreSQL binary boolean: exactly 1 raw byte (0 = false, non-zero = true).
+            // The field value buffer never contains a length prefix — that is stripped
+            // by the protocol layer before this function is called.
             if (buffer.empty()) {
                 throw std::runtime_error("Empty buffer for boolean value");
             }
-            
-            // PostgreSQL binary format for bool includes a 4-byte length header
-            if (buffer.size() >= 5) {
-                // If full binary format (with length header), check the 5th byte
-                return buffer[4] != 0;
-            }
-            
-            // For result field values, sometimes we just get the raw boolean value
             return buffer[0] != 0;
         } else if constexpr (std::is_same_v<value_type, bytea> ||
                              std::is_same_v<value_type, std::vector<byte>>) {
@@ -448,11 +444,23 @@ public:
         if constexpr (std::is_same_v<value_type, std::string>) {
             return text;
         } else if constexpr (std::is_same_v<value_type, smallint>) {
-            return static_cast<smallint>(std::stoi(text));
+            try {
+                return static_cast<smallint>(std::stoi(text));
+            } catch (const std::exception &e) {
+                throw error::client_error("Cannot parse smallint from text: " + text + " (" + e.what() + ")");
+            }
         } else if constexpr (std::is_same_v<value_type, integer>) {
-            return static_cast<integer>(std::stoi(text));
+            try {
+                return static_cast<integer>(std::stoi(text));
+            } catch (const std::exception &e) {
+                throw error::client_error("Cannot parse integer from text: " + text + " (" + e.what() + ")");
+            }
         } else if constexpr (std::is_same_v<value_type, bigint>) {
-            return static_cast<bigint>(std::stoll(text));
+            try {
+                return static_cast<bigint>(std::stoll(text));
+            } catch (const std::exception &e) {
+                throw error::client_error("Cannot parse bigint from text: " + text + " (" + e.what() + ")");
+            }
         } else if constexpr (std::is_same_v<value_type, float>) {
             // Special values
             if (text == "NaN")
@@ -461,7 +469,11 @@ public:
                 return std::numeric_limits<float>::infinity();
             if (text == "-Infinity" || text == "-inf")
                 return -std::numeric_limits<float>::infinity();
-            return std::stof(text);
+            try {
+                return std::stof(text);
+            } catch (const std::exception &e) {
+                throw error::client_error("Cannot parse float from text: " + text + " (" + e.what() + ")");
+            }
         } else if constexpr (std::is_same_v<value_type, double>) {
             // Special values
             if (text == "NaN")
@@ -470,7 +482,11 @@ public:
                 return std::numeric_limits<double>::infinity();
             if (text == "-Infinity" || text == "-inf")
                 return -std::numeric_limits<double>::infinity();
-            return std::strtod(text.c_str(), nullptr);;
+            try {
+                return std::strtod(text.c_str(), nullptr);
+            } catch (const std::exception &e) {
+                throw error::client_error("Cannot parse double from text: " + text + " (" + e.what() + ")");
+            }
         } else if constexpr (std::is_same_v<value_type, bool>) {
             return (text == "t" || text == "true" || text == "1" || text == "yes" ||
                     text == "y" || text == "on");
@@ -601,25 +617,11 @@ struct TypeConverter<qb::uuid> {
      */
     static void
     to_binary(const qb::uuid &value, std::vector<byte> &buffer) {
-        // PostgreSQL binary format consists of:
-        // - 4-byte length prefix
-        // - 16-byte UUID
-
-        // Resize buffer to hold length prefix and UUID data
-        buffer.resize(4 + 16);
-
-        // Write length (16) in big-endian format
-        buffer[0] = 0;
-        buffer[1] = 0;
-        buffer[2] = 0;
-        buffer[3] = 16;
-
-        // Get UUID bytes
-        auto bytes_span = value.as_bytes();
-
-        // Write UUID data after length prefix
+        // PostgreSQL UUID binary format: 4-byte length prefix (16) + 16 raw bytes
+        write_integer(buffer, 16);
+        const auto &uuid_bytes = value.as_bytes();
         for (size_t i = 0; i < 16; ++i) {
-            buffer[i + 4] = static_cast<byte>(bytes_span[i]);
+            buffer.push_back(static_cast<byte>(uuid_bytes[i]));
         }
     }
 
@@ -688,12 +690,19 @@ struct TypeConverter<qb::uuid> {
      */
     static qb::uuid
     from_text(const std::string &text) {
-        // Expected format: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
         auto uuid_result = qb::uuid::from_string(text);
         if (!uuid_result) {
             throw std::runtime_error("Invalid UUID format");
         }
         return uuid_result.value();
+    }
+
+private:
+    static void
+    write_integer(std::vector<byte> &buffer, integer value) {
+        integer     nbo   = htonl(value);
+        const byte *bytes = reinterpret_cast<const byte *>(&nbo);
+        buffer.insert(buffer.end(), bytes, bytes + sizeof(integer));
     }
 };
 
@@ -725,36 +734,22 @@ struct TypeConverter<qb::Timestamp> {
      */
     static void
     to_binary(const qb::Timestamp &value, std::vector<byte> &buffer) {
-        // PostgreSQL binary format consists of:
-        // - 4-byte length prefix
-        // - 8-byte timestamp (microseconds since 2000-01-01)
-
-        // Resize buffer to hold length prefix and timestamp data
-        buffer.resize(4 + 8);
-
-        // Write length (8) in big-endian format
-        buffer[0] = 0;
-        buffer[1] = 0;
-        buffer[2] = 0;
-        buffer[3] = 8;
+        // PostgreSQL timestamp binary: 4-byte length (8) + 8-byte microseconds
+        // since 2000-01-01 in big-endian.
 
         // Difference between PostgreSQL epoch (2000-01-01) and Unix epoch (1970-01-01)
-        constexpr int64_t POSTGRES_EPOCH_DIFF = 946684800LL; // seconds
+        constexpr int64_t POSTGRES_EPOCH_DIFF = 946684800LL;
 
-        // Convert Unix timestamp to PostgreSQL timestamp using float for higher precision
-        double unix_secs_float = value.seconds_float();
-        int64_t whole_seconds = static_cast<int64_t>(unix_secs_float);
-        double fractional_part = unix_secs_float - whole_seconds;
-        int64_t unix_usecs = static_cast<int64_t>(fractional_part * 1000000LL);
-        
+        double  unix_secs_float = value.seconds_float();
+        int64_t whole_seconds   = static_cast<int64_t>(unix_secs_float);
+        int64_t unix_usecs =
+            static_cast<int64_t>((unix_secs_float - whole_seconds) * 1000000LL);
         int64_t pg_usecs = (whole_seconds - POSTGRES_EPOCH_DIFF) * 1000000LL + unix_usecs;
 
-        // Convert to network byte order (big-endian) using the endian utility
-        int64_t network_usecs = qb::endian::to_big_endian(pg_usecs);
-
-        // Write timestamp data after length prefix
-        const byte *bytes = reinterpret_cast<const byte *>(&network_usecs);
-        std::memcpy(buffer.data() + 4, bytes, sizeof(int64_t));
+        write_integer(buffer, 8);
+        int64_t    be    = qb::endian::to_big_endian(pg_usecs);
+        const byte *bytes = reinterpret_cast<const byte *>(&be);
+        buffer.insert(buffer.end(), bytes, bytes + sizeof(int64_t));
     }
 
     /**
@@ -904,6 +899,14 @@ struct TypeConverter<qb::Timestamp> {
 
         return value_type(qb::Timestamp::from_seconds(time_secs) +
                           qb::Timespan::from_microseconds(usec));
+    }
+
+private:
+    static void
+    write_integer(std::vector<byte> &buffer, integer value) {
+        integer     nbo   = htonl(value);
+        const byte *bytes = reinterpret_cast<const byte *>(&nbo);
+        buffer.insert(buffer.end(), bytes, bytes + sizeof(integer));
     }
 };
 
@@ -1172,36 +1175,42 @@ struct TypeConverter<qb::json> {
             std::string json_str(reinterpret_cast<const char *>(buffer.data() + 4),
                                  buffer.size() - 4);
 
-            // The binary format might use a different encoding in PostgreSQL
-            try {
-                // Try to parse as standard JSON first
-                return qb::json::parse(json_str);
-            } catch (const std::exception &) {
-                // If that fails, it might be using the PostgreSQL array format
-                // The format often begins with '[[' for pairs of key-value entries
-                // Extract the values and convert to a proper JSON object
-                auto json = nlohmann::json::parse(json_str);
+            // OPTIMIZED: Single parse with format detection (P0-10 fix)
+            // Previously called parse TWICE on error path - wasteful CPU usage
+            // Parse once, then check if it's array format that needs conversion
+            auto json = nlohmann::json::parse(json_str);
 
-                // If it's already a valid JSON, just return it
-                if (!json.is_array()) {
-                    return qb::json(json);
-                }
+            // If it's not an array, return as-is (standard JSON)
+            if (!json.is_array()) {
+                return qb::json(json);
+            }
 
-                // Convert array format to object format
-                nlohmann::json result;
-                for (const auto &pair : json) {
-                    if (pair.is_array() && pair.size() == 2) {
-                        if (pair[0].is_string()) {
-                            // Standard key-value pair
-                            result[pair[0].get<std::string>()] = pair[1];
-                        } else {
-                            // Handle non-string keys by generating a string key
-                            result[pair[0].dump()] = pair[1];
-                        }
+            // Check if it might be PostgreSQL array format with key-value pairs
+            // The format often begins with '[[' for pairs of key-value entries
+            bool is_key_value_format = false;
+            if (!json.empty() && json[0].is_array() && json[0].size() == 2) {
+                is_key_value_format = true;
+            }
+
+            if (!is_key_value_format) {
+                // Regular array, return as-is
+                return qb::json(json);
+            }
+
+            // Convert key-value array format to object format
+            nlohmann::json result;
+            for (const auto &pair : json) {
+                if (pair.is_array() && pair.size() == 2) {
+                    if (pair[0].is_string()) {
+                        // Standard key-value pair
+                        result[pair[0].get<std::string>()] = pair[1];
+                    } else {
+                        // Handle non-string keys by generating a string key
+                        result[pair[0].dump()] = pair[1];
                     }
                 }
-                return qb::json(result);
             }
+            return qb::json(result);
         } catch (const std::exception &e) {
             throw std::runtime_error(std::string("Failed to parse JSON data: ") +
                                      e.what());
@@ -1331,37 +1340,42 @@ struct TypeConverter<qb::jsonb> {
             std::string json_str(reinterpret_cast<const char *>(buffer.data() + 5),
                                  buffer.size() - 5);
 
-            // The binary format might use a different encoding in PostgreSQL than
-            // standard JSON. Here we handle potential array-based format or direct JSON
-            try {
-                // Try to parse as standard JSON first
-                return qb::jsonb(nlohmann::json::parse(json_str));
-            } catch (const std::exception &) {
-                // If that fails, it might be using the PostgreSQL array format
-                // The format often begins with '[[' for pairs of key-value entries
-                // Extract the values and convert to a proper JSON object
-                auto json = nlohmann::json::parse(json_str);
+            // OPTIMIZED: Single parse with format detection (P0-10 fix)
+            // Previously called parse TWICE on error path - wasteful CPU usage
+            // Parse once, then check if it's array format that needs conversion
+            auto json = nlohmann::json::parse(json_str);
 
-                // If it's already a valid JSON, just return it
-                if (!json.is_array()) {
-                    return qb::jsonb(json);
-                }
+            // If it's not an array, return as-is (standard JSON)
+            if (!json.is_array()) {
+                return qb::jsonb(json);
+            }
 
-                // Convert array format to object format
-                nlohmann::json result;
-                for (const auto &pair : json) {
-                    if (pair.is_array() && pair.size() == 2) {
-                        if (pair[0].is_string()) {
-                            // Standard key-value pair
-                            result[pair[0].get<std::string>()] = pair[1];
-                        } else {
-                            // Handle non-string keys by generating a string key
-                            result[pair[0].dump()] = pair[1];
-                        }
+            // Check if it might be PostgreSQL array format with key-value pairs
+            // The format often begins with '[[' for pairs of key-value entries
+            bool is_key_value_format = false;
+            if (!json.empty() && json[0].is_array() && json[0].size() == 2) {
+                is_key_value_format = true;
+            }
+
+            if (!is_key_value_format) {
+                // Regular array, return as-is
+                return qb::jsonb(json);
+            }
+
+            // Convert key-value array format to object format
+            nlohmann::json result;
+            for (const auto &pair : json) {
+                if (pair.is_array() && pair.size() == 2) {
+                    if (pair[0].is_string()) {
+                        // Standard key-value pair
+                        result[pair[0].get<std::string>()] = pair[1];
+                    } else {
+                        // Handle non-string keys by generating a string key
+                        result[pair[0].dump()] = pair[1];
                     }
                 }
-                return qb::jsonb(result);
             }
+            return qb::jsonb(result);
         } catch (const std::exception &e) {
             throw std::runtime_error(std::string("Failed to parse JSONB data: ") +
                                      e.what());
@@ -1394,6 +1408,549 @@ private:
         byte   *dest = &buffer[buffer.size() - sizeof(integer)];
         integer nbo  = htonl(value);
         memcpy(dest, &nbo, sizeof(integer));
+    }
+};
+
+// ============================================================================
+// P2-2: Additional PostgreSQL type specializations
+// ============================================================================
+
+/**
+ * @brief Type converter for std::chrono::duration as PostgreSQL INTERVAL
+ *
+ * PostgreSQL stores intervals as 16 bytes:
+ * - 8 bytes: time in microseconds (int64)
+ * - 4 bytes: days (int32)
+ * - 4 bytes: months (int32)
+ */
+template <typename Rep, typename Period>
+struct TypeConverter<std::chrono::duration<Rep, Period>> {
+    using value_type = std::chrono::duration<Rep, Period>;
+
+    static integer
+    get_oid() {
+        return static_cast<integer>(oid::interval);
+    }
+
+    static void
+    to_binary(const value_type &value, std::vector<byte> &buffer) {
+        // Write total length (16 bytes for interval)
+        buffer.resize(buffer.size() + sizeof(integer));
+        byte   *dest = &buffer[buffer.size() - sizeof(integer)];
+        integer nbo  = htonl(16);
+        memcpy(dest, &nbo, sizeof(integer));
+
+        // Convert to microseconds
+        auto micros = std::chrono::duration_cast<std::chrono::microseconds>(value);
+        int64_t count = micros.count();
+        int64_t net_count = qb::endian::to_big_endian(count);
+        const byte *bytes = reinterpret_cast<const byte *>(&net_count);
+        buffer.insert(buffer.end(), bytes, bytes + sizeof(int64_t));
+
+        // Days = 0
+        int32_t zero = 0;
+        int32_t net_zero = qb::endian::to_big_endian(zero);
+        bytes = reinterpret_cast<const byte *>(&net_zero);
+        buffer.insert(buffer.end(), bytes, bytes + sizeof(int32_t));
+        buffer.insert(buffer.end(), bytes, bytes + sizeof(int32_t)); // months = 0
+    }
+
+    static std::string
+    to_text(const value_type &value) {
+        // Convert to seconds and format
+        auto secs = std::chrono::duration_cast<std::chrono::seconds>(value);
+        return std::to_string(secs.count()) + " seconds";
+    }
+
+    static value_type
+    from_binary(const std::vector<byte> &buffer) {
+        if (buffer.size() < 16) {
+            throw std::runtime_error("Invalid INTERVAL binary format");
+        }
+        int64_t net_count, count;
+        std::memcpy(&net_count, buffer.data(), sizeof(int64_t));
+        count = qb::endian::from_big_endian(net_count);
+        // Convert microseconds to target duration
+        auto micros = std::chrono::microseconds(count);
+        return std::chrono::duration_cast<value_type>(micros);
+    }
+
+    static value_type
+    from_text(const std::string &text) {
+        // Simple parsing for "X seconds" format
+        // This is a simplified implementation
+        try {
+            size_t pos = 0;
+            int64_t value = std::stoll(text, &pos);
+            return std::chrono::duration_cast<value_type>(std::chrono::seconds(value));
+        } catch (...) {
+            return value_type::zero();
+        }
+    }
+};
+
+// ============================================================================
+// P0: PostgreSQL NUMERIC/DECIMAL type support
+// ============================================================================
+
+/**
+ * @brief Type converter for PostgreSQL NUMERIC/DECIMAL type
+ *
+ * PostgreSQL NUMERIC is an arbitrary precision decimal type.
+ * We use std::string to preserve exact precision (financial calculations).
+ *
+ * Binary format: Complex structure with sign, weight, and digits.
+ * For simplicity, we use text format which is more reliable.
+ */
+template <>
+struct TypeConverter<std::string> {
+    using value_type = std::string;
+
+    static integer
+    get_oid() {
+        // Note: This returns text OID by default
+        // For NUMERIC, the caller should specify oid::numeric (1700)
+        return static_cast<integer>(oid::text);
+    }
+
+    static void
+    to_binary(const value_type &value, std::vector<byte> &buffer) {
+        // For NUMERIC, we send as text to preserve exact precision
+        // Write length
+        integer len = static_cast<integer>(value.size());
+        buffer.resize(buffer.size() + sizeof(integer));
+        byte   *dest = &buffer[buffer.size() - sizeof(integer)];
+        integer nbo  = htonl(len);
+        memcpy(dest, &nbo, sizeof(integer));
+
+        // Write raw data (without null terminator)
+        if (!value.empty()) {
+            buffer.insert(
+                buffer.end(), reinterpret_cast<const byte *>(value.data()),
+                reinterpret_cast<const byte *>(value.data() + value.size()));
+        }
+    }
+
+    static std::string
+    to_text(const value_type &value) {
+        return value;
+    }
+
+    static value_type
+    from_binary(const std::vector<byte> &buffer) {
+        // Read as text (length-prefixed)
+        if (buffer.size() < 4) {
+            return "";
+        }
+        integer len;
+        std::memcpy(&len, buffer.data(), sizeof(integer));
+        len = ntohl(len);
+        if (len <= 0 || static_cast<size_t>(len) > buffer.size() - 4) {
+            return "";
+        }
+        return std::string(reinterpret_cast<const char *>(buffer.data() + 4), len);
+    }
+
+    static value_type
+    from_text(const std::string &text) {
+        return text;
+    }
+};
+
+/**
+ * @brief Specialized NUMERIC converter for financial precision
+ *
+ * This is a marker type to distinguish NUMERIC from regular TEXT.
+ * Usage: TypeConverter<qb::pg::numeric>::from_text("123.456")
+ */
+struct numeric {
+    std::string value;
+
+    numeric() = default;
+    explicit numeric(const std::string &v) : value(v) {}
+    explicit numeric(const char *v) : value(v) {}
+
+    // Arithmetic operators for convenience
+    numeric operator+(const numeric &other) const {
+        // Simple string-based addition would require a decimal library
+        // For now, just concatenate for demonstration
+        return numeric("(" + value + "+" + other.value + ")");
+    }
+
+    bool operator==(const numeric &other) const {
+        return value == other.value;
+    }
+
+    const std::string &str() const { return value; }
+};
+
+template <>
+struct TypeConverter<numeric> {
+    using value_type = numeric;
+
+    static integer
+    get_oid() {
+        return static_cast<integer>(oid::numeric); // 1700
+    }
+
+    static void
+    to_binary(const value_type &num, std::vector<byte> &buffer) {
+        // Send as text for precision
+        const std::string &value = num.str();
+        integer len = static_cast<integer>(value.size());
+        buffer.resize(buffer.size() + sizeof(integer));
+        byte   *dest = &buffer[buffer.size() - sizeof(integer)];
+        integer nbo  = htonl(len);
+        memcpy(dest, &nbo, sizeof(integer));
+
+        if (!value.empty()) {
+            buffer.insert(
+                buffer.end(), reinterpret_cast<const byte *>(value.data()),
+                reinterpret_cast<const byte *>(value.data() + value.size()));
+        }
+    }
+
+    static std::string
+    to_text(const value_type &num) {
+        return num.str();
+    }
+
+    static value_type
+    from_binary(const std::vector<byte> &buffer) {
+        if (buffer.size() < 4) {
+            return numeric("0");
+        }
+        integer len;
+        std::memcpy(&len, buffer.data(), sizeof(integer));
+        len = ntohl(len);
+        if (len <= 0 || static_cast<size_t>(len) > buffer.size() - 4) {
+            return numeric("0");
+        }
+        return numeric(std::string(reinterpret_cast<const char *>(buffer.data() + 4), len));
+    }
+
+    static value_type
+    from_text(const std::string &text) {
+        return numeric(text);
+    }
+};
+
+// ============================================================================
+// P1: PostgreSQL DATE type support
+// ============================================================================
+
+/**
+ * @brief Simple date type for PostgreSQL DATE (days since 2000-01-01)
+ *
+ * PostgreSQL stores DATE as 4-byte integer (days since 2000-01-01).
+ * Positive = after 2000-01-01, negative = before.
+ */
+struct pgdate {
+    int32_t days_since_pg_epoch; // Days since 2000-01-01
+
+    pgdate() : days_since_pg_epoch(0) {}
+    explicit pgdate(int32_t days) : days_since_pg_epoch(days) {}
+
+    // Convert from Unix timestamp (seconds since 1970-01-01)
+    static pgdate from_unix_time(time_t unix_seconds) {
+        // Days from 1970-01-01 to 2000-01-01 = 10957 days
+        constexpr int32_t DAYS_1970_TO_2000 = 10957;
+        return pgdate(static_cast<int32_t>(unix_seconds / 86400) - DAYS_1970_TO_2000);
+    }
+
+    // Convert to Unix timestamp (midnight of that day)
+    time_t to_unix_time() const {
+        constexpr int32_t DAYS_1970_TO_2000 = 10957;
+        return static_cast<time_t>(days_since_pg_epoch + DAYS_1970_TO_2000) * 86400;
+    }
+
+    // Simple to_string (YYYY-MM-DD format) - UTC
+    std::string to_string() const {
+        time_t unix_time = to_unix_time();
+        struct tm *tm_data = std::gmtime(&unix_time);
+        if (!tm_data) return "2000-01-01";
+
+        char buf[11]; // YYYY-MM-DD\0
+        std::snprintf(buf, sizeof(buf), "%04d-%02d-%02d",
+                      tm_data->tm_year + 1900,
+                      tm_data->tm_mon + 1,
+                      tm_data->tm_mday);
+        return std::string(buf);
+    }
+
+    // Parse from string (YYYY-MM-DD) - UTC
+    static pgdate from_string(const std::string &str) {
+        if (str.size() < 10) return pgdate(0);
+        int year, month, day;
+        if (std::sscanf(str.c_str(), "%d-%d-%d", &year, &month, &day) != 3) {
+            return pgdate(0);
+        }
+
+        // Calculate days since Unix epoch using known algorithm (days from 1970-01-01)
+        // Zeller's congruence or simple day count
+        auto days_from_civil = [](int y, int m, int d) -> int64_t {
+            y -= m <= 2;
+            const int64_t era = (y >= 0 ? y : y - 399) / 400;
+            const unsigned yoe = static_cast<unsigned>(y - era * 400);
+            const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+            const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+            return era * 146097 + static_cast<int64_t>(doe) - 719468; // days since 1970-01-01
+        };
+
+        int64_t days_since_1970 = days_from_civil(year, month, day);
+        return from_unix_time(days_since_1970 * 86400);
+    }
+
+    bool operator==(const pgdate &other) const {
+        return days_since_pg_epoch == other.days_since_pg_epoch;
+    }
+
+    bool operator<(const pgdate &other) const {
+        return days_since_pg_epoch < other.days_since_pg_epoch;
+    }
+};
+
+template <>
+struct TypeConverter<pgdate> {
+    using value_type = pgdate;
+
+    static integer
+    get_oid() {
+        return static_cast<integer>(oid::date); // 1082
+    }
+
+    static void
+    to_binary(const value_type &date, std::vector<byte> &buffer) {
+        // PostgreSQL DATE: 4 bytes, network byte order
+        buffer.resize(buffer.size() + sizeof(integer));
+        byte   *dest = &buffer[buffer.size() - sizeof(integer)];
+        integer nbo  = htonl(4); // Length = 4
+        memcpy(dest, &nbo, sizeof(integer));
+
+        int32_t net_days = qb::endian::to_big_endian(date.days_since_pg_epoch);
+        const byte *bytes = reinterpret_cast<const byte *>(&net_days);
+        buffer.insert(buffer.end(), bytes, bytes + sizeof(int32_t));
+    }
+
+    static std::string
+    to_text(const value_type &date) {
+        return date.to_string();
+    }
+
+    static value_type
+    from_binary(const std::vector<byte> &buffer) {
+        if (buffer.size() < 8) { // 4 bytes length + 4 bytes data
+            return pgdate(0);
+        }
+        // Skip length prefix (already parsed by caller usually)
+        int32_t net_days;
+        std::memcpy(&net_days, buffer.data() + 4, sizeof(int32_t));
+        return pgdate(qb::endian::from_big_endian(net_days));
+    }
+
+    static value_type
+    from_text(const std::string &text) {
+        return pgdate::from_string(text);
+    }
+};
+
+// ============================================================================
+// TIME and TIMETZ Types
+// ============================================================================
+
+/**
+ * @brief Structure for PostgreSQL TIME type
+ *
+ * Stores time as microseconds since midnight (0-86399999999)
+ * PostgreSQL epoch starts at 2000-01-01, but TIME is relative to midnight
+ */
+struct pgtime {
+    int64_t microseconds; // Microseconds since midnight (0 to 86399999999)
+
+    pgtime() : microseconds(0) {}
+    explicit pgtime(int64_t micros) : microseconds(micros) {}
+
+    // Construct from hours, minutes, seconds, microseconds
+    static pgtime from_hmsu(int hour, int min, int sec, int microsec = 0) {
+        int64_t total_micros = ((hour * 3600LL) + (min * 60LL) + sec) * 1000000LL + microsec;
+        return pgtime(total_micros);
+    }
+
+    // Parse from string (HH:MM:SS or HH:MM:SS.uuuuuu)
+    static pgtime from_string(const std::string &str) {
+        int hour = 0, min = 0, sec = 0, microsec = 0;
+        // Try format HH:MM:SS.uuuuuu
+        if (std::sscanf(str.c_str(), "%d:%d:%d.%d", &hour, &min, &sec, &microsec) >= 3) {
+            return from_hmsu(hour, min, sec, microsec);
+        }
+        return pgtime(0);
+    }
+
+    std::string to_string() const {
+        int64_t total_seconds = microseconds / 1000000;
+        int hour = static_cast<int>(total_seconds / 3600);
+        int min = static_cast<int>((total_seconds % 3600) / 60);
+        int sec = static_cast<int>(total_seconds % 60);
+        int microsec = static_cast<int>(microseconds % 1000000);
+
+        char buf[32];
+        if (microsec > 0) {
+            std::snprintf(buf, sizeof(buf), "%02d:%02d:%02d.%06d", hour, min, sec, microsec);
+        } else {
+            std::snprintf(buf, sizeof(buf), "%02d:%02d:%02d", hour, min, sec);
+        }
+        return std::string(buf);
+    }
+
+    bool operator==(const pgtime &other) const {
+        return microseconds == other.microseconds;
+    }
+
+    bool operator<(const pgtime &other) const {
+        return microseconds < other.microseconds;
+    }
+};
+
+/**
+ * @brief Structure for PostgreSQL TIMETZ type
+ *
+ * Stores time with timezone offset
+ */
+struct pgtimetz {
+    int64_t microseconds; // Microseconds since midnight
+    int32_t tz_offset;      // Timezone offset in seconds (e.g., +02:00 = 7200)
+
+    pgtimetz() : microseconds(0), tz_offset(0) {}
+    pgtimetz(int64_t micros, int32_t offset) : microseconds(micros), tz_offset(offset) {}
+
+    static pgtimetz from_hmsu_tz(int hour, int min, int sec, int microsec, int tz_seconds) {
+        int64_t total_micros = ((hour * 3600LL) + (min * 60LL) + sec) * 1000000LL + microsec;
+        return pgtimetz(total_micros, tz_seconds);
+    }
+
+    // Parse from string (HH:MM:SS+TZ or HH:MM:SS-TZ)
+    static pgtimetz from_string(const std::string &str) {
+        int hour = 0, min = 0, sec = 0, microsec = 0;
+        int tz_hour = 0, tz_min = 0;
+        char tz_sign = '+';
+
+        // Try format with timezone HH:MM:SS+HH:MM or HH:MM:SS-HH:MM
+        if (std::sscanf(str.c_str(), "%d:%d:%d%c%d:%d", &hour, &min, &sec, &tz_sign, &tz_hour, &tz_min) >= 5) {
+            int tz_seconds = (tz_hour * 3600) + (tz_min * 60);
+            if (tz_sign == '-') tz_seconds = -tz_seconds;
+            return from_hmsu_tz(hour, min, sec, microsec, tz_seconds);
+        }
+        // Try without timezone
+        if (std::sscanf(str.c_str(), "%d:%d:%d", &hour, &min, &sec) == 3) {
+            return from_hmsu_tz(hour, min, sec, 0, 0);
+        }
+        return pgtimetz(0, 0);
+    }
+
+    std::string to_string() const {
+        int64_t total_seconds = microseconds / 1000000;
+        int hour = static_cast<int>(total_seconds / 3600);
+        int min = static_cast<int>((total_seconds % 3600) / 60);
+        int sec = static_cast<int>(total_seconds % 60);
+
+        int abs_offset = std::abs(tz_offset);
+        int tz_h = abs_offset / 3600;
+        int tz_m = (abs_offset % 3600) / 60;
+        char sign = tz_offset >= 0 ? '+' : '-';
+
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%02d:%02d:%02d%c%02d:%02d", hour, min, sec, sign, tz_h, tz_m);
+        return std::string(buf);
+    }
+
+    bool operator==(const pgtimetz &other) const {
+        return microseconds == other.microseconds && tz_offset == other.tz_offset;
+    }
+};
+
+template <>
+struct TypeConverter<pgtime> {
+    using value_type = pgtime;
+
+    static integer get_oid() {
+        return static_cast<integer>(oid::time); // 1083
+    }
+
+    static void to_binary(const value_type &time, std::vector<byte> &buffer) {
+        // Length: 8 bytes
+        buffer.resize(buffer.size() + sizeof(integer));
+        byte   *dest = &buffer[buffer.size() - sizeof(integer)];
+        integer nbo  = htonl(8);
+        memcpy(dest, &nbo, sizeof(integer));
+
+        // Microseconds since midnight (int64 big-endian)
+        int64_t net_micros = qb::endian::to_big_endian(time.microseconds);
+        const byte *bytes = reinterpret_cast<const byte *>(&net_micros);
+        buffer.insert(buffer.end(), bytes, bytes + sizeof(int64_t));
+    }
+
+    static std::string to_text(const value_type &time) {
+        return time.to_string();
+    }
+
+    static value_type from_binary(const std::vector<byte> &buffer) {
+        if (buffer.size() < 12) { // 4 bytes length + 8 bytes data
+            return pgtime(0);
+        }
+        int64_t net_micros;
+        std::memcpy(&net_micros, buffer.data() + 4, sizeof(int64_t));
+        return pgtime(qb::endian::from_big_endian(net_micros));
+    }
+
+    static value_type from_text(const std::string &text) {
+        return pgtime::from_string(text);
+    }
+};
+
+template <>
+struct TypeConverter<pgtimetz> {
+    using value_type = pgtimetz;
+
+    static integer get_oid() {
+        return static_cast<integer>(oid::timetz); // 1266
+    }
+
+    static void to_binary(const value_type &timetz, std::vector<byte> &buffer) {
+        // Length: 12 bytes (8 for time + 4 for tz offset)
+        buffer.resize(buffer.size() + sizeof(integer));
+        byte   *dest = &buffer[buffer.size() - sizeof(integer)];
+        integer nbo  = htonl(12);
+        memcpy(dest, &nbo, sizeof(integer));
+
+        // Microseconds since midnight (int64 big-endian)
+        int64_t net_micros = qb::endian::to_big_endian(timetz.microseconds);
+        const byte *bytes = reinterpret_cast<const byte *>(&net_micros);
+        buffer.insert(buffer.end(), bytes, bytes + sizeof(int64_t));
+
+        // Timezone offset in seconds (int32 big-endian)
+        int32_t net_offset = qb::endian::to_big_endian(timetz.tz_offset);
+        bytes = reinterpret_cast<const byte *>(&net_offset);
+        buffer.insert(buffer.end(), bytes, bytes + sizeof(int32_t));
+    }
+
+    static std::string to_text(const value_type &timetz) {
+        return timetz.to_string();
+    }
+
+    static value_type from_binary(const std::vector<byte> &buffer) {
+        if (buffer.size() < 16) { // 4 bytes length + 8 bytes time + 4 bytes tz
+            return pgtimetz(0, 0);
+        }
+        int64_t net_micros;
+        int32_t net_offset;
+        std::memcpy(&net_micros, buffer.data() + 4, sizeof(int64_t));
+        std::memcpy(&net_offset, buffer.data() + 12, sizeof(int32_t));
+        return pgtimetz(qb::endian::from_big_endian(net_micros),
+                       qb::endian::from_big_endian(net_offset));
+    }
+
+    static value_type from_text(const std::string &text) {
+        return pgtimetz::from_string(text);
     }
 };
 

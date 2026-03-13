@@ -1038,6 +1038,260 @@ TEST_F(ParamParsingTest, BackwardsCompatibility) {
 }
 
 /**
+ * @brief Test NUMERIC type in QueryParams (P0)
+ *
+ * Verifies that QueryParams correctly handles NUMERIC/DECIMAL types
+ * with exact precision preservation.
+ */
+TEST_F(ParamParsingTest, QueryParamsWithNumeric) {
+    using namespace qb::pg::detail;
+
+    // Create numeric values
+    numeric price("999.99");
+    numeric quantity("123456789.0123456789");
+
+    // Test text conversion
+    std::string price_text = TypeConverter<numeric>::to_text(price);
+    EXPECT_EQ(price_text, "999.99");
+
+    std::string qty_text = TypeConverter<numeric>::to_text(quantity);
+    EXPECT_EQ(qty_text, "123456789.0123456789");
+
+    // Create QueryParams with numeric values
+    QueryParams params(price_text, qty_text);
+
+    // Verify parameter count
+    ASSERT_EQ(params.param_count(), 2);
+
+    // Both should be text type (OID 25) since we send as text
+    ASSERT_EQ(params.param_types()[0], 25);
+    ASSERT_EQ(params.param_types()[1], 25);
+
+    // Debugging
+    printBuffer(params.get(), "QueryParams with NUMERIC");
+
+    std::cout << "NUMERIC parameter test passed" << std::endl;
+}
+
+/**
+ * @brief Test DATE type in QueryParams (P1)
+ *
+ * Verifies that QueryParams correctly handles DATE types.
+ */
+TEST_F(ParamParsingTest, QueryParamsWithDate) {
+    using namespace qb::pg::detail;
+
+    // Create date values
+    pgdate today = pgdate::from_string("2024-12-25");
+    pgdate epoch = pgdate(0); // 2000-01-01
+
+    // Test text conversion
+    std::string today_text = TypeConverter<pgdate>::to_text(today);
+    EXPECT_EQ(today_text, "2024-12-25");
+
+    std::string epoch_text = TypeConverter<pgdate>::to_text(epoch);
+    EXPECT_EQ(epoch_text, "2000-01-01");
+
+    // Create QueryParams with dates
+    QueryParams params(today_text, epoch_text);
+
+    // Verify parameter count
+    ASSERT_EQ(params.param_count(), 2);
+
+    // Both should be text type (OID 25)
+    ASSERT_EQ(params.param_types()[0], 25);
+    ASSERT_EQ(params.param_types()[1], 25);
+
+    // Debugging
+    printBuffer(params.get(), "QueryParams with DATE");
+
+    std::cout << "DATE parameter test passed" << std::endl;
+}
+
+/**
+ * @brief Test INTERVAL type in QueryParams (P2)
+ *
+ * Verifies that QueryParams correctly handles INTERVAL types.
+ */
+TEST_F(ParamParsingTest, QueryParamsWithInterval) {
+    using namespace std::chrono;
+    using namespace qb::pg::detail;
+
+    // Create interval values
+    auto duration1 = hours(2);
+    auto duration2 = minutes(30);
+
+    // Test text conversion
+    std::string d1_text = TypeConverter<hours>::to_text(duration1);
+    EXPECT_FALSE(d1_text.empty());
+
+    std::string d2_text = TypeConverter<minutes>::to_text(duration2);
+    EXPECT_FALSE(d2_text.empty());
+
+    // Create QueryParams with intervals
+    QueryParams params(d1_text, d2_text);
+
+    // Verify parameter count
+    ASSERT_EQ(params.param_count(), 2);
+
+    // Debugging
+    printBuffer(params.get(), "QueryParams with INTERVAL");
+
+    std::cout << "INTERVAL parameter test passed" << std::endl;
+}
+
+/**
+ * @brief Test mixed complex types in QueryParams
+ *
+ * Verifies handling of multiple complex types together.
+ */
+TEST_F(ParamParsingTest, QueryParamsWithMixedComplexTypes) {
+    using namespace qb::pg::detail;
+
+    // Create various parameter values
+    int32_t id = 12345;
+    numeric price("999.99");
+    pgdate date = pgdate::from_string("2024-12-25");
+    std::string name = "Test Product";
+    bool active = true;
+
+    // Convert to text for QueryParams
+    std::string price_text = TypeConverter<numeric>::to_text(price);
+    std::string date_text = TypeConverter<pgdate>::to_text(date);
+
+    // Create QueryParams with mixed types
+    QueryParams params(id, price_text, date_text, name, active);
+
+    // Verify parameter count
+    ASSERT_EQ(params.param_count(), 5);
+
+    // Debugging
+    printBuffer(params.get(), "QueryParams with mixed complex types");
+
+    std::cout << "Mixed complex types parameter test passed" << std::endl;
+}
+
+/**
+ * @brief Test QueryParams with network address types
+ *
+ * Tests handling of INET and CIDR types in parameter parsing.
+ */
+TEST_F(ParamParsingTest, QueryParamsWithNetworkTypes) {
+    using namespace qb::pg::detail;
+
+    // Test 1: IPv4 address
+    std::string ipv4 = "192.168.1.100";
+    QueryParams params1(ipv4);
+    ASSERT_EQ(params1.param_count(), 1);
+
+    // Test 2: CIDR notation
+    std::string cidr = "10.0.0.0/8";
+    QueryParams params2(cidr);
+    ASSERT_EQ(params2.param_count(), 1);
+
+    // Test 3: IPv6 address
+    std::string ipv6 = "2001:db8::1";
+    QueryParams params3(ipv6);
+    ASSERT_EQ(params3.param_count(), 1);
+
+    // Test 4: MAC address
+    std::string mac = "00:1a:2b:3c:4d:5e";
+    QueryParams params4(mac);
+    ASSERT_EQ(params4.param_count(), 1);
+
+    // Test 5: Multiple network addresses
+    QueryParams params5(ipv4, cidr, ipv6);
+    ASSERT_EQ(params5.param_count(), 3);
+
+    std::cout << "QueryParams with network types test passed" << std::endl;
+}
+
+/**
+ * @brief Test QueryParams with TIME types
+ *
+ * Tests handling of TIME and TIMETZ types in parameter parsing.
+ */
+TEST_F(ParamParsingTest, QueryParamsWithTimeTypes) {
+    using namespace qb::pg::detail;
+
+    // Test 1: Simple time
+    std::string time = "14:30:45";
+    QueryParams params1(time);
+    ASSERT_EQ(params1.param_count(), 1);
+
+    // Test 2: Time with microseconds
+    std::string time_micro = "14:30:45.123456";
+    QueryParams params2(time_micro);
+    ASSERT_EQ(params2.param_count(), 1);
+
+    // Test 3: Time with timezone
+    std::string timetz = "18:00:00+02:00";
+    QueryParams params3(timetz);
+    ASSERT_EQ(params3.param_count(), 1);
+
+    // Test 4: Midnight
+    std::string midnight = "00:00:00";
+    QueryParams params4(midnight);
+    ASSERT_EQ(params4.param_count(), 1);
+
+    // Test 5: Multiple time values
+    QueryParams params5(time, timetz, midnight);
+    ASSERT_EQ(params5.param_count(), 3);
+
+    std::cout << "QueryParams with time types test passed" << std::endl;
+}
+
+/**
+ * @brief Test edge cases in QueryParams
+ *
+ * Tests boundary conditions and special values.
+ */
+TEST_F(ParamParsingTest, QueryParamsEdgeCases) {
+    using namespace qb::pg::detail;
+
+    // Test 1: Very long numeric string
+    std::string huge_numeric = "999999999999999999999999999.9999999999";
+    QueryParams params1(huge_numeric);
+    ASSERT_EQ(params1.param_count(), 1);
+
+    // Verify as numeric (just check it's long, not exact length)
+    numeric n(huge_numeric);
+    EXPECT_GT(n.str().length(), 30);
+    EXPECT_TRUE(n.str().find("999") != std::string::npos);
+
+    // Test 2: Very small numeric
+    std::string tiny_numeric = "0.0000000000000000000000000000000000001";
+    QueryParams params2(tiny_numeric);
+    ASSERT_EQ(params2.param_count(), 1);
+
+    // Test 3: Negative numeric
+    std::string negative = "-999999.999999";
+    QueryParams params3(negative);
+    ASSERT_EQ(params3.param_count(), 1);
+
+    numeric n2(negative);
+    EXPECT_EQ(n2.str()[0], '-');
+
+    // Test 4: Far dates
+    std::string old_date = "1900-01-01";
+    std::string future_date = "2099-12-31";
+    QueryParams params4(old_date, future_date);
+    ASSERT_EQ(params4.param_count(), 2);
+
+    pgdate old = pgdate::from_string(old_date);
+    pgdate future = pgdate::from_string(future_date);
+    EXPECT_EQ(old.to_string(), "1900-01-01");
+    EXPECT_EQ(future.to_string(), "2099-12-31");
+
+    // Test 5: Empty string
+    std::string empty = "";
+    QueryParams params5(empty);
+    ASSERT_EQ(params5.param_count(), 1);
+
+    std::cout << "QueryParams edge cases test passed" << std::endl;
+}
+
+/**
  * @brief Main entry point for the test program
  *
  * Initializes Google Test framework and runs all registered tests.

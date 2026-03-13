@@ -61,20 +61,8 @@ public:
      * parameters, and parameter types.
      */
     ParamSerializer()
-        : format_codes_buffer_{}
-        , params_buffer_{}
+        : params_buffer_{}
         , param_types_{} {}
-
-    /**
-     * @brief Get the serialized format codes buffer
-     *
-     * @return const std::vector<byte>& Buffer containing binary format codes for
-     * parameters
-     */
-    const std::vector<byte> &
-    format_codes_buffer() const {
-        return format_codes_buffer_;
-    }
 
     /**
      * @brief Get the serialized parameters buffer
@@ -113,7 +101,6 @@ public:
      */
     void
     reset() {
-        format_codes_buffer_.clear();
         params_buffer_.clear();
         param_types_.clear();
     }
@@ -332,6 +319,15 @@ public:
      */
     void
     add_string_vector(const std::vector<std::string> &values) {
+        // OPTIMIZED: Reserve space to avoid O(n²) reallocations (P0-3 fix)
+        // Estimate: average 4 bytes for length + 20 bytes per string
+        param_types_.reserve(param_types_.size() + values.size());
+        size_t estimated_bytes = values.size() * 4; // length headers
+        for (const auto &value : values) {
+            estimated_bytes += value.size();
+        }
+        params_buffer_.reserve(params_buffer_.size() + estimated_bytes);
+
         // For each string, we add a parameter of text type
         // to get the exact format that PostgreSQL expects for VALUES ($1),($2),...
         for (const auto &value : values) {
@@ -416,90 +412,45 @@ public:
     }
 
     /**
-     * @brief Finalize the format codes buffer
-     * This should be called after adding all parameters and before sending to PostgreSQL
-     */
-    void
-    finalize_format_codes() {
-        // S'assurer que le buffer a suffisamment d'espace pour le nombre de paramètres
-        if (format_codes_buffer_.size() < sizeof(smallint)) {
-            format_codes_buffer_.resize(sizeof(smallint));
-        }
-
-        // The format codes count should be written at the beginning of the buffer
-        write_smallint_at(format_codes_buffer_, 0, param_count());
-    }
-
-    /**
      * @brief Finalize the parameters buffer
-     * This should be called after adding all parameters and before sending to PostgreSQL
+     *
+     * Writes the actual parameter count at the beginning of the buffer.
+     * Must be called after adding all parameters and before sending to PostgreSQL.
      */
     void
     finalize_params_buffer() {
-        // The parameter count should be written at the beginning of the buffer
         write_smallint_at(params_buffer_, 0, param_count());
     }
 
     /**
      * @brief Serialize parameters for a prepared statement
      *
+     * Builds the params buffer in a single pass: reserves space for the 2-byte
+     * count prefix at the beginning, appends each parameter's binary encoding,
+     * then fills in the actual count in-place — no secondary copy needed.
+     *
      * @tparam Args Parameter types
-     * @param args Parameter values
+     * @param args  Parameter values (forwarded)
      */
     template <typename... Args>
     void
     serialize_params(Args &&...args) {
         reset();
 
-        // Calculate the number of parameters (approximate, may change for vectors)
         constexpr smallint expected_count = sizeof...(Args);
-
-        // Reserve space for parameters (estimate)
         params_buffer_.reserve(sizeof(smallint) + expected_count * 32);
 
-        // Do not write the number of parameters at the beginning of the buffer,
-        // as this number may change for string vectors.
-        // We will add this information later.
+        // Reserve space for the count prefix; it will be filled in below.
+        params_buffer_.resize(sizeof(smallint));
 
-        // Process each parameter
         if constexpr (expected_count > 0) {
             (add_param(std::forward<Args>(args)), ...);
         }
 
-        // Get the actual number of parameters
-        smallint actual_count = param_count();
-
-        // Create a new buffer with the correct number of parameters at the beginning
-        std::vector<byte> final_buffer;
-        final_buffer.reserve(sizeof(smallint) + params_buffer_.size());
-
-        // Write the number of parameters at the beginning
-        write_smallint(final_buffer, actual_count);
-
-        // Copy the rest of the buffer
-        final_buffer.insert(final_buffer.end(), params_buffer_.begin(),
-                            params_buffer_.end());
-
-        // Replace the original buffer
-        params_buffer_ = std::move(final_buffer);
-    }
-
-    /**
-     * @brief Get the parameter types
-     * @return Vector of parameter OIDs
-     */
-    const std::vector<integer> &
-    get_param_types() const {
-        return param_types_;
-    }
-
-    /**
-     * @brief Get the serialized parameter data
-     * @return Binary buffer containing all parameter data
-     */
-    const std::vector<byte> &
-    get_params_buffer() const {
-        return params_buffer_;
+        // Write the actual parameter count (may differ from expected when
+        // vector<string> expands into multiple parameters).
+        smallint actual_count_be = htons(param_count());
+        std::memcpy(params_buffer_.data(), &actual_count_be, sizeof(smallint));
     }
 
 private:
@@ -514,29 +465,13 @@ private:
     struct param_serializer_traits {
         static void
         add_param(ParamSerializer &, const T &) {
-            // Fallback for unsupported types
             static_assert(!sizeof(T), "Unsupported parameter type");
         }
     };
 
 private:
-    std::vector<byte>    format_codes_buffer_;
     std::vector<byte>    params_buffer_;
     std::vector<integer> param_types_;
-
-    /**
-     * @brief Add a format code to the format codes buffer
-     *
-     * NOTE: This method is not used anymore. Format codes are handled
-     * in ExecuteQuery::get() with a single format code for all parameters.
-     *
-     * @param format Format code
-     */
-    void
-    add_format_code(protocol_data_format) {
-        // NO-OP - We don't add format codes in the serializer anymore
-        // This avoids the extra format codes problem
-    }
 
     /**
      * @brief Write a smallint to a buffer
@@ -650,32 +585,38 @@ private:
     }
 
     /**
-     * @brief Write a float parameter
+     * @brief Write a float parameter in big-endian IEEE 754 format
+     *
+     * PostgreSQL requires all numeric values in network byte order (big-endian).
+     * We reinterpret the IEEE 754 bit pattern as uint32_t and byte-swap it.
      *
      * @param value Float value
      */
     void
     write_float(float value) {
-        // Write length (4 bytes)
         write_integer(params_buffer_, 4);
-
-        // PostgreSQL expects IEEE 754 format, which is standard for C++
-        const byte *bytes = reinterpret_cast<const byte *>(&value);
+        uint32_t    raw;
+        std::memcpy(&raw, &value, sizeof(float));
+        uint32_t    be    = qb::endian::to_big_endian(raw);
+        const byte *bytes = reinterpret_cast<const byte *>(&be);
         params_buffer_.insert(params_buffer_.end(), bytes, bytes + sizeof(float));
     }
 
     /**
-     * @brief Write a double parameter
+     * @brief Write a double parameter in big-endian IEEE 754 format
+     *
+     * PostgreSQL requires all numeric values in network byte order (big-endian).
+     * We reinterpret the IEEE 754 bit pattern as uint64_t and byte-swap it.
      *
      * @param value Double value
      */
     void
     write_double(double value) {
-        // Write length (8 bytes)
         write_integer(params_buffer_, 8);
-
-        // PostgreSQL expects IEEE 754 format, which is standard for C++
-        const byte *bytes = reinterpret_cast<const byte *>(&value);
+        uint64_t    raw;
+        std::memcpy(&raw, &value, sizeof(double));
+        uint64_t    be    = qb::endian::to_big_endian(raw);
+        const byte *bytes = reinterpret_cast<const byte *>(&be);
         params_buffer_.insert(params_buffer_.end(), bytes, bytes + sizeof(double));
     }
 
@@ -823,6 +764,9 @@ private:
             return;
         }
 
+        // OPTIMIZED: Reserve space for param_types_ (P0-3 fix)
+        param_types_.reserve(param_types_.size() + 1);
+
         // Prepare a binary buffer for the array
         std::vector<byte> array_buffer;
 
@@ -833,6 +777,25 @@ private:
         // int32 dimension size
         // int32 dimension lower bound (typically 1)
         // followed by each element with int32 length prefix and data
+
+        // OPTIMIZED: Reserve space for header + estimated elements (P0-3 fix)
+        // Header = 20 bytes, each element = 4 bytes length prefix + data
+        size_t estimated_element_size = sizeof(integer); // length prefix
+        if constexpr (std::is_same_v<element_type, smallint>)
+            estimated_element_size += sizeof(smallint);
+        else if constexpr (std::is_same_v<element_type, integer>)
+            estimated_element_size += sizeof(integer);
+        else if constexpr (std::is_same_v<element_type, bigint>)
+            estimated_element_size += sizeof(bigint);
+        else if constexpr (std::is_same_v<element_type, float>)
+            estimated_element_size += sizeof(float);
+        else if constexpr (std::is_same_v<element_type, double>)
+            estimated_element_size += sizeof(double);
+        else if constexpr (std::is_same_v<element_type, bool>)
+            estimated_element_size += sizeof(byte);
+        else
+            estimated_element_size += 32; // default estimate for strings/complex types
+        array_buffer.reserve(20 + vector.size() * estimated_element_size);
 
         // We'll start with a 1D array header (20 bytes)
         // Number of dimensions
@@ -869,34 +832,6 @@ private:
                               array_buffer.end());
     }
 };
-
-/**
- * @brief Helper function to serialize parameters and get the resulting buffers
- *
- * @tparam Args Parameter types
- * @param params_buffer Output buffer for serialized parameters
- * @param format_codes_buffer Output buffer for format codes (OBSOLÈTE, non utilisé)
- * @param param_types Output vector for parameter OID types
- * @param args Parameter values
- */
-template <typename... Args>
-void
-serialize_params(std::vector<byte>    &params_buffer,
-                 std::vector<byte>    &format_codes_buffer,
-                 std::vector<integer> &param_types, Args &&...args) {
-    // Créer un nouveau sérialiseur
-    ParamSerializer serializer;
-
-    // Sérialiser les paramètres
-    serializer.serialize_params(std::forward<Args>(args)...);
-
-    // Récupérer les données sérialisées
-    params_buffer = serializer.params_buffer();
-    param_types   = serializer.param_types();
-
-    // Le buffer de codes de format n'est plus utilisé
-    format_codes_buffer.clear();
-}
 
 } // namespace qb::pg::detail
 

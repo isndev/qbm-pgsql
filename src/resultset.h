@@ -226,18 +226,28 @@ public:
      */
     bool
     operator!() const {
-        return *this;
+        return empty();
     }
     //@}
 
     /**
+     * @brief Returns the number of rows affected by the last command
+     *
+     * For INSERT, UPDATE, DELETE commands returns the number of rows affected.
+     * For SELECT returns the number of rows returned.
+     * Returns 0 when this information is unavailable.
+     *
+     * @return int64_t Number of rows affected or returned
+     */
+    int64_t rows_affected() const;
+
+    /**
      * @brief Convert the result set to a JSON array
-     * 
+     *
      * Converts the entire result set to a JSON array of objects where each object
      * represents a row and contains field name/value pairs.
-     * All values are converted to strings using as<std::string>().
      * NULL values are represented as JSON null.
-     * 
+     *
      * @return qb::json JSON array containing the result set data
      */
     qb::json json() const;
@@ -464,6 +474,8 @@ public:
             field_buffer buffer = input_buffer();
             bool         is_binary =
                 (description().format_code == pg::protocol_data_format::Binary);
+            // NOTE: buffer.to_vector() creates a copy - potential optimization area
+            // For now keeping as-is since from_binary/from_text expect vectors
             auto data_vector = buffer.to_vector();
 
             // 3. Use the TypeConverter to convert according to format
@@ -471,6 +483,7 @@ public:
                 return detail::TypeConverter<result_type>::from_binary(data_vector);
             } else {
                 // For text format, we first need to read the string
+                // QB Context: static is safe - we are always on a single VirtualCore (mono-thread)
                 static detail::ParamUnserializer unserializer;
                 std::string text_value = unserializer.read_string(data_vector);
                 return detail::TypeConverter<result_type>::from_text(text_value);

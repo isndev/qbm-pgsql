@@ -84,6 +84,9 @@ protected:
     error::db_error       _error;        ///< Error message of the transaction
     result_impl           _results;      ///< Last results of the transaction
 
+    // P1-2: Query timeout settings
+    int _query_timeout_ms{0}; ///< Query timeout in milliseconds (0 = no timeout)
+
     Transaction() = delete;
 
     Transaction(const Transaction &) = delete;
@@ -205,9 +208,19 @@ public:
     /**
      * @brief Called when a query returns a data row
      *
-     * @param Row data from the result
+     * @param data Row data from the result
      */
     virtual void on_new_data_row(row_data &&);
+
+    /**
+     * @brief Called when a CommandComplete message is received
+     *
+     * Stores the command tag in the current result set so that
+     * rows_affected() can be queried by the application.
+     *
+     * @param tag CommandComplete tag (e.g. "INSERT 0 5", "SELECT 10")
+     */
+    virtual void on_command_complete(const std::string &tag);
 
     /**
      * @brief Begins a new transaction with success and error callbacks
@@ -486,6 +499,31 @@ public:
      * @return Transaction& Reference to this transaction for chaining
      */
     Transaction &execute_file(const std::filesystem::path& file_path);
+
+    /**
+     * @brief Set query timeout for this transaction (P1-2)
+     *
+     * Configures a timeout for all subsequent queries in this transaction.
+     * If a query exceeds this timeout, it will be cancelled with an error.
+     *
+     * @param timeout_ms Timeout in milliseconds (0 = no timeout)
+     * @return Transaction& Reference to this transaction for chaining
+     */
+    Transaction &
+    set_timeout(int timeout_ms) {
+        _query_timeout_ms = timeout_ms;
+        return *this;
+    }
+
+    /**
+     * @brief Get the current query timeout (P1-2)
+     *
+     * @return int Timeout in milliseconds (0 = no timeout)
+     */
+    int
+    get_timeout() const {
+        return _query_timeout_ms;
+    }
 
     /**
      * @brief Adds a callback to be executed after the next operation

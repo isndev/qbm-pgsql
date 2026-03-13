@@ -35,6 +35,7 @@
 
 #include <iomanip>
 #include <iostream>
+#include <list>  // P2-1: LRU cache
 #include <qb/io.h>
 #include <qb/system/container/unordered_map.h>
 #include <qb/utility/branch_hints.h>
@@ -65,17 +66,74 @@ struct PreparedQuery {
 };
 
 /**
- * @brief Storage for prepared queries
+ * @brief Storage for prepared queries with LRU eviction (P2-1)
  *
  * Provides a central repository for all prepared statements in the
  * database session, allowing them to be referenced by name.
+ * Implements bounded capacity with LRU eviction to prevent unbounded growth.
  */
 class PreparedStorage {
-    qb::unordered_map<std::string, PreparedQuery>
-        _prepared_queries; ///< Map of query names to definitions
+    // LRU cache implementation
+    struct LruEntry {
+        std::string               name;    ///< Query name (key)
+        PreparedQuery             query;   ///< The prepared query
+        mutable std::list<std::string>::iterator lru_iter; ///< Iterator in LRU list (mutable for get())
+    };
+
+    qb::unordered_map<std::string, LruEntry> _prepared_queries; ///< Map of queries
+    std::list<std::string>                     _lru_list;         ///< LRU order list
+    size_t                                     _max_size{100};    ///< Max capacity
+    size_t                                     _evicted_count{0}; ///< Stats: evicted
 
 public:
+    /**
+     * @brief Default constructor with default max size
+     */
     PreparedStorage() = default;
+
+    /**
+     * @brief Construct with custom max size
+     * @param max_size Maximum number of prepared queries to keep
+     */
+    explicit PreparedStorage(size_t max_size)
+        : _max_size(max_size > 0 ? max_size : 100) {}
+
+    /**
+     * @brief Set maximum cache size (applies to future insertions)
+     * @param max_size New maximum size
+     */
+    void
+    set_max_size(size_t max_size) {
+        _max_size = max_size > 0 ? max_size : 100;
+        evict_if_needed(); // Evict immediately if over capacity
+    }
+
+    /**
+     * @brief Get current maximum cache size
+     * @return size_t Max size
+     */
+    size_t
+    max_size() const {
+        return _max_size;
+    }
+
+    /**
+     * @brief Get current number of cached queries
+     * @return size_t Current size
+     */
+    size_t
+    size() const {
+        return _prepared_queries.size();
+    }
+
+    /**
+     * @brief Get total number of evicted queries (stats)
+     * @return size_t Eviction count
+     */
+    size_t
+    evicted_count() const {
+        return _evicted_count;
+    }
 
     /**
      * @brief Checks if a prepared query exists
@@ -91,16 +149,44 @@ public:
     /**
      * @brief Adds a prepared query to storage
      *
+     * Implements LRU eviction if over capacity.
+     * Updates LRU order on access.
+     *
      * @param query Prepared query to add
      * @return const PreparedQuery& Reference to the stored query
      */
     const PreparedQuery &
     push(PreparedQuery &&query) {
-        return _prepared_queries.emplace(query.name, std::move(query)).first->second;
+        std::string key = query.name;
+
+        // Check if already exists - update it and move to front
+        auto it = _prepared_queries.find(key);
+        if (it != _prepared_queries.end()) {
+            // Move to front (most recently used)
+            _lru_list.erase(it->second.lru_iter);
+            _lru_list.push_front(key);
+            it->second.lru_iter = _lru_list.begin();
+            it->second.query    = std::move(query);
+            return it->second.query;
+        }
+
+        // Evict if at capacity
+        evict_if_needed();
+
+        // Add to front of LRU list
+        _lru_list.push_front(key);
+
+        // Store in map with LRU iterator
+        LruEntry entry{key, std::move(query), _lru_list.begin()};
+        auto     result = _prepared_queries.emplace(std::move(key), std::move(entry));
+
+        return result.first->second.query;
     }
 
     /**
      * @brief Retrieves a prepared query by name
+     *
+     * Updates LRU order on access (marks as recently used).
      *
      * @param name Name of the prepared query
      * @return PreparedQuery const& Reference to the prepared query
@@ -108,7 +194,43 @@ public:
      */
     PreparedQuery const &
     get(std::string_view name) const {
-        return _prepared_queries.at(std::string(name));
+        std::string key(name);
+        auto        it = _prepared_queries.find(key);
+        if (it == _prepared_queries.end()) {
+            throw std::out_of_range("Prepared query not found: " + key);
+        }
+
+        // Move to front (most recently used) - need to cast away const
+        auto &mutable_this = const_cast<PreparedStorage &>(*this);
+        mutable_this._lru_list.erase(it->second.lru_iter);
+        mutable_this._lru_list.push_front(key);
+        it->second.lru_iter = mutable_this._lru_list.begin();
+
+        return it->second.query;
+    }
+
+    /**
+     * @brief Clear all prepared queries
+     */
+    void
+    clear() {
+        _prepared_queries.clear();
+        _lru_list.clear();
+    }
+
+private:
+    /**
+     * @brief Evict least recently used items if over capacity
+     */
+    void
+    evict_if_needed() {
+        while (_prepared_queries.size() >= _max_size && !_lru_list.empty()) {
+            // Get least recently used (back of list)
+            std::string &lru_name = _lru_list.back();
+            _prepared_queries.erase(lru_name);
+            _lru_list.pop_back();
+            ++_evicted_count;
+        }
     }
 };
 
@@ -149,16 +271,8 @@ public:
             ParamSerializer serializer;
             serializer.serialize_params(std::forward<T>(args)...);
 
-            // Retrieve serialized data
             _params      = serializer.params_buffer();
             _param_types = serializer.param_types();
-
-            // Check if the beginning of the parameter buffer contains a 'B'
-            if (!_params.empty() && _params.size() > sizeof(smallint) &&
-                _params[sizeof(smallint)] == 'B') {
-                LOG_CRIT("[pgsql] CORRUPTION DETECTED in construction: first byte after "
-                         "count = 'B'");
-            }
         }
     }
 
@@ -338,12 +452,11 @@ public:
      */
     message
     get() const final {
-        ::std::ostringstream cmd;
-        cmd << "BEGIN " << _mode;
-
-        LOG_DEBUG("[pgsql] Send BEGIN: \"" << cmd.str() << "\"");
+        std::string sql = "BEGIN ";
+        sql += to_string(_mode);
+        LOG_DEBUG("[pgsql] Send BEGIN: \"" << sql << "\"");
         message m(query_tag);
-        m.write(cmd.str());
+        m.write(sql);
         return m;
     }
 };
@@ -428,7 +541,7 @@ public:
  */
 template <typename CB_SUCCESS, typename CB_ERROR>
 class SavePointQuery final : public SqlQuery<CB_SUCCESS, CB_ERROR> {
-    std::string const &_name; ///< Savepoint name
+    std::string _name; ///< Savepoint name (owned copy — never a dangling reference)
 
 public:
     /**
@@ -467,7 +580,7 @@ public:
  */
 template <typename CB_SUCCESS, typename CB_ERROR>
 class ReleaseSavePointQuery final : public SqlQuery<CB_SUCCESS, CB_ERROR> {
-    std::string const &_name; ///< Savepoint name
+    std::string _name; ///< Savepoint name (owned copy — never a dangling reference)
 
 public:
     /**
@@ -507,7 +620,7 @@ public:
  */
 template <typename CB_SUCCESS, typename CB_ERROR>
 class RollbackSavePointQuery final : public SqlQuery<CB_SUCCESS, CB_ERROR> {
-    std::string const &_name; ///< Savepoint name
+    std::string _name; ///< Savepoint name (owned copy — never a dangling reference)
 
 public:
     /**
@@ -603,8 +716,7 @@ public:
         cmd.write(_query.expression);
         cmd.write((smallint) _query.param_types.size());
         for (auto oid_val : _query.param_types) {
-            cmd.write(
-                static_cast<integer>(oid_val)); // déjà un integer, pas besoin de cast
+            cmd.write(static_cast<integer>(oid_val));
         }
 
         message describe(describe_tag);
