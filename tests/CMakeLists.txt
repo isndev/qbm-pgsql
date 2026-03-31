@@ -21,8 +21,9 @@ set(QB_PGSQL_TESTS
         param-serializer
         param-unserializer
         param-parsing
+        protocol-message
         connection
-#        connection-ssl
+        #        connection-ssl
         data-types
         data-types-integration
         prepared-statements
@@ -32,13 +33,32 @@ set(QB_PGSQL_TESTS
         queries
         params
         error-handling
+        protocol-integration
+        pgsql-coro-api
+        notify
 )
 
 # Register each test
 foreach (TEST ${QB_PGSQL_TESTS})
     qb_register_module_test(
-        MODULE_NAME pgsql
-        TEST_NAME ${TEST}
-        SOURCES test-${TEST}.cpp
+            MODULE_NAME pgsql
+            TEST_NAME ${TEST}
+            SOURCES test-${TEST}.cpp
     )
 endforeach ()
+
+# Integration tests share localhost:5432; parallel ctest would collide on the same DB.
+set(_qbm_pgsql_ctest_names "")
+foreach (TEST ${QB_PGSQL_TESTS})
+    list(APPEND _qbm_pgsql_ctest_names "qbm-pgsql-test-${TEST}")
+endforeach ()
+set_tests_properties(${_qbm_pgsql_ctest_names} PROPERTIES RESOURCE_LOCK qb_pgsql_integration)
+
+if (QB_HAS_SSL)
+    qb_register_module_test(
+            MODULE_NAME pgsql
+            TEST_NAME connection-ssl
+            SOURCES test-connection-ssl.cpp
+    )
+    set_tests_properties(qbm-pgsql-test-connection-ssl PROPERTIES RESOURCE_LOCK qb_pgsql_integration)
+endif ()

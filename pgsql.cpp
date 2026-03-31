@@ -82,10 +82,10 @@ pipe<char>::put<qb::pg::detail::message>(const qb::pg::detail::message &msg) {
 } // namespace qb::allocator
 
 // Explicit template instantiations for Database class with different transport types
-template class qb::pg::detail::Database<qb::io::transport::tcp>;
+template class qb::pg::detail::Database<qb::io::transport::tcp, void>;
 
 #ifdef QB_HAS_SSL
 
-template class qb::pg::detail::Database<qb::io::transport::stcp>;
+template class qb::pg::detail::Database<qb::io::transport::stcp, void>;
 
 #endif

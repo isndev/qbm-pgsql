@@ -48,7 +48,7 @@ public:
     typedef charT                                   char_type;      ///< Character type
     typedef container                               container_type; ///< Container type
     typedef typename container_type::const_iterator const_iterator; ///< Iterator type
-    typedef std::ios_base                           ios_base; ///< Base IO class type
+    typedef std::ios_base                           ios_base;       ///< Base IO class type
 
     typedef std::basic_streambuf<charT, traits> base;     ///< Base streambuf type
     typedef typename base::pos_type             pos_type; ///< Position type

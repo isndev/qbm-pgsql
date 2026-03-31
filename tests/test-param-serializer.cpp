@@ -43,6 +43,10 @@
  */
 
 #include <gtest/gtest.h>
+#include <qb/io/async.h>
+#include <qb/io/async/coroutine.h>
+#include <qb/io/async/coroutine/utils.h>
+
 #include "../pgsql.h"
 
 using namespace qb::pg;
@@ -140,8 +144,7 @@ protected:
      * @throws std::runtime_error if the buffer is too small for extraction
      */
     std::string
-    extractStringFromBuffer(const std::vector<byte> &buffer, size_t offset,
-                            size_t length) {
+    extractStringFromBuffer(const std::vector<byte> &buffer, size_t offset, size_t length) {
         if (buffer.size() < offset + length) {
             throw std::runtime_error("Buffer too small for string extract");
         }
@@ -222,8 +225,7 @@ TEST_F(ParamSerializerTest, SmallIntSerialization) {
     ASSERT_EQ(length, sizeof(smallint));
 
     // Following bytes are the value
-    qb::pg::smallint result =
-        extractIntFromBuffer<qb::pg::smallint>(buffer, sizeof(integer));
+    qb::pg::smallint result = extractIntFromBuffer<qb::pg::smallint>(buffer, sizeof(integer));
     ASSERT_EQ(result, testValue);
 }
 
@@ -257,8 +259,7 @@ TEST_F(ParamSerializerTest, IntegerSerialization) {
     ASSERT_EQ(length, sizeof(integer));
 
     // Following bytes are the value
-    qb::pg::integer result =
-        extractIntFromBuffer<qb::pg::integer>(buffer, sizeof(integer));
+    qb::pg::integer result = extractIntFromBuffer<qb::pg::integer>(buffer, sizeof(integer));
     ASSERT_EQ(result, testValue);
 }
 
@@ -738,8 +739,7 @@ TEST_F(ParamSerializerTest, ByteArraySerialization) {
 
     // Verify content
     for (size_t i = 0; i < binaryData.size(); ++i) {
-        ASSERT_EQ(buffer[sizeof(integer) + i], binaryData[i])
-            << "Mismatch at position " << i;
+        ASSERT_EQ(buffer[sizeof(integer) + i], binaryData[i]) << "Mismatch at position " << i;
     }
 }
 
@@ -899,7 +899,7 @@ TEST_F(ParamSerializerTest, VeryLongStringSerialization) {
  */
 TEST_F(ParamSerializerTest, StringWithNullCharacters) {
     // Create a string that explicitly contains null characters
-    std::string testString   = "This string\0contains\0null\0characters";
+    std::string testString = "This string\0contains\0null\0characters";
 
     // Serialize with explicit size
     serializer->add_cstring(testString.c_str());
@@ -928,9 +928,8 @@ TEST_F(ParamSerializerTest, StringWithNullCharacters) {
 TEST_F(ParamSerializerTest, ExtendedCharacterSetSerialization) {
     // Collection of strings to test
     std::vector<std::string> testStrings = {
-        "Escape sequences: \n\r\t\b\f\\\"\'",
-        "Unicode characters: \u00A9 \u2603 \u03C0 \u221E", "Emoji: 😀 😃 😄 😁 😆 😎",
-        "Mixed symbols: ✓✗★☆♥♦♣♠", "Mathematical: ∑∏√∞≠≈∈∉"};
+        "Escape sequences: \n\r\t\b\f\\\"\'", "Unicode characters: \u00A9 \u2603 \u03C0 \u221E",
+        "Emoji: 😀 😃 😄 😁 😆 😎", "Mixed symbols: ✓✗★☆♥♦♣♠", "Mathematical: ∑∏√∞≠≈∈∉"};
 
     for (const auto &testString : testStrings) {
         serializer->reset();
@@ -1025,12 +1024,11 @@ TEST_F(ParamSerializerTest, ComplexPreparedStatementSequence) {
     // === Query 1: User insertion ===
     serializer->reset();
 
-    qb::pg::integer user_id  = 1001;
-    std::string     username = "jdoe";
-    std::string     password_hash =
-        "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy";
-    std::string email     = "jdoe@example.com";
-    bool        is_active = true;
+    qb::pg::integer user_id       = 1001;
+    std::string     username      = "jdoe";
+    std::string     password_hash = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy";
+    std::string     email         = "jdoe@example.com";
+    bool            is_active     = true;
 
     // Add parameters
     serializer->add_integer(user_id);
@@ -1573,13 +1571,12 @@ TEST_F(ParamSerializerTest, TimestampTextFormat) {
  */
 TEST_F(ParamSerializerTest, JSONSerialization) {
     // Create a sample JSON object with various nested structures and types
-    qb::jsonb test_json = {
-        {"id", 12345},
-        {"name", "Test JSON"},
-        {"active", true},
-        {"tags", {"database", "postgres", "json"}},
-        {"metrics", {{"queries", 1000}, {"errors", 5}, {"success_rate", 99.5}}},
-        {"nullable", nullptr}};
+    qb::jsonb test_json = {{"id", 12345},
+                           {"name", "Test JSON"},
+                           {"active", true},
+                           {"tags", {"database", "postgres", "json"}},
+                           {"metrics", {{"queries", 1000}, {"errors", 5}, {"success_rate", 99.5}}},
+                           {"nullable", nullptr}};
 
     // Serialize the JSON object
     serializer->add_param(test_json);
@@ -1658,21 +1655,16 @@ TEST_F(ParamSerializerTest, ComplexJSONSerialization) {
              {"profile",
               {{"name", "User 1"},
                {"settings",
-                {{"theme", "dark"},
-                 {"notifications", true},
-                 {"limits", {10, 20, 30}}}}}}},
+                {{"theme", "dark"}, {"notifications", true}, {"limits", {10, 20, 30}}}}}}},
             {{"id", 2},
              {"profile",
               {{"name", "User 2"},
                {"settings",
-                {{"theme", "light"},
-                 {"notifications", false},
-                 {"limits", {5, 15, 25}}}}}}}}},
+                {{"theme", "light"}, {"notifications", false}, {"limits", {5, 15, 25}}}}}}}}},
           {"stats",
            {{"total_users", 2},
             {"active_users", 1},
-            {"historical",
-             {{"2023", {{"q1", 100}, {"q2", 150}}}, {"2024", {{"q1", 200}}}}}}}}}};
+            {"historical", {{"2023", {{"q1", 100}, {"q2", 150}}}, {"2024", {{"q1", 200}}}}}}}}}};
 
     // Reset serializer
     serializer->reset();
@@ -1711,18 +1703,14 @@ TEST_F(ParamSerializerTest, ComplexJSONSerialization) {
 
         // Verify deep nested elements
         ASSERT_EQ(parsed_json["data"]["users"][0]["id"].get<int>(), 1);
-        ASSERT_EQ(parsed_json["data"]["users"][1]["profile"]["name"].get<std::string>(),
-                  "User 2");
-        ASSERT_EQ(parsed_json["data"]["users"][0]["profile"]["settings"]["limits"][2]
-                      .get<int>(),
+        ASSERT_EQ(parsed_json["data"]["users"][1]["profile"]["name"].get<std::string>(), "User 2");
+        ASSERT_EQ(parsed_json["data"]["users"][0]["profile"]["settings"]["limits"][2].get<int>(),
                   30);
-        ASSERT_EQ(parsed_json["data"]["stats"]["historical"]["2023"]["q2"].get<int>(),
-                  150);
+        ASSERT_EQ(parsed_json["data"]["stats"]["historical"]["2023"]["q2"].get<int>(), 150);
 
         // We can't compare the complete structure directly since our original was an
         // object and the serialized form is an array of pairs
-        std::cout << "Successfully verified complex JSON structure integrity"
-                  << std::endl;
+        std::cout << "Successfully verified complex JSON structure integrity" << std::endl;
     } catch (const std::exception &e) {
         FAIL() << "Failed to parse complex JSON: " << e.what();
     }
@@ -1737,7 +1725,7 @@ TEST_F(ParamSerializerTest, NumericSerialization) {
     using namespace qb::pg::detail;
 
     // Test 1: Simple numeric value
-    numeric n1("123.45");
+    numeric           n1("123.45");
     std::vector<byte> buffer;
     TypeConverter<numeric>::to_binary(n1, buffer);
 
@@ -1775,7 +1763,7 @@ TEST_F(ParamSerializerTest, DateSerialization) {
     using namespace qb::pg::detail;
 
     // Test 1: Simple date
-    pgdate d1 = pgdate::from_string("2024-03-15");
+    pgdate            d1 = pgdate::from_string("2024-03-15");
     std::vector<byte> buffer;
     TypeConverter<pgdate>::to_binary(d1, buffer);
 
@@ -1818,7 +1806,7 @@ TEST_F(ParamSerializerTest, IntervalSerialization) {
     using namespace qb::pg::detail;
 
     // Test 1: Simple interval (1 hour) - verify structure
-    auto interval1 = hours(1);
+    auto              interval1 = hours(1);
     std::vector<byte> buffer;
     TypeConverter<hours>::to_binary(interval1, buffer);
 
@@ -1865,11 +1853,11 @@ TEST_F(ParamSerializerTest, MixedComplexTypes) {
     ParamSerializer serializer;
 
     // Add various parameter types
-    int32_t id = 12345;
-    numeric price("999.99");
-    pgdate date = pgdate::from_string("2024-12-25");
-    std::string name = "Test Product";
-    bool active = true;
+    int32_t     id = 12345;
+    numeric     price("999.99");
+    pgdate      date   = pgdate::from_string("2024-12-25");
+    std::string name   = "Test Product";
+    bool        active = true;
 
     // Serialize numeric (as text for precision)
     std::vector<byte> numeric_buffer;
@@ -1956,7 +1944,7 @@ TEST_F(ParamSerializerTest, EdgeCasesSerialization) {
     ParamSerializer serializer;
 
     // Test 1: Very long numeric string
-    numeric huge("999999999999999999999999999999.9999999999999999999999");
+    numeric           huge("999999999999999999999999999999.9999999999999999999999");
     std::vector<byte> buffer;
     TypeConverter<numeric>::to_binary(huge, buffer);
     EXPECT_GT(buffer.size(), 0);

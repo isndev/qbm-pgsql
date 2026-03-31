@@ -16,6 +16,58 @@
  * database operations to be performed without blocking actor threads. The client
  * fully implements the PostgreSQL wire protocol for efficient communication.
  *
+ * Connection / query API (single-threaded qb-io: one event loop + coroutine scheduler
+ * per thread; never block the loop inside a callback or coroutine except via
+ * explicit suspension).
+ *
+ * Two orthogonal styles — same method names, different completion model:
+ *
+ * - **Coroutine completion:** overloads **without** user callbacks return
+ *   `pg_reply_awaiter<T>`. Use **only** inside a coroutine: `auto r = co_await db.query("…");`
+ *   or `co_await db.execute("…")`, `co_await db.prepare(…)`, `co_await db.begin()`, etc.
+ *   From synchronous code, drive the coroutine with `qb::io::async::run_sync` (see
+ *   `qb/io/async/coroutine/utils.h`) or spawn a `task` on `coro_scheduler()`. **Do not** call a
+ *   blocking wait on the awaiter itself — there is no
+ *   `.await()` on `pg_reply_awaiter`.
+ *
+ * - **Callback + synchronous drain:** pass success/error callbacks; overloads return
+ *   `Transaction&` for fluent chaining. To run queued work to completion on the current
+ *   thread, call **`Transaction::await()`** (or `qb::pg::await(db)`). For SQL/prepared
+ *   ops when you have no real handler, use the constexpr discards:
+ *   `execute(sql, discard_query, discard_error)`,
+ *   `prepare(name, sql, types, discard_prepare, discard_error)`,
+ *   `execute(name, params, discard_query, discard_error)`.
+ *
+ * - **Connection:** `co_await db.connect()` or `run_sync(db.connect())` — see
+ *   `qb/io/async/coroutine/utils.h`.
+ *
+ * - **Coroutine transaction scope:** `co_await with_transaction(db, [](Transaction &tr) -> task<int>
+ * { ... })` runs `BEGIN`, awaits your `task` body (use `tr` / `db` for `co_await tr.execute` /
+ * `query`), then `COMMIT` on success or `ROLLBACK` on `transaction_abort`, `commit` failure, or a
+ * C++ exception. Overload `with_transaction(db, transaction_mode{...}, f)` sets isolation /
+ * read-only / deferrable. When `!reply.ok()` after an operation, throw
+ * `transaction_abort{reply.error()}` so the helper rolls back and returns `Reply::failure` instead
+ * of calling `COMMIT` on an aborted transaction.
+ *
+ * **Large-project conventions**
+ *
+ * - **One style per call stack:** In a `begin` success callback, use only callback overloads
+ *   (`execute(..., cb, err)` or discards) and `Transaction::await()` — do not mix with discarded
+ *   `execute("…")` coroutine awaiters (they are not driven there). In coroutines, use only
+ *   `co_await` overloads and `with_transaction` / manual `begin` / `commit` / `rollback`.
+ * - **`Transaction&` vs `database&`:** `tcp::database` *is-a* `Transaction`; `with_transaction` and
+ *   `co_await tr.query` use the same connection. Prefer passing `Transaction&` in helpers so code
+ * works with any concrete client type.
+ * - **Avoid nesting `with_transaction`:** It issues a second `BEGIN` on the same connection;
+ * behavior depends on the server (some configurations reject it and abort the block — use
+ *   `transaction_abort{inner.error()}` and never `COMMIT` an aborted transaction; others may accept
+ *   the pattern). Prefer a single scope plus `savepoint` / `release_savepoint` /
+ * `rollback_savepoint` for nested units of work.
+ * - **READ ONLY:** PostgreSQL still allows writes to **temporary** tables in a read-only
+ *   transaction; only non-temporary relations are restricted.
+ * - **Errors:** For coroutine bodies, treat `Reply::ok()` as mandatory; on failure either throw
+ *   `transaction_abort` (handled scope) or let exceptions propagate (rollback + rethrow).
+ *
  * Key features:
  * - Asynchronous I/O using the QB Actor Framework
  * - Support for both plain TCP and SSL/TLS connections
@@ -43,10 +95,21 @@
 
 #pragma once
 
+#include <chrono>
+#include <coroutine>
+#include <cstdint>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <qb/io/async.h>
 #include <qb/io/async/tcp/connector.h>
 #include <qb/io/crypto.h>
+#include <string>
+#include <string_view>
+#include <type_traits>
+#ifdef QB_HAS_SSL
+#include <qb/io/tcp/ssl/socket.h>
+#endif
 #include <qb/system/allocator/pipe.h>
 
 // P1-1: Socket includes for keepalive support
@@ -60,6 +123,7 @@
 #endif
 
 #include "./src/commands.h"
+#include "./src/pg_reply.h"
 #include "./src/transaction.h"
 
 /**
@@ -151,8 +215,7 @@ parse_header_attributes(const char *ptr, const size_t len) {
                 } else if (*ptr != ' ') { // ignore whitespace
                     // check if control character detected, or max sized exceeded
                     if (is_control(*ptr) || attribute_name.size() >= ATTRIBUTE_NAME_MAX)
-                        throw std::runtime_error(
-                            "ctrl in name found or max attribute name length");
+                        throw std::runtime_error("ctrl in name found or max attribute name length");
                     // character is part of the name
                     attribute_name.push_back(*ptr);
                 }
@@ -180,11 +243,9 @@ parse_header_attributes(const char *ptr, const size_t len) {
                             attribute_value.push_back(*ptr);
                         }
                     } else if (*ptr != ' ' ||
-                               !attribute_value
-                                    .empty()) { // ignore leading unquoted whitespace
+                               !attribute_value.empty()) { // ignore leading unquoted whitespace
                         // check if control character detected, or max sized exceeded
-                        if (is_control(*ptr) ||
-                            attribute_value.size() >= ATTRIBUTE_VALUE_MAX)
+                        if (is_control(*ptr) || attribute_value.size() >= ATTRIBUTE_VALUE_MAX)
                             throw std::runtime_error(
                                 "ctrl in value found or max attribute value length");
                         // character is part of the (unquoted) value
@@ -313,8 +374,7 @@ public:
      */
     std::size_t
     getMessageSize() noexcept final {
-        constexpr const size_t header_size =
-            sizeof(qb::pg::integer) + sizeof(qb::pg::byte);
+        constexpr const size_t header_size = sizeof(qb::pg::integer) + sizeof(qb::pg::byte);
 
         const auto &in = this->_io.in();
         if (in.size() < offset_ + header_size)
@@ -328,17 +388,33 @@ public:
             // OPTIMIZED: Use std::copy_n for batch copy instead of byte-by-byte
             // This provides ~10x performance improvement for large messages
             auto header_begin = in.begin();
-            auto out            = message_->output();
+            auto out          = message_->output();
             std::copy_n(header_begin, header_size, out);
             offset_ += header_size;
             max_bytes -= header_size;
+
+            const qb::pg::uinteger wire_len = static_cast<qb::pg::uinteger>(message_->length());
+            if (wire_len < 4u) {
+                LOG_CRIT("[pgsql] Invalid wire message length " << wire_len << " (< 4)");
+                message_.reset();
+                offset_ = 0;
+                this->_io.prepare_reconnect();
+                return 0;
+            }
+            if (wire_len > qb::pg::PG_PROTOCOL_MAX_MESSAGE_BYTES) {
+                LOG_CRIT("[pgsql] Wire message length " << wire_len << " exceeds client cap "
+                                                        << qb::pg::PG_PROTOCOL_MAX_MESSAGE_BYTES);
+                message_.reset();
+                offset_ = 0;
+                this->_io.prepare_reconnect();
+                return 0;
+            }
         }
 
         if (message_->length() > message_->size()) {
             // Read the message body
-            auto              out = message_->output();
-            const std::size_t to_copy =
-                std::min(message_->length() - message_->size(), max_bytes);
+            auto              out     = message_->output();
+            const std::size_t to_copy = std::min(message_->length() - message_->size(), max_bytes);
 
             // OPTIMIZED: Use std::copy_n for batch copy instead of byte-by-byte
             auto data_begin = in.begin() + offset_;
@@ -394,6 +470,19 @@ public:
 } // namespace qb::protocol
 
 namespace qb::pg {
+
+/**
+ * @brief Asynchronous payload from PostgreSQL NOTIFY (after LISTEN on the same or another session).
+ *
+ * Delivered on the I/O thread when a `NotificationResponse` is received; see
+ * `tcp::notify_cb_consumer` / `tcp::notify_co_consumer`, or `database::on_incoming_notify`.
+ */
+struct notification {
+    int         server_backend_pid{};
+    std::string channel;
+    std::string payload;
+};
+
 namespace detail {
 using namespace qb::io;
 using namespace qb::pg;
@@ -417,10 +506,13 @@ using namespace qb::pg;
  * connectivity and the Transaction class for query and transaction management.
  *
  * @tparam QB_IO_ I/O handler type that provides networking capabilities
+ * @tparam NotifyDerived CRTP notify consumer type (`void` for plain `database`); receives NOTIFY via
+ *         `consume_pg_notify` / `deliver_pg_notify`. See `notify_consumer` / `notify_co_consumer`
+ *         (`notify_cb_consumer` is an alias for the same class).
  */
-template <typename QB_IO_>
+template <typename QB_IO_, typename NotifyDerived = void>
 class Database
-    : public qb::io::async::tcp::client<Database<QB_IO_>, QB_IO_, void>
+    : public qb::io::async::tcp::client<Database<QB_IO_, NotifyDerived>, QB_IO_, void>
     , public Transaction {
 public:
     /**
@@ -428,15 +520,224 @@ public:
      *
      * Type alias for the protocol handler used by this database client.
      */
-    using pg_protocol = qb::protocol::pgsql<Database<QB_IO_>>;
+    using pg_protocol = qb::protocol::pgsql<Database<QB_IO_, NotifyDerived>>;
 
 private:
-    connection_options   conn_opts_;      ///< Database connection options
-    client_options_type  client_opts_;    ///< Client options
-    integer              serverPid_{};    ///< Server process ID
-    integer              serverSecret_{}; ///< Server secret for protocol operations
-    PreparedQueryStorage storage_;        ///< Storage for prepared statements
-    bool is_connected_ = false; ///< Flag indicating if the connection is established
+    connection_options   conn_opts_;            ///< Database connection options
+    client_options_type  client_opts_;          ///< Client options
+    integer              serverPid_{};          ///< Server process ID
+    integer              serverSecret_{};       ///< Server secret for protocol operations
+    PreparedQueryStorage storage_;              ///< Storage for prepared statements
+    bool                 is_connected_ = false; ///< Flag indicating if the connection is established
+
+    /// Outstanding `co_await connect()` handshake (coroutine resume + validity token)
+    bool                    connect_coroutine_pending_{false};
+    bool                    connect_handshake_failed_{false};
+    std::coroutine_handle<> connect_suspend_handle_{};
+    std::shared_ptr<bool>   connect_suspend_valid_{};
+    /// Bumps on each new handshake / reconnect prep so stale `callback(timeout)` ignores
+    std::uint64_t connect_timer_generation_{0};
+
+    /// When `NotifyDerived` is `void`, optional handler for `NotificationResponse` (plain
+    /// `database`).
+    std::function<void(::qb::pg::notification &&)> inbound_notify_handler_{};
+
+    void
+    try_resume_connect_wait() {
+        if (!connect_coroutine_pending_)
+            return;
+        const bool terminal =
+            is_connected_ || connect_handshake_failed_ || (has_error() && !is_connected_);
+        if (!terminal)
+            return;
+        auto h                     = connect_suspend_handle_;
+        auto v                     = connect_suspend_valid_;
+        connect_coroutine_pending_ = false;
+        connect_suspend_handle_    = {};
+        connect_suspend_valid_.reset();
+        if (v && !*v)
+            return;
+        if (h)
+            qb::io::async::coro_scheduler().schedule_resume(h);
+    }
+
+    /**
+     * @brief Starts outbound TCP using the async framework (`qb::io::async::tcp::connect`).
+     *
+     * Uses the same connector path as Redis: non-blocking `n_connect`, `EV_WRITE` completion,
+     * and an optional deadline (`connect_timeout` or default 10s). The coroutine awaiter is
+     * resumed from `try_resume_connect_wait()` after TCP + PostgreSQL pre-startup steps or on
+     * failure.
+     *
+     * @param h Coroutine handle to resume when the handshake attempt finishes (success or failure)
+     * @param valid Shared flag cleared when the awaiter is destroyed (ignore stale callbacks)
+     * @param timeout_override_sec If &gt; 0, overrides `conn_opts_.connect_timeout` for this attempt
+     */
+    void
+    start_connect_from_awaiter(std::coroutine_handle<> h, std::shared_ptr<bool> valid,
+                               double timeout_override_sec) {
+        ++connect_timer_generation_;
+        const std::uint64_t timer_gen = connect_timer_generation_;
+
+        connect_suspend_handle_    = h;
+        connect_suspend_valid_     = std::move(valid);
+        connect_coroutine_pending_ = true;
+        connect_handshake_failed_  = false;
+        _error                     = error::db_error{"unknown error"};
+
+        if (is_connected_) {
+            try_resume_connect_wait();
+            return;
+        }
+
+        const double t_out =
+            timeout_override_sec > 0
+                ? timeout_override_sec
+                : (conn_opts_.connect_timeout > 0 ? static_cast<double>(conn_opts_.connect_timeout)
+                                                  : 10.0);
+
+        const qb::io::uri connect_uri{conn_opts_.schema + "://" + conn_opts_.uri};
+        auto              awaiter_valid = connect_suspend_valid_;
+
+        qb::io::async::tcp::connect<qb::io::tcp::socket>(
+            connect_uri,
+            [this, timer_gen, t_out, awaiter_valid](qb::io::tcp::socket &&raw_io) {
+                if (awaiter_valid && !*awaiter_valid)
+                    return;
+                on_async_tcp_connected(std::move(raw_io), timer_gen, t_out);
+            },
+            t_out);
+    }
+
+    /**
+     * @brief Switches to the PostgreSQL protocol, starts read/write watchers, sends startup.
+     *
+     * Schedules the existing application-level handshake timeout (authentication / ReadyForQuery),
+     * distinct from the TCP connector deadline in `start_connect_from_awaiter`.
+     *
+     * @param timer_gen Generation counter; stale timers ignore the callback after reconnect
+     * @param t_out Handshake timeout in seconds passed to `async::callback`
+     */
+    void
+    attach_pg_protocol_and_handshake_timer(std::uint64_t timer_gen, double t_out) {
+        this->template switch_protocol<pg_protocol>(*this);
+        this->start();
+        send_startup_message();
+
+        qb::io::async::callback(
+            [this, t_out, timer_gen]() {
+                if (timer_gen != connect_timer_generation_)
+                    return;
+                if (!connect_coroutine_pending_ || is_connected_)
+                    return;
+                LOG_WARN("[pgsql] Connection timed out after " << t_out << "s");
+                _error                    = error::db_error{"connection timeout"};
+                connect_handshake_failed_ = true;
+                try_resume_connect_wait();
+            },
+            t_out);
+
+        try_resume_connect_wait();
+    }
+
+    /**
+     * @brief Completes transport setup after async TCP connect (PostgreSQL-compatible).
+     *
+     * **Plain TCP (`transport::tcp`):** moves the connected `tcp::socket` into `transport()`.
+     *
+     * **TLS client (`transport::stcp`):** sends the PostgreSQL SSLRequest packet (8 bytes: length 8,
+     * request code 80877103 / `0x04D2162F` big-endian per protocol docs). On `S`, performs TLS
+     * on the same fd; on `N`, keeps cleartext on an `ssl::socket` without an `SSL` object
+     * (read/write delegate to `tcp::socket`).
+     *
+     * Then calls `attach_pg_protocol_and_handshake_timer`.
+     *
+     * @param raw_io Connected cleartext TCP socket from `async::tcp::connect`
+     * @param timer_gen Passed through to the handshake timer
+     * @param t_out Used for TLS `connect(uri, timeout)` when the server accepts SSL
+     */
+    void
+    on_async_tcp_connected(qb::io::tcp::socket &&raw_io, std::uint64_t timer_gen, double t_out) {
+        if (!raw_io.is_open()) {
+            connect_handshake_failed_ = true;
+            _error                    = error::connection_error{"tcp connect failed"};
+            try_resume_connect_wait();
+            return;
+        }
+
+        if (this->protocol())
+            this->clear_protocols();
+
+        using transport_sock = std::remove_cvref_t<typename QB_IO_::transport_io_type>;
+
+        if constexpr (transport_sock::is_secure()) {
+#ifdef QB_HAS_SSL
+            uint32_t               len  = htonl(8);
+            uint32_t               code = htonl(0x04D2162F);
+            std::array<uint8_t, 8> ssl_request{};
+            std::memcpy(ssl_request.data(), &len, 4);
+            std::memcpy(ssl_request.data() + 4, &code, 4);
+
+            if (::send(raw_io.native_handle(), reinterpret_cast<const char *>(ssl_request.data()),
+                       ssl_request.size(), 0) != 8) {
+                LOG_CRIT("[pgsql] Failed to send SSL request");
+                connect_handshake_failed_ = true;
+                _error                    = error::connection_error{"ssl request send failed"};
+                try_resume_connect_wait();
+                return;
+            }
+
+            uint8_t response = 0;
+            if (::recv(raw_io.native_handle(), reinterpret_cast<char *>(&response), 1, 0) != 1) {
+                LOG_CRIT("[pgsql] Failed to receive SSL response");
+                connect_handshake_failed_ = true;
+                _error                    = error::connection_error{"ssl response recv failed"};
+                try_resume_connect_wait();
+                return;
+            }
+
+            const auto tcp_connect_timeout = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::duration<double>(t_out));
+            const qb::io::uri upgrade_uri{conn_opts_.schema + "://" + conn_opts_.uri};
+
+            if (response == 'S') {
+                LOG_INFO("[pgsql] Server supports SSL");
+                qb::io::tcp::ssl::socket ssl_sock(nullptr, raw_io);
+                ssl_sock.init(nullptr);
+                if (ssl_sock.connect(upgrade_uri, tcp_connect_timeout) != 0) {
+                    LOG_CRIT("[pgsql] Failed to connect to SSL server");
+                    connect_handshake_failed_ = true;
+                    _error = error::connection_error{"tls handshake / connect failed"};
+                    try_resume_connect_wait();
+                    return;
+                }
+                this->transport() = std::move(ssl_sock);
+            } else if (response == 'N') {
+                LOG_INFO("[pgsql] Server declined SSL; continuing with cleartext protocol");
+                qb::io::tcp::ssl::socket ssl_sock(nullptr, raw_io);
+                this->transport() = std::move(ssl_sock);
+            } else {
+                LOG_CRIT("[pgsql] Invalid SSL response byte from server");
+                connect_handshake_failed_ = true;
+                _error = error::connection_error{"invalid SSLRequest response from server"};
+                try_resume_connect_wait();
+                return;
+            }
+#else
+            (void) raw_io;
+            (void) timer_gen;
+            (void) t_out;
+            connect_handshake_failed_ = true;
+            _error                    = error::connection_error{"ssl transport requires QB_HAS_SSL"};
+            try_resume_connect_wait();
+            return;
+#endif
+        } else {
+            this->transport() = std::move(raw_io);
+        }
+
+        attach_pg_protocol_and_handshake_timer(timer_gen, t_out);
+    }
 
     /**
      * @brief Creates a startup message for PostgreSQL connection
@@ -489,10 +790,19 @@ private:
     /**
      * @brief Handles sub-command status updates
      *
-     * @param status Status of the sub-command
+     * Propagates leaf `ResultQuery` / nested command outcomes to the root `Transaction`
+     * so `await()` and `status::operator bool` reflect failures (not only child `_result`).
      */
     void
-    on_sub_command_status(bool) final {}
+    on_sub_command_status(bool status) final {
+        Transaction::on_sub_command_status(status);
+    }
+
+    /// Root `Transaction` for this connection (never null while `Database` lives).
+    Transaction *
+    root_transaction() noexcept {
+        return static_cast<Transaction *>(static_cast<Database<QB_IO_, NotifyDerived> *>(this));
+    }
 
     Transaction *_current_command = this;    ///< Current transaction being processed
     ISqlQuery   *_current_query   = nullptr; ///< Current query being executed
@@ -531,8 +841,12 @@ private:
     bool
     process_query(Transaction *cmd) {
         _ready_for_query = false;
+        if (!cmd)
+            cmd = root_transaction();
         _current_command = next_transaction(cmd);
-        _current_query   = _current_command->next_query();
+        if (!_current_command)
+            _current_command = root_transaction();
+        _current_query = _current_command->next_query();
 
         if (_current_query) {
             if (qb::likely(_current_query->is_valid())) {
@@ -540,8 +854,8 @@ private:
                 return true;
             } else {
                 LOG_DEBUG("[pgsql] error processing query not valid");
-                _error = error::client_error{
-                    "query couldn't be processed check logs for more infos"};
+                _error =
+                    error::client_error{"query couldn't be processed check logs for more infos"};
                 on_error_query(error());
                 return process_query(_current_command) || (_ready_for_query = true);
             }
@@ -571,11 +885,15 @@ private:
      */
     void
     on_success_query() {
-        if (_current_query) {
-            auto query = _current_command->pop_query();
-            query->on_success();
+        if (!_current_query)
+            return;
+        if (!_current_command) {
             _current_query = nullptr;
+            return;
         }
+        auto query = _current_command->pop_query();
+        query->on_success();
+        _current_query = nullptr;
     }
 
     /**
@@ -586,12 +904,16 @@ private:
     void
     on_error_query(error::db_error const &err) {
         _error = err;
-        if (_current_query) {
-            _current_command->result(false);
-            auto query = _current_command->pop_query();
-            query->on_error(err);
+        if (!_current_query)
+            return;
+        if (!_current_command) {
             _current_query = nullptr;
+            return;
         }
+        _current_command->result(false);
+        auto query = _current_command->pop_query();
+        query->on_error(err);
+        _current_query = nullptr;
     }
 
 private:
@@ -629,6 +951,7 @@ public:
                 is_connected_ = true;
                 // Apply keepalive settings if configured (P1-1)
                 apply_keepalive_settings();
+                try_resume_connect_wait();
             } break;
             case Cleartext: {
                 LOG_INFO("[pgsql] Clear text authentication requested");
@@ -643,13 +966,12 @@ public:
                 std::string salt;
                 msg.read(salt, 4);
                 // Calculate hash
-                std::string pwdhash = qb::crypto::to_hex_string(
-                    qb::crypto::md5(conn_opts_.password + conn_opts_.user),
-                    qb::crypto::range_hex_lower);
-                std::string md5digest =
-                    std::string("md5") +
-                    qb::crypto::to_hex_string(qb::crypto::md5(pwdhash + salt),
+                std::string pwdhash =
+                    qb::crypto::to_hex_string(qb::crypto::md5(conn_opts_.password + conn_opts_.user),
                                               qb::crypto::range_hex_lower);
+                std::string md5digest =
+                    std::string("md5") + qb::crypto::to_hex_string(qb::crypto::md5(pwdhash + salt),
+                                                                   qb::crypto::range_hex_lower);
                 // Construct and send message
                 message pm(password_message_tag);
                 pm.write(md5digest);
@@ -660,8 +982,7 @@ public:
                 LOG_INFO("[pgsql] SCRAM-SHA-256 authentication requested");
                 message pm(password_message_tag);
                 // Set new nonce
-                _nonce =
-                    qb::crypto::generate_random_string(32, qb::crypto::range_hex_lower);
+                _nonce = qb::crypto::generate_random_string(32, qb::crypto::range_hex_lower);
                 const auto data = "n,,n=" + conn_opts_.user + ",r=" + _nonce;
                 // Add mechanism
                 pm.write("SCRAM-SHA-256");
@@ -691,35 +1012,30 @@ public:
                 try {
                     auto it = params.find("i");
                     if (it == params.end()) {
-                        throw error::connection_error(
-                            "Missing iteration count in SCRAM response");
+                        throw error::connection_error("Missing iteration count in SCRAM response");
                     }
                     iteration = std::stoi(it->second);
                     if (iteration < 1) {
-                        throw error::connection_error(
-                            "Invalid iteration count: must be positive");
+                        throw error::connection_error("Invalid iteration count: must be positive");
                     }
                 } catch (const std::exception &e) {
-                    throw error::connection_error(
-                        std::string("Invalid SCRAM iteration count: ") + e.what());
+                    throw error::connection_error(std::string("Invalid SCRAM iteration count: ") +
+                                                  e.what());
                 }
 
                 // Client-first-message-bare
-                std::string client_first_message_bare =
-                    "n=" + username + ",r=" + clientNonce;
-                std::string server_first_message = "r=" + serverNonce +
-                                                   ",s=" + salt_base64 +
-                                                   ",i=" + std::to_string(iteration);
+                std::string client_first_message_bare = "n=" + username + ",r=" + clientNonce;
+                std::string server_first_message =
+                    "r=" + serverNonce + ",s=" + salt_base64 + ",i=" + std::to_string(iteration);
                 std::string client_final_message_without_proof =
                     "c=biws,r=" + serverNonce; // "biws" is the base64 encoding of "n,,"
-                _auth_message = client_first_message_bare + "," + server_first_message +
-                                "," + client_final_message_without_proof;
+                _auth_message = client_first_message_bare + "," + server_first_message + "," +
+                                client_final_message_without_proof;
                 // Compute SaltedPassword using PBKDF2-HMAC-SHA256
                 std::vector<unsigned char> salt = qb::crypto::base64_decode(salt_base64);
                 std::vector<unsigned char> saltedPassword(32); // 32 bytes for SHA256
-                if (PKCS5_PBKDF2_HMAC(password.c_str(),
-                                      static_cast<int>(password.size()), salt.data(),
-                                      static_cast<int>(salt.size()), iteration,
+                if (PKCS5_PBKDF2_HMAC(password.c_str(), static_cast<int>(password.size()),
+                                      salt.data(), static_cast<int>(salt.size()), iteration,
                                       EVP_sha256(), 32, saltedPassword.data()) != 1) {
                     throw std::runtime_error("error during PBKDF2 computing");
                 }
@@ -767,9 +1083,8 @@ public:
                     std::vector<unsigned char> computedServerSignature =
                         qb::crypto::hmac_sha256(serverKey, _auth_message);
                     // Encode the computed server signature in Base64
-                    std::string computedServerSignatureBase64 =
-                        qb::crypto::base64_encode(computedServerSignature.data(),
-                                                  computedServerSignature.size());
+                    std::string computedServerSignatureBase64 = qb::crypto::base64_encode(
+                        computedServerSignature.data(), computedServerSignature.size());
                     // Compare the computed server signature with the received one
                     if (computedServerSignatureBase64 != receivedServerSignatureBase64) {
                         throw std::runtime_error(
@@ -779,13 +1094,16 @@ public:
                              "signature verified");
                     break;
                 } catch (std::exception &ex) {
-                    LOG_CRIT("[pgsql] SCRAM-SHA-256 Failed verifying server signature: "
-                             << ex.what());
+                    LOG_CRIT(
+                        "[pgsql] SCRAM-SHA-256 Failed verifying server signature: " << ex.what());
+                    connect_handshake_failed_ = true;
+                    is_connected_             = false;
+                    try_resume_connect_wait();
                 }
             } break;
             default: {
-                LOG_CRIT("[pgsql] Unsupported authentication scheme "
-                         << auth_state << "requested by server");
+                LOG_CRIT("[pgsql] Unsupported authentication scheme " << auth_state
+                                                                      << "requested by server");
                 throw std::runtime_error("[pgsql] fatal error: check logs");
             }
         }
@@ -828,10 +1146,11 @@ public:
         msg.read(notice);
 
         LOG_WARN("[pgsql] Error " << notice);
-        error::query_error err(notice.message, notice.severity, notice.sqlstate,
-                               notice.detail);
+        error::query_error err(notice.message, notice.severity, notice.sqlstate, notice.detail);
 
         on_error_query(err);
+        if (connect_coroutine_pending_ && !is_connected_)
+            try_resume_connect_wait();
     }
 
     /**
@@ -875,11 +1194,15 @@ public:
         on_success_query();
         char stat(0);
         msg.read(stat);
+        // I = idle, T = in transaction block, E = failed transaction (must ROLLBACK)
+        if (stat == 'E') {
+            LOG_WARN("[pgsql] ReadyForQuery: backend session is in failed transaction "
+                     "(SQLSTATE implicit); issue ROLLBACK before new commands");
+        }
 
         if (!process_query(_current_command)) {
             _ready_for_query = true;
-            LOG_DEBUG("[pgsql] Database " << conn_opts_.uri << "[" << conn_opts_.database
-                                          << "]"
+            LOG_DEBUG("[pgsql] Database " << conn_opts_.uri << "[" << conn_opts_.database << "]"
                                           << " is ready for query (" << stat << ")");
         }
     }
@@ -891,6 +1214,8 @@ public:
      */
     void
     on_row_description(message &msg) {
+        if (!_current_command)
+            return;
         row_description_type fields;
         smallint             col_cnt;
         msg.read(col_cnt);
@@ -915,6 +1240,8 @@ public:
      */
     void
     on_data_row(message &msg) {
+        if (!_current_command)
+            return;
         row_data row;
         if (msg.read(row))
             _current_command->on_new_data_row(std::move(row));
@@ -988,13 +1315,168 @@ public:
     }
 
     /**
+     * @todo COPY protocol — not a product feature yet; only enough handling to keep the session
+     *       healthy. Future work: stream **COPY FROM STDIN** (client → server bulk load) and
+     *       surface **COPY TO STDOUT** / CopyData payloads to the application (today `on_copy_data`
+     *       discards chunks). See PostgreSQL docs: COPY, CopyIn/CopyOut/CopyData messages.
+     */
+
+    /**
+     * @brief Abort COPY FROM (client → server) and return to normal query protocol
+     *
+     * After CopyInResponse the server waits for CopyData / CopyDone / CopyFail.
+     * We do not implement COPY IN; CopyFail + Sync recovers per PostgreSQL docs.
+     */
+    void
+    send_copy_fail_and_sync() {
+        message fail(copy_fail_tag);
+        fail.write(std::string("qbm-pgsql: COPY FROM STDIN is not supported by this client"));
+        message sync(sync_tag);
+        fail.pack(sync);
+        *this << fail;
+    }
+
+    /**
+     * @brief NotificationResponse (LISTEN/NOTIFY)
+     *
+     * @see https://www.postgresql.org/docs/current/protocol-message-formats.html
+     */
+    void
+    on_notification_response(message &msg) {
+        integer     pid{};
+        std::string channel;
+        std::string payload;
+        if (!msg.read(pid) || !msg.read(channel) || !msg.read(payload)) {
+            LOG_WARN("[pgsql] Malformed NotificationResponse");
+            return;
+        }
+        ::qb::pg::notification n;
+        n.server_backend_pid = static_cast<int>(pid);
+        n.channel            = std::move(channel);
+        n.payload            = std::move(payload);
+        if constexpr (!std::is_same_v<NotifyDerived, void>) {
+            static_cast<NotifyDerived *>(this)->consume_pg_notify(std::move(n));
+        } else if (inbound_notify_handler_) {
+            inbound_notify_handler_(std::move(n));
+        } else {
+            LOG_INFO("[pgsql] NOTIFY pid=" << n.server_backend_pid << " channel=" << n.channel
+                                           << " payload=" << n.payload);
+        }
+    }
+
+    /**
+     * @brief CopyInResponse — server expects COPY data from client
+     */
+    void
+    on_copy_in_response(message &msg) {
+        char     overall{};
+        smallint ncols{};
+        if (!msg.read(overall) || !msg.read(ncols)) {
+            LOG_WARN("[pgsql] Malformed CopyInResponse");
+            send_copy_fail_and_sync();
+            return;
+        }
+        if (ncols < 0 || ncols > 4096) {
+            LOG_WARN("[pgsql] CopyInResponse invalid column count " << ncols);
+            on_error_query(error::client_error{"Malformed CopyInResponse from server"});
+            send_copy_fail_and_sync();
+            return;
+        }
+        for (int i = 0; i < ncols; ++i) {
+            smallint fmt{};
+            if (!msg.read(fmt)) {
+                send_copy_fail_and_sync();
+                return;
+            }
+        }
+        LOG_WARN("[pgsql] COPY FROM STDIN not supported; sending CopyFail+Sync");
+        on_error_query(error::client_error{"COPY FROM STDIN is not supported by this client"});
+        send_copy_fail_and_sync();
+    }
+
+    /**
+     * @brief CopyOutResponse — server will send COPY data (COPY ... TO STDOUT)
+     */
+    void
+    on_copy_out_response(message &msg) {
+        char     overall{};
+        smallint ncols{};
+        if (!msg.read(overall) || !msg.read(ncols)) {
+            LOG_WARN("[pgsql] Malformed CopyOutResponse");
+            msg.discard_remaining();
+            return;
+        }
+        if (ncols < 0 || ncols > 4096) {
+            LOG_WARN("[pgsql] CopyOutResponse invalid column count " << ncols);
+            msg.discard_remaining();
+            return;
+        }
+        for (int i = 0; i < ncols; ++i) {
+            smallint fmt{};
+            if (!msg.read(fmt)) {
+                msg.discard_remaining();
+                return;
+            }
+        }
+        LOG_DEBUG("[pgsql] CopyOutResponse received (data will pass as CopyData messages)");
+    }
+
+    /**
+     * @brief CopyBothResponse — bidirectional COPY (replication / rare)
+     */
+    void
+    on_copy_both_response(message &msg) {
+        on_copy_out_response(msg);
+        LOG_WARN("[pgsql] CopyBothResponse: bidirectional COPY not fully supported");
+    }
+
+    /**
+     * @brief CopyData from server during COPY OUT / BOTH (payload is opaque row bytes)
+     */
+    void
+    on_copy_data(message &msg) {
+        // High volume: avoid logging each chunk; advance read cursor for consistency
+        msg.discard_remaining();
+    }
+
+    /**
+     * @brief CopyDone from server (end of COPY OUT data stream)
+     */
+    void
+    on_copy_done(message &msg) {
+        LOG_DEBUG("[pgsql] CopyDone (server)");
+        msg.discard_remaining();
+    }
+
+    /**
+     * @brief CloseComplete — acknowledgment of Close (frontend); usually empty body
+     */
+    void
+    on_close_complete(message &msg) {
+        LOG_DEBUG("[pgsql] CloseComplete");
+        msg.discard_remaining();
+    }
+
+    /**
+     * @brief FunctionCallResponse — legacy fast-path function protocol (rare)
+     */
+    void
+    on_function_call_response(message &msg) {
+        LOG_WARN("[pgsql] FunctionCallResponse (V): fast-path function protocol not "
+                 "implemented; message ignored");
+        msg.discard_remaining();
+    }
+
+    /**
      * @brief Handles unrecognized messages
      *
      * @param msg Unhandled message
      */
     void
     on_unhandled_message(message &msg) {
-        LOG_DEBUG("[pgsql] Unhandled message tag " << (char) msg.tag());
+        LOG_WARN("[pgsql] Unhandled backend message tag " << (char) msg.tag() << " (length "
+                                                          << msg.length()
+                                                          << ") — check protocol coverage");
     }
 
     /**
@@ -1002,13 +1484,15 @@ public:
      *
      * Maps PostgreSQL protocol message tags to their handler methods.
      */
-    inline static const qb::unordered_flat_map<int, void (Database::*)(message &)>
+    inline static const qb::unordered_flat_map<int,
+                                               void (Database<QB_IO_, NotifyDerived>::*)(message &)>
         routes_ = {{authentication_tag, &Database::on_authentication},
                    {command_complete_tag, &Database::on_command_complete},
                    {backend_key_data_tag, &Database::on_backend_key_data},
                    {error_response_tag, &Database::on_error_response},
                    {parameter_status_tag, &Database::on_parameter_status},
                    {notice_response_tag, &Database::on_notice_response},
+                   {notification_resp_tag, &Database::on_notification_response},
                    {ready_for_query_tag, &Database::on_ready_for_query},
                    {row_description_tag, &Database::on_row_description},
                    {data_row_tag, &Database::on_data_row},
@@ -1017,7 +1501,14 @@ public:
                    {bind_complete_tag, &Database::on_bind_complete},
                    {no_data_tag, &Database::on_no_data},
                    {portal_suspended_tag, &Database::on_portal_suspended},
-                   {empty_query_response_tag, &Database::on_empty_query_response}};
+                   {empty_query_response_tag, &Database::on_empty_query_response},
+                   {copy_in_response_tag, &Database::on_copy_in_response},
+                   {copy_out_response_tag, &Database::on_copy_out_response},
+                   {copy_both_response_tag, &Database::on_copy_both_response},
+                   {copy_data_tag, &Database::on_copy_data},
+                   {copy_done_tag, &Database::on_copy_done},
+                   {close_complete_tag, &Database::on_close_complete},
+                   {function_call_resp_tag, &Database::on_function_call_response}};
 
 public:
     /**
@@ -1054,121 +1545,84 @@ public:
     }
 
     /**
-     * @brief Initiates a connection to the database
-     *
-     * Establishes a TCP connection to the PostgreSQL server, configures
-     * the protocol handler, and performs the authentication process.
-     * This method blocks until the connection is established or an error occurs.
-     *
-     * @return bool True if connection was successful, false on failure
+     * @struct connect_awaiter
+     * @brief Coroutine awaiter for `co_await db.connect()` (see also `run_sync` in tests).
      */
-    bool
-    connect() {
-        if (is_connected_)
-            return true;
+    struct connect_awaiter {
+        Database<QB_IO_, NotifyDerived> &db;
+        double                           timeout_sec{0.};
+        std::shared_ptr<bool>            valid{std::make_shared<bool>(true)};
 
-        _error = error::db_error{"unknown error"};
+        explicit connect_awaiter(Database<QB_IO_, NotifyDerived> &d, double t = 0.) noexcept
+            : db(d)
+            , timeout_sec(t) {}
 
-        if (!static_cast<qb::io::tcp::socket &>(this->transport()).connect(
-                qb::io::uri{conn_opts_.schema + "://" + conn_opts_.uri})) {
-            if (this->protocol())
-                this->clear_protocols();
-            using tpt = std::decay_t<decltype(this->transport())>;
-            if constexpr (tpt::is_secure()) {
-                uint32_t len = htonl(8);
-                uint32_t code = htonl(0x04D2162F);
-                std::array<uint8_t, 8> ssl_request{};
-                std::memcpy(ssl_request.data(), &len, 4);
-                std::memcpy(ssl_request.data() + 4, &code, 4);
-
-                if (send(this->transport().native_handle(), reinterpret_cast<const char *>(ssl_request.data()), ssl_request.size(), 0) != 8) {
-                    LOG_CRIT("[pgsql] Failed to send SSL request");
-                    return false;
-                }
-
-                uint8_t response;
-                auto    n = recv(this->transport().native_handle(),
-                                 reinterpret_cast<char *>(&response), 1, 0);
-                if (n != 1) {
-                    LOG_CRIT("[pgsql] Failed to receive SSL response");
-                    return false;
-                }
-
-                if (response == 'S') {
-                    LOG_INFO("[pgsql] Server supports SSL");
-                    if (!this->transport().connect(
-                            qb::io::uri{conn_opts_.schema + "://" + conn_opts_.uri})) {
-                        LOG_CRIT("[pgsql] Failed to connect to SSL server");
-                        return false;
-                    }
-                } else if (response == 'N') {
-                    LOG_CRIT("[pgsql] Server does NOT support SSL");
-                    return false;
-                }
-            }
-            this->template switch_protocol<pg_protocol>(*this);
-            this->start();
-            send_startup_message();
-
-            // Register a one-shot timer so the loop below cannot block forever
-            // when the server is unreachable or the handshake stalls.
-            // The lambda captures `this` by pointer — safe because the timer fires
-            // while we are still inside this stack frame (or, if the connection
-            // already succeeded before the timer fires, the `!is_connected_` guard
-            // makes it a no-op and the self-deleting Timeout causes no harm).
-            qb::io::async::callback(
-                [this]() {
-                    if (!is_connected_) {
-                        LOG_WARN("[pgsql] Connection timed out after "
-                                 << conn_opts_.connect_timeout << "s");
-                        _error = error::db_error{"connection timeout"};
-                    }
-                },
-                static_cast<double>(conn_opts_.connect_timeout > 0
-                                        ? conn_opts_.connect_timeout
-                                        : 10));
-
-            while (!is_connected_ && !has_error())
-                qb::io::async::run_once();
-
-            return is_connected_ && !has_error();
+        ~connect_awaiter() {
+            if (valid)
+                *valid = false;
         }
-        return false;
-    }
+
+        connect_awaiter(connect_awaiter const &)            = delete;
+        connect_awaiter &operator=(connect_awaiter const &) = delete;
+        connect_awaiter(connect_awaiter &&)                 = default;
+        connect_awaiter &operator=(connect_awaiter &&)      = default;
+
+        [[nodiscard]] bool
+        await_ready() const noexcept {
+            return db.is_connected_;
+        }
+
+        void
+        await_suspend(std::coroutine_handle<> h) {
+            db.start_connect_from_awaiter(h, valid, timeout_sec);
+        }
+
+        [[nodiscard]] bool
+        await_resume() const noexcept {
+            return db.is_connected_;
+        }
+    };
 
     /**
-     * @brief Connects to a database using connection options
-     *
-     * Parses the connection string and initiates a connection to the
-     * specified PostgreSQL database.
-     *
-     * @param conn_opts Connection string in format
-     * "postgresql://user:password@host:port/database"
-     * @return bool True if connection was successful, false on failure
+     * @brief Start async connection (`co_await` or `run_sync(db.connect())`).
      */
-    bool
+    [[nodiscard]] connect_awaiter
+    connect() {
+        return connect_awaiter{*this, 0.};
+    }
+
+    /** @brief Same as connect() with an explicit timeout override (seconds). */
+    [[nodiscard]] connect_awaiter
+    connect(double timeout_sec) {
+        return connect_awaiter{*this, timeout_sec};
+    }
+
+    /** @brief Parse connection string then connect. */
+    [[nodiscard]] connect_awaiter
     connect(std::string const &conn_opts) {
         conn_opts_ = connection_options::parse(conn_opts);
         return connect();
     }
 
-    /**
-     * @brief Connects to a database using an existing I/O channel
-     *
-     * Uses an existing transport I/O channel (e.g., from a connection pool)
-     * to establish a database connection. This allows for connection reuse
-     * and efficient resource management.
-     *
-     * @param conn_opts Connection string with database credentials
-     * @param raw_io Existing I/O channel to use for communication
-     * @return bool True if connection was successful, false on failure
-     */
-    bool
+    /** @brief Use an existing transport channel (e.g. pool) then handshake. */
+    [[nodiscard]] connect_awaiter
     connect(std::string const &conn_opts, typename QB_IO_::transport_io_type &&raw_io) {
         conn_opts_        = connection_options::parse(conn_opts);
         this->transport() = std::move(raw_io);
-
         return connect();
+    }
+
+    /**
+     * @brief Register a handler for asynchronous NOTIFY (plain `database` only).
+     *
+     * Ignored for `notify_*_consumer` types (they use `on_notify` / `receive()`). Replaces any
+     * previous handler. Without a handler, NOTIFY is only logged.
+     */
+    Database<QB_IO_, NotifyDerived> &
+    on_incoming_notify(std::function<void(::qb::pg::notification &&)> fn) {
+        if constexpr (std::is_same_v<NotifyDerived, void>)
+            inbound_notify_handler_ = std::move(fn);
+        return *this;
     }
 
     /**
@@ -1258,8 +1712,8 @@ private:
         setsockopt(sock_fd, IPPROTO_TCP, TCP_KEEPCNT, &optval, sizeof(optval));
 #endif
 
-        LOG_INFO("[pgsql] TCP keepalive enabled: idle=" << conn_opts_.keepalive_idle
-                 << "s, interval=" << conn_opts_.keepalive_interval
+        LOG_INFO("[pgsql] TCP keepalive enabled: idle="
+                 << conn_opts_.keepalive_idle << "s, interval=" << conn_opts_.keepalive_interval
                  << "s, probes=" << conn_opts_.keepalive_probes);
     }
 
@@ -1288,14 +1742,60 @@ public:
      * Called when the connection to the database server is lost.
      * Updates the connection state and raises an error for any pending queries.
      *
-     * @param Disconnection event (unused)
+     * @param ev Disconnection event
      */
     void
-    on(qb::io::async::event::disconnected const &) {
+    on(qb::io::async::event::disconnected const &ev) {
+        if (connect_coroutine_pending_) {
+            connect_handshake_failed_ = true;
+            _error                    = error::client_error("database disconnected");
+            try_resume_connect_wait();
+        }
         if (is_connected_) {
             is_connected_ = false;
             on_error_query(error::client_error("database disconnected"));
         }
+        _current_command = root_transaction();
+        _current_query   = nullptr;
+        _ready_for_query = false;
+        if constexpr (!std::is_same_v<NotifyDerived, void>) {
+            if constexpr (requires {
+                              std::declval<NotifyDerived &>().on_pg_notify_consumer_disconnected(
+                                  std::declval<qb::io::async::event::disconnected const &>());
+                          }) {
+                static_cast<NotifyDerived *>(this)->on_pg_notify_consumer_disconnected(ev);
+            }
+        }
+    }
+
+    /**
+     * @brief Reset async I/O state after disconnect() so this client can connect() again
+     *
+     * `disconnect()` marks the underlying `qb::io::async::io` layer disposed; a new TCP/TLS
+     * handshake must not start until `reset_io_state()` runs. Call `prepare_reconnect()`,
+     * then `co_await connect()` or `run_sync(connect(...))` as usual.
+     *
+     * @pre No pending queries on this connection (finish or drain the transaction queue first).
+     */
+    void
+    prepare_reconnect() noexcept {
+        ++connect_timer_generation_;
+        // Transport is a private base of `tcp::client`; use public `in`/`out`/`transport`.
+        this->in().reset();
+        this->out().reset();
+        // `tcp::socket::disconnect()` is shutdown-only; the fd stays open. The next
+        // `n_connect()` path requires a closed socket so `init()` opens a new fd.
+        this->transport().close();
+        this->reset_io_state();
+        is_connected_              = false;
+        connect_handshake_failed_  = false;
+        connect_coroutine_pending_ = false;
+        connect_suspend_handle_    = {};
+        connect_suspend_valid_.reset();
+        _error           = error::db_error{"unknown error"};
+        _current_command = root_transaction();
+        _current_query   = nullptr;
+        _ready_for_query = false;
     }
 
     /**
@@ -1307,11 +1807,123 @@ public:
      */
     void
     disconnect() {
-        static_cast<qb::io::async::tcp::client<Database<QB_IO_>, QB_IO_, void> &>(*this)
+        static_cast<qb::io::async::tcp::client<Database<QB_IO_, NotifyDerived>, QB_IO_, void> &>(
+            *this)
             .disconnect();
         qb::io::async::run(EVRUN_NOWAIT);
     }
 };
+
+/**
+ * @brief CRTP base for LISTEN/NOTIFY consumers (mirrors `RedisConsumer` + derived).
+ *
+ * `Derived` must implement `deliver_pg_notify(::qb::pg::notification &&)` and inherit this class as
+ * `notify_consumer<QB_IO_, Derived>` (see `notify_co_consumer`).
+ */
+template <typename QB_IO_, typename Derived>
+class notify_consumer : public Database<QB_IO_, Derived> {
+public:
+    notify_consumer()
+        : Database<QB_IO_, Derived>() {}
+
+    explicit notify_consumer(std::string const &connection_opts)
+        : Database<QB_IO_, Derived>(connection_opts) {}
+
+    void
+    consume_pg_notify(::qb::pg::notification &&n) {
+        static_cast<Derived *>(this)->deliver_pg_notify(std::move(n));
+    }
+};
+
+/**
+ * @brief LISTEN/NOTIFY consumer: optional callback + `co_await receive()` queue (mirrors Redis
+ * `cb_consumer` / `co_consumer` in one type — PostgreSQL allows normal queries on the same link).
+ */
+template <typename QB_IO_>
+class notify_co_consumer : public notify_consumer<QB_IO_, notify_co_consumer<QB_IO_>> {
+    using base_type = notify_consumer<QB_IO_, notify_co_consumer<QB_IO_>>;
+
+    static constexpr std::size_t default_notify_channel_capacity = 8192;
+
+    qb::io::async::channel<::qb::pg::notification> notify_channel_{default_notify_channel_capacity};
+    std::function<void(::qb::pg::notification &&)> on_notify_dropped_{};
+    std::function<void(::qb::pg::notification &&)> on_notify_callback_{};
+
+public:
+    notify_co_consumer()
+        : base_type() {}
+
+    explicit notify_co_consumer(std::string const &opts,
+                                std::size_t        notify_capacity = default_notify_channel_capacity)
+        : base_type(opts)
+        , notify_channel_(notify_capacity) {}
+
+    /**
+     * @brief Optional callback invoked for each NOTIFY before the message is queued for `receive()`.
+     */
+    notify_co_consumer<QB_IO_> &
+    on_notify(std::function<void(::qb::pg::notification &&)> cb) {
+        on_notify_callback_ = std::move(cb);
+        return *this;
+    }
+
+    void
+    deliver_pg_notify(::qb::pg::notification &&n) {
+        if (on_notify_callback_) {
+            try {
+                on_notify_callback_(::qb::pg::notification{n});
+            } catch (std::exception const &ex) {
+                LOG_WARN("[pgsql] notify_co_consumer on_notify callback error: " << ex.what());
+            }
+        }
+        if (notify_channel_.try_send(std::move(n)))
+            return;
+        if (on_notify_dropped_) {
+            try {
+                on_notify_dropped_(std::move(n));
+            } catch (std::exception const &ex) {
+                LOG_WARN("[pgsql] notify_co_consumer on_notify_dropped error: " << ex.what());
+            }
+        } else {
+            LOG_WARN("[pgsql] notify_co_consumer: notification dropped (buffer full)");
+        }
+    }
+
+    void
+    on_pg_notify_consumer_disconnected(qb::io::async::event::disconnected const &) {
+        notify_channel_.close();
+    }
+
+    notify_co_consumer<QB_IO_> &
+    on_notify_dropped(std::function<void(::qb::pg::notification &&)> cb) {
+        on_notify_dropped_ = std::move(cb);
+        return *this;
+    }
+
+    [[nodiscard]] std::size_t
+    notify_channel_capacity() const noexcept {
+        return notify_channel_.capacity();
+    }
+
+    /**
+     * @brief Await the next NOTIFY; `std::nullopt` when the channel is closed (e.g. disconnect).
+     */
+    [[nodiscard]] auto
+    receive() {
+        return [this]() -> qb::io::async::task<std::optional<::qb::pg::notification>> {
+            co_return co_await notify_channel_.recv();
+        }();
+    }
+
+    ~notify_co_consumer() {
+        notify_channel_.close();
+    }
+};
+
+/** @brief Same type as `notify_co_consumer` (Redis-style name for callback-first usage via
+ * `on_notify`). */
+template <typename QB_IO_>
+using notify_cb_consumer = notify_co_consumer<QB_IO_>;
 
 } // namespace detail
 
@@ -1325,7 +1937,7 @@ public:
  * @tparam QB_IO_ I/O handler type that provides networking capabilities
  */
 template <typename QB_IO_>
-using database = detail::Database<QB_IO_>;
+using database = detail::Database<QB_IO_, void>;
 
 /**
  * @brief Type alias for transaction base class
@@ -1353,6 +1965,35 @@ using results = detail::resultset;
 using params = detail::QueryParams;
 
 /**
+ * @brief No-op success handler for callback-style `execute` / `prepare` when chaining with
+ * `.await()`.
+ */
+struct discard_query_results_t {
+    void
+    operator()(detail::Transaction &, results) const noexcept {}
+};
+
+struct discard_error_t {
+    void
+    operator()(error::db_error const &) const noexcept {}
+};
+
+struct discard_prepare_t {
+    void
+    operator()(detail::Transaction &, detail::PreparedQuery const &) const noexcept {}
+};
+
+inline constexpr discard_query_results_t discard_query{};
+inline constexpr discard_error_t         discard_error{};
+inline constexpr discard_prepare_t       discard_prepare{};
+
+/**
+ * @brief Coroutine awaiter for `Reply<T>` (no-callback overloads of `execute`, `prepare`, …).
+ */
+template <typename T>
+using pg_reply_awaiter = detail::pg_reply_awaiter<T>;
+
+/**
  * @brief TCP transport namespace
  *
  * Contains database clients that use TCP transport for PostgreSQL communication.
@@ -1364,7 +2005,17 @@ struct tcp {
      * Database client implementation using unencrypted TCP connections.
      * Suitable for local networks or when using an external encryption layer.
      */
-    using database = detail::Database<qb::io::transport::tcp>;
+    using database = detail::Database<qb::io::transport::tcp, void>;
+
+    /**
+     * @brief LISTEN/NOTIFY consumer with callback delivery (see `redis::tcp::cb_consumer`).
+     */
+    using notify_cb_consumer = detail::notify_cb_consumer<qb::io::transport::tcp>;
+
+    /**
+     * @brief LISTEN/NOTIFY consumer with `co_await receive()` (see `redis::tcp::co_consumer`).
+     */
+    using notify_co_consumer = detail::notify_co_consumer<qb::io::transport::tcp>;
 #ifdef QB_HAS_SSL
     /**
      * @brief SSL transport namespace
@@ -1380,12 +2031,17 @@ struct tcp {
          * Recommended for production environments and connections over
          * public networks for enhanced security.
          */
-        using database = detail::Database<qb::io::transport::stcp>;
+        using database = detail::Database<qb::io::transport::stcp, void>;
+
+        using notify_cb_consumer = detail::notify_cb_consumer<qb::io::transport::stcp>;
+        using notify_co_consumer = detail::notify_co_consumer<qb::io::transport::stcp>;
     };
 #endif
 };
 
 } // namespace qb::pg
+
+#include "./src/with_transaction.h"
 
 namespace qb::allocator {
 

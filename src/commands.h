@@ -80,8 +80,7 @@ public:
     void
     on_end_transaction() {
         push_query(_result ? std::unique_ptr<ISqlQuery>(new CommitQuery(
-                                 []() {},
-                                 [this](auto const &err) { _on_error(err); }))
+                                 []() {}, [this](auto const &err) { _on_error(err); }))
                            : std::unique_ptr<ISqlQuery>(new RollbackQuery(
                                  [this]() {
                                      _on_error((error::db_error) error::query_error(
@@ -115,33 +114,31 @@ public:
      * @param mode Transaction mode
      * @param on_success Callback for successful transaction start
      */
-    Begin(Transaction *parent, End<CB_ERROR> *end, transaction_mode mode,
-          CB_SUCCESS &&on_success)
+    Begin(Transaction *parent, End<CB_ERROR> *end, transaction_mode mode, CB_SUCCESS &&on_success)
         : Transaction(parent)
         , _end(end)
         , _mode(mode)
         , _on_success(std::forward<CB_SUCCESS>(on_success)) {
         push_query(std::unique_ptr<ISqlQuery>(new BeginQuery(
-            mode,
+            mode, parent->get_timeout(),
             [this]() {
                 try {
                     _on_success(*this);
                 } catch (std::exception const &e) {
                     _result = false;
-                    _end->get_error_callback()(
-                        (error::db_error) error::client_error{e.what()});
+                    _end->get_error_callback()((error::db_error) error::client_error{e.what()});
                 }
             },
             [this](auto &&err) { _end->get_error_callback()(err); })));
     }
 
     /**
-     * @brief Destructor
+     * @brief Finalizes the begin/end pair when this command leaves the queue
      *
-     * Finalizes the transaction by updating the end command's
-     * result status and triggering the end sequence.
+     * Replaces destructor-driven commit scheduling for predictable async semantics.
      */
-    ~Begin() {
+    void
+    on_before_pop() override {
         _end->result(_result);
         _end->on_end_transaction();
     }
@@ -227,19 +224,16 @@ public:
     void
     on_end_savepoint() {
         bool should_release = _result && !_force_rollback;
-        push_query(should_release
-                       ? std::unique_ptr<ISqlQuery>(new ReleaseSavePointQuery(
-                             _name,
-                             []() {},
-                             [this](auto const &err) { _on_error(err); }))
-                       : std::unique_ptr<ISqlQuery>(new RollbackSavePointQuery(
-                             _name,
-                             [this]() {
-                                 _on_error((error::db_error) error::query_error(
-                                     "savepoint rollback processed due to a "
-                                     "query failure"));
-                             },
-                             [this](auto const &err) { _on_error(err); })));
+        push_query(should_release ? std::unique_ptr<ISqlQuery>(new ReleaseSavePointQuery(
+                                        _name, []() {}, [this](auto const &err) { _on_error(err); }))
+                                  : std::unique_ptr<ISqlQuery>(new RollbackSavePointQuery(
+                                        _name,
+                                        [this]() {
+                                            _on_error((error::db_error) error::query_error(
+                                                "savepoint rollback processed due to a "
+                                                "query failure"));
+                                        },
+                                        [this](auto const &err) { _on_error(err); })));
     }
 };
 
@@ -277,8 +271,7 @@ public:
                 } catch (std::exception const &e) {
                     _result = false;
                     _end->force_rollback(); // Force rollback on exception
-                    _end->get_error_callback()(
-                        (error::db_error) error::client_error{e.what()});
+                    _end->get_error_callback()((error::db_error) error::client_error{e.what()});
                 }
             },
             [this](auto const &err) {
@@ -289,12 +282,10 @@ public:
     }
 
     /**
-     * @brief Destructor
-     *
-     * Finalizes the savepoint by updating the end command's
-     * result status and triggering the end sequence.
+     * @brief Finalizes the savepoint/end pair when this command leaves the queue
      */
-    ~SavePoint() {
+    void
+    on_before_pop() override {
         _end->result(_result);
         _end->on_end_savepoint();
     }
@@ -339,8 +330,7 @@ public:
      * @param on_success Callback for successful query execution
      * @param on_error Callback for query execution errors
      */
-    Query(Transaction *parent, std::string &&expr, CB_SUCCESS &&on_success,
-          CB_ERROR &&on_error)
+    Query(Transaction *parent, std::string &&expr, CB_SUCCESS &&on_success, CB_ERROR &&on_error)
         : Transaction(parent)
         , _on_success(std::forward<CB_SUCCESS>(on_success))
         , _on_error(std::forward<CB_ERROR>(on_error)) {
@@ -560,8 +550,7 @@ public:
      * @param on_success Callback for successful preparation
      * @param on_error Callback for preparation errors
      */
-    Prepare(Transaction *parent, PreparedQuery &&query, CB_SUCCESS &&on_success,
-            CB_ERROR &&on_error)
+    Prepare(Transaction *parent, PreparedQuery &&query, CB_SUCCESS &&on_success, CB_ERROR &&on_error)
         : Transaction(parent)
         , _query(std::move(query))
         , _on_success(std::forward<CB_SUCCESS>(on_success))
@@ -574,9 +563,16 @@ public:
                 } catch (std::exception const &e) {
                     _result = false;
                     _on_error((error::db_error) error::client_error{e.what()});
+                    if (_parent)
+                        _parent->on_sub_command_status(false);
                 }
             },
-            [this](auto const &err) { _on_error(err); })));
+            [this](auto const &err) {
+                _result = false;
+                _on_error(err);
+                if (_parent)
+                    _parent->on_sub_command_status(false);
+            })));
     }
 
     /**
@@ -631,9 +627,16 @@ public:
                 } catch (std::exception const &e) {
                     _result = false;
                     _on_error((error::db_error) error::client_error{e.what()});
+                    if (_parent)
+                        _parent->on_sub_command_status(false);
                 }
             },
-            [this](auto const &err) { _on_error(err); })));
+            [this](auto const &err) {
+                _result = false;
+                _on_error(err);
+                if (_parent)
+                    _parent->on_sub_command_status(false);
+            })));
     }
 };
 
@@ -663,8 +666,8 @@ public:
      * @param on_success Callback for successful execution with results
      * @param on_error Callback for execution errors
      */
-    QueryPrepared(Transaction *parent, std::string const &query_name,
-                  QueryParams &&params, CB_SUCCESS &&on_success, CB_ERROR &&on_error)
+    QueryPrepared(Transaction *parent, std::string const &query_name, QueryParams &&params,
+                  CB_SUCCESS &&on_success, CB_ERROR &&on_error)
         : Transaction(parent)
         , _on_success(std::forward<CB_SUCCESS>(on_success))
         , _on_error(std::forward<CB_ERROR>(on_error))
@@ -673,16 +676,23 @@ public:
             _query_storage, _query_name, std::move(params),
             [this]() {
                 try {
-                    _results.row_description() =
-                        _query_storage.get(_query_name).row_description;
+                    _results.row_description() = _query_storage.get(_query_name).row_description;
+                    sync_field_format_codes_with_extended_query_bind(_results.row_description());
                     _on_success(*this, resultset(&_results));
                     _parent->results() = std::move(_results);
                 } catch (std::exception const &e) {
                     _result = false;
                     _on_error((error::db_error) error::client_error{e.what()});
+                    if (_parent)
+                        _parent->on_sub_command_status(false);
                 }
             },
-            [this](auto const &err) { _on_error(err); })));
+            [this](auto const &err) {
+                _result = false;
+                _on_error(err);
+                if (_parent)
+                    _parent->on_sub_command_status(false);
+            })));
     }
 
     /**

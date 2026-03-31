@@ -1,235 +1,165 @@
-# `qbm-pgsql`: Result Set Processing
+# Result sets and row access
 
-This document explains how to access and process data returned from PostgreSQL queries using the `qb::pg::results` class and its associated components.
+How to read **rows** and **columns** from **`qb::pg::results`** (callback API and *
+*`Transaction::await()` → `status.results()`**) and from **`Reply<resultset>`** after **`co_await`**.
 
-## Modern Usage Examples
+**Header:** `#include <pgsql/pgsql.h>` pulls **`resultset.h`** / **`result_impl.h`** through the transaction stack — you
+do not include them separately in application code.
 
-Here are some modern, concise ways to work with PostgreSQL results:
+---
 
-### Range-based For Loops
+## Implementation sketch
 
-```cpp
-db.execute("SELECT id, name, email FROM users", 
-    [](qb::pg::transaction& tr, qb::pg::results result) {
-        // Iterate rows with range-based for loop
-        for (auto row : result) {
-            // Access fields by name
-            int id = row["id"].as<int>();
-            std::string name = row["name"].as<std::string>();
-            std::string email = row["email"].as<std::string>();
-            
-            std::cout << "User: " << name << " <" << email << ">" << std::endl;
-            
-            // Or iterate through all fields in a row
-            for (auto field : row) {
-                std::cout << field.name() << ": " << field.as<std::string>() << std::endl;
-            }
-        }
-    }
-);
-```
+- **`result_impl`** ([`src/result_impl.h`](../src/result_impl.h), [`result_impl.cpp`](../src/result_impl.cpp)) holds row
+  buffers, **`RowDescription`**, command tag.
+- **`ResultQuery`** ([`src/commands.h`](../src/commands.h)) drives simple-query / query completion callbacks; *
+  *`on_new_data_row`** / **`on_command_complete`** fill **`result_impl`** on the active **`Transaction`**.
+- **`resultset`** ([`src/resultset.h`](../src/resultset.h)) is a non-owning view; **`qb::pg::results`** aliases *
+  *`detail::resultset`** (**`pgsql.h`**).
+- Coroutine path: successful **`co_await`** moves or copies snapshot into **`Reply<resultset>`._value** ([
+  `pg_reply.h`](../src/pg_reply.h)) so later I/O does not invalidate the rowset.
 
-### Convert Results to JSON
+---
 
-```cpp
-db.execute("SELECT id, name, email, created_at FROM users", 
-    [](qb::pg::transaction& tr, qb::pg::results result) {
-        // Convert entire result set to JSON array of objects
-        qb::json json_result = result.json();
-        
-        // Use the JSON result
-        std::cout << "JSON result: " << json_result.dump(2) << std::endl;
-        
-        // Access specific values from the JSON
-        if (!json_result.empty()) {
-            std::cout << "First user name: " << json_result[0]["name"] << std::endl;
-        }
-    }
-);
-```
+## Coroutine path: `Reply<resultset>` / `results`
 
-### Map Results to Structures
+**`co_await db.execute("SELECT …")`** returns **`pg_reply_awaiter<resultset>`**, which completes to *
+*`Reply<resultset>`**. **`qb::pg::results`** is a **type alias** for **`qb::pg::detail::resultset`** (**`pgsql.h`**) —
+the names are interchangeable.
+
+On success, **`result()`** exposes the rowset. Prefer **`std::move(r).result()`** if **`r`** is about to die; otherwise
+**`r.result()`** gives an lvalue reference to the internal value.
 
 ```cpp
-// Define a structure to hold the data
-struct User {
-    int id;
-    std::string name;
-    std::string email;
-};
+auto r = co_await db.execute("SELECT id, name FROM users LIMIT 3");
+if (!r.ok())
+    co_return;
 
-db.execute("SELECT id, name, email FROM users", 
-    [](qb::pg::transaction& tr, qb::pg::results result) {
-        std::vector<User> users;
-        
-        for (auto row : result) {
-            User user;
-            // Map row directly to structure fields
-            row.to(std::tie(user.id, user.name, user.email));
-            users.push_back(user);
-        }
-        
-        // Use the populated vector of structures
-        for (const auto& user : users) {
-            std::cout << "User " << user.id << ": " << user.name << std::endl;
-        }
-    }
-);
-```
-
-## Core Class: `qb::pg::results`
-
-*(Defined in `src/resultset.h`, uses `src/result_impl.h` internally)*
-
-This class represents the entire result set returned by a query (e.g., a `SELECT` statement). It acts like a container of rows.
-
-### Key Features:
-
-*   **Container Interface:** Supports range-based for loops, `begin()`, `end()`, `size()`, `empty()`, `front()`, `back()`, `operator[]` for row access.
-*   **Metadata:** Provides access to column information (names, types) via `columns_size()` and `row_description()`.
-*   **Row Access:** Access individual rows using iterators or `operator[]`.
-*   **JSON Conversion:** Convert the entire result set to JSON via `results.json()`.
-
-```cpp
-db.execute("SELECT id, name, age FROM users",
-    [](qb::pg::transaction& tr, qb::pg::results results) {
-        if (results.empty()) {
-            std::cout << "No users found.\n";
-            return;
-        }
-
-        std::cout << "Found " << results.size() << " users.\n";
-        std::cout << "Number of columns: " << results.columns_size() << "\n";
-
-        // Get description of the first column
-        const qb::pg::field_description& first_col_desc = results.field(0);
-        std::cout << "First column name: " << first_col_desc.name
-                  << ", Type OID: " << static_cast<int>(first_col_desc.type_oid) << "\n";
-
-        // Iterate over rows
-        for (const qb::pg::resultset::row& row : results) {
-            // Process each row (see qb::pg::resultset::row below)
-        }
-
-        // Access specific row by index
-        if (results.size() > 0) {
-            const qb::pg::resultset::row& first_row = results[0];
-            // ... access fields in first_row ...
-        }
-    }
-);
-```
-
-## Row Access: `qb::pg::resultset::row`
-
-*(Defined in `src/resultset.h`)*
-
-This class represents a single row within a `resultset`. It acts like a container of fields.
-
-### Key Features:
-
-*   **Field Access by Index:** `row[column_index]`
-*   **Field Access by Name:** `row["column_name"]` (less performant than by index due to name lookup).
-*   **Container Interface:** Supports range-based for loops, `begin()`, `end()`, `size()`, `empty()` for iterating over fields.
-*   **Tuple Conversion:** `row.to(my_tuple)` or `row.to(std::tie(var1, var2))` for easy data extraction. See [Data Type Handling](./types.md).
-*   **Reference Semantics:** A `row` object is lightweight and references data within the parent `resultset`. It must not outlive the `resultset`.
-
-```cpp
-void process_user_row(const qb::pg::resultset::row& row) {
-    // Access by index
-    int id = row[0].as<int>();
-
-    // Access by name
+qb::pg::results data = std::move(r).result();
+for (auto const& row : data) {
+    int id = row["id"].as<int>();
     std::string name = row["name"].as<std::string>();
-    std::optional<int> age_opt = row["age"].as<std::optional<int>>();
-
-    std::cout << "Row Index: " << row.row_index() << " | ID: " << id << ", Name: " << name;
-    if (age_opt) {
-        std::cout << ", Age: " << *age_opt;
-    }
-    std::cout << std::endl;
-
-    // Iterate over fields in the row
-    for (const qb::pg::resultset::field& field : row) {
-        std::cout << "  Field Name: " << field.name()
-                  << ", Is Null: " << field.is_null() << std::endl;
-        if (!field.is_null()) {
-            // Access raw buffer (advanced)
-            // qb::pg::field_buffer buffer = field.input_buffer();
-            // ... process buffer ...
-        }
-    }
-
-    // Extract to tuple (C++17 structured binding)
-    auto [user_id, user_name, user_age] = std::tuple<int, std::string, std::optional<int>>();
-    row.to(std::tie(user_id, user_name, user_age)); // Uses std::tie for references
-    std::cout << "Extracted via tuple: " << user_id << ", " << user_name << std::endl;
 }
 ```
 
-## Field Access: `qb::pg::resultset::field`
+**`Reply`** API (**`src/pg_reply.h`**): **`ok()`**, **`explicit operator bool`**, **`error()`**, **`result()`** (*
+*`&` / `&&`** overloads).
 
-*(Defined in `src/resultset.h`, uses `src/field_handler.h` internally)*
+---
 
-This class represents a single field (column value) within a `row`.
-
-### Key Features:
-
-*   **`.as<T>()`:** The primary method for extracting the field's value, converting it to the specified C++ type `T`. Throws `qb::pg::error::value_is_null` if the field is SQL NULL and `T` is not `std::optional`. Throws `qb::pg::error::field_type_mismatch` or other exceptions on conversion errors.
-*   **`.to<T>(T& value)`:** Extracts the value into the provided reference `value`. Returns `false` if the field is SQL NULL (does not throw `value_is_null`), `true` otherwise. Throws on conversion errors.
-*   **`.is_null()`:** Checks if the field contains SQL NULL.
-*   **`.name()`:** Gets the column name.
-*   **`.description()`:** Gets the `field_description` struct containing metadata (OID, format code, etc.).
-*   **`.input_buffer()`:** Gets a `field_buffer` (a `qb::util::input_iterator_buffer`) providing access to the raw byte data received from the server (advanced use).
+## Callback path: `results` parameter
 
 ```cpp
-void process_field(const qb::pg::resultset::field& field) {
-    std::cout << "Processing Field: " << field.name()
-              << " (OID: " << static_cast<int>(field.description().type_oid) << ")\n";
-
-    if (field.is_null()) {
-        std::cout << "  Value is NULL\n";
-    } else {
-        try {
-            // Attempt conversion to string (usually safe)
-            std::string string_val = field.as<std::string>();
-            std::cout << "  Value as string: " << string_val << "\n";
-
-            // Attempt conversion to int (might throw)
-            if (field.description().type_oid == qb::pg::oid::int4) { // Check type first
-                int int_val = field.as<int>();
-                std::cout << "  Value as int: " << int_val << "\n";
-            }
-
-            // Safe conversion using to()
-            int safe_int_val;
-            if (field.to(safe_int_val)) {
-                 std::cout << "  Value safely converted to int: " << safe_int_val << "\n";
-            } else {
-                 // This handles the NULL case if to<int> was called on a NULL field
-                 // but as() would have thrown value_is_null earlier.
-                 // More useful for optional types.
-            }
-
-            // Handling optional types
-            std::optional<double> opt_double;
-            if(field.to(opt_double)) { // Always returns true for optional
-                if (opt_double) {
-                    std::cout << "  Value as optional<double>: " << *opt_double << "\n";
-                } else {
-                    std::cout << "  Value is NULL (checked via optional)\n";
-                }
-            }
-
-        } catch (const qb::pg::error::value_is_null& e) {
-            std::cerr << "  Error: Tried to get value of NULL field '" << field.name() << "'\n";
-        } catch (const qb::pg::error::field_type_mismatch& e) {
-            std::cerr << "  Error: Type mismatch for field '" << field.name() << "': " << e.what() << "\n";
-        } catch (const std::exception& e) {
-            std::cerr << "  Error converting field '" << field.name() << "': " << e.what() << "\n";
+db.execute("SELECT id, name FROM users",
+    [](qb::pg::transaction&, qb::pg::results result) {
+        for (auto const& row : result) {
+            int id = row["id"].as<int>();
+            (void)row["name"].as<std::string>();
         }
-    }
+    },
+    [](qb::pg::error::db_error const&) {});
+```
+
+**Lifetime:** **`row`** and **`field`** proxies reference **parent storage** inside **`results`**. Do not store **`row`
+** or **`field`** past the **`results`** object’s lifetime.
+
+---
+
+## `qb::pg::results` (container of rows)
+
+**`src/resultset.h`**, backed by **`result_impl`**.
+
+| Capability     | Notes                                                                       |
+|:---------------|:----------------------------------------------------------------------------|
+| **Iteration**  | Range-based **`for`**, **`begin()` / `end()`**                              |
+| **Size**       | **`size()`**, **`empty()`**                                                 |
+| **Random row** | **`operator[]`** (0-based)                                                  |
+| **Metadata**   | **`columns_size()`**, **`field(i)`**, **`row_description()`**               |
+| **JSON**       | **`results.json()`** → **`qb::json`** (handy for logging or HTTP responses) |
+
+```cpp
+if (results.empty())
+    return;
+
+for (qb::pg::resultset::row const& row : results) {
+    (void)row.row_index();
 }
 ```
 
-See [Data Type Handling](./types.md) for more on type conversions. 
+---
+
+## `qb::pg::resultset::row`
+
+- **`row[i]`** — column index (0-based).
+- **`row["name"]`** — case-sensitive column name; throws if missing (see tests for exact error type).
+- **`row.to(tuple)`** / **`row.to(std::tie(a, b, c))`** — fill a tuple or tied references ([types.md](./types.md)).
+- **`row.row_index()`** — 0-based index in the result set.
+
+---
+
+## `qb::pg::resultset::field`
+
+- **`as<T>()`** — decode to **`T`**; throws **`qb::pg::error::value_is_null`** if SQL NULL and **`T`** is not *
+  *`std::optional<U>`**.
+- **`to(value&)`** — out-parameter style; returns **false** for NULL on some paths — prefer **`std::optional`** or *
+  *`is_null()`** for clarity.
+- **`is_null()`**, **`name()`**, **`description()`**, **`input_buffer()`** (advanced / debugging).
+
+**NULL-safe decoding:** **`field.as<std::optional<U>>()`** — empty optional when NULL.
+
+**Type mismatches:** Wrong **`T`** for wire type → **`field_type_mismatch`** (
+see [error_handling.md](./error_handling.md)).
+
+**Text vs binary:** **`description().format_code`** reflects what the server sent; converters branch in **`FieldHandler`
+** (**`field_handler.h`**). Simple queries often yield **text** columns; prepared queries often yield **binary** for
+scalars — [types.md](./types.md).
+
+---
+
+## `await()` → `status.results()`
+
+```cpp
+auto st = db.execute("SELECT 1 AS x", qb::pg::discard_query, qb::pg::discard_error).await();
+if (st) {
+    qb::pg::results r = st.results();
+    (void)r[0]["x"].as<int>();
+}
+```
+
+**`status.results()`** returns a view tied to the **`status`** object’s last **`result_impl`** for that drain — same
+iteration rules as above.
+
+---
+
+## Commands with no rows
+
+**`INSERT` / `UPDATE` / `DELETE`** without **`RETURNING`** typically produce an **empty** **`results`** with **`ok()`**
+true at the **`Reply`** level — still check **`ok()`** for constraint violations.
+
+**`DDL`** (e.g. **`CREATE TABLE`**) — empty rowset; success is **`ok()`** / clean **`status`**.
+
+---
+
+## JSON export
+
+```cpp
+qb::json j = result.json();
+```
+
+Useful for diagnostics, admin APIs, or quick serialization — not a substitute for typed **`as<T>()`** in hot paths.
+
+---
+
+## Copy and large results
+
+The module’s **COPY protocol** support is limited (see root **README** limitations). For large **SELECT** results,
+streaming is not the same as libpq’s single-row mode — prefer **cursors** / **`FETCH`** in SQL (*
+*`test-transaction-advanced.cpp`** patterns) or pagination.
+
+---
+
+## Related
+
+- [types.md](./types.md) — conversions, **`params`**, NULL, tuple decode
+- [error_handling.md](./error_handling.md) — **`value_is_null`**, **`field_type_mismatch`**
+- [queries.md](./queries.md) — **`execute`**, prepared paths  

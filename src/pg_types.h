@@ -98,6 +98,15 @@ using jsonb = qb::jsonb;
 constexpr const integer PROTOCOL_VERSION = (3 << 16); // 3.0
 
 /**
+ * @brief Maximum value of a single message's 32-bit length field (inclusive of the 4
+ *        length bytes), for memory / DoS safety on the client.
+ *
+ * PostgreSQL can send large CopyData chunks; 256 MiB is a practical ceiling for this
+ * client. Raise only if you control server limits and need larger single messages.
+ */
+constexpr uinteger PG_PROTOCOL_MAX_MESSAGE_BYTES = 256U * 1024U * 1024U;
+
+/**
  * @brief 1-byte char or byte type.
  *
  * Basic unit for binary data storage and transmission.

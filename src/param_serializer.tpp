@@ -61,8 +61,8 @@ struct ParamSerializer::param_serializer_traits<
 
 // Specialization for floating-point types
 template <typename T>
-struct ParamSerializer::param_serializer_traits<T,
-                                               std::enable_if_t<std::is_floating_point_v<T>, void>> {
+struct ParamSerializer::param_serializer_traits<
+    T, std::enable_if_t<std::is_floating_point_v<T>, void>> {
     static void
     add_param(ParamSerializer &serializer, const T &param) {
         if constexpr (sizeof(T) <= 4) {
@@ -115,8 +115,7 @@ struct ParamSerializer::param_serializer_traits<std::vector<char>> {
     static void
     add_param(ParamSerializer &serializer, const std::vector<char> &param) {
         if (!param.empty()) {
-            serializer.add_byte_array(reinterpret_cast<const byte *>(param.data()),
-                                      param.size());
+            serializer.add_byte_array(reinterpret_cast<const byte *>(param.data()), param.size());
         } else {
             serializer.add_null();
         }
@@ -129,8 +128,7 @@ struct ParamSerializer::param_serializer_traits<std::vector<unsigned char>> {
     static void
     add_param(ParamSerializer &serializer, const std::vector<unsigned char> &param) {
         if (!param.empty()) {
-            serializer.add_byte_array(reinterpret_cast<const byte *>(param.data()),
-                                      param.size());
+            serializer.add_byte_array(reinterpret_cast<const byte *>(param.data()), param.size());
         } else {
             serializer.add_null();
         }
@@ -153,15 +151,14 @@ struct ParamSerializer::param_serializer_traits<std::optional<T>> {
 // Specialization for vector types (excluding string, char and unsigned char vectors)
 template <typename T>
 struct ParamSerializer::param_serializer_traits<
-    std::vector<T>,
-    std::enable_if_t<!std::is_same_v<std::vector<T>, std::vector<std::string>> &&
-                         !std::is_same_v<std::vector<T>, std::vector<char>> &&
-                         !std::is_same_v<std::vector<T>, std::vector<unsigned char>>,
-                     void>> {
+    std::vector<T>, std::enable_if_t<!std::is_same_v<std::vector<T>, std::vector<std::string>> &&
+                                         !std::is_same_v<std::vector<T>, std::vector<char>> &&
+                                         !std::is_same_v<std::vector<T>, std::vector<unsigned char>>,
+                                     void>> {
     static void
     add_param(ParamSerializer &serializer, const std::vector<T> &param) {
         serializer.add_vector(param);
     }
 };
 
-} // namespace qb::pg::detail 
+} // namespace qb::pg::detail

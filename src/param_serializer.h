@@ -301,8 +301,7 @@ public:
      */
     template <typename T>
     void
-    add_optional(const std::optional<T> &value,
-                 void (ParamSerializer::*adder)(const T &)) {
+    add_optional(const std::optional<T> &value, void (ParamSerializer::*adder)(const T &)) {
         if (value.has_value()) {
             (this->*adder)(*value);
         } else {
@@ -371,8 +370,7 @@ public:
             else if constexpr (std::is_same_v<value_type, std::vector<char>> ||
                                std::is_same_v<value_type, std::vector<unsigned char>>) {
                 if (!param.empty()) {
-                    add_byte_array(reinterpret_cast<const byte *>(param.data()),
-                                   param.size());
+                    add_byte_array(reinterpret_cast<const byte *>(param.data()), param.size());
                 } else {
                     add_null();
                 }
@@ -595,7 +593,7 @@ private:
     void
     write_float(float value) {
         write_integer(params_buffer_, 4);
-        uint32_t    raw;
+        uint32_t raw;
         std::memcpy(&raw, &value, sizeof(float));
         uint32_t    be    = qb::endian::to_big_endian(raw);
         const byte *bytes = reinterpret_cast<const byte *>(&be);
@@ -613,7 +611,7 @@ private:
     void
     write_double(double value) {
         write_integer(params_buffer_, 8);
-        uint64_t    raw;
+        uint64_t raw;
         std::memcpy(&raw, &value, sizeof(double));
         uint64_t    be    = qb::endian::to_big_endian(raw);
         const byte *bytes = reinterpret_cast<const byte *>(&be);
@@ -636,8 +634,7 @@ private:
         // 2. Write the raw data WITHOUT null terminator
         if (!value.empty()) {
             // Use data() + size() to avoid any potential null terminators
-            params_buffer_.insert(params_buffer_.end(), value.data(),
-                                  value.data() + value.size());
+            params_buffer_.insert(params_buffer_.end(), value.data(), value.data() + value.size());
         }
     }
 
@@ -657,8 +654,7 @@ private:
         // 2. Write the raw data WITHOUT null terminator
         if (!value.empty()) {
             // String views have no null terminators by design
-            params_buffer_.insert(params_buffer_.end(), value.data(),
-                                  value.data() + value.size());
+            params_buffer_.insert(params_buffer_.end(), value.data(), value.data() + value.size());
         }
     }
 
@@ -820,16 +816,14 @@ private:
             TypeConverter<element_type>::to_binary(elem, elem_buffer);
 
             // Add element data to array buffer
-            array_buffer.insert(array_buffer.end(), elem_buffer.begin(),
-                                elem_buffer.end());
+            array_buffer.insert(array_buffer.end(), elem_buffer.begin(), elem_buffer.end());
         }
 
         // Write the total array length
         write_integer(params_buffer_, static_cast<integer>(array_buffer.size()));
 
         // Write the array data
-        params_buffer_.insert(params_buffer_.end(), array_buffer.begin(),
-                              array_buffer.end());
+        params_buffer_.insert(params_buffer_.end(), array_buffer.begin(), array_buffer.end());
     }
 };
 

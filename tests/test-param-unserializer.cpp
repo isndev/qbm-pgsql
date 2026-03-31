@@ -33,6 +33,10 @@
  */
 
 #include <gtest/gtest.h>
+#include <qb/io/async.h>
+#include <qb/io/async/coroutine.h>
+#include <qb/io/async/coroutine/utils.h>
+
 #include "../pgsql.h"
 
 using namespace qb::pg;
@@ -134,8 +138,7 @@ protected:
     printBuffer(const std::vector<qb::pg::byte> &buffer, const std::string &label) {
         std::cout << label << " (size: " << buffer.size() << "): ";
         for (const auto &b : buffer) {
-            std::cout << std::hex << std::setw(2) << std::setfill('0')
-                      << static_cast<int>(b) << " ";
+            std::cout << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(b) << " ";
         }
         std::cout << std::dec << std::endl;
     }
@@ -399,8 +402,7 @@ TEST_F(ParamUnserializerTest, BinaryFormatString) {
     ASSERT_EQ(result, testValue);
 
     // Test with type_oid
-    field_description fd =
-        createFieldDescription(oid::text, protocol_data_format::Binary);
+    field_description fd = createFieldDescription(oid::text, protocol_data_format::Binary);
     // Verify the type is correctly identified
     ASSERT_EQ(static_cast<int>(fd.type_oid), static_cast<int>(oid::text));
 
@@ -437,8 +439,7 @@ TEST_F(ParamUnserializerTest, StringUnicodeDeserialization) {
     std::vector<qb::pg::byte> binaryBuffer = createPgBinaryString(testValue);
 
     // Extract the data portion (after the 4-byte length)
-    std::vector<qb::pg::byte> dataBuffer(binaryBuffer.begin() + sizeof(integer),
-                                         binaryBuffer.end());
+    std::vector<qb::pg::byte> dataBuffer(binaryBuffer.begin() + sizeof(integer), binaryBuffer.end());
 
     // Deserialize
     std::string binaryResult = unserializer->read_string(dataBuffer);
@@ -519,13 +520,10 @@ TEST_F(ParamUnserializerTest, MalformedData) {
 
     // The numeric types should be able to deserialize any sequence of bytes
     // even if the result doesn't make semantic sense
-    ASSERT_NO_THROW(
-        unserializer->read_smallint({randomBuffer.begin(), randomBuffer.begin() + 2}));
-    ASSERT_NO_THROW(
-        unserializer->read_integer({randomBuffer.begin(), randomBuffer.begin() + 4}));
+    ASSERT_NO_THROW(unserializer->read_smallint({randomBuffer.begin(), randomBuffer.begin() + 2}));
+    ASSERT_NO_THROW(unserializer->read_integer({randomBuffer.begin(), randomBuffer.begin() + 4}));
     ASSERT_NO_THROW(unserializer->read_bigint(randomBuffer));
-    ASSERT_NO_THROW(
-        unserializer->read_float({randomBuffer.begin(), randomBuffer.begin() + 4}));
+    ASSERT_NO_THROW(unserializer->read_float({randomBuffer.begin(), randomBuffer.begin() + 4}));
     ASSERT_NO_THROW(unserializer->read_double(randomBuffer));
 
     // The strings should always work with any sequence of bytes
@@ -563,8 +561,7 @@ TEST_F(ParamUnserializerTest, PgBinaryFormatString) {
     std::vector<qb::pg::byte> fullBuffer = createPgBinaryString(testValue);
 
     // 2. Extract only the data portion that our deserializer expects
-    std::vector<qb::pg::byte> dataBuffer(fullBuffer.begin() + sizeof(integer),
-                                         fullBuffer.end());
+    std::vector<qb::pg::byte> dataBuffer(fullBuffer.begin() + sizeof(integer), fullBuffer.end());
 
     // 3. Deserialize
     std::string result = unserializer->read_string(dataBuffer);
@@ -721,13 +718,11 @@ TEST_F(ParamUnserializerTest, RealWorldPgIntegration) {
 
         try {
             std::string textResult = unserializer->read_string(test.text_format_buffer);
-            std::cout << "  Result length: " << textResult.size() << " bytes"
-                      << std::endl;
+            std::cout << "  Result length: " << textResult.size() << " bytes" << std::endl;
 
             // Verify that deserialization preserves the data
             ASSERT_EQ(textResult.size(), test.text_format_buffer.size());
-            for (size_t i = 0;
-                 i < test.text_format_buffer.size() && i < textResult.size(); i++) {
+            for (size_t i = 0; i < test.text_format_buffer.size() && i < textResult.size(); i++) {
                 ASSERT_EQ(static_cast<unsigned char>(textResult[i]),
                           static_cast<unsigned char>(test.text_format_buffer[i]));
             }
@@ -741,15 +736,13 @@ TEST_F(ParamUnserializerTest, RealWorldPgIntegration) {
         printBuffer(test.binary_format_buffer, "");
 
         try {
-            std::string binaryResult =
-                unserializer->read_string(test.binary_format_buffer);
-            std::cout << "  Result length: " << binaryResult.size() << " bytes"
-                      << std::endl;
+            std::string binaryResult = unserializer->read_string(test.binary_format_buffer);
+            std::cout << "  Result length: " << binaryResult.size() << " bytes" << std::endl;
 
             // Verify that deserialization preserves the data
             ASSERT_EQ(binaryResult.size(), test.binary_format_buffer.size());
-            for (size_t i = 0;
-                 i < test.binary_format_buffer.size() && i < binaryResult.size(); i++) {
+            for (size_t i = 0; i < test.binary_format_buffer.size() && i < binaryResult.size();
+                 i++) {
                 ASSERT_EQ(static_cast<unsigned char>(binaryResult[i]),
                           static_cast<unsigned char>(test.binary_format_buffer[i]));
             }
@@ -757,12 +750,10 @@ TEST_F(ParamUnserializerTest, RealWorldPgIntegration) {
             // For binary data, it's normal to have an error if trying to interpret
             // as PG binary format (with length) - in this case, don't fail the test
             if (test.description == "Binary data (BYTEA)") {
-                std::cout << "  ERROR: " << e.what() << " (expected for binary data)"
-                          << std::endl;
+                std::cout << "  ERROR: " << e.what() << " (expected for binary data)" << std::endl;
             } else {
                 std::cout << "  ERROR: " << e.what() << std::endl;
-                FAIL() << "Exception during BINARY deserialization of "
-                       << test.description;
+                FAIL() << "Exception during BINARY deserialization of " << test.description;
             }
         }
     }
@@ -783,7 +774,7 @@ TEST_F(ParamUnserializerTest, PartialDataRecovery) {
     for (size_t trunc_pos = 5; trunc_pos < original.size(); trunc_pos += 5) {
         std::vector<qb::pg::byte> truncated_buffer(full_buffer.begin(),
                                                    full_buffer.begin() + trunc_pos);
-        std::string recovered = unserializer->read_string(truncated_buffer);
+        std::string               recovered = unserializer->read_string(truncated_buffer);
 
         // Verify that we correctly recover the non-truncated part
         ASSERT_EQ(recovered, original.substr(0, trunc_pos));
@@ -896,8 +887,7 @@ TEST_F(ParamUnserializerTest, ExtendedCharacterSetDeserialization) {
     std::string emoji        = "Emoji: 😀 😃 😄 😁 😆 😊 😎 👍 👌 💯 🔥";
 
     // Collection of strings to test
-    std::vector<std::string> testStrings = {specialChars, unicodeChars, mixedChars,
-                                            emoji};
+    std::vector<std::string> testStrings = {specialChars, unicodeChars, mixedChars, emoji};
 
     // Test each string
     for (const auto &testString : testStrings) {
@@ -1134,8 +1124,7 @@ TEST_F(ParamUnserializerTest, CompleteSequenceSimulation) {
 
     // Field 5: String ("Complete Test")
     std::string string_value = "Complete Sequence Test";
-    fields.push_back(
-        std::vector<qb::pg::byte>(string_value.begin(), string_value.end()));
+    fields.push_back(std::vector<qb::pg::byte>(string_value.begin(), string_value.end()));
 
     // 2. Now deserialize each field and verify
     qb::pg::smallint result_smallint = unserializer->read_smallint(fields[0]);
@@ -1315,9 +1304,7 @@ TEST_F(ParamUnserializerTest, CompleteFormatCycle) {
         // Test text format by deserializing as string
         std::string text_result = unserializer->read_string(test.text_format);
         ASSERT_EQ(text_result.size(), test.text_format.size());
-        ASSERT_EQ(
-            std::memcmp(text_result.data(), test.text_format.data(), text_result.size()),
-            0);
+        ASSERT_EQ(std::memcmp(text_result.data(), test.text_format.data(), text_result.size()), 0);
 
         // For binary format, we can't verify the result generically because the
         // interpretation depends on the type. But we can at least check that it doesn't
@@ -1334,24 +1321,23 @@ TEST_F(ParamUnserializerTest, CompleteFormatCycle) {
  */
 TEST_F(ParamUnserializerTest, UUIDBinaryFormat) {
     // In PostgreSQL, UUID is stored as 16 bytes in binary format
-    std::vector<qb::pg::byte> uuid_buffer = {
-        // Example UUID: 550e8400-e29b-41d4-a716-446655440000
-        0x55,
-        0x0e,
-        static_cast<qb::pg::byte>(0x84),
-        0x00,
-        static_cast<qb::pg::byte>(0xe2),
-        static_cast<qb::pg::byte>(0x9b),
-        0x41,
-        static_cast<qb::pg::byte>(0xd4),
-        static_cast<qb::pg::byte>(0xa7),
-        0x16,
-        0x44,
-        0x66,
-        0x55,
-        0x44,
-        0x00,
-        0x00};
+    std::vector<qb::pg::byte> uuid_buffer = {// Example UUID: 550e8400-e29b-41d4-a716-446655440000
+                                             0x55,
+                                             0x0e,
+                                             static_cast<qb::pg::byte>(0x84),
+                                             0x00,
+                                             static_cast<qb::pg::byte>(0xe2),
+                                             static_cast<qb::pg::byte>(0x9b),
+                                             0x41,
+                                             static_cast<qb::pg::byte>(0xd4),
+                                             static_cast<qb::pg::byte>(0xa7),
+                                             0x16,
+                                             0x44,
+                                             0x66,
+                                             0x55,
+                                             0x44,
+                                             0x00,
+                                             0x00};
 
     // Since our deserializer doesn't have a specific read_uuid method,
     // we read it as a string and then format it
@@ -1454,8 +1440,7 @@ TEST_F(ParamUnserializerTest, TimestampBinaryFormat) {
 TEST_F(ParamUnserializerTest, TimestampTextFormat) {
     // In text format, a timestamp is a formatted date string
     std::string               timestamp_string = "2020-01-01 12:34:56.789012";
-    std::vector<qb::pg::byte> timestamp_buffer(timestamp_string.begin(),
-                                               timestamp_string.end());
+    std::vector<qb::pg::byte> timestamp_buffer(timestamp_string.begin(), timestamp_string.end());
 
     // Deserialize as string
     std::string result = unserializer->read_string(timestamp_buffer);
@@ -1487,13 +1472,12 @@ TEST_F(ParamUnserializerTest, TimestampTextFormat) {
  */
 TEST_F(ParamUnserializerTest, JSONBinaryFormat) {
     // Create a JSONB object
-    qb::jsonb test_json = {
-        {"id", 12345},
-        {"name", "Test JSON"},
-        {"active", true},
-        {"tags", {"database", "postgres", "json"}},
-        {"metrics", {{"queries", 1000}, {"errors", 5}, {"success_rate", 99.5}}},
-        {"nullable", nullptr}};
+    qb::jsonb test_json = {{"id", 12345},
+                           {"name", "Test JSON"},
+                           {"active", true},
+                           {"tags", {"database", "postgres", "json"}},
+                           {"metrics", {{"queries", 1000}, {"errors", 5}, {"success_rate", 99.5}}},
+                           {"nullable", nullptr}};
 
     // Get JSON string representation
     std::string json_str = test_json.dump();
@@ -1573,8 +1557,7 @@ TEST_F(ParamUnserializerTest, JSONBinaryFormat) {
     std::vector<byte> invalid_jsonb = jsonb_buffer;
     invalid_jsonb[4]                = 2; // Set version to 2 (unsupported)
 
-    ASSERT_THROW(TypeConverter<qb::jsonb>::from_binary(invalid_jsonb),
-                 std::runtime_error);
+    ASSERT_THROW(TypeConverter<qb::jsonb>::from_binary(invalid_jsonb), std::runtime_error);
 }
 
 /**
@@ -1613,13 +1596,12 @@ TEST_F(ParamUnserializerTest, JSONTextFormat) {
             qb::json result = TypeConverter<qb::json>::from_text(test_case);
 
             // Compare the result with expected
-            ASSERT_EQ(result.dump(), expected.dump())
-                << "Failed on test case: " << test_case;
+            ASSERT_EQ(result.dump(), expected.dump()) << "Failed on test case: " << test_case;
 
             std::cout << "Successfully parsed JSON: " << result.dump(2) << std::endl;
         } catch (const std::exception &e) {
-            FAIL() << "Exception during JSON text deserialization for case '"
-                   << test_case << "': " << e.what();
+            FAIL() << "Exception during JSON text deserialization for case '" << test_case
+                   << "': " << e.what();
         }
     }
 
@@ -1637,7 +1619,7 @@ TEST_F(ParamUnserializerTest, NumericDeserialization) {
     using namespace qb::pg::detail;
 
     // Test 1: Create binary buffer for numeric
-    numeric original("123456789.0123456789");
+    numeric           original("123456789.0123456789");
     std::vector<byte> buffer;
     TypeConverter<numeric>::to_binary(original, buffer);
 
@@ -1647,7 +1629,7 @@ TEST_F(ParamUnserializerTest, NumericDeserialization) {
 
     // Test 2: Text format deserialization
     std::string text_value = "999999999.999999999";
-    numeric result2 = TypeConverter<numeric>::from_text(text_value);
+    numeric     result2    = TypeConverter<numeric>::from_text(text_value);
     EXPECT_EQ(result2.str(), text_value);
 
     // Test 3: Zero value
@@ -1676,7 +1658,7 @@ TEST_F(ParamUnserializerTest, DateDeserialization) {
     using namespace qb::pg::detail;
 
     // Test 1: Serialize and deserialize a date
-    pgdate original = pgdate::from_string("2024-06-15");
+    pgdate            original = pgdate::from_string("2024-06-15");
     std::vector<byte> buffer;
     TypeConverter<pgdate>::to_binary(original, buffer);
 
@@ -1686,7 +1668,7 @@ TEST_F(ParamUnserializerTest, DateDeserialization) {
 
     // Test 2: Text format
     std::string text_date = "2000-01-01";
-    pgdate result2 = TypeConverter<pgdate>::from_text(text_date);
+    pgdate      result2   = TypeConverter<pgdate>::from_text(text_date);
     EXPECT_EQ(result2.to_string(), text_date);
 
     // Test 3: Epoch date (PostgreSQL epoch: 2000-01-01 = day 0)
@@ -1714,7 +1696,7 @@ TEST_F(ParamUnserializerTest, IntervalDeserialization) {
     using namespace qb::pg::detail;
 
     // Test 1: Hours - verify serialization works
-    auto original1 = hours(2);
+    auto              original1 = hours(2);
     std::vector<byte> buffer;
     TypeConverter<hours>::to_binary(original1, buffer);
     EXPECT_EQ(buffer.size(), 20);
@@ -1737,7 +1719,7 @@ TEST_F(ParamUnserializerTest, IntervalDeserialization) {
 
     // Test 5: from_text doesn't crash
     auto result = TypeConverter<hours>::from_text("3600");
-    (void)result; // Suppress unused warning
+    (void) result; // Suppress unused warning
 
     std::cout << "INTERVAL deserialization test passed (text format preferred)" << std::endl;
 }
@@ -1755,9 +1737,9 @@ TEST_F(ParamUnserializerTest, MixedComplexTypesRoundTrip) {
     std::vector<byte> buffer;
 
     // NUMERIC - full round-trip works with text format
-    numeric n1("123.456");
+    numeric     n1("123.456");
     std::string n1_text = TypeConverter<numeric>::to_text(n1);
-    numeric n2 = TypeConverter<numeric>::from_text(n1_text);
+    numeric     n2      = TypeConverter<numeric>::from_text(n1_text);
     EXPECT_EQ(n1.str(), n2.str());
 
     // DATE - full round-trip works
@@ -1786,23 +1768,23 @@ TEST_F(ParamUnserializerTest, NetworkAddressDeserialization) {
     using namespace qb::pg::detail;
 
     // Test 1: IPv4 address as binary string
-    auto ipv4_buffer = createPgBinaryString("192.168.1.100");
-    std::string ipv4 = unserializer->read_string(ipv4_buffer);
+    auto        ipv4_buffer = createPgBinaryString("192.168.1.100");
+    std::string ipv4        = unserializer->read_string(ipv4_buffer);
     EXPECT_EQ(ipv4, "192.168.1.100");
 
     // Test 2: CIDR notation
-    auto cidr_buffer = createPgBinaryString("10.0.0.0/8");
-    std::string cidr = unserializer->read_string(cidr_buffer);
+    auto        cidr_buffer = createPgBinaryString("10.0.0.0/8");
+    std::string cidr        = unserializer->read_string(cidr_buffer);
     EXPECT_EQ(cidr, "10.0.0.0/8");
 
     // Test 3: IPv6 address
-    auto ipv6_buffer = createPgBinaryString("::1");
-    std::string ipv6 = unserializer->read_string(ipv6_buffer);
+    auto        ipv6_buffer = createPgBinaryString("::1");
+    std::string ipv6        = unserializer->read_string(ipv6_buffer);
     EXPECT_EQ(ipv6, "::1");
 
     // Test 4: MAC address
-    auto mac_buffer = createPgBinaryString("00:1a:2b:3c:4d:5e");
-    std::string mac = unserializer->read_string(mac_buffer);
+    auto        mac_buffer = createPgBinaryString("00:1a:2b:3c:4d:5e");
+    std::string mac        = unserializer->read_string(mac_buffer);
     EXPECT_EQ(mac, "00:1a:2b:3c:4d:5e");
 
     std::cout << "Network address unserialization test passed" << std::endl;
@@ -1817,18 +1799,18 @@ TEST_F(ParamUnserializerTest, TimeDeserialization) {
     using namespace qb::pg::detail;
 
     // Test 1: Time string
-    auto time_buffer = createPgBinaryString("14:30:45.123456");
-    std::string time = unserializer->read_string(time_buffer);
+    auto        time_buffer = createPgBinaryString("14:30:45.123456");
+    std::string time        = unserializer->read_string(time_buffer);
     EXPECT_EQ(time, "14:30:45.123456");
 
     // Test 2: Time with timezone
-    auto timetz_buffer = createPgBinaryString("18:00:00+02:00");
-    std::string timetz = unserializer->read_string(timetz_buffer);
+    auto        timetz_buffer = createPgBinaryString("18:00:00+02:00");
+    std::string timetz        = unserializer->read_string(timetz_buffer);
     EXPECT_EQ(timetz, "18:00:00+02:00");
 
     // Test 3: Midnight
-    auto midnight_buffer = createPgBinaryString("00:00:00");
-    std::string midnight = unserializer->read_string(midnight_buffer);
+    auto        midnight_buffer = createPgBinaryString("00:00:00");
+    std::string midnight        = unserializer->read_string(midnight_buffer);
     EXPECT_EQ(midnight, "00:00:00");
 
     std::cout << "TIME/TIMETZ unserialization test passed" << std::endl;
@@ -1843,26 +1825,26 @@ TEST_F(ParamUnserializerTest, EdgeCasesDeserialization) {
     using namespace qb::pg::detail;
 
     // Test 1: Very long numeric string
-    auto huge_buffer = createPgBinaryString("999999999999999999999999999.9999999999");
-    std::string huge = unserializer->read_string(huge_buffer);
-    numeric n(huge);
+    auto        huge_buffer = createPgBinaryString("999999999999999999999999999.9999999999");
+    std::string huge        = unserializer->read_string(huge_buffer);
+    numeric     n(huge);
     EXPECT_GT(n.str().length(), 30); // Should be long
 
     // Test 2: Very small numeric
-    auto tiny_buffer = createPgBinaryString("0.0000000000000000000000000000000000001");
-    std::string tiny = unserializer->read_string(tiny_buffer);
-    numeric n2(tiny);
+    auto        tiny_buffer = createPgBinaryString("0.0000000000000000000000000000000000001");
+    std::string tiny        = unserializer->read_string(tiny_buffer);
+    numeric     n2(tiny);
     EXPECT_TRUE(n2.str().find("0.") != std::string::npos);
 
     // Test 3: Negative numeric
-    auto neg_buffer = createPgBinaryString("-999999.999999");
-    std::string neg = unserializer->read_string(neg_buffer);
-    numeric n3(neg);
+    auto        neg_buffer = createPgBinaryString("-999999.999999");
+    std::string neg        = unserializer->read_string(neg_buffer);
+    numeric     n3(neg);
     EXPECT_EQ(n3.str()[0], '-');
 
     // Test 4: Empty string edge case
-    auto empty_buffer = createPgBinaryString("");
-    std::string empty = unserializer->read_string(empty_buffer);
+    auto        empty_buffer = createPgBinaryString("");
+    std::string empty        = unserializer->read_string(empty_buffer);
     EXPECT_EQ(empty, "");
 
     std::cout << "Edge cases unserialization test passed" << std::endl;

@@ -1,112 +1,155 @@
-# `qbm-pgsql`: Error Handling
+# Error handling
 
-This document describes the error handling mechanisms within the `qbm-pgsql` module.
+**`qbm-pgsql`** combines **explicit error values** (**`Reply<T>`**, callback **`on_err`**, **`Transaction::status`**)
+with **C++ exceptions** for **row/column decoding** and for **`with_transaction`** control flow (**`transaction_abort`**
+is caught; other exceptions propagate after **`ROLLBACK`**).
 
-## Error Philosophy
+**Include:** `#include <pgsql/pgsql.h>` — **`db_error`**, **`Reply`**, **`transaction_abort`**, **`sqlstate`**.
 
-`qbm-pgsql` uses a combination of C++ exceptions and error callbacks to report issues.
+---
 
-*   **Exceptions:** For critical errors during result processing (like type conversion failures or accessing NULL values incorrectly), exceptions derived from `qb::pg::error::db_error` are thrown.
-*   **Error Callbacks:** For asynchronous operation failures (connection errors, query execution errors reported by the server), the optional error callback provided to methods like `db.execute()` or `db.begin()` is invoked.
-*   **`status.error()`:** When using the synchronous `.await()` method, the returned `status` object contains error information accessible via `status.error()` if `status` evaluates to `false`.
+## Layers (choose the right one)
 
-## Exception Hierarchy
+| Layer                      | Mechanism                                                    | When                                                                                                                                                       |
+|:---------------------------|:-------------------------------------------------------------|:-----------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Coroutine operation**    | **`Reply<T>`** — **`ok()`**, **`error()`**, **`result()`** | **`co_await db.execute`**, **`co_await prepare`**, **`co_await begin`**, …                                                                                 |
+| **Per-operation callback** | **`on_err`** on **`execute`**, **`prepare`**, **`begin`**, … | Immediate SQL / protocol failure for that command                                                                                                          |
+| **Fluent `Error` command** | **`db.error(cb)`** after **`execute`/`begin`/…**             | Runs in **`~Error`** when **`parent()->result()`** is false — receives **`parent()->error()`** ([`src/commands.h`](../src/commands.h) **`Error::~Error`**) |
+| **Optional batch drain**   | **`Transaction::await()`** → **`status`**                    | **`explicit operator bool`**, **`status.error()`**, **`status.results()`** — optional if **`run_once`** drains the connection                              |
+| **Scoped transaction**     | **`throw transaction_abort{db_error}`**                      | Inside **`with_transaction`**                                                                                                                              |
+| **Field access**           | **`value_is_null`**, **`field_type_mismatch`**, …            | **`field.as<T>()`**                                                                                                                                        |
+| **User callback bug**      | **`client_error`**                                           | Exception from **`begin`** body or **`Then`** / **`Error`** destructor paths ([`commands.h`](../src/commands.h))                                           |
 
-*(Defined in `src/error.h`, implemented in `src/error.cpp`)*
+### Decision tree (callbacks)
 
-All PostgreSQL-specific exceptions inherit from `qb::pg::error::db_error`, which itself inherits from `std::runtime_error`.
+1. **Single statement:** use **`execute(..., on_ok, on_err)`** — **`on_err`** is enough.
+2. **Several statements, shared failure logging:** enqueue them, then **`.error([](db_error const& e){ … })`** on the
+   same **`Transaction&`** so one handler sees the accumulated failure state when the **`Error`** node runs.
+3. **Need last **`results`** / global **`status`:** call **`.await()`** once at the end of the chain (or rely on *
+   *`run_once`** + side effects in callbacks).
 
-*   **`qb::pg::error::db_error`:** Base class.
-    *   `what()`: Returns the primary error message.
-    *   `severity`: Severity level from PostgreSQL (e.g., "ERROR", "FATAL", "WARNING").
-    *   `code`: The 5-character SQLSTATE code string (e.g., "42P01").
-    *   `detail`: Additional details provided by the server.
-    *   `sqlstate`: An enum representation (`qb::pg::sqlstate::code`) of the `code` string for easier programmatic checks.
-*   **`qb::pg::error::connection_error`:** Errors related to establishing or maintaining the connection.
-*   **`qb::pg::error::query_error`:** Errors reported by the server during query parsing or execution.
-    *   **`qb::pg::error::transaction_closed`:** Attempting an operation on an already committed or rolled-back transaction.
-*   **`qb::pg::error::client_error`:** Wraps exceptions thrown from user-provided callbacks.
-*   **`qb::pg::error::value_is_null`:** Attempting `field.as<T>()` on a NULL field where `T` is not `std::optional`.
-    *   **`qb::pg::error::field_is_null`:** More specific version used internally.
-*   **`qb::pg::error::field_type_mismatch`:** Attempting an invalid conversion (e.g., `field.as<int>()` on a non-numeric text field).
+---
 
-## Handling Errors
+## `Reply<T>` (coroutines)
 
-**1. Asynchronous Callbacks:**
-
-Provide an error callback lambda to handle failures reported by the database or connection issues.
+**`src/pg_reply.h`**
 
 ```cpp
-db.execute(
-    "INVALID SQL",
-    [](auto& tr, auto result) { /* Success - won't be called */ },
-    [](const qb::pg::error::db_error& err) {
-        // Handle the error
-        std::cerr << "Async Error: " << err.what() << "\n";
-        std::cerr << "  Severity: " << err.severity << "\n";
-        std::cerr << "  SQLSTATE: " << err.code
-                  << " (" << qb::pg::sqlstate::to_string(err.sqlstate) << ")\n"; // Helper to get description
-        if (!err.detail.empty()) {
-            std::cerr << "  Detail: " << err.detail << "\n";
+auto r = co_await db.execute("SELECT …");
+if (!r.ok()) {
+    qb::pg::error::db_error const& e = r.error();
+    // e.what(), e.code, e.sqlstate, …
+    co_return;
+}
+qb::pg::results rows = std::move(r).result();
+```
+
+- **`void`** specialization for operations with no payload (e.g. **`co_await db.listen("ch")`**).
+- **`operator bool`** and **`ok()`** are equivalent success tests.
+
+**Do not** call **`result()`** on failure without checking **`ok()`** — the value is default-constructed / stale.
+
+---
+
+## `transaction_abort`
+
+**`src/pg_reply.h`**
+
+```cpp
+auto ins = co_await tr.execute("INSERT …");
+if (!ins.ok())
+    throw qb::pg::transaction_abort{ins.error()};
+```
+
+**`with_transaction`** catches **`transaction_abort`**, issues **`ROLLBACK`**, returns **`Reply<T>::failure`**
+carrying **`err`**. It does **not** rethrow **`transaction_abort`**.
+
+**Other exceptions** after **`begin`**: **`ROLLBACK`**, then **rethrow** — your outer coroutine or **`run_sync`** must
+handle them.
+
+---
+
+## `db_error` hierarchy
+
+**`src/error.h`**, **`src/error.cpp`**
+
+| Type                                                                | Role                                                                                                 |
+|:--------------------------------------------------------------------|:-----------------------------------------------------------------------------------------------------|
+| **`db_error`**                                                      | Base: **`what()`**, **`severity`**, **`code`**, **`detail`**, **`sqlstate`** (**`sqlstate::code`**). |
+| **`connection_error`**                                              | Connect / transport / handshake / timeout waiting for **`ReadyForQuery`**.                           |
+| **`query_error`**                                                   | Server-reported SQL or protocol errors during a command.                                             |
+| **`transaction_closed`**                                            | Operation on a finished transaction (**`query_error`** subclass).                                    |
+| **`client_error`**                                                  | User-provided callback threw — see message / nested cause.                                           |
+| **`value_is_null`**, **`field_is_null`**, **`field_type_mismatch`** | Result extraction — **not** server errors.                                                           |
+
+---
+
+## Callback error handler
+
+```cpp
+db.execute("SELECT * FROM missing_table",
+    [](auto&, qb::pg::results) {},
+    [](qb::pg::error::db_error const& err) {
+        if (err.sqlstate == qb::pg::sqlstate::undefined_table) {
+            // handle missing relation
         }
-
-        // Example: Check for specific SQLSTATE codes
-        if (err.sqlstate == qb::pg::sqlstate::syntax_error) {
-            std::cerr << "  Action: Correct the SQL syntax.\n";
-        } else if (err.sqlstate == qb::pg::sqlstate::undefined_table) {
-            std::cerr << "  Action: Check if table exists.\n";
-        }
-    }
-);
+    });
 ```
 
-**2. Synchronous `await()`:**
+Prefer **`sqlstate`** enum comparisons over raw five-character strings when an enumerator exists (**`src/sqlstates.h`
+**).
 
-Check the boolean status of the returned object and access the error details if `false`.
+---
+
+## `Transaction::await()` → `status`
+
+**`status`** is **true** only when the drained batch is **clean**: **`_command_ok`** and SQLSTATE still **`unknown_code`
+** (**`transaction.h`**).
 
 ```cpp
-auto status = db.execute("SELECT * FROM non_existent_table").await();
-
-if (!status) {
-    const auto& err = status.error();
-    std::cerr << "Await Error: " << err.what() << "\n";
-    std::cerr << "  SQLSTATE: " << err.code << "\n";
-    // Handle error based on err.sqlstate or err.code
+auto st = db.execute("…", …, …).await();
+if (!static_cast<bool>(st)) {
+    auto& e = st.error();
+    (void)e;
 }
 ```
 
-**3. Result Processing Exceptions:**
+Use **`static_cast<bool>(st)`** when assigning to a **`bool`** variable — **`explicit operator bool`**.
 
-Wrap calls to `field.as<T>()` in `try...catch` blocks if you expect potential type mismatches or need to handle NULLs without using `std::optional`.
+**Snapshot behaviour:** If the transaction already recorded failure before **`await()`**, **`await()`** surfaces that
+failure (no silent success).
 
-```cpp
-try {
-    int value = row["possibly_null_or_text_column"].as<int>();
-    // ... use value ...
-} catch (const qb::pg::error::value_is_null& e) {
-    std::cerr << "Caught NULL value: " << e.what() << std::endl;
-    // Handle NULL case
-} catch (const qb::pg::error::field_type_mismatch& e) {
-    std::cerr << "Caught type mismatch: " << e.what() << std::endl;
-    // Handle conversion error
-} catch (const qb::pg::error::db_error& e) {
-    // Catch other potential database errors
-    std::cerr << "Database error during conversion: " << e.what() << std::endl;
-}
-```
+---
 
-## SQLSTATE Codes
+## SQLSTATE
 
-*(Defined in `src/sqlstates.h`, mapping in `src/sqlstates.cpp`)*
+**`src/sqlstates.h`**, **`src/sqlstates.cpp`**,
+PostgreSQL [errcodes appendix](https://www.postgresql.org/docs/current/errcodes-appendix.html).
 
-The `qb::pg::sqlstate::code` enum provides symbolic names for standard SQLSTATE error codes, making error handling logic more readable and robust than comparing raw string codes.
+Examples you will see in practice: **`undefined_table`**, **`unique_violation`**, **`query_canceled`** (statement
+timeout), **`serialization_failure`**.
 
-```cpp
-if (err.sqlstate == qb::pg::sqlstate::unique_violation) {
-    // Handle primary key or unique constraint violation
-} else if (err.sqlstate == qb::pg::sqlstate::foreign_key_violation) {
-    // Handle foreign key violation
-}
-```
+---
 
-Refer to the [PostgreSQL Error Codes Appendix](https://www.postgresql.org/docs/current/errcodes-appendix.html) for a complete list and explanation of SQLSTATE codes. 
+## Statement timeout errors
+
+With **`set_timeout`** + **`begin()`**, long-running statements fail with a normal **`db_error`** (message / SQLSTATE
+often indicate cancel / timeout). Handle like any other **`!Reply::ok()`** path — no separate exception type.
+
+---
+
+## Coroutine + `run_sync`
+
+If **`run_sync`** wraps a **`task`** that **`co_await`**s PostgreSQL:
+
+- **`Reply` failure** is **not** an exception unless **you** **`throw`**.
+- **Uncaught exceptions** from the coroutine propagate out of **`run_sync`** (implementation-dependent details — treat
+  like any **`task`** boundary).
+
+---
+
+## Related
+
+- [transaction.md](./transaction.md) — **`await()`**, **`with_transaction`**, **`status`**
+- [queries.md](./queries.md) — discards, NOTIFY errors
+- [results.md](./results.md) — **`as<T>()`** exceptions  

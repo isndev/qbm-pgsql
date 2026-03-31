@@ -47,11 +47,10 @@ namespace detail {
  */
 namespace {
 /** @brief Set of allowed message tags for frontend (client) */
-tag_set_type FRONTEND_COMMANDS{empty_tag,         bind_tag,      close_tag,
-                               copy_data_tag,     copy_done_tag, copy_fail_tag,
-                               describe_tag,      execute_tag,   flush_tag,
-                               function_call_tag, parse_tag,     password_message_tag,
-                               query_tag,         sync_tag,      terminate_tag};
+tag_set_type FRONTEND_COMMANDS{empty_tag,     bind_tag,          close_tag,    copy_data_tag,
+                               copy_done_tag, copy_fail_tag,     describe_tag, execute_tag,
+                               flush_tag,     function_call_tag, parse_tag,    password_message_tag,
+                               query_tag,     sync_tag,          terminate_tag};
 /** @brief Set of allowed message tags for backend (server) */
 tag_set_type BACKEND_COMMANDS{
     authentication_tag,     backend_key_data_tag,   bind_complete_tag,
@@ -105,8 +104,9 @@ message::message()
 message::message(message_tag tag)
     : payload(5, 0)
     , packed_(false) {
-    // TODO Check the tag
-    payload[0] = (char) tag;
+    assert(message::frontend_tags().count(tag) != 0 &&
+           "Outgoing PostgreSQL messages must use a frontend protocol tag");
+    payload[0] = static_cast<char>(tag);
 }
 
 /**
@@ -232,6 +232,11 @@ message::reset_read() {
     }
 }
 
+void
+message::discard_remaining() noexcept {
+    curr_ = payload.end();
+}
+
 /**
  * @brief Read a byte from the message buffer
  *
@@ -258,8 +263,8 @@ template <typename T>
 void
 write_int(message::buffer_type &payload, T val) {
     // OPTIMIZED: Use std::memcpy for batch copy instead of byte-by-byte (P0-14 fix)
-    T converted = qb::endian::to_big_endian(val);
-    const auto *bytes = reinterpret_cast<const message::buffer_type::value_type *>(&converted);
+    T           converted = qb::endian::to_big_endian(val);
+    const auto *bytes     = reinterpret_cast<const message::buffer_type::value_type *>(&converted);
     payload.insert(payload.end(), bytes, bytes + sizeof(T));
 }
 
@@ -303,8 +308,7 @@ message::read(integer &val) {
  */
 bool
 message::read(std::string &val) {
-    const_iterator c =
-        io::protocol_read<pg::protocol_data_format::Text>(curr_, payload.cend(), val);
+    const_iterator c = io::protocol_read<pg::protocol_data_format::Text>(curr_, payload.cend(), val);
     if (curr_ == c)
         return false;
     curr_ = c;
@@ -343,8 +347,8 @@ message::read(field_description &fd) {
     tmp.max_size = 0;
     integer  type_oid;
     smallint fmt;
-    if (read(tmp.name) && read(tmp.table_oid) && read(tmp.attribute_number) &&
-        read(type_oid) && read(tmp.type_size) && read(tmp.type_mod) && read(fmt)) {
+    if (read(tmp.name) && read(tmp.table_oid) && read(tmp.attribute_number) && read(type_oid) &&
+        read(tmp.type_size) && read(tmp.type_mod) && read(fmt)) {
         tmp.type_oid    = static_cast<oid>(type_oid);
         tmp.format_code = static_cast<protocol_data_format>(fmt);
         fd              = tmp;
@@ -653,8 +657,8 @@ std::ostream &
 operator<<(std::ostream &out, notice_message const &msg) {
     std::ostream::sentry s(out);
     if (s) {
-        out << "severity: " << msg.severity << " SQL code: " << msg.sqlstate
-            << " message: '" << msg.message << "'";
+        out << "severity: " << msg.severity << " SQL code: " << msg.sqlstate << " message: '"
+            << msg.message << "'";
         if (!msg.detail.empty()) {
             out << " detail: '" << msg.detail << "'";
         }

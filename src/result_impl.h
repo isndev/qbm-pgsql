@@ -69,6 +69,11 @@ public:
     /// Copy assignment operator
     result_impl &operator=(result_impl &) = default;
 
+    /**
+     * @brief Deep copy of description, rows, and command tag (row_data is move-only at type level).
+     */
+    [[nodiscard]] result_impl clone_snapshot() const;
+
     /// Move assignment operator
     result_impl &operator=(result_impl &&) = default;
 
@@ -192,15 +197,15 @@ private:
      */
     void build_name_cache() const;
 
-    row_description_type row_description_;          ///< Metadata about the result columns
-    row_set_type         rows_;                     ///< Collection of result rows
-    std::string          command_tag_;              ///< Raw CommandComplete tag
-    int64_t              rows_affected_{0};         ///< Rows affected/returned
+    row_description_type row_description_;  ///< Metadata about the result columns
+    row_set_type         rows_;             ///< Collection of result rows
+    std::string          command_tag_;      ///< Raw CommandComplete tag
+    int64_t              rows_affected_{0}; ///< Rows affected/returned
 
     // OPTIMIZED: Name cache for O(1) column lookups (P0-11)
     // Using unordered_map for average O(1) lookup vs O(n) linear search
     mutable std::unordered_map<std::string, usmallint> name_cache_;
-    mutable bool name_cache_built_{false};          ///< Flag to track if cache is populated
+    mutable bool name_cache_built_{false}; ///< Flag to track if cache is populated
 };
 
 } /* namespace detail */

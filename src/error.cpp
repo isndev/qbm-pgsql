@@ -71,8 +71,7 @@ db_error::db_error(char const *what_arg)
  * @param c PostgreSQL error code string
  * @param d Additional error details or context
  */
-db_error::db_error(std::string const &message, std::string s, std::string c,
-                   std::string d)
+db_error::db_error(std::string const &message, std::string s, std::string c, std::string d)
     : std::runtime_error(message)
     , severity(s)
     , code(c)
@@ -130,8 +129,7 @@ query_error::query_error(char const *what_arg)
  * @param c PostgreSQL error code string
  * @param d Additional error details or context
  */
-query_error::query_error(std::string const &message, std::string s, std::string c,
-                         std::string d)
+query_error::query_error(std::string const &message, std::string s, std::string c, std::string d)
     : db_error(message, s, c, d) {}
 
 /**

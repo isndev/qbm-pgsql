@@ -237,8 +237,7 @@ struct has_parser<std::optional<T>, pg::protocol_data_format::Binary>
  * @tparam Args The types contained in the tuple
  */
 template <typename... Args>
-struct has_parser<std::tuple<Args...>, pg::protocol_data_format::Text>
-    : std::true_type {};
+struct has_parser<std::tuple<Args...>, pg::protocol_data_format::Text> : std::true_type {};
 
 /**
  * @brief Tuples can be parsed from binary format
@@ -246,8 +245,7 @@ struct has_parser<std::tuple<Args...>, pg::protocol_data_format::Text>
  * @tparam Args The types contained in the tuple
  */
 template <typename... Args>
-struct has_parser<std::tuple<Args...>, pg::protocol_data_format::Binary>
-    : std::true_type {};
+struct has_parser<std::tuple<Args...>, pg::protocol_data_format::Binary> : std::true_type {};
 
 /**
  * @brief Base reader for binary data that uses ParamUnserializer
@@ -812,8 +810,8 @@ copy_to_vector(InputIterator begin, InputIterator end) {
 
 // Adding a namespace detail to contain utility components and make ParamUnserializer available
 namespace detail {
-    // Import ParamUnserializer from the parent namespace to make it available here
-    using qb::pg::detail::ParamUnserializer;
+// Import ParamUnserializer from the parent namespace to make it available here
+using qb::pg::detail::ParamUnserializer;
 } // namespace detail
 
 /**
@@ -853,10 +851,8 @@ protocol_read(InputIterator begin, InputIterator end, T &value) {
  * @return detail::message::const_iterator New start iterator (after reading)
  */
 template <>
-detail::message::const_iterator
-protocol_read<pg::protocol_data_format::Binary, qb::uuid>(
-    detail::message::const_iterator begin, detail::message::const_iterator end,
-    qb::uuid &value);
+detail::message::const_iterator protocol_read<pg::protocol_data_format::Binary, qb::uuid>(
+    detail::message::const_iterator begin, detail::message::const_iterator end, qb::uuid &value);
 
 /**
  * @brief Specialization for reading UUID from text format
@@ -868,8 +864,7 @@ protocol_read<pg::protocol_data_format::Binary, qb::uuid>(
  */
 template <>
 detail::message::const_iterator protocol_read<pg::protocol_data_format::Text, qb::uuid>(
-    detail::message::const_iterator begin, detail::message::const_iterator end,
-    qb::uuid &value);
+    detail::message::const_iterator begin, detail::message::const_iterator end, qb::uuid &value);
 
 } // namespace io
 } // namespace pg
