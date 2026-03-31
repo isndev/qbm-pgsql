@@ -38,8 +38,7 @@
 namespace qb {
 namespace pg {
 
-const resultset::size_type resultset::npos =
-    std::numeric_limits<resultset::size_type>::max();
+const resultset::size_type      resultset::npos = std::numeric_limits<resultset::size_type>::max();
 const resultset::row::size_type resultset::row::npos =
     std::numeric_limits<resultset::row::size_type>::max();
 
@@ -104,8 +103,7 @@ int
 resultset::const_row_iterator::compare(const_row_iterator const &rhs) const {
     if (!(*this) && !rhs) // invalid iterators are equal
         return 0;
-    assert(result_ == rhs.result_ &&
-           "Cannot compare iterators in different result sets");
+    assert(result_ == rhs.result_ && "Cannot compare iterators in different result sets");
     if (row_index_ != rhs.row_index_)
         return (row_index_ < rhs.row_index_) ? -1 : 1;
     return 0;
@@ -172,10 +170,8 @@ int
 resultset::const_field_iterator::compare(const_field_iterator const &rhs) const {
     if (!(*this) && !rhs) // invalid iterators are equal
         return 0;
-    assert(result_ == rhs.result_ &&
-           "Cannot compare iterators in different result sets");
-    assert(row_index_ == rhs.row_index_ &&
-           "Cannot compare iterators in different data rows");
+    assert(result_ == rhs.result_ && "Cannot compare iterators in different result sets");
+    assert(row_index_ == rhs.row_index_ && "Cannot compare iterators in different data rows");
     if (field_index_ != rhs.field_index_)
         return field_index_ < rhs.field_index_ ? -1 : 1;
     return 0;
@@ -218,6 +214,13 @@ resultset::resultset()
 
 resultset::resultset(result_impl_ptr impl)
     : pimpl_(impl) {}
+
+resultset
+resultset::deep_snapshot() const {
+    if (!pimpl_)
+        return resultset();
+    return resultset(new detail::result_impl(pimpl_->clone_snapshot()));
+}
 
 resultset::size_type
 resultset::size() const {
@@ -348,12 +351,12 @@ resultset::json() const {
     for (const auto row : *this) {
         qb::json row_obj = qb::json::object();
         for (const auto field : row) {
-            auto opt = field.as<std::optional<std::string>>();
+            auto opt              = field.as<std::optional<std::string>>();
             row_obj[field.name()] = opt;
         }
         result.push_back(row_obj);
     }
-    
+
     return result;
 }
 

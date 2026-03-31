@@ -117,8 +117,7 @@ public:
      * @param row_index The index of the row containing the field
      * @param field_index The index of the field to position the iterator at
      */
-    data_iterator(const resultset *result, std::size_t row_index,
-                  std::size_t field_index)
+    data_iterator(const resultset *result, std::size_t row_index, std::size_t field_index)
         : result_(result)
         , row_index_(row_index)
         , field_index_(field_index) {}
@@ -152,7 +151,8 @@ public:
      *
      * @return The data element at the current position
      */
-    value_type operator*() const {
+    value_type
+    operator*() const {
         return static_cast<Derived &>(*this).operator*();
     }
 

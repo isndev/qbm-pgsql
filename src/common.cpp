@@ -46,7 +46,7 @@ namespace {
  */
 struct IsolationLevelEntry {
     isolation_level level;
-    const char      *name;
+    const char     *name;
 };
 
 constexpr std::array<IsolationLevelEntry, 3> ISOLATION_TO_STRING{{

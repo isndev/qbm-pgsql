@@ -18,23 +18,22 @@
 project(qbm-pgsql)
 
 # Check if qb framework is available
-if(NOT QB_FOUND)
+if (NOT QB_FOUND)
     qb_status_message("qb framework not found, skipping PostgreSQL module")
     return()
-endif()
+endif ()
 
-# Check if SSL support is available
-if(NOT QB_HAS_SSL)
-    qb_status_message("PostgreSQL module requires SSL support - skipping")
-    return()
-endif()
+# TCP/cleartext builds without OpenSSL; qb::pg::tcp::ssl::database requires QB_HAS_SSL
+if (NOT QB_HAS_SSL)
+    qb_status_message("PostgreSQL: building cleartext TCP only (QB_HAS_SSL off — TLS transport alias unavailable)")
+endif ()
 
 # Register the PostgreSQL module using the new framework functions
 qb_register_module(
-    NAME pgsql
-    VERSION 2.0.0
-    DEPENDS qb-core
-    SOURCES
+        NAME pgsql
+        VERSION 2.0.0
+        DEPENDS qb-core
+        SOURCES
         src/sqlstates.cpp
         src/error.cpp
         src/pg_types.cpp
@@ -47,11 +46,11 @@ qb_register_module(
         src/field_reader_integration.cpp
         src/param_unserializer.cpp
         pgsql.cpp
-    DEFINES
+        DEFINES
         QBM_PGSQL_VERSION=2.0.0
 )
 
 # Add tests if enabled
-if(QB_BUILD_TESTS)
+if (QB_BUILD_TESTS)
     add_subdirectory(tests)
-endif()
+endif ()

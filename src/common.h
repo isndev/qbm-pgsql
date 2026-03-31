@@ -145,11 +145,11 @@ struct dbalias : std::string {
  * connections, with optional SSL encryption.
  */
 struct connection_options {
-    dbalias     alias;  /**< Database alias for convenient reference */
-    std::string schema; /**< Database connection schema. Currently supported are tcp and
-                           socket */
-    std::string uri; /**< Database connection URI. `host:port` for tcp, `/path/to/file`
-                        for socket */
+    dbalias     alias;    /**< Database alias for convenient reference */
+    std::string schema;   /**< Database connection schema. Currently supported are tcp and
+                             socket */
+    std::string uri;      /**< Database connection URI. `host:port` for tcp, `/path/to/file`
+                             for socket */
     std::string database; /**< Database name to connect to */
     std::string user;     /**< Database user name for authentication */
     std::string password; /**< Database user's password for authentication */
@@ -157,7 +157,7 @@ struct connection_options {
 
     // P1-1: Connection health check / keepalive settings
     int keepalive_interval{0}; /**< TCP keepalive interval in seconds (0 = disabled) */
-    int keepalive_probes{3};  /**< Number of keepalive probes before considering dead */
+    int keepalive_probes{3};   /**< Number of keepalive probes before considering dead */
     int keepalive_idle{60};    /**< Seconds of idle time before sending keepalive probes */
 
     /**
@@ -210,9 +210,9 @@ enum class isolation_level {
                         before it began  (default) */
     repeatable_read, /**< All statements in the transaction see only rows committed
                         before the first query is executed */
-    serializable /**< All statements in the transaction see only rows committed before
-                    the first query, and     transactions can only be committed if they
-                    could be executed one at a     time */
+    serializable     /**< All statements in the transaction see only rows committed before
+                        the first query, and     transactions can only be committed if they
+                        could be executed one at a     time */
 };
 
 /**
@@ -236,8 +236,7 @@ enum class isolation_level {
 struct transaction_mode {
     isolation_level isolation =
         isolation_level::read_committed; /**< Isolation level for the transaction */
-    bool read_only =
-        false; /**< Whether the transaction is read-only (no writes allowed) */
+    bool read_only  = false; /**< Whether the transaction is read-only (no writes allowed) */
     bool deferrable = false; /**< Whether the transaction is deferrable (only applies to
                                 serializable transactions) */
 
@@ -259,8 +258,7 @@ struct transaction_mode {
      * @param ro Whether the transaction is read-only (true) or read-write (false)
      * @param def Whether the transaction is deferrable (true) or non-deferrable (false)
      */
-    explicit constexpr transaction_mode(isolation_level i, bool ro = false,
-                                        bool def = false)
+    explicit constexpr transaction_mode(isolation_level i, bool ro = false, bool def = false)
         : isolation{i}
         , read_only{ro}
         , deferrable{def} {}
@@ -276,8 +274,8 @@ struct transaction_mode {
  * @param val The transaction mode to output
  * @return Reference to the output stream after writing
  */
-::std::ostream    &operator<<(::std::ostream &os, transaction_mode const &val);
-::std::string      to_string(transaction_mode const &val);
+::std::ostream &operator<<(::std::ostream &os, transaction_mode const &val);
+::std::string   to_string(transaction_mode const &val);
 
 /**
  * @brief Description of a field returned by the PostgreSQL backend
@@ -339,8 +337,9 @@ struct field_description {
      * @brief The format code for field data
      *
      * Indicates whether the field data is in text (0) or binary (1) format.
-     * In a RowDescription returned from the statement variant of Describe,
-     * the format code is not yet known and will always be zero.
+     * Describe('S') always sends 0 here; after extended-query execute the client sets
+     * this to match the per-column result formats sent in Bind (see
+     * `sync_field_format_codes_with_extended_query_bind`).
      */
     protocol_data_format format_code;
 
@@ -359,6 +358,62 @@ struct field_description {
  * the structure of the data returned by a query.
  */
 using row_description_type = std::vector<field_description>;
+
+/**
+ * @brief True if we request PostgreSQL binary transfer for this column in Bind.
+ *
+ * Describe('S') leaves format_code 0; we choose per-column result formats in Bind.
+ * String-like types use text on the wire so DataRow matches our text decoders; scalars
+ * use binary for efficiency.
+ */
+[[nodiscard]] inline bool
+type_oid_prefers_binary_result_format(oid const t) noexcept {
+    switch (static_cast<int>(t)) {
+        case static_cast<int>(oid::text):
+        case static_cast<int>(oid::varchar):
+        case static_cast<int>(oid::bpchar):
+        case static_cast<int>(oid::unknown):
+        case static_cast<int>(oid::xml):
+        case static_cast<int>(oid::cstring):
+        case static_cast<int>(oid::json):
+        case static_cast<int>(oid::tsvector):
+        case static_cast<int>(oid::tsquery):
+        case static_cast<int>(oid::gtsvector):
+        case static_cast<int>(oid::name):
+            // String-like / text-on-wire: same rationale as text/varchar (see readme/types.md).
+            // jsonb stays binary (efficient structured binary on the wire).
+            return false;
+        case static_cast<int>(oid::regproc):
+        case static_cast<int>(oid::regprocedure):
+        case static_cast<int>(oid::regoper):
+        case static_cast<int>(oid::regoperator):
+        case static_cast<int>(oid::regclass):
+        case static_cast<int>(oid::regtype):
+        case static_cast<int>(oid::regrole):
+        case static_cast<int>(oid::regconfig):
+        case static_cast<int>(oid::regdictionary):
+            // Catalog / reg* types: binary is often an OID or internal form; text matches
+            // human-readable names and std::string consumption.
+            return false;
+        case static_cast<int>(oid::cash):
+            // money: locale-dependent text is safer than assuming binary cash layout everywhere.
+            return false;
+        default:
+            return true;
+    }
+}
+
+/**
+ * @brief Set `format_code` on each field to match `ExecuteQuery` Bind result formats.
+ */
+inline void
+sync_field_format_codes_with_extended_query_bind(row_description_type &desc) {
+    for (field_description &fd : desc) {
+        fd.format_code = type_oid_prefers_binary_result_format(fd.type_oid)
+                             ? protocol_data_format::Binary
+                             : protocol_data_format::Text;
+    }
+}
 
 //@{
 /** @name Forward declarations */

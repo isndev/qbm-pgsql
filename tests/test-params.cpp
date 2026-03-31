@@ -70,20 +70,17 @@ public:
      */
     void
     test_string_vector(const std::vector<std::string> &values) {
-        std::cout << "\n===== Test with vector of " << values.size()
-                  << " strings =====\n";
+        std::cout << "\n===== Test with vector of " << values.size() << " strings =====\n";
 
         // Reset the serializer
         serializer_.reset();
 
         // Add the string vector directly
-        std::cout << "[TEST] Adding a vector of " << values.size()
-                  << " strings as parameters\n";
+        std::cout << "[TEST] Adding a vector of " << values.size() << " strings as parameters\n";
 
         // Display each value in the vector
         for (const auto &value : values) {
-            std::cout << "[TEST]   - Value: '" << value << "', length: " << value.size()
-                      << "\n";
+            std::cout << "[TEST]   - Value: '" << value << "', length: " << value.size() << "\n";
         }
 
         // Add the vector to the serializer
@@ -144,15 +141,15 @@ public:
 
         if (param_count != expected_values.size()) {
             std::cout << "ERROR: The number of parameters (" << param_count
-                      << ") does not match the number of expected values ("
-                      << expected_values.size() << ")\n";
+                      << ") does not match the number of expected values (" << expected_values.size()
+                      << ")\n";
             return;
         }
 
         if (types.size() != expected_values.size()) {
             std::cout << "ERROR: The number of types (" << types.size()
-                      << ") does not match the number of expected values ("
-                      << expected_values.size() << ")\n";
+                      << ") does not match the number of expected values (" << expected_values.size()
+                      << ")\n";
             return;
         }
 
@@ -160,8 +157,8 @@ public:
         bool types_ok = true;
         for (size_t i = 0; i < types.size(); ++i) {
             if (static_cast<int>(types[i]) != static_cast<int>(oid::text)) {
-                std::cout << "ERROR: Parameter " << i << " has type " << types[i]
-                          << " instead of " << oid::text << " (text)\n";
+                std::cout << "ERROR: Parameter " << i << " has type " << types[i] << " instead of "
+                          << oid::text << " (text)\n";
                 types_ok = false;
             }
         }
@@ -195,18 +192,15 @@ public:
     /**
      * @brief Test NUMERIC type serialization
      */
-    void test_numeric() {
+    void
+    test_numeric() {
         using namespace qb::pg::detail;
 
         std::cout << "\n===== Test NUMERIC type parameters =====\n";
 
         // Create numeric values
-        std::vector<numeric> values = {
-            numeric("0"),
-            numeric("123.45"),
-            numeric("-999.99"),
-            numeric("123456789.0123456789")
-        };
+        std::vector<numeric> values = {numeric("0"), numeric("123.45"), numeric("-999.99"),
+                                       numeric("123456789.0123456789")};
 
         for (const auto &val : values) {
             std::cout << "Testing NUMERIC: " << val.str() << "\n";
@@ -221,13 +215,13 @@ public:
             if (result.str() == val.str()) {
                 std::cout << "  SUCCESS: Round-trip preserved value\n";
             } else {
-                std::cout << "  ERROR: Round-trip failed (expected " << val.str()
-                          << ", got " << result.str() << ")\n";
+                std::cout << "  ERROR: Round-trip failed (expected " << val.str() << ", got "
+                          << result.str() << ")\n";
             }
 
             // Test text format
-            std::string text = TypeConverter<numeric>::to_text(val);
-            numeric text_result = TypeConverter<numeric>::from_text(text);
+            std::string text        = TypeConverter<numeric>::to_text(val);
+            numeric     text_result = TypeConverter<numeric>::from_text(text);
             if (text_result.str() == val.str()) {
                 std::cout << "  SUCCESS: Text format preserved value\n";
             } else {
@@ -239,18 +233,17 @@ public:
     /**
      * @brief Test DATE type serialization
      */
-    void test_date() {
+    void
+    test_date() {
         using namespace qb::pg::detail;
 
         std::cout << "\n===== Test DATE type parameters =====\n";
 
         // Create date values
-        std::vector<pgdate> values = {
-            pgdate(0),  // 2000-01-01 (epoch)
-            pgdate::from_string("2024-12-25"),
-            pgdate::from_string("1990-01-01"),
-            pgdate::from_string("1970-01-01")
-        };
+        std::vector<pgdate> values = {pgdate(0), // 2000-01-01 (epoch)
+                                      pgdate::from_string("2024-12-25"),
+                                      pgdate::from_string("1990-01-01"),
+                                      pgdate::from_string("1970-01-01")};
 
         for (const auto &val : values) {
             std::cout << "Testing DATE: " << val.to_string() << "\n";
@@ -269,8 +262,8 @@ public:
             }
 
             // Test text format
-            std::string text = TypeConverter<pgdate>::to_text(val);
-            pgdate text_result = TypeConverter<pgdate>::from_text(text);
+            std::string text        = TypeConverter<pgdate>::to_text(val);
+            pgdate      text_result = TypeConverter<pgdate>::from_text(text);
             if (text_result == val) {
                 std::cout << "  SUCCESS: Text format preserved value\n";
             } else {
@@ -282,7 +275,8 @@ public:
     /**
      * @brief Test INTERVAL type serialization
      */
-    void test_interval() {
+    void
+    test_interval() {
         using namespace std::chrono;
         using namespace qb::pg::detail;
 
@@ -318,7 +312,8 @@ public:
     /**
      * @brief Test TIME type serialization
      */
-    void test_time() {
+    void
+    test_time() {
         using namespace qb::pg::detail;
 
         std::cout << "\n===== Test TIME type parameters =====\n";
@@ -341,8 +336,8 @@ public:
         }
 
         // Text format
-        std::string text = TypeConverter<pgtime>::to_text(t);
-        pgtime text_result = TypeConverter<pgtime>::from_text(text);
+        std::string text        = TypeConverter<pgtime>::to_text(t);
+        pgtime      text_result = TypeConverter<pgtime>::from_text(text);
         if (text_result == t) {
             std::cout << "  SUCCESS: Text format preserved value\n";
         } else {
@@ -405,13 +400,8 @@ main() {
 
     // Test network types
     std::cout << "\n>>> Testing NETWORK ADDRESS types (INET/CIDR/MACADDR)...\n";
-    std::vector<std::string> network_values = {
-        "192.168.1.100",
-        "10.0.0.0/8",
-        "2001:db8::1",
-        "::1",
-        "00:1a:2b:3c:4d:5e"
-    };
+    std::vector<std::string> network_values = {"192.168.1.100", "10.0.0.0/8", "2001:db8::1", "::1",
+                                               "00:1a:2b:3c:4d:5e"};
     std::cout << "  IPv4: " << network_values[0] << "\n";
     std::cout << "  CIDR: " << network_values[1] << "\n";
     std::cout << "  IPv6: " << network_values[2] << "\n";
@@ -422,13 +412,8 @@ main() {
 
     // Test time types
     std::cout << "\n>>> Testing TIME types (TIME/TIMETZ)...\n";
-    std::vector<std::string> time_values = {
-        "14:30:45",
-        "14:30:45.123456",
-        "18:00:00+02:00",
-        "00:00:00",
-        "23:59:59.999999"
-    };
+    std::vector<std::string> time_values = {"14:30:45", "14:30:45.123456", "18:00:00+02:00",
+                                            "00:00:00", "23:59:59.999999"};
     std::cout << "  Time: " << time_values[0] << "\n";
     std::cout << "  Time with microseconds: " << time_values[1] << "\n";
     std::cout << "  Time with timezone: " << time_values[2] << "\n";

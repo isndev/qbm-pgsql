@@ -39,10 +39,12 @@
 #include <chrono>
 #include <future>
 #include <gtest/gtest.h>
+#include <qb/io/async.h>
+#include <qb/io/async/coroutine.h>
+#include <qb/io/async/coroutine/utils.h>
 #include <thread>
 #include "../pgsql.h"
-
-constexpr std::string_view PGSQL_CONNECTION_STR = "tcp://test:test@localhost:5432[test]";
+#include "test_config.hpp"
 
 using namespace qb::pg;
 using namespace qb::pg::detail;
@@ -65,30 +67,31 @@ protected:
     SetUp() override {
         // Create primary database connection
         db1_ = std::make_unique<qb::pg::tcp::database>();
-        ASSERT_TRUE(db1_->connect(PGSQL_CONNECTION_STR.data()));
+        ASSERT_TRUE(qb::io::async::run_sync(db1_->connect(qb::pg::test::dsn_tcp_string())));
 
         // Create secondary database connection for concurrent testing
         db2_ = std::make_unique<qb::pg::tcp::database>();
-        ASSERT_TRUE(db2_->connect(PGSQL_CONNECTION_STR.data()));
+        ASSERT_TRUE(qb::io::async::run_sync(db2_->connect(qb::pg::test::dsn_tcp_string())));
 
         // Set up test tables
-        auto setup1 =
-            db1_->execute("DROP TABLE IF EXISTS test_advanced_transactions").await();
+        auto setup1 = db1_->execute("DROP TABLE IF EXISTS test_advanced_transactions", discard_query,
+                                    discard_error)
+                          .await();
         ASSERT_TRUE(setup1);
 
         auto setup2 = db1_->execute("CREATE TABLE test_advanced_transactions ("
                                     "id SERIAL PRIMARY KEY, "
                                     "value TEXT, "
-                                    "counter INTEGER DEFAULT 0)")
+                                    "counter INTEGER DEFAULT 0)",
+                                    discard_query, discard_error)
                           .await();
         ASSERT_TRUE(setup2);
 
         // Insert initial test data
-        auto setup3 =
-            db1_->execute(
-                    "INSERT INTO test_advanced_transactions (value, counter) VALUES "
-                    "('row1', 10), ('row2', 20), ('row3', 30)")
-                .await();
+        auto setup3 = db1_->execute("INSERT INTO test_advanced_transactions (value, counter) VALUES "
+                                    "('row1', 10), ('row2', 20), ('row3', 30)",
+                                    discard_query, discard_error)
+                          .await();
         ASSERT_TRUE(setup3);
     }
 
@@ -100,8 +103,9 @@ protected:
     void
     TearDown() override {
         if (db1_) {
-            auto cleanup =
-                db1_->execute("DROP TABLE IF EXISTS test_advanced_transactions").await();
+            auto cleanup = db1_->execute("DROP TABLE IF EXISTS test_advanced_transactions",
+                                         discard_query, discard_error)
+                               .await();
             db1_->disconnect();
             db1_.reset();
         }
@@ -113,8 +117,7 @@ protected:
     }
 
     std::unique_ptr<qb::pg::tcp::database> db1_; // Primary connection
-    std::unique_ptr<qb::pg::tcp::database>
-        db2_; // Secondary connection for concurrent tests
+    std::unique_ptr<qb::pg::tcp::database> db2_; // Secondary connection for concurrent tests
 };
 
 /**
@@ -129,36 +132,33 @@ TEST_F(PostgreSQLAdvancedTransactionTest, ExplicitIsolationLevels) {
 
     // Create transaction mode with explicit isolation level for debugging
     transaction_mode mode{isolation_level::read_committed};
-    std::cout << "DEBUG: Transaction mode created with isolation_level::read_committed"
-              << std::endl;
+    std::cout << "DEBUG: Transaction mode created with isolation_level::read_committed" << std::endl;
 
     // Convert the transaction mode to string for debug
     std::stringstream ss;
     ss << mode;
-    std::cout << "DEBUG: Transaction mode string representation: \"BEGIN TRANSACTION"
-              << ss.str() << "\"" << std::endl;
+    std::cout << "DEBUG: Transaction mode string representation: \"BEGIN TRANSACTION" << ss.str()
+              << "\"" << std::endl;
 
     // Start a transaction with READ COMMITTED isolation
     auto status =
         db1_->begin(
                 [&read_committed_success](Transaction &t) {
                     // Query the initial value
-                    t.execute(
-                        "SELECT counter FROM test_advanced_transactions WHERE value = "
-                        "'row1'",
-                        [&read_committed_success](Transaction &tr, results result) {
-                            ASSERT_EQ(result.size(), 1);
-                            ASSERT_EQ(result[0][0].as<int>(), 10);
-                            read_committed_success = true;
+                    t.execute("SELECT counter FROM test_advanced_transactions WHERE value = "
+                              "'row1'",
+                              [&read_committed_success](Transaction &tr, results result) {
+                                  ASSERT_EQ(result.size(), 1);
+                                  ASSERT_EQ(result[0][0].as<int>(), 10);
+                                  read_committed_success = true;
 
-                            // Print debug message
-                            std::cout << "READ COMMITTED isolation test successful"
-                                      << std::endl;
-                        });
+                                  // Print debug message
+                                  std::cout << "READ COMMITTED isolation test successful"
+                                            << std::endl;
+                              });
                 },
                 [](error::db_error error) {
-                    std::cout << "Error in READ COMMITTED test: " << error.what()
-                              << std::endl;
+                    std::cout << "Error in READ COMMITTED test: " << error.what() << std::endl;
                     ASSERT_TRUE(false);
                 },
                 mode // use our debug mode variable
@@ -169,7 +169,8 @@ TEST_F(PostgreSQLAdvancedTransactionTest, ExplicitIsolationLevels) {
 
     // Reset counter if needed
     auto reset = db1_->execute("UPDATE test_advanced_transactions SET counter = 10 "
-                               "WHERE value = 'row1'")
+                               "WHERE value = 'row1'",
+                               discard_query, discard_error)
                      .await();
     ASSERT_TRUE(reset);
 }
@@ -193,40 +194,37 @@ TEST_F(PostgreSQLAdvancedTransactionTest, ReadOnlyTransaction) {
     // Convert the mode to string for debugging
     std::stringstream ss;
     ss << mode;
-    std::cout << "DEBUG: READ ONLY transaction mode string: \"BEGIN TRANSACTION"
-              << ss.str() << "\"" << std::endl;
+    std::cout << "DEBUG: READ ONLY transaction mode string: \"BEGIN TRANSACTION" << ss.str() << "\""
+              << std::endl;
 
     // Start a transaction with READ ONLY mode using mode parameter
     auto status =
         db1_->begin(
                 [&read_success, &write_attempted](Transaction &t) {
                     // Try to read data (should succeed)
-                    t.execute(
-                        "SELECT COUNT(*) FROM test_advanced_transactions",
-                        [&read_success, &write_attempted](Transaction &tr,
-                                                          results      result) {
-                            ASSERT_EQ(result.size(), 1);
-                            std::cout << "Read operation successful, count: "
-                                      << result[0][0].as<int>() << std::endl;
-                            read_success = true;
+                    t.execute("SELECT COUNT(*) FROM test_advanced_transactions",
+                              [&read_success, &write_attempted](Transaction &tr, results result) {
+                                  ASSERT_EQ(result.size(), 1);
+                                  std::cout << "Read operation successful, count: "
+                                            << result[0][0].as<int>() << std::endl;
+                                  read_success = true;
 
-                            // Now try to modify data (should fail)
-                            tr.execute(
-                                "INSERT INTO test_advanced_transactions (value, "
-                                "counter) VALUES ('readonly_test', 999)",
-                                [&write_attempted](Transaction &tr2, results result) {
-                                    write_attempted = true;
-                                    std::cout << "WARNING: Write operation succeeded in "
-                                                 "READ ONLY transaction"
-                                              << std::endl;
-                                },
-                                [&write_attempted](error::db_error error) {
-                                    write_attempted = true;
-                                    std::cout
-                                        << "Expected error in READ ONLY transaction: "
-                                        << error.what() << std::endl;
-                                });
-                        });
+                                  // Now try to modify data (should fail)
+                                  tr.execute(
+                                      "INSERT INTO test_advanced_transactions (value, "
+                                      "counter) VALUES ('readonly_test', 999)",
+                                      [&write_attempted](Transaction &tr2, results result) {
+                                          write_attempted = true;
+                                          std::cout << "WARNING: Write operation succeeded in "
+                                                       "READ ONLY transaction"
+                                                    << std::endl;
+                                      },
+                                      [&write_attempted](error::db_error error) {
+                                          write_attempted = true;
+                                          std::cout << "Expected error in READ ONLY transaction: "
+                                                    << error.what() << std::endl;
+                                      });
+                              });
                 },
                 [&error_caught](error::db_error error) {
                     error_caught = true;
@@ -245,15 +243,14 @@ TEST_F(PostgreSQLAdvancedTransactionTest, ReadOnlyTransaction) {
     ASSERT_TRUE(error_caught);
 
     // Make sure no data was modified
-    auto verify =
-        db1_->execute("SELECT COUNT(*) FROM test_advanced_transactions WHERE value = "
-                      "'readonly_test'",
-                      [](Transaction &tr, results result) {
-                          ASSERT_EQ(result.size(), 1);
-                          ASSERT_EQ(result[0][0].as<int>(),
-                                    0); // Should be 0 if read-only worked correctly
-                      })
-            .await();
+    auto verify = db1_->execute("SELECT COUNT(*) FROM test_advanced_transactions WHERE value = "
+                                "'readonly_test'",
+                                [](Transaction &tr, results result) {
+                                    ASSERT_EQ(result.size(), 1);
+                                    ASSERT_EQ(result[0][0].as<int>(),
+                                              0); // Should be 0 if read-only worked correctly
+                                })
+                      .await();
 
     ASSERT_TRUE(verify);
 }
@@ -271,8 +268,7 @@ TEST_F(PostgreSQLAdvancedTransactionTest, SavepointRestoration) {
     // Start a transaction with a savepoint
     auto status =
         db1_->begin(
-                [&transaction_started, &savepoint_created,
-                 &after_savepoint](Transaction &t) {
+                [&transaction_started, &savepoint_created, &after_savepoint](Transaction &t) {
                     transaction_started = true;
                     std::cout << "Main transaction started" << std::endl;
 
@@ -287,24 +283,21 @@ TEST_F(PostgreSQLAdvancedTransactionTest, SavepointRestoration) {
                             tr.execute("SELECT COUNT(*) FROM test_advanced_transactions",
                                        [](Transaction &tr2, results result) {
                                            ASSERT_EQ(result.size(), 1);
-                                           std::cout << "Count in savepoint: "
-                                                     << result[0][0].as<int>()
-                                                     << std::endl;
+                                           std::cout
+                                               << "Count in savepoint: " << result[0][0].as<int>()
+                                               << std::endl;
                                        });
                         },
                         [](error::db_error error) {
-                            std::cout << "Error creating savepoint: " << error.what()
-                                      << std::endl;
+                            std::cout << "Error creating savepoint: " << error.what() << std::endl;
                             ASSERT_TRUE(false);
                         });
 
                     // Execute a query after the savepoint
-                    t.execute(
-                        "SELECT 1", [&after_savepoint](Transaction &tr, results result) {
-                            after_savepoint = true;
-                            std::cout << "Query after savepoint executed successfully"
-                                      << std::endl;
-                        });
+                    t.execute("SELECT 1", [&after_savepoint](Transaction &tr, results result) {
+                        after_savepoint = true;
+                        std::cout << "Query after savepoint executed successfully" << std::endl;
+                    });
                 },
                 [](error::db_error error) {
                     std::cout << "Transaction error: " << error.what() << std::endl;
@@ -329,13 +322,16 @@ TEST_F(PostgreSQLAdvancedTransactionTest, MultiOperationTransaction) {
     // Start a transaction with multiple operations
     auto status =
         db1_->begin([&all_operations_succeeded](Transaction &t) {
-                // First operation - insert a new row
+                // First operation - insert a new row (callback overload: coro-only
+                // execute("...") must not be used inside begin lambdas)
                 t.execute("INSERT INTO test_advanced_transactions (value, counter) "
-                          "VALUES ('temp_row', 100)");
+                          "VALUES ('temp_row', 100)",
+                          discard_query, discard_error);
 
                 // Second operation - update an existing row
                 t.execute("UPDATE test_advanced_transactions SET counter = counter + 5 "
-                          "WHERE value = 'row1'");
+                          "WHERE value = 'row1'",
+                          discard_query, discard_error);
 
                 // Third operation - verify results
                 t.execute("SELECT COUNT(*) FROM test_advanced_transactions",
@@ -355,14 +351,15 @@ TEST_F(PostgreSQLAdvancedTransactionTest, MultiOperationTransaction) {
     ASSERT_TRUE(status);
 
     // Clean up - delete the temp row
-    auto cleanup =
-        db1_->execute("DELETE FROM test_advanced_transactions WHERE value = 'temp_row'")
-            .await();
+    auto cleanup = db1_->execute("DELETE FROM test_advanced_transactions WHERE value = 'temp_row'",
+                                 discard_query, discard_error)
+                       .await();
     ASSERT_TRUE(cleanup);
 
     // Reset the counter for row1
     auto reset = db1_->execute("UPDATE test_advanced_transactions SET counter = 10 "
-                               "WHERE value = 'row1'")
+                               "WHERE value = 'row1'",
+                               discard_query, discard_error)
                      .await();
     ASSERT_TRUE(reset);
 }
@@ -386,22 +383,19 @@ TEST_F(PostgreSQLAdvancedTransactionTest, BasicErrorHandling) {
                             ASSERT_TRUE(false); // This should not be called
                         },
                         [](error::db_error error) {
-                            std::cout << "Error handled correctly: " << error.what()
-                                      << std::endl;
+                            std::cout << "Error handled correctly: " << error.what() << std::endl;
                             ASSERT_TRUE(true); // Error handler called as expected
                         });
                 },
                 [&error_handled](error::db_error error) {
                     error_handled = true;
-                    std::cout << "Transaction error callback: " << error.what()
-                              << std::endl;
+                    std::cout << "Transaction error callback: " << error.what() << std::endl;
                 })
             .await();
 
     // The transaction might fail or succeed depending on how errors are propagated in
     // the library
-    std::cout << "Transaction status: " << (status ? "succeeded" : "failed")
-              << std::endl;
+    std::cout << "Transaction status: " << (status ? "succeeded" : "failed") << std::endl;
 }
 
 /**
@@ -420,7 +414,7 @@ TEST_F(PostgreSQLAdvancedTransactionTest, TransactionTimeout) {
                 timeout_operation_started = true;
 
                 // Add statement timeout setting (1 second)
-                t.execute("SET statement_timeout = '1000'");
+                t.execute("SET statement_timeout = '1000'", discard_query, discard_error);
 
                 // Execute a query that will exceed the timeout
                 t.execute(
@@ -429,17 +423,14 @@ TEST_F(PostgreSQLAdvancedTransactionTest, TransactionTimeout) {
                         ASSERT_TRUE(false); // Should not be called due to timeout
                     },
                     [](error::db_error error) {
-                        std::cout << "Expected timeout error: " << error.what()
-                                  << std::endl;
-                        ASSERT_TRUE(std::string(error.what()).find("timeout") !=
-                                    std::string::npos);
+                        std::cout << "Expected timeout error: " << error.what() << std::endl;
+                        ASSERT_TRUE(std::string(error.what()).find("timeout") != std::string::npos);
                     });
             })
             .await();
 
     auto end_time = std::chrono::steady_clock::now();
-    auto duration =
-        std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
 
     ASSERT_TRUE(timeout_operation_started);
 
@@ -448,6 +439,26 @@ TEST_F(PostgreSQLAdvancedTransactionTest, TransactionTimeout) {
     std::cout << "Transaction took " << duration.count() << " ms" << std::endl;
     ASSERT_GT(duration.count(), 900);  // At least 900ms
     ASSERT_LT(duration.count(), 2000); // But less than 2 seconds (not the full 3s sleep)
+}
+
+/**
+ * @brief Same as manual SET statement_timeout, but via Transaction::set_timeout() before begin().
+ */
+TEST_F(PostgreSQLAdvancedTransactionTest, TransactionTimeout_ViaSetTimeoutBeforeBegin) {
+    bool       saw_error = false;
+    const auto st =
+        db1_->set_timeout(1000)
+            .begin([&saw_error](Transaction &t) {
+                t.execute(
+                    "SELECT pg_sleep(3)", [](Transaction &, results) { ASSERT_TRUE(false); },
+                    [&saw_error](error::db_error const &e) {
+                        saw_error = true;
+                        EXPECT_NE(std::string(e.what()).find("timeout"), std::string::npos);
+                    });
+            })
+            .await();
+    EXPECT_TRUE(saw_error);
+    EXPECT_FALSE(static_cast<bool>(st)); // statement error leaves the block in a failed state
 }
 
 /**
@@ -464,8 +475,7 @@ TEST_F(PostgreSQLAdvancedTransactionTest, BasicTransactionAPIUsage) {
     auto status =
         db1_->begin([&success](Transaction &t) {
                 // Simple query to verify transaction functionality
-                t.execute("SELECT 1 AS simple_test", [&success](Transaction &tr,
-                                                                results      result) {
+                t.execute("SELECT 1 AS simple_test", [&success](Transaction &tr, results result) {
                     ASSERT_EQ(result.size(), 1);
                     ASSERT_EQ(result[0][0].as<int>(), 1);
                     success = true;
@@ -490,55 +500,53 @@ TEST_F(PostgreSQLAdvancedTransactionTest, SequentialTransactions) {
     bool transaction2_complete = false;
 
     // First transaction - update row1
-    auto status1 =
-        db1_->begin([&transaction1_complete](Transaction &t) {
-                t.execute("UPDATE test_advanced_transactions SET counter = counter + 1 "
-                          "WHERE value = 'row1'",
-                          [&transaction1_complete](Transaction &tr, results result) {
-                              transaction1_complete = true;
-                              std::cout << "First transaction completed successfully"
-                                        << std::endl;
-                          });
-            })
-            .await();
+    auto status1 = db1_->begin([&transaction1_complete](Transaction &t) {
+                           t.execute("UPDATE test_advanced_transactions SET counter = counter + 1 "
+                                     "WHERE value = 'row1'",
+                                     [&transaction1_complete](Transaction &tr, results result) {
+                                         transaction1_complete = true;
+                                         std::cout << "First transaction completed successfully"
+                                                   << std::endl;
+                                     });
+                       })
+                       .await();
 
     ASSERT_TRUE(transaction1_complete);
     ASSERT_TRUE(status1);
 
     // Second transaction - update row2
-    auto status2 =
-        db1_->begin([&transaction2_complete](Transaction &t) {
-                t.execute("UPDATE test_advanced_transactions SET counter = counter + 1 "
-                          "WHERE value = 'row2'",
-                          [&transaction2_complete](Transaction &tr, results result) {
-                              transaction2_complete = true;
-                              std::cout << "Second transaction completed successfully"
-                                        << std::endl;
-                          });
-            })
-            .await();
+    auto status2 = db1_->begin([&transaction2_complete](Transaction &t) {
+                           t.execute("UPDATE test_advanced_transactions SET counter = counter + 1 "
+                                     "WHERE value = 'row2'",
+                                     [&transaction2_complete](Transaction &tr, results result) {
+                                         transaction2_complete = true;
+                                         std::cout << "Second transaction completed successfully"
+                                                   << std::endl;
+                                     });
+                       })
+                       .await();
 
     ASSERT_TRUE(transaction2_complete);
     ASSERT_TRUE(status2);
 
     // Verify both updates
-    auto verify =
-        db1_->execute("SELECT value, counter FROM test_advanced_transactions WHERE "
-                      "value IN ('row1', 'row2') ORDER BY value",
-                      [](Transaction &tr, results result) {
-                          ASSERT_EQ(result.size(), 2);
-                          std::cout << "Row1 counter after both transactions: "
-                                    << result[0]["counter"].as<int>() << std::endl;
-                          std::cout << "Row2 counter after both transactions: "
-                                    << result[1]["counter"].as<int>() << std::endl;
-                      })
-            .await();
+    auto verify = db1_->execute("SELECT value, counter FROM test_advanced_transactions WHERE "
+                                "value IN ('row1', 'row2') ORDER BY value",
+                                [](Transaction &tr, results result) {
+                                    ASSERT_EQ(result.size(), 2);
+                                    std::cout << "Row1 counter after both transactions: "
+                                              << result[0]["counter"].as<int>() << std::endl;
+                                    std::cout << "Row2 counter after both transactions: "
+                                              << result[1]["counter"].as<int>() << std::endl;
+                                })
+                      .await();
 
     // Reset the counters for other tests
     auto reset = db1_->execute("UPDATE test_advanced_transactions SET counter = CASE "
                                "WHEN value = 'row1' THEN 10 "
                                "WHEN value = 'row2' THEN 20 "
-                               "WHEN value = 'row3' THEN 30 END")
+                               "WHEN value = 'row3' THEN 30 END",
+                               discard_query, discard_error)
                      .await();
     ASSERT_TRUE(reset);
 }
@@ -561,29 +569,27 @@ TEST_F(PostgreSQLAdvancedTransactionTest, SerializableTransaction) {
     // Convert the mode to string for debugging
     std::stringstream ss;
     ss << mode;
-    std::cout << "DEBUG: SERIALIZABLE transaction mode string: \"BEGIN TRANSACTION"
-              << ss.str() << "\"" << std::endl;
+    std::cout << "DEBUG: SERIALIZABLE transaction mode string: \"BEGIN TRANSACTION" << ss.str()
+              << "\"" << std::endl;
 
     // Start a transaction with SERIALIZABLE mode directly via the mode parameter
     auto status =
         db1_->begin(
                 [&serializable_success](Transaction &t) {
                     // Run a query in serializable mode
-                    t.execute(
-                        "SELECT counter FROM test_advanced_transactions WHERE value = "
-                        "'row1'",
-                        [&serializable_success](Transaction &tr, results result) {
-                            ASSERT_EQ(result.size(), 1);
-                            ASSERT_EQ(result[0][0].as<int>(), 10);
-                            serializable_success = true;
-                            std::cout
-                                << "Serializable transaction query executed successfully"
-                                << std::endl;
-                        });
+                    t.execute("SELECT counter FROM test_advanced_transactions WHERE value = "
+                              "'row1'",
+                              [&serializable_success](Transaction &tr, results result) {
+                                  ASSERT_EQ(result.size(), 1);
+                                  ASSERT_EQ(result[0][0].as<int>(), 10);
+                                  serializable_success = true;
+                                  std::cout << "Serializable transaction query executed successfully"
+                                            << std::endl;
+                              });
                 },
                 [](error::db_error error) {
-                    std::cout << "Error in SERIALIZABLE transaction test: "
-                              << error.what() << std::endl;
+                    std::cout << "Error in SERIALIZABLE transaction test: " << error.what()
+                              << std::endl;
                     ASSERT_TRUE(false);
                 },
                 mode // Pass mode directly here
@@ -606,57 +612,53 @@ TEST_F(PostgreSQLAdvancedTransactionTest, DeallocatePreparedStatement) {
     std::cout << "Beginning prepared statement deallocation test" << std::endl;
 
     // First prepare a statement outside transaction
-    auto prepare_status =
-        db1_->prepare("test_deallocate_stmt",
-                      "SELECT * FROM test_advanced_transactions WHERE value = $1")
-            .await();
+    auto prepare_status = db1_->prepare("test_deallocate_stmt",
+                                        "SELECT * FROM test_advanced_transactions WHERE value = $1",
+                                        type_oid_sequence{}, discard_prepare, discard_error)
+                              .await();
     ASSERT_TRUE(prepare_status);
 
     // Execute the prepared statement to verify it works
     auto exec_status =
-        db1_->execute(
-                "test_deallocate_stmt", params{std::string("row1")},
-                [&prepare_success](Transaction &tr, results result) {
-                    ASSERT_EQ(result.size(), 1);
-                    prepare_success = true;
-                    std::cout
-                        << "Successfully executed prepared statement before deallocate"
-                        << std::endl;
-                })
+        db1_->execute("test_deallocate_stmt", params{std::string("row1")},
+                      [&prepare_success](Transaction &tr, results result) {
+                          ASSERT_EQ(result.size(), 1);
+                          prepare_success = true;
+                          std::cout << "Successfully executed prepared statement before deallocate"
+                                    << std::endl;
+                      })
             .await();
     ASSERT_TRUE(exec_status);
     ASSERT_TRUE(prepare_success);
 
     // Start a transaction and deallocate the statement
-    auto status =
-        db1_->begin([&deallocate_success](Transaction &t) {
-                // Deallocate the prepared statement
-                t.execute("DEALLOCATE test_deallocate_stmt",
-                          [&deallocate_success](Transaction &tr, results result) {
-                              deallocate_success = true;
-                              std::cout << "Successfully deallocated prepared statement"
-                                        << std::endl;
-                          });
-            })
-            .await();
+    auto status = db1_->begin([&deallocate_success](Transaction &t) {
+                          // Deallocate the prepared statement
+                          t.execute("DEALLOCATE test_deallocate_stmt",
+                                    [&deallocate_success](Transaction &tr, results result) {
+                                        deallocate_success = true;
+                                        std::cout << "Successfully deallocated prepared statement"
+                                                  << std::endl;
+                                    });
+                      })
+                      .await();
 
     ASSERT_TRUE(deallocate_success);
     ASSERT_TRUE(status);
 
     // Try to execute the deallocated statement (should fail)
     bool error_caught = false;
-    auto reuse_status =
-        db1_->execute(
-                "test_deallocate_stmt", params{std::string("row1")},
-                [](Transaction &tr, results result) {
-                    ASSERT_TRUE(false) << "Deallocated statement should not execute";
-                },
-                [&error_caught](error::db_error error) {
-                    error_caught = true;
-                    std::cout << "Expected error after deallocate: " << error.what()
-                              << std::endl;
-                })
-            .await();
+    auto reuse_status = db1_->execute(
+                                "test_deallocate_stmt", params{std::string("row1")},
+                                [](Transaction &tr, results result) {
+                                    ASSERT_TRUE(false) << "Deallocated statement should not execute";
+                                },
+                                [&error_caught](error::db_error error) {
+                                    error_caught = true;
+                                    std::cout << "Expected error after deallocate: " << error.what()
+                                              << std::endl;
+                                })
+                            .await();
 
     ASSERT_FALSE(reuse_status);
     ASSERT_TRUE(error_caught);
@@ -674,16 +676,24 @@ TEST_F(PostgreSQLAdvancedTransactionTest, ConstraintViolationHandling) {
 
     std::cout << "Beginning constraint violation test" << std::endl;
 
+    // Idempotent setup: prior runs may have committed the seed row outside the failing txn.
+    auto drop_uc =
+        db1_->execute("DROP TABLE IF EXISTS test_unique_constraint", discard_query, discard_error)
+            .await();
+    ASSERT_TRUE(drop_uc);
+
     // First, create a table with a unique constraint
     auto setup = db1_->execute("CREATE TABLE IF NOT EXISTS test_unique_constraint ("
                                "id SERIAL PRIMARY KEY, "
-                               "unique_value TEXT UNIQUE)")
+                               "unique_value TEXT UNIQUE)",
+                               discard_query, discard_error)
                      .await();
     ASSERT_TRUE(setup);
 
     // Insert an initial row
     auto insert = db1_->execute("INSERT INTO test_unique_constraint (unique_value) "
-                                "VALUES ('unique_string')")
+                                "VALUES ('unique_string')",
+                                discard_query, discard_error)
                       .await();
     ASSERT_TRUE(insert);
 
@@ -709,15 +719,14 @@ TEST_F(PostgreSQLAdvancedTransactionTest, ConstraintViolationHandling) {
                                                  "this callback";
                                       },
                                       [](error::db_error error) {
-                                          std::cout << "Expected constraint error: "
-                                                    << error.what() << std::endl;
+                                          std::cout << "Expected constraint error: " << error.what()
+                                                    << std::endl;
                                       });
                               });
                 },
                 [&error_caught](error::db_error error) {
                     error_caught = true;
-                    std::cout << "Transaction error callback: " << error.what()
-                              << std::endl;
+                    std::cout << "Transaction error callback: " << error.what() << std::endl;
                 })
             .await();
 
@@ -728,25 +737,26 @@ TEST_F(PostgreSQLAdvancedTransactionTest, ConstraintViolationHandling) {
 
     // Verify that the second insert was not applied
     bool verification_complete = false;
-    auto verify =
-        db1_->execute("SELECT COUNT(*) FROM test_unique_constraint WHERE unique_value = "
-                      "'different_unique'",
-                      [&verification_complete](Transaction &tr, results result) {
-                          ASSERT_EQ(result.size(), 1);
-                          // Should be 0 because the transaction was rolled back
-                          ASSERT_EQ(result[0][0].as<int>(), 0);
-                          verification_complete = true;
-                          std::cout << "Verification complete - transaction was "
-                                       "correctly rolled back"
-                                    << std::endl;
-                      })
-            .await();
+    auto verify = db1_->execute("SELECT COUNT(*) FROM test_unique_constraint WHERE unique_value = "
+                                "'different_unique'",
+                                [&verification_complete](Transaction &tr, results result) {
+                                    ASSERT_EQ(result.size(), 1);
+                                    // Should be 0 because the transaction was rolled back
+                                    ASSERT_EQ(result[0][0].as<int>(), 0);
+                                    verification_complete = true;
+                                    std::cout << "Verification complete - transaction was "
+                                                 "correctly rolled back"
+                                              << std::endl;
+                                })
+                      .await();
 
     ASSERT_TRUE(verify);
     ASSERT_TRUE(verification_complete);
 
     // Clean up
-    auto cleanup = db1_->execute("DROP TABLE IF EXISTS test_unique_constraint").await();
+    auto cleanup =
+        db1_->execute("DROP TABLE IF EXISTS test_unique_constraint", discard_query, discard_error)
+            .await();
     ASSERT_TRUE(cleanup);
 }
 
@@ -768,18 +778,18 @@ TEST_F(PostgreSQLAdvancedTransactionTest, TransactionWithCursor) {
                 for (int i = 0; i < CURSOR_TEST_ROWS; i++) {
                     t.execute("INSERT INTO test_advanced_transactions (value, counter) "
                               "VALUES ('cursor_row_" +
-                              std::to_string(i) + "', " + std::to_string(i) + ")");
+                                  std::to_string(i) + "', " + std::to_string(i) + ")",
+                              discard_query, discard_error);
                 }
-                std::cout << "Inserted " << CURSOR_TEST_ROWS << " rows for cursor test"
-                          << std::endl;
+                std::cout << "Inserted " << CURSOR_TEST_ROWS << " rows for cursor test" << std::endl;
             })
             .await();
     ASSERT_TRUE(insert_status);
 
     // Now test a transaction with cursor
-    bool          cursor_created = false;
-    bool          fetch_executed = false;
-    int           rows_fetched   = 0;
+    bool cursor_created = false;
+    bool fetch_executed = false;
+    int  rows_fetched   = 0;
 
     std::cout << "Starting transaction with cursor" << std::endl;
 
@@ -795,8 +805,7 @@ TEST_F(PostgreSQLAdvancedTransactionTest, TransactionWithCursor) {
                         std::cout << "Cursor declared successfully" << std::endl;
                     },
                     [](error::db_error error) {
-                        std::cout << "Error declaring cursor: " << error.what()
-                                  << std::endl;
+                        std::cout << "Error declaring cursor: " << error.what() << std::endl;
                         ASSERT_TRUE(false);
                     });
 
@@ -804,37 +813,34 @@ TEST_F(PostgreSQLAdvancedTransactionTest, TransactionWithCursor) {
                 for (int i = 0; i < 3; i++) {
                     t.execute(
                         "FETCH " + std::to_string(FETCH_SIZE) + " FROM test_cursor",
-                        [&fetch_executed, &rows_fetched, i](Transaction &tr,
-                                                          results result) {
+                        [&fetch_executed, &rows_fetched, i](Transaction &tr, results result) {
                             fetch_executed = true;
                             rows_fetched += result.size();
 
-                            std::cout << "Batch " << i + 1 << ": Fetched "
-                                      << result.size() << " rows" << std::endl;
+                            std::cout << "Batch " << i + 1 << ": Fetched " << result.size()
+                                      << " rows" << std::endl;
 
                             // Check first and last row in this batch
                             if (result.size() > 0) {
                                 int         expected_first = i * FETCH_SIZE;
                                 std::string expected_value =
                                     "cursor_row_" + std::to_string(expected_first);
-                                std::cout
-                                    << "First row in batch - value: "
-                                    << result[0]["value"].as<std::string>()
-                                    << ", counter: " << result[0]["counter"].as<int>()
-                                    << std::endl;
+                                std::cout << "First row in batch - value: "
+                                          << result[0]["value"].as<std::string>()
+                                          << ", counter: " << result[0]["counter"].as<int>()
+                                          << std::endl;
 
                                 // int expected_last = std::min(
                                 //     expected_first + static_cast<int>(result.size()) - 1,
                                 //     99);
-                                std::cout
-                                    << "Last row in batch - counter: "
-                                    << result[result.size() - 1]["counter"].as<int>()
-                                    << std::endl;
+                                std::cout << "Last row in batch - counter: "
+                                          << result[result.size() - 1]["counter"].as<int>()
+                                          << std::endl;
                             }
                         },
                         [i](error::db_error error) {
-                            std::cout << "Error in fetch batch " << i << ": "
-                                      << error.what() << std::endl;
+                            std::cout << "Error in fetch batch " << i << ": " << error.what()
+                                      << std::endl;
                             ASSERT_TRUE(false);
                         });
                 }
@@ -846,8 +852,7 @@ TEST_F(PostgreSQLAdvancedTransactionTest, TransactionWithCursor) {
                         std::cout << "Cursor closed successfully" << std::endl;
                     },
                     [](error::db_error error) {
-                        std::cout << "Error closing cursor: " << error.what()
-                                  << std::endl;
+                        std::cout << "Error closing cursor: " << error.what() << std::endl;
                         ASSERT_TRUE(false);
                     });
             })
@@ -861,8 +866,8 @@ TEST_F(PostgreSQLAdvancedTransactionTest, TransactionWithCursor) {
 
     // Clean up the inserted data
     auto cleanup =
-        db1_->execute(
-                "DELETE FROM test_advanced_transactions WHERE value LIKE 'cursor_row_%'")
+        db1_->execute("DELETE FROM test_advanced_transactions WHERE value LIKE 'cursor_row_%'",
+                      discard_query, discard_error)
             .await();
     ASSERT_TRUE(cleanup);
 }
@@ -894,50 +899,44 @@ TEST_F(PostgreSQLAdvancedTransactionTest, DirectTransactionModeUsage) {
         db1_->begin(
                 [&query_executed, &write_error_caught](Transaction &t) {
                     // Run a query in the transaction with configured mode
-                    t.execute("SELECT 1 as test_col",
-                              [&query_executed, &write_error_caught](Transaction &tr,
-                                                                     results result) {
-                                  ASSERT_EQ(result.size(), 1);
-                                  ASSERT_EQ(result[0][0].as<int>(), 1);
-                                  query_executed = true;
-                                  std::cout << "Query executed successfully in "
-                                               "transaction with mode parameter"
-                                            << std::endl;
+                    t.execute("SELECT 1 as test_col", [&query_executed, &write_error_caught](
+                                                          Transaction &tr, results result) {
+                        ASSERT_EQ(result.size(), 1);
+                        ASSERT_EQ(result[0][0].as<int>(), 1);
+                        query_executed = true;
+                        std::cout << "Query executed successfully in "
+                                     "transaction with mode parameter"
+                                  << std::endl;
 
-                                  // Try a write operation which should fail due to
-                                  // read-only
-                                  tr.execute(
-                                      "CREATE TEMP TABLE temp_test (id INT)",
-                                      [](Transaction &tr2, results result) {
-                                          std::cout << "WARNING: Write succeeded in "
-                                                       "read-only transaction!"
-                                                    << std::endl;
-                                          ASSERT_TRUE(false)
-                                              << "Write operation should not succeed in "
-                                                 "read-only transaction";
-                                      },
-                                      [&write_error_caught](error::db_error error) {
-                                          std::cout
-                                              << "Expected write error: " << error.what()
-                                              << std::endl;
-                                          write_error_caught = true;
-                                          // The transaction will be rolled back after
-                                          // this error
-                                      });
-                              });
+                        // Try a write operation which should fail due to
+                        // read-only
+                        tr.execute(
+                            "CREATE TEMP TABLE temp_test (id INT)",
+                            [](Transaction &tr2, results result) {
+                                std::cout << "WARNING: Write succeeded in "
+                                             "read-only transaction!"
+                                          << std::endl;
+                                ASSERT_TRUE(false) << "Write operation should not succeed in "
+                                                      "read-only transaction";
+                            },
+                            [&write_error_caught](error::db_error error) {
+                                std::cout << "Expected write error: " << error.what() << std::endl;
+                                write_error_caught = true;
+                                // The transaction will be rolled back after
+                                // this error
+                            });
+                    });
                 },
                 [&write_error_caught](error::db_error error) {
                     std::cout << "Transaction error: " << error.what() << std::endl;
                     // This is expected when trying to write in a read-only transaction
-                    if (error.what() ==
-                            std::string("rollback processed due to a query failure") &&
+                    if (error.what() == std::string("rollback processed due to a query failure") &&
                         write_error_caught) {
                         std::cout << "Expected transaction rollback due to write "
                                      "attempt in read-only transaction"
                                   << std::endl;
                     } else {
-                        ASSERT_TRUE(false)
-                            << "Unexpected transaction error: " << error.what();
+                        ASSERT_TRUE(false) << "Unexpected transaction error: " << error.what();
                     }
                 },
                 mode // Use our mode directly
@@ -958,10 +957,23 @@ TEST_F(PostgreSQLAdvancedTransactionTest, DirectTransactionModeUsage) {
 }
 
 /**
+ * @brief Fixture seed data visible to `co_await query()` (mixed callback + coroutine API).
+ */
+TEST_F(PostgreSQLAdvancedTransactionTest, SeedDataVisible_Coroutine) {
+    bool ok = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        auto reply = co_await db1_->query("SELECT COUNT(*) FROM test_advanced_transactions");
+        ok         = reply.ok() && reply.result().size() == 1 && reply.result()[0][0].as<int>() == 3;
+    }());
+    ASSERT_TRUE(ok);
+}
+
+/**
  * @brief Run all the tests
  */
 int
 main(int argc, char **argv) {
+    qb::io::async::init();
     testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }

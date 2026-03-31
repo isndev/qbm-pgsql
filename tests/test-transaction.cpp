@@ -44,9 +44,12 @@
  */
 
 #include <gtest/gtest.h>
+#include <qb/io/async.h>
+#include <qb/io/async/coroutine.h>
+#include <qb/io/async/coroutine/utils.h>
+#include <string>
 #include "../pgsql.h"
-
-constexpr std::string_view PGSQL_CONNECTION_STR = "tcp://test:test@localhost:5432[test]";
+#include "test_config.hpp"
 
 using namespace qb::pg;
 using namespace qb::pg::detail;
@@ -59,6 +62,8 @@ using namespace qb::pg::detail;
  */
 class PostgreSQLTransactionTest : public ::testing::Test {
 protected:
+    /** Set only after a successful connect and temp table creation (for safe TearDown). */
+    bool fixture_ready_{false};
     /**
      * @brief Set up the test environment
      *
@@ -68,12 +73,17 @@ protected:
     void
     SetUp() override {
         db_ = std::make_unique<qb::pg::tcp::database>();
-        ASSERT_TRUE(db_->connect(PGSQL_CONNECTION_STR.data()));
+        if (!qb::io::async::run_sync(db_->connect(qb::pg::test::dsn_tcp_string()))) {
+            GTEST_SKIP() << "PostgreSQL not reachable";
+            return;
+        }
 
         auto status = db_->execute("CREATE TEMP TABLE test_transactions (id SERIAL "
-                                   "PRIMARY KEY, value TEXT)")
+                                   "PRIMARY KEY, value TEXT)",
+                                   discard_query, discard_error)
                           .await();
         ASSERT_TRUE(status);
+        fixture_ready_ = true;
     }
 
     /**
@@ -83,12 +93,14 @@ protected:
      */
     void
     TearDown() override {
-        if (db_) {
-            auto status = db_->execute("DROP TABLE IF EXISTS test_transactions").await();
-            ASSERT_TRUE(status);
+        if (db_ && fixture_ready_) {
+            (void) db_
+                ->execute("DROP TABLE IF EXISTS test_transactions", discard_query, discard_error)
+                .await();
             db_->disconnect();
-            db_.reset();
         }
+        db_.reset();
+        fixture_ready_ = false;
     }
 
     std::unique_ptr<qb::pg::tcp::database> db_;
@@ -115,6 +127,92 @@ TEST_F(PostgreSQLTransactionTest, BasicTransaction) {
                          [](error::db_error error) { ASSERT_TRUE(false); })
                       .await();
     ASSERT_TRUE(success);
+}
+
+/**
+ * @brief After callback `begin` sees empty table, `co_await query()` must see the same state.
+ */
+TEST_F(PostgreSQLTransactionTest, BasicTransaction_CoroutineFollowUp) {
+    bool txn_ok = false;
+    auto status = db_->begin(
+                         [&txn_ok](Transaction &t) {
+                             t.execute(
+                                 "SELECT * FROM test_transactions",
+                                 [&txn_ok](Transaction &tr, results result) {
+                                     ASSERT_EQ(result.size(), 0);
+                                     txn_ok = true;
+                                 },
+                                 [](error::db_error error) { ASSERT_TRUE(false); });
+                         },
+                         [](error::db_error error) { ASSERT_TRUE(false); })
+                      .await();
+    ASSERT_TRUE(txn_ok);
+
+    bool coro_ok = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        auto reply = co_await db_->query("SELECT COUNT(*) FROM test_transactions");
+        coro_ok    = reply.ok() && reply.result().size() == 1 && reply.result()[0][0].as<int>() == 0;
+    }());
+    ASSERT_TRUE(coro_ok);
+}
+
+/**
+ * @brief Imperative coroutine transaction: `begin()` / `execute()` / `commit()` without callbacks.
+ */
+TEST_F(PostgreSQLTransactionTest, ImperativeTransactionCoroBeginCommit) {
+    if (!fixture_ready_)
+        GTEST_SKIP();
+
+    bool ok = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        auto b = co_await db_->begin();
+        if (!b)
+            co_return;
+        auto         ins =
+            co_await db_->execute("INSERT INTO test_transactions (value) VALUES ('coro_txn')");
+        if (!ins)
+            co_return;
+        auto c = co_await db_->commit();
+        if (!c)
+            co_return;
+
+        auto         verify =
+            co_await db_->query("SELECT COUNT(*) FROM test_transactions WHERE value = 'coro_txn'");
+        ok = verify.ok() && verify.result().size() == 1 && verify.result()[0][0].as<int>() == 1;
+    }());
+    ASSERT_TRUE(ok);
+}
+
+/**
+ * @brief Savepoint helpers over the coroutine API.
+ */
+TEST_F(PostgreSQLTransactionTest, SavepointCoroHelpers) {
+    if (!fixture_ready_)
+        GTEST_SKIP();
+
+    bool ok = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        auto b = co_await db_->begin();
+        if (!b)
+            co_return;
+        auto sp = co_await db_->savepoint("sp_coro");
+        if (!sp)
+            co_return;
+        auto ins = co_await db_->execute("INSERT INTO test_transactions (value) VALUES ('sp_row')");
+        if (!ins)
+            co_return;
+        auto rb = co_await db_->rollback_savepoint("sp_coro");
+        if (!rb)
+            co_return;
+        auto c = co_await db_->commit();
+        if (!c)
+            co_return;
+
+        auto         verify =
+            co_await db_->query("SELECT COUNT(*) FROM test_transactions WHERE value = 'sp_row'");
+        ok = verify.ok() && verify.result().size() == 1 && verify.result()[0][0].as<int>() == 0;
+    }());
+    ASSERT_TRUE(ok);
 }
 
 /**
@@ -157,9 +255,7 @@ TEST_F(PostgreSQLTransactionTest, NestedTransactions) {
                        [&success](Transaction &tr) {
                            tr.execute(
                                "INSERT INTO test_transactions (value) VALUES ('test')",
-                               [&success](Transaction &tr2, results result) {
-                                   success = true;
-                               },
+                               [&success](Transaction &tr2, results result) { success = true; },
                                [](error::db_error error) { ASSERT_TRUE(false); });
                        },
                        [](error::db_error error) { ASSERT_TRUE(false); });
@@ -200,16 +296,15 @@ TEST_F(PostgreSQLTransactionTest, TransactionIsolation) {
  */
 TEST_F(PostgreSQLTransactionTest, TransactionTimeout) {
     bool success = false;
-    auto status =
-        db_->begin(
-               [&success](Transaction &t) {
-                   t.execute(
-                       "SELECT pg_sleep(2)",
-                       [&success](Transaction &tr, results result) { success = true; },
-                       [](error::db_error error) { ASSERT_TRUE(false); });
-               },
-               [](error::db_error error) { ASSERT_TRUE(false); })
-            .await();
+    auto status  = db_->begin(
+                         [&success](Transaction &t) {
+                             t.execute(
+                                 "SELECT pg_sleep(2)",
+                                 [&success](Transaction &tr, results result) { success = true; },
+                                 [](error::db_error error) { ASSERT_TRUE(false); });
+                         },
+                         [](error::db_error error) { ASSERT_TRUE(false); })
+                      .await();
     ASSERT_TRUE(success);
 }
 
@@ -250,13 +345,14 @@ TEST_F(PostgreSQLTransactionTest, SavepointRollback) {
     bool after_savepoint  = false;
 
     // Clean the test table
-    auto cleanup = db_->execute("DELETE FROM test_transactions").await();
+    auto cleanup =
+        db_->execute("DELETE FROM test_transactions", discard_query, discard_error).await();
     ASSERT_TRUE(cleanup);
 
     // Insert reference data outside the main transaction
-    auto setup =
-        db_->execute("INSERT INTO test_transactions (value) VALUES ('before_savepoint')")
-            .await();
+    auto setup = db_->execute("INSERT INTO test_transactions (value) VALUES ('before_savepoint')",
+                              discard_query, discard_error)
+                     .await();
     ASSERT_TRUE(setup);
     before_savepoint = true;
 
@@ -272,8 +368,7 @@ TEST_F(PostgreSQLTransactionTest, SavepointRollback) {
                            tr2.execute(
                                "INSERT INTO test_transactions (value) VALUES "
                                "('in_savepoint')",
-                               [&in_savepoint, &error_caught](Transaction &tr3,
-                                                              results      result) {
+                               [&in_savepoint, &error_caught](Transaction &tr3, results result) {
                                    in_savepoint = true;
 
                                    // Trigger an explicit error that will cause the
@@ -286,59 +381,56 @@ TEST_F(PostgreSQLTransactionTest, SavepointRollback) {
                                        [&error_caught](error::db_error error) {
                                            error_caught = true;
                                            std::cout
-                                               << "SQL error detected in savepoint: "
-                                               << error.what() << std::endl;
+                                               << "SQL error detected in savepoint: " << error.what()
+                                               << std::endl;
                                        });
                                },
                                [](error::db_error error) {
-                                   std::cout << "Error during savepoint insertion: "
-                                             << error.what() << std::endl;
+                                   std::cout << "Error during savepoint insertion: " << error.what()
+                                             << std::endl;
                                });
                        },
                        [](error::db_error error) {
-                           std::cout << "Savepoint error detected: " << error.what()
-                                     << std::endl;
+                           std::cout << "Savepoint error detected: " << error.what() << std::endl;
                        });
                },
                [](error::db_error error) {
-                   std::cout << "Transaction error detected: " << error.what()
-                             << std::endl;
+                   std::cout << "Transaction error detected: " << error.what() << std::endl;
                })
             .await();
 
     // Phase 2: Verify that data outside the savepoint still exists and data inside the
     // savepoint was removed
-    auto verify =
-        db_->begin(
-               [&after_savepoint](Transaction &t) {
-                   // Verify that savepoint data doesn't exist (rollback)
-                   t.execute(
-                       "SELECT * FROM test_transactions WHERE value = 'in_savepoint'",
-                       [](Transaction &tr, results result) {
-                           ASSERT_EQ(result.size(), 0)
-                               << "Savepoint data was not properly rolled back";
-                       },
-                       [](error::db_error error) {
-                           FAIL() << "Error when verifying rollback: " << error.what();
-                       });
+    auto verify = db_->begin(
+                         [&after_savepoint](Transaction &t) {
+                             // Verify that savepoint data doesn't exist (rollback)
+                             t.execute(
+                                 "SELECT * FROM test_transactions WHERE value = 'in_savepoint'",
+                                 [](Transaction &tr, results result) {
+                                     ASSERT_EQ(result.size(), 0)
+                                         << "Savepoint data was not properly rolled back";
+                                 },
+                                 [](error::db_error error) {
+                                     FAIL() << "Error when verifying rollback: " << error.what();
+                                 });
 
-                   // Verify that data before the savepoint still exists (commit)
-                   t.execute(
-                       "SELECT * FROM test_transactions WHERE value = "
-                       "'before_savepoint'",
-                       [&after_savepoint](Transaction &tr, results result) {
-                           ASSERT_EQ(result.size(), 1)
-                               << "Data before savepoint was not preserved";
-                           after_savepoint = true;
-                       },
-                       [](error::db_error error) {
-                           FAIL() << "Error when verifying commit: " << error.what();
-                       });
-               },
-               [](error::db_error error) {
-                   FAIL() << "Error during verification: " << error.what();
-               })
-            .await();
+                             // Verify that data before the savepoint still exists (commit)
+                             t.execute(
+                                 "SELECT * FROM test_transactions WHERE value = "
+                                 "'before_savepoint'",
+                                 [&after_savepoint](Transaction &tr, results result) {
+                                     ASSERT_EQ(result.size(), 1)
+                                         << "Data before savepoint was not preserved";
+                                     after_savepoint = true;
+                                 },
+                                 [](error::db_error error) {
+                                     FAIL() << "Error when verifying commit: " << error.what();
+                                 });
+                         },
+                         [](error::db_error error) {
+                             FAIL() << "Error during verification: " << error.what();
+                         })
+                      .await();
 
     // Verify that the execution flow completed correctly
     ASSERT_TRUE(before_savepoint) << "Insertion before savepoint didn't work";
@@ -373,17 +465,12 @@ TEST_F(PostgreSQLTransactionTest, MultipleNestedTransactions) {
                                                "INSERT INTO test_transactions (value) "
                                                "VALUES "
                                                "('sp2')",
-                                               [&success2](Transaction &tr4,
-                                                           results      result) {
+                                               [&success2](Transaction &tr4, results result) {
                                                    success2 = true;
                                                },
-                                               [](error::db_error error) {
-                                                   ASSERT_TRUE(false);
-                                               });
+                                               [](error::db_error error) { ASSERT_TRUE(false); });
                                        },
-                                       [](error::db_error error) {
-                                           ASSERT_TRUE(false);
-                                       });
+                                       [](error::db_error error) { ASSERT_TRUE(false); });
                                },
                                [](error::db_error error) { ASSERT_TRUE(false); });
                        },
@@ -409,22 +496,18 @@ TEST_F(PostgreSQLTransactionTest, CommitMultipleChanges) {
                [&insert_success, &select_success](Transaction &t) {
                    t.execute(
                        "INSERT INTO test_transactions (value) VALUES ('test1')",
-                       [&insert_success, &select_success](Transaction &tr1,
-                                                          results      result) {
+                       [&insert_success, &select_success](Transaction &tr1, results result) {
                            insert_success = true;
                            tr1.execute(
                                "INSERT INTO test_transactions (value) VALUES ('test2')",
                                [&select_success](Transaction &tr2, results result) {
                                    tr2.execute(
                                        "SELECT * FROM test_transactions",
-                                       [&select_success](Transaction &tr3,
-                                                         results      result) {
+                                       [&select_success](Transaction &tr3, results result) {
                                            ASSERT_EQ(result.size(), 2);
                                            select_success = true;
                                        },
-                                       [](error::db_error error) {
-                                           ASSERT_TRUE(false);
-                                       });
+                                       [](error::db_error error) { ASSERT_TRUE(false); });
                                },
                                [](error::db_error error) { ASSERT_TRUE(false); });
                        },
@@ -436,8 +519,56 @@ TEST_F(PostgreSQLTransactionTest, CommitMultipleChanges) {
     ASSERT_TRUE(select_success);
 }
 
+/**
+ * @brief Aborted transaction (RfQ 'E') blocks further commands until ROLLBACK
+ *
+ * Verifies the client recovers after explicit ROLLBACK and can run queries again.
+ */
+TEST_F(PostgreSQLTransactionTest, AbortedTransactionRequiresRollback) {
+    ASSERT_TRUE(db_->execute("BEGIN", discard_query, discard_error).await());
+
+    bool div_err = false;
+    auto st      = db_->execute(
+                     "SELECT 1 / 0",
+                     [](Transaction &, results) { FAIL() << "division by zero should error"; },
+                     [&div_err](error::db_error const &) { div_err = true; })
+                  .await();
+    EXPECT_FALSE(st);
+    EXPECT_TRUE(div_err);
+
+    bool blocked = false;
+    st           = db_->execute(
+                "SELECT 1",
+                [](Transaction &, results) { FAIL() << "commands should fail while aborted"; },
+                [&blocked](error::db_error const &e) {
+                    blocked = true;
+                    const std::string w{e.what()};
+                    EXPECT_TRUE(w.find("current transaction is aborted") != std::string::npos ||
+                                          e.code == "25P02");
+                })
+             .await();
+    EXPECT_FALSE(st);
+    EXPECT_TRUE(blocked);
+
+    ASSERT_TRUE(db_->execute("ROLLBACK", discard_query, discard_error).await());
+
+    bool recovered = false;
+    st             = db_->execute(
+                "SELECT 1 AS x",
+                [&recovered](Transaction &, results r) {
+                    ASSERT_EQ(r.size(), 1U);
+                    EXPECT_EQ(r[0][0].as<int>(), 1);
+                    recovered = true;
+                },
+                [](error::db_error const &e) { FAIL() << e.what(); })
+             .await();
+    EXPECT_TRUE(st);
+    EXPECT_TRUE(recovered);
+}
+
 int
 main(int argc, char **argv) {
+    qb::io::async::init();
     testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }

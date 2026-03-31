@@ -71,8 +71,7 @@ convert_from_text(const char *data, size_t size) {
     } else if constexpr (std::is_same_v<T, double>) {
         return std::stod(text);
     } else if constexpr (std::is_same_v<T, bool>) {
-        return (text == "t" || text == "true" || text == "y" || text == "yes" ||
-                text == "1");
+        return (text == "t" || text == "true" || text == "y" || text == "yes" || text == "1");
     } else {
         throw std::runtime_error("Unsupported type for text conversion");
     }
@@ -92,9 +91,9 @@ convert_from_text(const char *data, size_t size) {
  */
 template <>
 detail::message::const_iterator
-protocol_read<pg::protocol_data_format::Binary, qb::uuid>(
-    detail::message::const_iterator begin, detail::message::const_iterator end,
-    qb::uuid &value) {
+protocol_read<pg::protocol_data_format::Binary, qb::uuid>(detail::message::const_iterator begin,
+                                                          detail::message::const_iterator end,
+                                                          qb::uuid                       &value) {
     if (std::distance(begin, end) < 16) {
         return begin;
     }
@@ -123,9 +122,9 @@ protocol_read<pg::protocol_data_format::Binary, qb::uuid>(
  */
 template <>
 detail::message::const_iterator
-protocol_read<pg::protocol_data_format::Text, qb::uuid>(
-    detail::message::const_iterator begin, detail::message::const_iterator end,
-    qb::uuid &value) {
+protocol_read<pg::protocol_data_format::Text, qb::uuid>(detail::message::const_iterator begin,
+                                                        detail::message::const_iterator end,
+                                                        qb::uuid                       &value) {
     if (begin == end) {
         return begin;
     }

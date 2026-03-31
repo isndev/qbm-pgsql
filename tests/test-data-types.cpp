@@ -51,6 +51,10 @@
  */
 
 #include <gtest/gtest.h>
+#include <qb/io/async.h>
+#include <qb/io/async/coroutine.h>
+#include <qb/io/async/coroutine/utils.h>
+
 #include <iomanip>
 #include <iostream>
 #include <random>
@@ -598,8 +602,7 @@ TEST_F(PostgreSQLDataTypesTest, LargeStringDeserialization) {
  */
 TEST_F(PostgreSQLDataTypesTest, StringWithNullChars) {
     // Create a buffer containing a string with null characters
-    std::vector<byte> buffer = {'H', 'e', 'l', 'l', 'o',  '\0', 'W',
-                                'o', 'r', 'l', 'd', '\0', '!'};
+    std::vector<byte> buffer = {'H', 'e', 'l', 'l', 'o', '\0', 'W', 'o', 'r', 'l', 'd', '\0', '!'};
 
     // Display buffer for debugging
     printBuffer(buffer, "String with Null Chars Buffer");
@@ -653,8 +656,7 @@ TEST_F(PostgreSQLDataTypesTest, NonStandardSizeBuffers) {
 TEST_F(PostgreSQLDataTypesTest, CorruptedData) {
     // Create buffers with corrupted data
     std::vector<byte> corrupted_smallint = {
-        static_cast<char>(0xFF),
-        static_cast<char>(0xFF)}; // Value that might cause issues
+        static_cast<char>(0xFF), static_cast<char>(0xFF)}; // Value that might cause issues
 
     // Deserialize and verify
     smallint result = unserializer->read_smallint(corrupted_smallint);
@@ -882,9 +884,8 @@ TEST_F(PostgreSQLDataTypesTest, UUIDTextFormatDeserialization) {
 
     // Test with malformed UUID
     std::string               malformedUUID = "550e8400-e29b-41d4-a716"; // Too short
-    std::vector<qb::pg::byte> malformedBuffer(malformedUUID.begin(),
-                                              malformedUUID.end());
-    std::string malformedResult = unserializer->read_string(malformedBuffer);
+    std::vector<qb::pg::byte> malformedBuffer(malformedUUID.begin(), malformedUUID.end());
+    std::string               malformedResult = unserializer->read_string(malformedBuffer);
 
     // Even malformed UUIDs should be correctly deserialized as strings
     ASSERT_EQ(malformedResult, malformedUUID);
@@ -940,8 +941,7 @@ TEST_F(PostgreSQLDataTypesTest, TimestampBinaryFormatDeserialization) {
     ASSERT_EQ(infinityResult, infinity);
 
     // Test with incorrect buffer size
-    std::vector<qb::pg::byte> truncatedBuffer(timestampBuffer.begin(),
-                                              timestampBuffer.begin() + 4);
+    std::vector<qb::pg::byte> truncatedBuffer(timestampBuffer.begin(), timestampBuffer.begin() + 4);
     ASSERT_THROW(unserializer->read_bigint(truncatedBuffer), std::runtime_error);
 }
 
@@ -958,8 +958,7 @@ TEST_F(PostgreSQLDataTypesTest, TimestampTextFormatDeserialization) {
     std::string timestampISO    = "2020-01-01T12:34:56.789012Z";
 
     // Create vector of bytes from the first string
-    std::vector<qb::pg::byte> timestampTextBuffer(timestampStr.begin(),
-                                                  timestampStr.end());
+    std::vector<qb::pg::byte> timestampTextBuffer(timestampStr.begin(), timestampStr.end());
 
     // Debug
     printBuffer(timestampTextBuffer, "Timestamp Text Buffer");
@@ -971,21 +970,18 @@ TEST_F(PostgreSQLDataTypesTest, TimestampTextFormatDeserialization) {
     ASSERT_EQ(result, timestampStr);
 
     // Test with timezone format
-    std::vector<qb::pg::byte> timestampTZBuffer(timestampWithTZ.begin(),
-                                                timestampWithTZ.end());
+    std::vector<qb::pg::byte> timestampTZBuffer(timestampWithTZ.begin(), timestampWithTZ.end());
     std::string               tzResult = unserializer->read_string(timestampTZBuffer);
     ASSERT_EQ(tzResult, timestampWithTZ);
 
     // Test with ISO format
-    std::vector<qb::pg::byte> timestampISOBuffer(timestampISO.begin(),
-                                                 timestampISO.end());
+    std::vector<qb::pg::byte> timestampISOBuffer(timestampISO.begin(), timestampISO.end());
     std::string               isoResult = unserializer->read_string(timestampISOBuffer);
     ASSERT_EQ(isoResult, timestampISO);
 
     // Test with truncated timestamp (should still parse as string)
     std::string               partialTimestamp = "2020-01-01 12:34";
-    std::vector<qb::pg::byte> partialBuffer(partialTimestamp.begin(),
-                                            partialTimestamp.end());
+    std::vector<qb::pg::byte> partialBuffer(partialTimestamp.begin(), partialTimestamp.end());
     std::string               partialResult = unserializer->read_string(partialBuffer);
     ASSERT_EQ(partialResult, partialTimestamp);
 }
@@ -1032,12 +1028,11 @@ TEST_F(PostgreSQLDataTypesTest, HighBitValues) {
  */
 TEST_F(PostgreSQLDataTypesTest, JSONBBinaryFormatDeserialization) {
     // Create a simple JSON object
-    qb::jsonb test_json = {
-        {"id", 123},
-        {"name", "test user"},
-        {"active", true},
-        {"scores", {98, 87, 95}},
-        {"details", {{"address", "123 Test St"}, {"email", "test@example.com"}}}};
+    qb::jsonb test_json = {{"id", 123},
+                           {"name", "test user"},
+                           {"active", true},
+                           {"scores", {98, 87, 95}},
+                           {"details", {{"address", "123 Test St"}, {"email", "test@example.com"}}}};
 
     // Convert to string representation
     std::string json_str = test_json.dump();
@@ -1101,8 +1096,7 @@ TEST_F(PostgreSQLDataTypesTest, JSONBBinaryFormatDeserialization) {
     std::vector<byte> invalid_jsonb = jsonb_buffer;
     invalid_jsonb[4]                = 2; // Set version to 2 (unsupported)
 
-    ASSERT_THROW(TypeConverter<qb::jsonb>::from_binary(invalid_jsonb),
-                 std::runtime_error);
+    ASSERT_THROW(TypeConverter<qb::jsonb>::from_binary(invalid_jsonb), std::runtime_error);
 }
 
 /**
@@ -1138,13 +1132,12 @@ TEST_F(PostgreSQLDataTypesTest, JSONTextFormatDeserialization) {
             qb::jsonb result = TypeConverter<qb::jsonb>::from_text(test_case);
 
             // Compare the result with expected
-            ASSERT_EQ(result.dump(), expected.dump())
-                << "Failed on test case: " << test_case;
+            ASSERT_EQ(result.dump(), expected.dump()) << "Failed on test case: " << test_case;
 
             std::cout << "Successfully parsed JSON: " << result.dump(2) << std::endl;
         } catch (const std::exception &e) {
-            FAIL() << "Exception during JSON text deserialization for case '"
-                   << test_case << "': " << e.what();
+            FAIL() << "Exception during JSON text deserialization for case '" << test_case
+                   << "': " << e.what();
         }
     }
 
@@ -1184,7 +1177,7 @@ TEST(ResultsetMemoryManagementTest, BasicMoveSemantics) {
         // After move, moved should have valid internal implementation
         // and original should be null (no crash on access)
         EXPECT_NO_THROW({
-            (void) moved.empty();  // Should not crash
+            (void) moved.empty(); // Should not crash
         });
     }
 
@@ -1196,9 +1189,7 @@ TEST(ResultsetMemoryManagementTest, BasicMoveSemantics) {
         rs2 = std::move(rs1);
 
         // rs2 should have taken ownership from rs1
-        EXPECT_NO_THROW({
-            (void) rs2.empty();
-        });
+        EXPECT_NO_THROW({ (void) rs2.empty(); });
     }
 
     std::cout << "Resultset memory management test passed" << std::endl;
@@ -1231,7 +1222,7 @@ TEST(IntervalTypeTest, ChronoDurationConversion) {
 
     // Test 1: Serialize duration to binary
     std::vector<byte> buffer;
-    auto duration = seconds(3600); // 1 hour
+    auto              duration = seconds(3600); // 1 hour
     TypeConverter<std::chrono::seconds>::to_binary(duration, buffer);
 
     // Should have 4 bytes length prefix + 16 bytes data
@@ -1261,8 +1252,8 @@ TEST(NullBitmapTest, VectorBoolVsSetBehavior) {
     row.null_map.resize(5, false); // 5 columns, all non-NULL initially
 
     // Mark some columns as NULL
-    row.null_map[1] = true;  // Column 1 is NULL
-    row.null_map[3] = true;  // Column 3 is NULL
+    row.null_map[1] = true; // Column 1 is NULL
+    row.null_map[3] = true; // Column 3 is NULL
 
     // Verify NULL detection
     EXPECT_FALSE(row.null_map[0]); // Column 0: NOT NULL
@@ -1318,14 +1309,14 @@ TEST(ConnectionOptionsTest, KeepaliveSettings) {
     qb::pg::connection_options opts;
 
     // Default values
-    EXPECT_EQ(opts.keepalive_interval, 0);  // Disabled by default
-    EXPECT_EQ(opts.keepalive_probes, 3);    // Default probes
-    EXPECT_EQ(opts.keepalive_idle, 60);      // Default idle time
+    EXPECT_EQ(opts.keepalive_interval, 0); // Disabled by default
+    EXPECT_EQ(opts.keepalive_probes, 3);   // Default probes
+    EXPECT_EQ(opts.keepalive_idle, 60);    // Default idle time
 
     // Custom settings
     opts.keepalive_interval = 30;
-    opts.keepalive_probes = 5;
-    opts.keepalive_idle = 120;
+    opts.keepalive_probes   = 5;
+    opts.keepalive_idle     = 120;
 
     EXPECT_EQ(opts.keepalive_interval, 30);
     EXPECT_EQ(opts.keepalive_probes, 5);
@@ -1346,7 +1337,7 @@ TEST(NumericTypeTest, NumericPrecision) {
     EXPECT_EQ(TypeConverter<numeric>::get_oid(), 1700);
 
     // Test 2: Serialize to binary
-    numeric n1("123456789.0123456789");
+    numeric           n1("123456789.0123456789");
     std::vector<byte> buffer;
     TypeConverter<numeric>::to_binary(n1, buffer);
 
@@ -1391,7 +1382,7 @@ TEST(DateTypeTest, DateConversions) {
 
     // Test 3: Create date from Unix time
     time_t now = std::time(nullptr);
-    pgdate d2 = pgdate::from_unix_time(now);
+    pgdate d2  = pgdate::from_unix_time(now);
     EXPECT_FALSE(d2.to_string().empty());
 
     // Test 4: Serialize to binary
@@ -1409,7 +1400,7 @@ TEST(DateTypeTest, DateConversions) {
 
     // Test 7: Date comparison
     pgdate early = pgdate::from_string("2020-01-01");
-    pgdate late = pgdate::from_string("2024-01-01");
+    pgdate late  = pgdate::from_string("2024-01-01");
     EXPECT_TRUE(early < late);
 
     std::cout << "DATE type test passed" << std::endl;
@@ -1480,12 +1471,12 @@ TEST(EdgeCasesTest, ExtremeValues) {
 
     // Test 1: Very large numeric (just check it's stored, not exact length)
     numeric huge("999999999999999999999999999.9999999999");
-    EXPECT_GT(huge.str().length(), 30); // Should be long
+    EXPECT_GT(huge.str().length(), 30);                       // Should be long
     EXPECT_TRUE(huge.str().find("999") != std::string::npos); // Contains digits
 
     // Test 2: Very small numeric
     numeric tiny("0.0000000000000000000000000000000000001");
-    EXPECT_GT(tiny.str().length(), 30); // Should be long
+    EXPECT_GT(tiny.str().length(), 30);                      // Should be long
     EXPECT_TRUE(tiny.str().find("0.") != std::string::npos); // Starts with 0.
 
     // Test 3: Negative numeric
@@ -1545,7 +1536,7 @@ TEST(TimeTypeFullTest, BinaryConversion) {
 
     // Test 6: Text round-trip
     std::string text = TypeConverter<pgtime>::to_text(t1);
-    pgtime t4 = TypeConverter<pgtime>::from_text(text);
+    pgtime      t4   = TypeConverter<pgtime>::from_text(text);
     EXPECT_EQ(t4, t1);
 
     // Test 7: OID check
@@ -1593,7 +1584,7 @@ TEST(TimeTzTypeFullTest, BinaryConversion) {
 
     // Test 7: Text round-trip
     std::string text = TypeConverter<pgtimetz>::to_text(tt1);
-    pgtimetz tt5 = TypeConverter<pgtimetz>::from_text(text);
+    pgtimetz    tt5  = TypeConverter<pgtimetz>::from_text(text);
     EXPECT_EQ(tt5, tt1);
 
     // Test 8: OID check

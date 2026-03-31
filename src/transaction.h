@@ -45,14 +45,15 @@
 
 #pragma once
 
+#include <filesystem>
 #include <memory>
 #include <qb/io/async.h>
 #include <queue>
 #include <string_view>
 #include <type_traits>
 #include <utility>
-#include <filesystem>
 
+#include "./pg_awaiter.h"
 #include "./queries.h"
 #include "./result_impl.h"
 #include "./resultset.h"
@@ -76,16 +77,16 @@ using namespace qb::pg;
 class Transaction {
 protected:
     Transaction *_parent{nullptr}; ///< Parent transaction (for nested transactions)
-    std::queue<std::unique_ptr<Transaction>>
-                                           _sub_commands; ///< Queue of sub-transactions
-    std::queue<std::unique_ptr<ISqlQuery>> _queries; ///< Queue of SQL queries to execute
-    PreparedQueryStorage &_query_storage;            ///< Storage for prepared queries
-    bool                  _result{true}; ///< Result status of the transaction
-    error::db_error       _error;        ///< Error message of the transaction
-    result_impl           _results;      ///< Last results of the transaction
+    std::queue<std::unique_ptr<Transaction>> _sub_commands;  ///< Queue of sub-transactions
+    std::queue<std::unique_ptr<ISqlQuery>>   _queries;       ///< Queue of SQL queries to execute
+    PreparedQueryStorage                    &_query_storage; ///< Storage for prepared queries
+    bool                                     _result{true};  ///< Result status of the transaction
+    error::db_error                          _error;         ///< Error message of the transaction
+    result_impl                              _results;       ///< Last results of the transaction
 
-    // P1-2: Query timeout settings
-    int _query_timeout_ms{0}; ///< Query timeout in milliseconds (0 = no timeout)
+    // Statement timeout: applied on the server in the same simple-query batch as `BEGIN`
+    // (`SET LOCAL statement_timeout`, transaction-scoped). Not socket idle time — see set_timeout().
+    int _query_timeout_ms{0}; ///< Milliseconds for SET LOCAL on next BEGIN (0 = omit)
 
     Transaction() = delete;
 
@@ -118,6 +119,14 @@ public:
      * Cleans up any remaining queries and sub-transactions
      */
     virtual ~Transaction();
+
+    /**
+     * @brief Hook invoked when this command is popped from the parent's queue
+     *
+     * Used to finalize transaction/savepoint command pairs without relying on
+     * destructor side effects (explicit lifecycle, coroutine-friendly).
+     */
+    virtual void on_before_pop();
 
     /**
      * @brief Sets the result status of the transaction
@@ -232,11 +241,8 @@ public:
      * @param mode Optional transaction mode settings
      * @return Transaction& Reference to this transaction for chaining
      */
-    template <typename CB_SUCCESS, typename CB_ERROR,
-              typename = std::enable_if<std::is_function_v<CB_SUCCESS> &&
-                                        std::is_function_v<CB_ERROR>>>
-    Transaction &begin(CB_SUCCESS &&on_success, CB_ERROR &&on_error,
-                       transaction_mode mode = {});
+    template <typename CB_SUCCESS, typename CB_ERROR>
+    Transaction &begin(CB_SUCCESS &&on_success, CB_ERROR &&on_error, transaction_mode mode = {});
 
     /**
      * @brief Begins a new transaction with only a success callback
@@ -250,6 +256,13 @@ public:
     Transaction &begin(CB_SUCCESS &&on_success, transaction_mode mode = {});
 
     /**
+     * @brief Begins a transaction without callbacks (`co_await`; same SQL as callback `begin`).
+     */
+    [[nodiscard]] pg_reply_awaiter<resultset> begin();
+
+    [[nodiscard]] pg_reply_awaiter<resultset> begin(transaction_mode mode);
+
+    /**
      * @brief Creates a savepoint within the current transaction
      *
      * @tparam CB_SUCCESS Type of success callback function
@@ -259,11 +272,8 @@ public:
      * @param on_error Callback called if savepoint creation fails
      * @return Transaction& Reference to this transaction for chaining
      */
-    template <typename CB_SUCCESS, typename CB_ERROR,
-              typename = std::enable_if<std::is_function_v<CB_SUCCESS> &&
-                                        std::is_function_v<CB_ERROR>>>
-    Transaction &savepoint(std::string_view name, CB_SUCCESS &&on_success,
-                           CB_ERROR &&on_error);
+    template <typename CB_SUCCESS, typename CB_ERROR>
+    Transaction &savepoint(std::string_view name, CB_SUCCESS &&on_success, CB_ERROR &&on_error);
 
     /**
      * @brief Creates a savepoint with only a success callback
@@ -277,6 +287,15 @@ public:
     Transaction &savepoint(std::string_view name, CB_SUCCESS &&on_success);
 
     /**
+     * @brief Creates a savepoint without callbacks (`co_await`).
+     */
+    [[nodiscard]] pg_reply_awaiter<resultset> savepoint(std::string_view name);
+
+    [[nodiscard]] pg_reply_awaiter<resultset> rollback_savepoint(std::string_view name);
+
+    [[nodiscard]] pg_reply_awaiter<resultset> release_savepoint(std::string_view name);
+
+    /**
      * @brief Executes a SQL query with success and error callbacks
      *
      * @tparam CB_SUCCESS Type of success callback function
@@ -286,11 +305,8 @@ public:
      * @param on_error Callback called if query execution fails
      * @return Transaction& Reference to this transaction for chaining
      */
-    template <typename CB_SUCCESS, typename CB_ERROR,
-              typename = std::enable_if<std::is_function_v<CB_SUCCESS> &&
-                                        std::is_function_v<CB_ERROR>>>
-    Transaction &execute(std::string_view expr, CB_SUCCESS &&on_success,
-                         CB_ERROR &&on_error);
+    template <typename CB_SUCCESS, typename CB_ERROR>
+    Transaction &execute(std::string_view expr, CB_SUCCESS &&on_success, CB_ERROR &&on_error);
 
     /**
      * @brief Executes a SQL query with only a success callback
@@ -300,17 +316,65 @@ public:
      * @param on_success Callback called when query executes successfully
      * @return Transaction& Reference to this transaction for chaining
      */
-    template <typename CB_SUCCESS,
-              typename = std::enable_if<std::is_function_v<CB_SUCCESS>>>
+    template <typename CB_SUCCESS>
     Transaction &execute(std::string_view expr, CB_SUCCESS &&on_success);
 
     /**
-     * @brief Executes a SQL query without callbacks
+     * @brief Executes SQL for coroutines only (`co_await` → Reply<resultset>).
      *
-     * @param expr SQL query to execute
-     * @return Transaction& Reference to this transaction for chaining
+     * Synchronous blocking: use the callback overload with `qb::pg::discard_query` and
+     * `qb::pg::discard_error`, then `Transaction::await()`.
      */
-    Transaction &execute(std::string_view expr);
+    [[nodiscard]] pg_reply_awaiter<resultset> execute(std::string_view expr);
+
+    /**
+     * @brief Simple-query protocol for coroutines (same as `execute(sql)`).
+     *
+     * Lets `with_transaction` bodies use `co_await tr.query("SELECT …")` on `Transaction&`.
+     */
+    [[nodiscard]] pg_reply_awaiter<resultset>
+    query(std::string_view sql) {
+        return execute(sql);
+    }
+
+    /**
+     * @brief Sends NOTIFY (publisher side; use a normal `database` connection).
+     *
+     * Builds safe `NOTIFY "channel" [, 'payload']` SQL. Empty @p payload omits the payload
+     * clause (server default). Payload length is capped (see `notify_payload_max_bytes`).
+     */
+    template <typename CB_SUCCESS, typename CB_ERROR>
+    Transaction &notify(std::string_view channel, std::string_view payload, CB_SUCCESS &&on_success,
+                        CB_ERROR &&on_error);
+
+    /**
+     * @brief NOTIFY without payload (same as `notify(channel, "", cb, err)` but omits payload in
+     * SQL).
+     */
+    template <typename CB_SUCCESS, typename CB_ERROR>
+    Transaction &notify(std::string_view channel, CB_SUCCESS &&on_success, CB_ERROR &&on_error);
+
+    /** @brief Coroutine NOTIFY (`co_await` → `Reply<void>`). Empty @p payload omits payload in
+     * SQL. */
+    [[nodiscard]] pg_reply_awaiter<void> notify(std::string_view channel,
+                                                std::string_view payload = {});
+
+    /**
+     * @brief LISTEN on a channel (SQL `LISTEN "name"`).
+     */
+    template <typename CB_SUCCESS, typename CB_ERROR>
+    Transaction &listen(std::string_view channel, CB_SUCCESS &&on_success, CB_ERROR &&on_error);
+
+    [[nodiscard]] pg_reply_awaiter<void> listen(std::string_view channel);
+
+    template <typename CB_SUCCESS, typename CB_ERROR>
+    Transaction &unlisten(std::string_view channel, CB_SUCCESS &&on_success, CB_ERROR &&on_error);
+
+    template <typename CB_SUCCESS, typename CB_ERROR>
+    Transaction &unlisten_all(CB_SUCCESS &&on_success, CB_ERROR &&on_error);
+
+    [[nodiscard]] pg_reply_awaiter<void> unlisten(std::string_view channel);
+    [[nodiscard]] pg_reply_awaiter<void> unlisten_all();
 
     /**
      * @brief Prepares a SQL query with parameter types and callbacks
@@ -324,12 +388,9 @@ public:
      * @param on_error Callback called if query preparation fails
      * @return Transaction& Reference to this transaction for chaining
      */
-    template <typename CB_SUCCESS, typename CB_ERROR,
-              typename = std::enable_if<std::is_function_v<CB_SUCCESS> &&
-                                        std::is_function_v<CB_ERROR>>>
+    template <typename CB_SUCCESS, typename CB_ERROR>
     Transaction &prepare(std::string_view query_name, std::string_view expr,
-                         type_oid_sequence &&types, CB_SUCCESS &&on_success,
-                         CB_ERROR &&on_error);
+                         type_oid_sequence &&types, CB_SUCCESS &&on_success, CB_ERROR &&on_error);
 
     /**
      * @brief Prepares a SQL query with parameter types and success callback
@@ -341,21 +402,18 @@ public:
      * @param on_success Callback called when query is prepared successfully
      * @return Transaction& Reference to this transaction for chaining
      */
-    template <typename CB_SUCCESS,
-              typename = std::enable_if<std::is_function_v<CB_SUCCESS>>>
+    template <typename CB_SUCCESS>
     Transaction &prepare(std::string_view query_name, std::string_view expr,
                          type_oid_sequence &&types, CB_SUCCESS &&on_success);
 
     /**
-     * @brief Prepares a SQL query with parameter types without callbacks
+     * @brief Prepares for coroutines only (`co_await` → Reply<PreparedQuery>).
      *
-     * @param query_name Name for the prepared query
-     * @param expr SQL query to prepare
-     * @param types Sequence of parameter types
-     * @return Transaction& Reference to this transaction for chaining
+     * Synchronous blocking: use `prepare(..., discard_prepare, discard_error)` then
+     * `Transaction::await()`.
      */
-    Transaction &prepare(std::string_view query_name, std::string_view expr,
-                         type_oid_sequence &&types = {});
+    [[nodiscard]] pg_reply_awaiter<PreparedQuery>
+    prepare(std::string_view query_name, std::string_view expr, type_oid_sequence types = {});
 
     /**
      * @brief Prepares a SQL query from a file with parameter types and callbacks
@@ -369,14 +427,10 @@ public:
      * @param on_error Callback called if query preparation fails
      * @return Transaction& Reference to this transaction for chaining
      */
-    template <typename CB_SUCCESS, typename CB_ERROR,
-              typename = std::enable_if<std::is_function_v<CB_SUCCESS> &&
-                                        std::is_function_v<CB_ERROR>>>
-    Transaction &prepare_file(std::string_view query_name, 
-                             const std::filesystem::path& file_path,
-                             type_oid_sequence &&types, 
-                             CB_SUCCESS &&on_success,
-                             CB_ERROR &&on_error);
+    template <typename CB_SUCCESS, typename CB_ERROR>
+    Transaction &prepare_file(std::string_view query_name, const std::filesystem::path &file_path,
+                              type_oid_sequence &&types, CB_SUCCESS &&on_success,
+                              CB_ERROR &&on_error);
 
     /**
      * @brief Prepares a SQL query from a file with parameter types and success callback
@@ -388,24 +442,19 @@ public:
      * @param on_success Callback called when query is prepared successfully
      * @return Transaction& Reference to this transaction for chaining
      */
-    template <typename CB_SUCCESS,
-              typename = std::enable_if<std::is_function_v<CB_SUCCESS>>>
-    Transaction &prepare_file(std::string_view query_name, 
-                             const std::filesystem::path& file_path,
-                             type_oid_sequence &&types, 
-                             CB_SUCCESS &&on_success);
+    template <typename CB_SUCCESS>
+    Transaction &prepare_file(std::string_view query_name, const std::filesystem::path &file_path,
+                              type_oid_sequence &&types, CB_SUCCESS &&on_success);
 
     /**
-     * @brief Prepares a SQL query from a file with parameter types without callbacks
+     * @brief Prepare from file for coroutines only (`co_await` → Reply<PreparedQuery>).
      *
-     * @param query_name Name for the prepared query
-     * @param file_path Path to the file containing the SQL query
-     * @param types Sequence of parameter types
-     * @return Transaction& Reference to this transaction for chaining
+     * Synchronous blocking: `prepare_file(..., types, discard_prepare, discard_error)` then
+     * `Transaction::await()`.
      */
-    Transaction &prepare_file(std::string_view query_name, 
-                             const std::filesystem::path& file_path,
-                             type_oid_sequence &&types = {});
+    [[nodiscard]] pg_reply_awaiter<PreparedQuery>
+    prepare_file(std::string_view query_name, const std::filesystem::path &file_path,
+                 type_oid_sequence types = {});
 
     /**
      * @brief Executes a prepared query with parameters and callbacks
@@ -418,11 +467,9 @@ public:
      * @param on_error Callback called if query execution fails
      * @return Transaction& Reference to this transaction for chaining
      */
-    template <typename CB_SUCCESS, typename CB_ERROR,
-              typename = std::enable_if<std::is_function_v<CB_SUCCESS> &&
-                                        std::is_function_v<CB_ERROR>>>
-    Transaction &execute(std::string_view query_name, QueryParams &&params,
-                         CB_SUCCESS &&on_success, CB_ERROR &&on_error);
+    template <typename CB_SUCCESS, typename CB_ERROR>
+    Transaction &execute(std::string_view query_name, QueryParams &&params, CB_SUCCESS &&on_success,
+                         CB_ERROR &&on_error);
 
     /**
      * @brief Executes a prepared query with parameters and success callback
@@ -433,10 +480,8 @@ public:
      * @param on_success Callback called when query executes successfully
      * @return Transaction& Reference to this transaction for chaining
      */
-    template <typename CB_SUCCESS,
-              typename = std::enable_if<std::is_function_v<CB_SUCCESS>>>
-    Transaction &execute(std::string_view query_name, QueryParams &&params,
-                         CB_SUCCESS &&on_success);
+    template <typename CB_SUCCESS>
+    Transaction &execute(std::string_view query_name, QueryParams &&params, CB_SUCCESS &&on_success);
 
     /**
      * @brief Executes a prepared query with parameters and success callback (alternative
@@ -448,19 +493,17 @@ public:
      * @param params Parameters for the prepared query
      * @return Transaction& Reference to this transaction for chaining
      */
-    template <typename CB_SUCCESS,
-              typename = std::enable_if<std::is_function_v<CB_SUCCESS>>>
-    Transaction &execute(std::string_view query_name, CB_SUCCESS &&on_success,
-                         QueryParams &&params);
+    template <typename CB_SUCCESS>
+    Transaction &execute(std::string_view query_name, CB_SUCCESS &&on_success, QueryParams &&params);
 
     /**
-     * @brief Executes a prepared query with parameters without callbacks
+     * @brief Executes a prepared statement for coroutines only (`co_await`).
      *
-     * @param query_name Name of the prepared query to execute
-     * @param params Parameters for the prepared query
-     * @return Transaction& Reference to this transaction for chaining
+     * Synchronous blocking: `execute(name, params, discard_query, discard_error)` then
+     * `Transaction::await()`.
      */
-    Transaction &execute(std::string_view query_name, QueryParams &&params);
+    [[nodiscard]] pg_reply_awaiter<resultset> execute(std::string_view query_name,
+                                                      QueryParams    &&params);
 
     /**
      * @brief Executes a SQL query from a file
@@ -472,12 +515,9 @@ public:
      * @param on_error Callback called if query execution fails
      * @return Transaction& Reference to this transaction for chaining
      */
-    template <typename CB_SUCCESS, typename CB_ERROR,
-              typename = std::enable_if<std::is_function_v<CB_SUCCESS> &&
-                                        std::is_function_v<CB_ERROR>>>
-    Transaction &execute_file(const std::filesystem::path& file_path,
-                             CB_SUCCESS &&on_success,
-                             CB_ERROR &&on_error);
+    template <typename CB_SUCCESS, typename CB_ERROR>
+    Transaction &execute_file(const std::filesystem::path &file_path, CB_SUCCESS &&on_success,
+                              CB_ERROR &&on_error);
 
     /**
      * @brief Executes a SQL query from a file with success callback
@@ -487,40 +527,39 @@ public:
      * @param on_success Callback called when query is executed successfully
      * @return Transaction& Reference to this transaction for chaining
      */
-    template <typename CB_SUCCESS,
-              typename = std::enable_if<std::is_function_v<CB_SUCCESS>>>
-    Transaction &execute_file(const std::filesystem::path& file_path,
-                             CB_SUCCESS &&on_success);
+    template <typename CB_SUCCESS>
+    Transaction &execute_file(const std::filesystem::path &file_path, CB_SUCCESS &&on_success);
 
     /**
-     * @brief Executes a SQL query from a file without callbacks
+     * @brief Execute SQL from file for coroutines only (`co_await` → Reply<resultset>).
      *
-     * @param file_path Path to the file containing the SQL query
-     * @return Transaction& Reference to this transaction for chaining
+     * Synchronous blocking: `execute_file(path, discard_query, discard_error)` then
+     * `Transaction::await()`.
      */
-    Transaction &execute_file(const std::filesystem::path& file_path);
+    [[nodiscard]] pg_reply_awaiter<resultset> execute_file(const std::filesystem::path &file_path);
 
     /**
-     * @brief Set query timeout for this transaction (P1-2)
+     * @brief Set PostgreSQL **statement_timeout** for the **next** `BEGIN` on this connection.
      *
-     * Configures a timeout for all subsequent queries in this transaction.
-     * If a query exceeds this timeout, it will be cancelled with an error.
+     * When @p timeout_ms &gt; 0, the following `begin()` (callback or `co_await`) sends
+     * `SET LOCAL statement_timeout = N` in the **same** simple-query round-trip as `BEGIN`,
+     * so the limit is **transaction-scoped** and cleared at `COMMIT`/`ROLLBACK`. Call **before**
+     * `begin()`; use `0` to omit (server default for new transactions).
      *
-     * @param timeout_ms Timeout in milliseconds (0 = no timeout)
+     * @param timeout_ms Timeout in milliseconds (&lt;= 0 disables for subsequent begins)
      * @return Transaction& Reference to this transaction for chaining
      */
     Transaction &
     set_timeout(int timeout_ms) {
-        _query_timeout_ms = timeout_ms;
+        _query_timeout_ms = timeout_ms > 0 ? timeout_ms : 0;
         return *this;
     }
 
     /**
-     * @brief Get the current query timeout (P1-2)
-     *
-     * @return int Timeout in milliseconds (0 = no timeout)
+     * @brief Milliseconds passed into the next `SET LOCAL statement_timeout` with `begin()` (0 =
+     * none).
      */
-    int
+    [[nodiscard]] int
     get_timeout() const {
         return _query_timeout_ms;
     }
@@ -581,6 +620,8 @@ public:
 
         result_impl     _results;
         error::db_error _error{"unknown error"};
+        /// Reflects `Transaction::_result` after the work queue drained (set in `await()`).
+        bool _command_ok{true};
 
     public:
         status() = default;
@@ -595,13 +636,18 @@ public:
 
         status &operator=(status &&) = default;
 
-        status(result_impl results, error::db_error error)
+        status(result_impl results, error::db_error error, bool command_ok)
             : _results(std::move(results))
-            , _error(std::move(error)) {}
+            , _error(std::move(error))
+            , _command_ok(command_ok) {}
 
+        /**
+         * True when the command batch completed without a failed sub-result and without a
+         * PostgreSQL / client error on `_error` (SQLSTATE still `unknown_code` for success).
+         */
         [[nodiscard]] explicit
         operator bool() const {
-            return _error.code.empty();
+            return _command_ok && _error.sqlstate == sqlstate::unknown_code;
         }
 
         [[nodiscard]] bool
@@ -619,6 +665,16 @@ public:
             return _error;
         }
     };
+
+    /**
+     * @brief Commits the current transaction without callbacks (`co_await`).
+     */
+    [[nodiscard]] pg_reply_awaiter<resultset> commit();
+
+    /**
+     * @brief Rolls back the current transaction without callbacks (`co_await`).
+     */
+    [[nodiscard]] pg_reply_awaiter<resultset> rollback();
 
     status await();
 };

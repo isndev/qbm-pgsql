@@ -276,20 +276,20 @@ ParamUnserializer::read_bool(const std::vector<byte> &buffer) {
     if (buffer.size() >= 5) {
         // Check if this is a binary format with length prefix
         integer length = read_integer(std::vector<byte>(buffer.begin(), buffer.begin() + 4));
-        
+
         if (length == 1) {
             // This is the formal binary format with length=1
             return buffer[4] != 0;
         }
     }
-    
+
     // Text format ("true"/"false", "t"/"f", "1"/"0", etc.)
     if (buffer.size() >= 1 &&
         (buffer[0] == 't' || buffer[0] == 'T' || buffer[0] == 'f' || buffer[0] == 'F' ||
          buffer[0] == '1' || buffer[0] == '0' || buffer[0] == 'y' || buffer[0] == 'n')) {
         std::string text = read_text_string(buffer);
-        return (text == "true" || text == "t" || text == "1" || text == "y" ||
-                text == "yes" || text == "on");
+        return (text == "true" || text == "t" || text == "1" || text == "y" || text == "yes" ||
+                text == "on");
     }
 
     // Raw binary format (single byte) - last resort
@@ -317,8 +317,7 @@ ParamUnserializer::read_bytea(const std::vector<byte> &buffer) {
         }
 
         // Read the length
-        integer length =
-            read_integer(std::vector<byte>(buffer.begin(), buffer.begin() + 4));
+        integer length = read_integer(std::vector<byte>(buffer.begin(), buffer.begin() + 4));
 
         // Verify the length
         if (length < 0) {

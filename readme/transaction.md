@@ -1,156 +1,231 @@
-# `qbm-pgsql`: Transaction Handling
+# Transactions and command queues
 
-This document explains how to manage database transactions using the `qbm-pgsql` module's fluent API.
+**`qb::pg::tcp::database`** (and **`qb::pg::tcp::ssl::database`**) **is** the root **`qb::pg::detail::Transaction`**.
+The same object owns the socket, protocol state, **prepared-statement LRU**, and the **queues** that **`execute`**, *
+*`prepare`**, **`begin`**, **`listen`**, etc. extend.
 
-## Core Concept: `qb::pg::detail::Transaction`
+**Public alias:** **`qb::pg::transaction`** — type used in callbacks.
 
-*(Base class defined in `src/transaction.h`, concrete commands in `src/commands.h`)*
+**Include:** `#include <pgsql/pgsql.h>`.
 
-While `qb::pg::detail::Transaction` is the internal base class, you primarily interact with transactions through methods on the `qb::pg::tcp::database` object (or its SSL variant).
+---
 
-The API is designed to be **fluent**, allowing you to chain multiple database operations together within a single transaction block. Each operation (like `execute`, `prepare`, `savepoint`, `then`, `error`) returns a reference to the transaction object, enabling this chaining.
+## Implementation: two queues
 
-## Starting a Transaction: `db.begin()`
+From [`transaction.cpp`](../src/transaction.cpp) / [`transaction.h`](../src/transaction.h):
 
-This method initiates a new transaction block.
+- **`_sub_commands`** — nested **`Transaction`** command objects (**`Begin`**, **`End`**, **`SavePoint`**, *
+  *`EndSavePoint`**, **`Then`**, **`Error`**, **`Prepare`**, …) processed in FIFO order.
+- **`_queries`** — **`ISqlQuery`** instances (**`BeginQuery`**, **`ResultQuery`**, **`CommitQuery`**, …) that actually
+  talk to PostgreSQL.
+
+**`Transaction::await()`** loops **`qb::io::async::run_once()`** until both **`_sub_commands`** and **`_queries`** are
+empty, then builds a **`status`** snapshot.
+
+**Callback path = ordered async:** each **`execute(..., cb, err)`** returns **`Transaction&`** immediately after *
+*enqueueing**. Completion happens later when something runs **`run_once()`** (listener, VirtualCore, or **`await()`**).
+You **do not** need **`await()`** on every call if the io loop keeps running.
+
+---
+
+## `Begin` / `End` (callback transaction blocks)
+
+Defined in [`src/commands.h`](../src/commands.h).
+
+1. **`begin(on_success, on_error, mode)`** pushes a **`Begin`** command, then an **`End`** command (see [
+   `transaction.inl`](../src/transaction.inl) **`Transaction::begin`**).
+2. **`Begin`** constructor queues **`BeginQuery`** (SQL **`BEGIN …`** plus optional **`SET LOCAL statement_timeout`**
+   from [`get_timeout()`](../src/transaction.h)).
+3. When **`BeginQuery`** completes successfully, the framework invokes **`on_success(*this)`** where **`this`** is the *
+   *`Begin`** command object exposed as **`Transaction&`** — your lambda enqueues **`tr.execute`**, **`tr.savepoint`**,
+   etc. onto **that** inner context.
+4. When the **`Begin`** command object is **popped**, **`Begin::on_before_pop`** copies **`_result`** into **`End`** and
+   calls **`End::on_end_transaction`**, which enqueues **`CommitQuery`** or **`RollbackQuery`** depending on **`_result`
+   **.
+
+So **COMMIT/ROLLBACK** for the callback style is **not** a separate `commit(cb, err)` API — it is **`End`**. Explicit *
+*`co_await db.commit()`** exists only on the coroutine path ([`transaction_coro.inl`](../src/transaction_coro.inl)).
+
+**`Begin` errors:** failures on **`BeginQuery`** route to **`on_error`** passed to **`begin`**. **`End`** uses its
+stored **`on_error`** for commit/rollback failures.
+
+**Exceptions in `on_success`:** if your **`begin`** body throws, **`Begin`** catches, sets **`_result = false`**, and
+forwards a **`client_error`** to **`End`**’s error callback ([`commands.h`](../src/commands.h) **`Begin`** constructor).
+
+---
+
+## `Then` / `success` / `error`
+
+Also in [`src/commands.h`](../src/commands.h).
+
+- **`then(cb)`** / **`success(cb)`** (aliases) push a **`Then<CB>`** command. In **`~Then`**, if **`parent()->result()`
+  ** is still success, **`cb(*(parent()))`** is invoked with the **same** **`Transaction&`** the **`Then`** was chained
+  from (`this` in [`Transaction::then`](../src/transaction.inl)).
+- **`error(cb)`** pushes **`Error<CB>`**; in **`~Error`**, if **`parent()->result()`** is failure, *
+  *`cb(parent()->error())`** runs.
+
+The lambdas run when these objects are **popped** during queue draining — i.e. **in order** relative to other *
+*`_sub_commands`**, not “inline” after the C++ statement.
+
+### Root `db` vs inner `tr` chaining
+
+| Call site                                  | What `parent()` is for `Then`/`Error`                              | Typical meaning                                                                                                                                                                                                                                                        |
+|:-------------------------------------------|:-------------------------------------------------------------------|:-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **`db.begin(...).then(f).error(g)`**       | Root **`database`**                                                | **`Then`/`Error` are enqueued **after** the **`Begin`/`End`** pair that **`begin`** just pushed. They run when that pair has been processed — usually **after** COMMIT or ROLLBACK of the block. Use for **follow-up work** that depends on the whole block finishing. |
+| **`tr.then(f)` inside the `begin` lambda** | The **`Begin`** sub-transaction (the **`Transaction&`** parameter) | Chains relative to **that** subtree’s queue — use for **intra-block** sequencing before **`End`** runs.                                                                                                                                                                |
+
+There is **no** separate `tr_next` type in the API: **`then`** passes **`*(parent())`** — the parent transaction
+reference.
+
+**Exceptions in `Then`/`Error` destructors:** caught; **`parent()->result(false)`** may be set if a grandparent
+exists ([`commands.h`](../src/commands.h)).
+
+---
+
+## Optional `await()` and `status` snapshot
+
+**`Transaction::await()`** ([`transaction.cpp`](../src/transaction.cpp) ~155–190):
+
+- Clears **`results()`**, resets **`_error`** / **`_result`** to a neutral baseline, then drains with **`run_once()`**
+  until queues are empty.
+- **If the queues were already empty on entry** but a **failure was already recorded** (e.g. synchronous validation
+  before any async step), **`await()`** restores that failure into **`status`** instead of reporting a false success.
+
+**`status`** ([`transaction.h`](../src/transaction.h)):
+
+- **`explicit operator bool()`** — true only when **`_command_ok`** and **`_error.sqlstate == unknown_code`**.
+- **`results()`** / **`error()`** — last batch payload.
+
+**`qb::pg::await(db)`** — thin forwarder to **`db.await()`**.
+
+Use **`await()`** when you need a **blocking drain on the current thread** or a **`status`** object. Omit it when the *
+*actor / listener** continuously calls **`run_once()`**.
+
+---
+
+## Starting a transaction (callbacks)
 
 ```cpp
 db.begin(
-    // --- Success Callback (Required) ---
-    // This lambda is executed *if* the BEGIN command succeeds.
-    // It receives a reference to the transaction context.
     [](qb::pg::transaction& tr) {
-        // --- Chain operations within the transaction here ---
-        tr.execute("...")
-          .prepare("...")
-          .then([](qb::pg::transaction& tr_step2) { /* ... */ });
-        // --- End of chained operations ---
+        tr.execute("INSERT INTO t(v) VALUES (1)", qb::pg::discard_query, qb::pg::discard_error);
+        tr.execute("UPDATE t SET v = 2 WHERE v = 1", qb::pg::discard_query, qb::pg::discard_error);
     },
-    // --- Error Callback (Optional) ---
-    // This lambda is executed *if* the BEGIN command itself fails,
-    // or if any subsequent operation within the transaction fails
-    // and causes a rollback.
-    [](const qb::pg::error::db_error& err) {
-        std::cerr << "Transaction failed: " << err.what() << std::endl;
+    [](qb::pg::error::db_error const& err) {
+        (void)err; // BEGIN failed or End error path
     },
-    // --- Transaction Mode (Optional) ---
-    // Specify isolation level, read-only status, etc.
-    qb::pg::transaction_mode{qb::pg::isolation_level::serializable, true /*read only*/}
-);
+    qb::pg::transaction_mode{});
 ```
 
-*   **Asynchronous Execution:** The `begin()` call itself is non-blocking. The code inside the success lambda is queued for execution.
-*   **Commit/Rollback:** The transaction is automatically **committed** if all operations chained within the success lambda complete without error. It is automatically **rolled back** if the `begin` fails, or if any operation within the success lambda fails (either by throwing an exception in a callback or by receiving a database error).
-
-## Chaining Operations
-
-Inside the `begin()` success callback, you chain operations using the provided `qb::pg::transaction& tr` reference:
-
-*   **`tr.execute(sql, [params], [on_success], [on_error])`**: Executes a simple or prepared query. See [Query Execution](./queries.md).
-*   **`tr.prepare(name, sql, [types], [on_success], [on_error])`**: Prepares a statement. See [Query Execution](./queries.md).
-*   **`tr.savepoint(name, on_success, [on_error])`**: Creates a nested savepoint. See below.
-*   **`tr.then(on_success)`**: Executes the `on_success` lambda *only if* the preceding operation in the chain succeeded. This is crucial for sequential logic.
-    ```cpp
-    tr.execute("INSERT...")
-      .then([](qb::pg::transaction& tr_next) {
-          // This runs only if INSERT was successful
-          return tr_next.execute("SELECT..."); // Return to continue chain
-      });
-    ```
-*   **`tr.error(on_error)`**: Attaches an error handler specifically to the preceding operation(s) in the chain *within the current transaction block*. If an error occurs before this point, the `on_error` lambda is executed.
-    ```cpp
-    tr.execute("UPDATE...")
-      .error([](const qb::pg::error::db_error& err) {
-          // Handle specific UPDATE error
-      })
-      .then([](qb::pg::transaction& tr_next) { /* ... */ });
-    ```
-*   **`tr.success(on_success)`**: Similar to `then`, but typically used at the very end of a chain to signify the successful completion of the *entire sequence* within that transaction block. Often redundant as the main transaction commit handles overall success.
-
-## Savepoints (Nested Transactions)
-
-Savepoints allow you to establish points within a transaction to which you can later roll back, without aborting the entire transaction.
+**Optional synchronous drain:**
 
 ```cpp
-db.begin([](qb::pg::transaction& tr_outer) {
-    tr_outer.execute("INSERT INTO main_table ...");
-
-    tr_outer.savepoint("my_sp", // Savepoint name
-        // --- Savepoint Success Callback ---
-        [](qb::pg::transaction& tr_inner) {
-            std::cout << "Inside savepoint.\n";
-            tr_inner.execute("INSERT INTO secondary_table ...")
-                  .then([](auto& tr) { /* More work */ })
-                  .error([](const auto& err) {
-                      // If this error handler is called, the work done
-                      // inside this savepoint lambda will be rolled back
-                      // to the state just before the savepoint.
-                      std::cerr << "Error inside savepoint: " << err.what() << std::endl;
-                      // IMPORTANT: This error typically propagates and rolls back
-                      // the *entire* outer transaction unless handled differently.
-                      // To *only* rollback the savepoint requires more complex logic
-                      // (e.g., catching specific errors and manually issuing
-                      // ROLLBACK TO SAVEPOINT my_sp). The default fluent API
-                      // promotes all-or-nothing semantics for the outer transaction.
-                  });
-        },
-        // --- Savepoint Error Callback (if SAVEPOINT command fails) ---
-        [](const qb::pg::error::db_error& err) {
-            std::cerr << "Failed to create savepoint: " << err.what() << std::endl;
-        }
-    )
-    .then([](qb::pg::transaction& tr_after) {
-        // This executes if the savepoint block completed (either committed
-        // internally or rolled back internally due to an error caught
-        // by its .error() handler).
-        // The outer transaction continues.
-        tr_after.execute("INSERT INTO log_table ...");
-    });
-});
+auto st = db.begin(/* … */).await();
+if (!static_cast<bool>(st)) { /* st.error() */ }
 ```
 
-*   **Rollback:** An error occurring *inside* the savepoint's success lambda will, by default, cause the **entire outer transaction** to roll back when the error propagates up. To achieve partial rollback *only* to the savepoint, you would need to catch the specific error within the savepoint's chain (`.error()`) and prevent it from failing the outer transaction, potentially by executing `ROLLBACK TO SAVEPOINT my_sp` manually (though this deviates from the simple fluent API).
-*   **Naming:** Savepoint names should be unique within their transaction scope.
-
-## Transaction Isolation Levels
-
-*(Enum defined in `src/common.h`)*
-
-You can specify the isolation level when beginning a transaction:
-
-*   `qb::pg::isolation_level::read_committed` (Default): Each statement sees data committed before it began.
-*   `qb::pg::isolation_level::repeatable_read`: All statements in the transaction see a snapshot as of the first statement.
-*   `qb::pg::isolation_level::serializable`: Strictest level, ensures transactions behave as if run sequentially.
+**Post-block chain on root (runs after `Begin`/`End` pair):**
 
 ```cpp
-qb::pg::transaction_mode mode;
-mode.isolation = qb::pg::isolation_level::serializable;
-mode.read_only = true; // Optional: make it read-only
-
-db.begin(
-    [](qb::pg::transaction& tr) { /* ... */ },
-    [](const qb::pg::error::db_error& err) { /* ... */ },
-    mode // Pass the mode struct
-);
+db.begin(/* … */, on_begin_err)
+    .then([](qb::pg::transaction& tr) { (void)tr; /* next enqueue on root */ })
+    .error([](qb::pg::error::db_error const& e) { (void)e; });
 ```
 
-Refer to PostgreSQL documentation for the detailed implications of each isolation level.
+---
 
-## Synchronous Execution with `await()`
-
-While the primary API is asynchronous, you can force synchronous execution by calling `.await()` at the end of a transaction chain.
+## Starting a transaction (coroutines)
 
 ```cpp
-auto status = db.begin([](qb::pg::transaction& tr) {
-                      tr.execute("...");
-                   })
-                  .await(); // Blocks until transaction completes or fails
+auto br = co_await db.begin();
+if (!br.ok()) { co_return; }
 
-if (status) {
-    std::cout << "Transaction committed.\n";
-} else {
-    std::cerr << "Transaction failed: " << status.error().what() << std::endl;
+auto er = co_await db.execute("INSERT INTO t(v) VALUES (1)");
+if (!er.ok()) {
+    (void)co_await db.rollback();
+    co_return;
 }
+
+auto cr = co_await db.commit();
+if (!cr.ok())
+    (void)co_await db.rollback();
 ```
 
-This is useful for testing, simple scripts, or integrating with synchronous code, but should be avoided in performance-critical actor code as it blocks the caller. 
+**`set_timeout`:** stored on the connection; next **`begin()`** (callback or coroutine) merges *
+*`SET LOCAL statement_timeout`** into the **`BEGIN`** round-trip ([`BeginQuery`](../src/queries.h)).
+See [connection.md](./connection.md) vs connect deadline.
+
+---
+
+## `set_timeout` / `get_timeout`
+
+| Call                              | Effect                                                                          |
+|:----------------------------------|:--------------------------------------------------------------------------------|
+| **`set_timeout(n)`**, **`n > 0`** | Next **`begin()`** appends **`SET LOCAL statement_timeout`** after **`BEGIN`**. |
+| **`set_timeout(0)`**              | Disables for subsequent begins.                                                 |
+| **Scope**                         | Transaction-local on server until COMMIT/ROLLBACK.                              |
+| **No `begin()`**                  | Autocommit **`execute`** does not inject it; use raw SQL if needed.             |
+
+---
+
+## `with_transaction` (coroutines only)
+
+Implemented in [`src/coro_with_transaction.hpp`](../src/with_transaction.h): **`co_await begin`**, body **`task`
+**, **`COMMIT`** or **`ROLLBACK`** on success / **`transaction_abort`** / exception / commit failure.
+
+```cpp
+auto r = co_await qb::pg::with_transaction(db, [](qb::pg::detail::Transaction& tr)
+    -> qb::io::async::task<int> {
+        auto q = co_await tr.query("SELECT 1");
+        if (!q.ok())
+            throw qb::pg::transaction_abort{q.error()};
+        co_return 42;
+    });
+```
+
+**Nesting:** avoid second **`BEGIN`** on same connection; use **`savepoint`** for nested units.
+
+---
+
+## Savepoints
+
+**Callback — open block:**
+
+```cpp
+tr.savepoint("sp1",
+    [](qb::pg::transaction& inner) {
+        inner.execute("INSERT INTO t VALUES (1)", qb::pg::discard_query, qb::pg::discard_error);
+    },
+    [](qb::pg::error::db_error const&) {});
+```
+
+**Coroutine:** **`co_await tr.savepoint("name")`**, **`co_await tr.release_savepoint("name")`**, *
+*`co_await tr.rollback_savepoint("name")`** ([`transaction_coro.inl`](../src/transaction_coro.inl)).
+
+**API gap:** there are **no** callback overloads for **`release_savepoint` / `rollback_savepoint`** — only **`co_await`
+**. Inside a callback transaction, issue **`ROLLBACK TO SAVEPOINT` / `RELEASE SAVEPOINT`** via **`execute`** if needed.
+
+Semantics follow **`SavePoint` / `EndSavePoint`** in [`commands.h`](../src/commands.h); see *
+*`test-transaction-advanced.cpp`** for edge cases.
+
+---
+
+## Isolation and modes
+
+**`qb::pg::transaction_mode`** ([`common.h`](../src/common.h)): isolation, **`read_only`**, **`deferrable`**. Read-only
+still allows temp table writes (PostgreSQL).
+
+---
+
+## `commit` / `rollback` (coroutines only)
+
+**`co_await tr.commit()`** / **`co_await tr.rollback()`** → **`Reply<resultset>`**. No callback twins; use **`begin`**
+’s **`End`** for implicit commit/rollback in callback style.
+
+---
+
+## Related documentation
+
+- [queries.md](./queries.md) — **`execute`**, prepared SQL, NOTIFY/LISTEN
+- [error_handling.md](./error_handling.md) — **`Reply`**, **`Error` command**, **`status`**
+- [connection.md](./connection.md) — connect vs statement timeout  

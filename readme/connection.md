@@ -1,119 +1,184 @@
-# `qbm-pgsql`: Connection Management
+# Connection management
 
-This document details how to establish and manage connections to a PostgreSQL database using the `qbm-pgsql` module.
+How **`qb::pg::tcp::database`** and **`qb::pg::tcp::ssl::database`** attach to PostgreSQL: DSN parsing, async *
+*`connect_awaiter`**, authentication, TLS upgrade, lifecycle, and errors.
 
-## Core Class: `qb::pg::tcp::database`
+**Primary type:** **`qb::pg::detail::Database<QB_IO_, void>`** exposed as **`qb::pg::tcp::database`** (cleartext) or *
+*`qb::pg::tcp::ssl::database`** (OpenSSL build).
 
-*(Defined in `qbm/pgsql/pgsql.h`, implemented in `qbm/pgsql/pgsql.cpp`)*
+---
 
-This is the main class representing a connection to a PostgreSQL server over TCP/IP. For SSL/TLS connections, use `qb::pg::tcp::ssl::database`.
+## Types and inheritance
 
-It inherits from:
-*   `qb::io::async::tcp::client`: Provides the asynchronous TCP client capabilities.
-*   `qb::pg::detail::Transaction`: Provides the base for the fluent transaction API (although top-level `db.execute()` etc. are usually used outside an explicit `db.begin()` block).
+- **`tcp::client<Database, Transport, void>`** — socket, **`qb::io::async::io`**, protocol attachment.
+- **`detail::Transaction`** — same object is the **root transaction** ( **`execute`**, **`begin`**, …).
 
-### Establishing a Connection
+There is **no** synchronous **`bool connect()`**. Connection is started with **`connect()`** returning *
+*`connect_awaiter`**.
 
-Connections are typically established using a connection string or a `connection_options` struct.
+### No callback overload for `connect`
 
-**1. Using Connection String:**
+Unlike **`execute`**, **`listen`**, **`notify`**, etc., there is **no** `connect(dsn, on_ok, on_err)`. Use:
 
-The easiest way is to provide a connection string to the constructor or the `connect()` method.
+- **`co_await db.connect(...)`** inside a coroutine, or
+- **`qb::io::async::run_sync(db.connect(...))`** from synchronous code.
 
-```cpp
-#include <pgsql/pgsql.h>
+The awaiter type and handshake live in [`pgsql.h`](../pgsql.h) (**`connect_awaiter`** struct, **`Database::connect`**
+overloads).
 
-// Via constructor
-qb::pg::tcp::database db1("tcp://user:pwd@host:port[database]");
-if (!db1.connect()) {
-    // Handle error: db1.error() contains details
-}
+---
 
-// Via connect method
-qb::pg::tcp::database db2;
-if (!db2.connect("tcp://test:test@localhost:5432[test]")) {
-    // Handle error
-}
+## Connection string (DSN)
+
+Parsed by **`qb::pg::connection_options::parse`** (**`src/common.cpp`**).
+
+**General form:**
+
+```text
+tcp://[user[:password]@]host[:port][database_name]
 ```
 
-**Connection String Format:**
+| Part                    | Meaning                                                                                                               |
+|:------------------------|:----------------------------------------------------------------------------------------------------------------------|
+| **`tcp://`**            | Used for **both** cleartext and SSL clients. SSL uses **`SSLRequest`** after TCP connect, not a different URL scheme. |
+| **`user` / `password`** | Authentication. Special characters in passwords must survive your URL embedding rules.                                |
+| **`host`**              | Hostname or IP.                                                                                                       |
+| **`port`**              | Optional; default **5432**.                                                                                           |
+| **`[database]`**        | Database name in **square brackets** (parser convention in this module).                                              |
 
-`schema://[user[:password]@]host[:port][database]`
-
-*   `schema`: `tcp` (for plain TCP) or `tcp` + (for SSL/TLS - requires `qb::pg::tcp::ssl::database`).
-*   `user`, `password` (Optional): Credentials for authentication.
-*   `host`: Hostname or IP address of the PostgreSQL server.
-*   `port` (Optional): Port number (defaults to 5432).
-*   `database`: The name of the database to connect to.
-
-*(Parsing logic is in `src/common.cpp` using `connect_string_parser`)*
-
-**2. Using `connection_options` Struct:**
-
-*(Defined in `src/common.h`)*
-
-This provides more structured control over connection parameters.
+**Examples:**
 
 ```cpp
-qb::pg::connection_options opts;
-opts.schema = "tcp";
-opts.uri = "localhost:5432"; // Combines host and port
-opts.database = "test";
-opts.user = "test";
-opts.password = "test";
-// opts.alias = "my_db"; // Optional
+qb::pg::tcp::database db("tcp://readonly:secret@db.internal:5432[analytics]");
+qb::pg::tcp::database empty;
+// Later:
+auto a = empty.connect("tcp://test:test@127.0.0.1:5432[test]");
+```
 
+**Structured `connection_options`:** There is **no** `Database::connect(connection_options)` overload. Typical flows:
+
+1. **`database(std::string const& dsn)`** — stores parsed options; then **`connect()`** uses **`conn_opts_`**.
+2. **`connect(std::string const& dsn)`** — re-parses and starts handshake.
+
+Fields on **`connection_options`** (**`src/common.h`**) include **`user`**, **`password`**, **`database`**, **`uri`** (
+host:port), **`connect_timeout`** (seconds, default **10**), TCP keepalive integers, **`application_name`**, etc. To
+build options manually, populate the struct and **serialize to the DSN format your parser accepts**, or extend the
+module if you need a direct struct connect API.
+
+---
+
+## `connect_awaiter` — starting the session
+
+**Signatures (see `pgsql.h`):**
+
+- **`connect()`** — use stored **`conn_opts_`**.
+- **`connect(double timeout_sec)`** — override **this attempt’s** deadline (still uses **`conn_opts_`** for
+  host/user/db).
+- **`connect(std::string const& dsn)`** — parse then **`connect()`**.
+- **`connect(std::string const& dsn, transport&&)`** — for advanced injection (e.g. pooled socket).
+
+**Awaiter behaviour:**
+
+- **`await_ready()`** — **`true`** if already **`is_connected_`**.
+- **`co_await`** — suspends until handshake success or failure; **`await_resume()`** is **`true`** iff connected.
+
+**Synchronous / test code:**
+
+```cpp
+qb::io::async::init();
 qb::pg::tcp::database db;
-if (!db.connect(opts)) { // Pass the struct to connect()
-    // Handle error
+if (!qb::io::async::run_sync(db.connect("tcp://u:p@h:5432[d]"))) {
+    /* not connected */
 }
 ```
 
-### Connection Lifecycle
+**Handshake** runs incrementally on the event loop (startup, auth rounds, **`BackendKeyData`**, **`ReadyForQuery`**). A
+**timer** can fail the attempt with a **timeout** **`db_error`** — separate from **`set_timeout()`** which sets
+PostgreSQL **`statement_timeout`** on the **next** **`BEGIN`**.
 
-*   **`connect()`:** Initiates the asynchronous connection process. This involves resolving the hostname, establishing the TCP connection, and performing the PostgreSQL startup and authentication handshake.
-*   **Asynchronous Nature:** The `connect()` call returns quickly. The actual connection status is determined later via the QB event loop. You typically need `qb::io::async::run()` or `db.await()` (for synchronous waits) after calling `connect()`.
-*   **`disconnect()`:** Closes the connection gracefully.
-*   **Destructor:** The `database` destructor automatically calls `disconnect()`.
+---
 
-### Authentication
+## `disconnect()` and `prepare_reconnect()`
 
-*(Logic primarily in `Database::on_authentication` in `pgsql.h`)*
+Documented on **`Database`** in [`pgsql.h`](../pgsql.h):
 
-The client handles the authentication flow dictated by the server:
+- **`disconnect()`** — tears down the session and triggers a short **`EVRUN_NOWAIT`** pass so pending close I/O is
+  observed. Underlying TCP may **shutdown** while keeping the handle in a state where a **new** socket is opened on the
+  next connect (see comments near **`prepare_reconnect`** about **`tcp::socket::disconnect()`** vs a fully closed fd).
+- **`prepare_reconnect()`** — **must** be called on the **same** **`database`** after **`disconnect()`** before *
+  *`connect()`** again: calls **`reset_io_state()`** on the transport and clears handshake / connected flags. **Do not**
+  call while SQL commands are still queued on this object.
 
-*   **Startup Message:** Client sends protocol version, user, database, and client options.
-*   **Server Response (`Authentication*` messages):** The server responds with the required authentication method.
-*   **Supported Methods:**
-    *   `OK` (0): Authentication successful (rarely the first step).
-    *   `Cleartext` (3): Client sends the password in plain text.
-    *   `MD5Password` (5): Client receives a salt, computes `md5(md5(password + user) + salt)`, and sends the result.
-    *   `SCRAM-SHA-256` (10, 11, 12): Client engages in the SCRAM challenge-response mechanism, involving nonce exchange, salting, hashing (PBKDF2), and signature verification. Requires OpenSSL.
-*   **Error Handling:** Invalid credentials or unsupported methods result in a connection error.
+```cpp
+db.disconnect();
+db.prepare_reconnect();
+(void)qb::io::async::run_sync(db.connect("tcp://..."));
+```
 
-### Backend Parameters
+---
 
-*(Handled in `Database::on_parameter_status` in `pgsql.h`)*
+## Authentication (`Database::on_authentication`)
 
-After successful authentication, the server sends various runtime parameters (like `client_encoding`, `server_version`, `TimeZone`, etc.). The client stores these in its internal `client_opts_` map, though direct access isn't typically needed by user code.
+Handler on **`Database`** in [`pgsql.h`](../pgsql.h) (search **`on_authentication`**). Drives the authentication
+sub-state machine from server **`Authentication*`** messages.
 
-### Connection Errors (`qb::pg::error::connection_error`)
+| Server code                    | Client behaviour                                                          |
+|:-------------------------------|:--------------------------------------------------------------------------|
+| **OK**                         | Mark connected; apply socket keepalive from options.                      |
+| **Cleartext (3)**              | Send password message.                                                    |
+| **MD5 (5)**                    | Salted MD5 per PostgreSQL spec.                                           |
+| **SCRAM-SHA-256 (10, 11, 12)** | Nonce, PBKDF2, client proof, **server signature verification** (OpenSSL). |
+| **Other**                      | Unsupported → failure path.                                               |
 
-*(Defined in `src/error.h`, implemented in `src/error.cpp`)*
+SCRAM includes validation of iteration count and defensive parsing of server-first message fields.
 
-If `connect()` fails, it returns `false`, and `db.error()` will contain a `connection_error` (or a derived type). Common causes include:
+---
 
-*   Network issues (host unreachable, port closed).
-*   Invalid hostname or address.
-*   Authentication failure (wrong user/password).
-*   Server configuration issues (e.g., `pg_hba.conf` restrictions).
-*   SSL handshake failure.
+## SSL / TLS
 
-### SSL/TLS Connections
+When **`QB_HAS_SSL`** is defined:
 
-To use SSL/TLS:
+- Use **`qb::pg::tcp::ssl::database`**.
+- DSN remains **`tcp://...`**.
+- Transport performs PostgreSQL **SSLRequest**; on **`S`**, upgrades with **`qb::io::transport::stcp`**.
 
-1.  Ensure QB was built with OpenSSL (`QB_IO_WITH_SSL=ON`).
-2.  Use the `qb::pg::tcp::ssl::database` class instead of `qb::pg::tcp::database`.
-3.  Use the `tcp://` schema in the connection string or set `opts.schema = "ssl";`.
-4.  The underlying `qb::io::transport::stcp` handles the SSL handshake during connection. 
+Integration tests: **`qbm-pgsql-test-connection-ssl`**; env **`QB_PG_SSL_DSN`** (see [testing.md](./testing.md)).
+
+---
+
+## Parameter status
+
+After authentication, **`ParameterStatus`** messages update internal maps (**`on_parameter_status`**). Rarely needed in
+application code; useful for debugging encoding/timezone.
+
+---
+
+## Incoming asynchronous messages
+
+While idle in **`ReadyForQuery`**, the server may send **NOTICE**, **NOTIFY**, **ParameterStatus**, etc. **NOTIFY** is
+delivered to:
+
+- **`notify_co_consumer`** / **`notify_cb_consumer`** → **`deliver_pg_notify`**, or
+- Plain **`database`** → **`on_incoming_notify`** handler if set.
+
+Cross-connection ordering: completing **`NOTIFY`** SQL on session A does **not** guarantee session B has already read *
+*`NotificationResponse`** — drive B’s loop or await work on B before asserting delivery (see **`test-notify.cpp`** *
+*`io_pump`** pattern).
+
+---
+
+## Errors
+
+Failures surface as **`qb::pg::error::connection_error`** or generic **`db_error`** with message/SQLSTATE where
+applicable. With **`run_sync(connect(...))`**, a **`false`** result means the awaiter completed without *
+*`is_connected_`**.
+
+See [error_handling.md](./error_handling.md).
+
+---
+
+## Related
+
+- [transaction.md](./transaction.md) — **`set_timeout`** vs connect timeout
+- [queries.md](./queries.md) — **`listen`/`notify`**
+- [testing.md](./testing.md) — DSN env vars  

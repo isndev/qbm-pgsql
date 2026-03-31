@@ -33,6 +33,7 @@
  */
 
 #include <memory>
+#include <optional>
 #include <utility>
 
 #include "./transaction.h"
@@ -60,6 +61,9 @@ Transaction::~Transaction() {
 }
 
 void
+Transaction::on_before_pop() {}
+
+void
 Transaction::result(bool value) {
     _result = value;
 }
@@ -84,6 +88,7 @@ std::unique_ptr<Transaction>
 Transaction::pop_transaction() {
     auto ret = std::move(_sub_commands.front());
     _sub_commands.pop();
+    ret->on_before_pop();
     on_sub_command_status(ret->_result);
     return ret;
 }
@@ -132,43 +137,6 @@ Transaction::on_command_complete(const std::string &tag) {
     _results.set_command_tag(tag);
 }
 
-Transaction &
-Transaction::execute(std::string_view expr) {
-    return this->execute(
-        expr, [](Transaction &, auto) {}, [](error::db_error const &) {});
-}
-
-Transaction &
-Transaction::prepare(std::string_view query_name, std::string_view expr,
-                     type_oid_sequence &&types) {
-    return this->prepare(
-        query_name, expr, std::move(types), [](Transaction &, PreparedQuery const &) {},
-        [](error::db_error const &) {});
-}
-
-Transaction &
-Transaction::prepare_file(std::string_view query_name, 
-                         const std::filesystem::path& file_path,
-                         type_oid_sequence &&types) {
-    return prepare_file(query_name, file_path, std::move(types), 
-                       [](Transaction&, PreparedQuery const&) {},
-                       [](error::db_error const &) {});
-}
-
-Transaction &
-Transaction::execute(std::string_view query_name, QueryParams &&params) {
-    return this->execute(
-        query_name, std::move(params), [](Transaction &, auto) {},
-        [](error::db_error const &) {});
-}
-
-Transaction &
-Transaction::execute_file(const std::filesystem::path& file_path) {
-    return execute_file(file_path, 
-                       [](Transaction&, auto) {},
-                       [](error::db_error const &) {});
-}
-
 bool
 Transaction::has_error() const {
     return _error.sqlstate != sqlstate::unknown_code;
@@ -186,12 +154,38 @@ Transaction::results() {
 
 Transaction::status
 Transaction::await() {
+    // `push_transaction` → `on_new_command` → `process_if_query_ready` can finish the whole
+    // operation (including errors) synchronously before `execute()`/`prepare()` returns.
+    // If we always reset `_result`/`_error` here, `await()` then sees an empty queue, runs
+    // zero `run_once()` iterations, and incorrectly reports success (prepared-statement
+    // client validation, etc.). When the queue is already empty at entry, snapshot outcome
+    // before resetting if that snapshot is not a clean success.
     results() = {};
+
+    const bool empty_at_entry = _sub_commands.empty() && _queries.empty();
+    const bool pre_success    = _result && (_error.sqlstate == sqlstate::unknown_code);
+    std::optional<error::db_error> pre_failure_error;
+    if (empty_at_entry && !pre_success)
+        pre_failure_error = _error;
+
+    _error  = error::db_error{"unknown error"};
+    _result = true;
 
     while (!_sub_commands.empty() || !_queries.empty())
         qb::io::async::run_once();
 
-    return {std::move(results()), std::move(_error)};
+    if (empty_at_entry && pre_failure_error.has_value()) {
+        _result = false;
+        _error  = std::move(*pre_failure_error);
+    }
+
+    status out{std::move(results()), std::move(_error), _result};
+
+    // Neutral baseline for the next fluent chain; `status` owns the moved error/results.
+    _error  = error::db_error{"unknown error"};
+    _result = true;
+
+    return out;
 }
 
 } // namespace qb::pg::detail

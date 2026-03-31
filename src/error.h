@@ -106,8 +106,7 @@ public:
      * @param code PostgreSQL error code string
      * @param detail Additional error details or context
      */
-    db_error(std::string const &message, std::string severity, std::string code,
-             std::string detail);
+    db_error(std::string const &message, std::string severity, std::string code, std::string detail);
 
     std::string    severity; ///< PostgreSQL error severity level (ERROR, FATAL, etc.)
     std::string    code;     ///< PostgreSQL error code string

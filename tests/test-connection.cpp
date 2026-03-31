@@ -42,10 +42,14 @@
  * limitations under the License.
  */
 
+#include <chrono>
+#include <cstdlib>
 #include <gtest/gtest.h>
+#include <qb/io/async.h>
+#include <qb/io/async/coroutine.h>
+#include <qb/io/async/coroutine/utils.h>
 #include "../pgsql.h"
-
-constexpr std::string_view PGSQL_CONNECTION_STR = "tcp://test:test@localhost:5432[test]";
+#include "test_config.hpp"
 
 using namespace qb::pg;
 
@@ -91,7 +95,19 @@ protected:
  * a PostgreSQL server with valid credentials.
  */
 TEST_F(PostgreSQLConnectionTest, ConnectSuccess) {
-    ASSERT_TRUE(db_->connect(PGSQL_CONNECTION_STR.data()));
+    ASSERT_TRUE(qb::io::async::run_sync(db_->connect(qb::pg::test::dsn_tcp_string())));
+}
+
+/**
+ * @brief Same as ConnectSuccess using `co_await connect()` on a spawned `task` (libev +
+ * coro_scheduler).
+ */
+TEST_F(PostgreSQLConnectionTest, ConnectSuccess_Coroutine) {
+    bool ok = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        ok = co_await db_->connect(qb::pg::test::dsn_tcp_string());
+    }());
+    ASSERT_TRUE(ok);
 }
 
 /**
@@ -102,7 +118,13 @@ TEST_F(PostgreSQLConnectionTest, ConnectSuccess) {
  */
 TEST_F(PostgreSQLConnectionTest, ConnectWithInvalidCredentials) {
     const auto invalid_db = std::make_unique<qb::pg::tcp::database>();
-    ASSERT_FALSE(invalid_db->connect("tcp://billy@localhost:5432[invalid]"));
+    const bool connected =
+        qb::io::async::run_sync(invalid_db->connect(qb::pg::test::dsn_invalid_auth_string()));
+    if (connected && std::getenv("QB_PG_INVALID_DSN") == nullptr) {
+        GTEST_SKIP() << "Server accepted default wrong-password DSN (e.g. trust in "
+                        "pg_hba). Set QB_PG_INVALID_DSN to a DSN that must fail auth.";
+    }
+    ASSERT_FALSE(connected);
 }
 
 /**
@@ -111,14 +133,13 @@ TEST_F(PostgreSQLConnectionTest, ConnectWithInvalidCredentials) {
  * Verifies that a connection can be reestablished after
  * an explicit disconnection.
  */
-TEST_F(PostgreSQLConnectionTest, DISABLED_ReconnectAfterDisconnect) {
-    ASSERT_TRUE(db_->connect(PGSQL_CONNECTION_STR.data()));
+TEST_F(PostgreSQLConnectionTest, ReconnectAfterDisconnect) {
+    ASSERT_TRUE(qb::io::async::run_sync(db_->connect(qb::pg::test::dsn_tcp_string())));
 
-    // Simulate disconnection
     db_->disconnect();
+    db_->prepare_reconnect();
 
-    // Attempt to reconnect
-    ASSERT_TRUE(db_->connect(PGSQL_CONNECTION_STR.data()));
+    ASSERT_TRUE(qb::io::async::run_sync(db_->connect(qb::pg::test::dsn_tcp_string())));
 }
 
 /**
@@ -126,16 +147,16 @@ TEST_F(PostgreSQLConnectionTest, DISABLED_ReconnectAfterDisconnect) {
  *
  * Verifies that a connection attempt to an unreachable server
  * returns false within the configured timeout (default 10 s).
- * Disabled until non-blocking TCP connect is implemented —
- * the blocking ::connect() can stall for 75+ s at the OS level.
+ * Uses timed TCP connect (`qb::io::socket::connect_n`) so the attempt is not
+ * stuck in a blocking `::connect()` for OS-default SYN timeouts.
  */
-TEST_F(PostgreSQLConnectionTest, DISABLED_ConnectionTimeout) {
+TEST_F(PostgreSQLConnectionTest, ConnectionTimeout) {
     constexpr std::string_view unreachable = "tcp://test:test@192.0.2.1:5432[test]";
 
     const auto timeout_db = std::make_unique<qb::pg::tcp::database>();
 
     const auto start  = std::chrono::steady_clock::now();
-    const bool result = timeout_db->connect(std::string(unreachable));
+    const bool result = qb::io::async::run_sync(timeout_db->connect(std::string{unreachable}));
     const auto end    = std::chrono::steady_clock::now();
 
     ASSERT_FALSE(result);
@@ -157,19 +178,44 @@ TEST_F(PostgreSQLConnectionTest, ConnectionPool) {
 
     for (int i = 0; i < num_connections; ++i) {
         auto conn = std::make_unique<qb::pg::tcp::database>();
-        ASSERT_TRUE(conn->connect(PGSQL_CONNECTION_STR.data()));
+        ASSERT_TRUE(qb::io::async::run_sync(conn->connect(qb::pg::test::dsn_tcp_string())));
         connections.push_back(std::move(conn));
     }
 
     // Verify all connections are working by executing a simple query
     for (const auto &conn : connections) {
-        auto status = conn->execute("SELECT 1").await();
+        auto status = conn->execute("SELECT 1", discard_query, discard_error).await();
         ASSERT_TRUE(status);
     }
 }
 
+/**
+ * @brief Same as ConnectionPool: multiple handshakes via `co_await connect()` then `co_await
+ * query()`.
+ */
+TEST_F(PostgreSQLConnectionTest, ConnectionPool_Coroutine) {
+    constexpr int num_connections = 5;
+    bool          all_ok          = true;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        for (int i = 0; i < num_connections; ++i) {
+            auto conn = std::make_unique<qb::pg::tcp::database>();
+            if (!co_await conn->connect(qb::pg::test::dsn_tcp_string())) {
+                all_ok = false;
+                co_return;
+            }
+            auto reply = co_await conn->query("SELECT 1");
+            if (!reply.ok() || reply.result().size() != 1 || reply.result()[0][0].as<int>() != 1) {
+                all_ok = false;
+                co_return;
+            }
+        }
+    }());
+    ASSERT_TRUE(all_ok);
+}
+
 int
 main(int argc, char **argv) {
+    qb::io::async::init();
     testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }

@@ -44,6 +44,7 @@
 #include <sstream>
 
 #include "./commands.h"
+#include "./pg_notify_sql.h"
 #include "./transaction.h"
 
 namespace qb::pg::detail {
@@ -62,7 +63,7 @@ namespace qb::pg::detail {
  * @param mode Transaction isolation mode
  * @return Reference to this transaction for method chaining
  */
-template <typename CB_SUCCESS, typename CB_ERROR, typename>
+template <typename CB_SUCCESS, typename CB_ERROR>
 Transaction &
 Transaction::begin(CB_SUCCESS &&on_success, CB_ERROR &&on_error, transaction_mode mode) {
     if (_parent) {
@@ -107,7 +108,7 @@ Transaction::begin(CB_SUCCESS &&on_success, transaction_mode mode) {
  * @param on_error Callback invoked if savepoint creation fails
  * @return Reference to this transaction for method chaining
  */
-template <typename CB_SUCCESS, typename CB_ERROR, typename>
+template <typename CB_SUCCESS, typename CB_ERROR>
 Transaction &
 Transaction::savepoint(std::string_view name, CB_SUCCESS &&on_success,
                        CB_ERROR &&on_error) {
@@ -150,7 +151,7 @@ Transaction::savepoint(std::string_view name, CB_SUCCESS &&on_success) {
  * @param on_error Callback invoked if query fails
  * @return Reference to this transaction for method chaining
  */
-template <typename CB_SUCCESS, typename CB_ERROR, typename>
+template <typename CB_SUCCESS, typename CB_ERROR>
 Transaction &
 Transaction::execute(std::string_view expr, CB_SUCCESS &&on_success,
                      CB_ERROR &&on_error) {
@@ -181,7 +182,7 @@ Transaction::execute(std::string_view expr, CB_SUCCESS &&on_success,
  * @param on_success Callback invoked when query succeeds
  * @return Reference to this transaction for method chaining
  */
-template <typename CB_SUCCESS, typename>
+template <typename CB_SUCCESS>
 Transaction &
 Transaction::execute(std::string_view expr, CB_SUCCESS &&on_success) {
     return execute(std::string(expr), std::forward<CB_SUCCESS>(on_success),
@@ -204,7 +205,7 @@ Transaction::execute(std::string_view expr, CB_SUCCESS &&on_success) {
  * @param on_error Callback invoked if preparation fails
  * @return Reference to this transaction for method chaining
  */
-template <typename CB_SUCCESS, typename CB_ERROR, typename>
+template <typename CB_SUCCESS, typename CB_ERROR>
 Transaction &
 Transaction::prepare(std::string_view query_name, std::string_view expr,
                      type_oid_sequence &&types, CB_SUCCESS &&on_success,
@@ -231,7 +232,7 @@ Transaction::prepare(std::string_view query_name, std::string_view expr,
  * @param on_success Callback invoked when preparation succeeds
  * @return Reference to this transaction for method chaining
  */
-template <typename CB_SUCCESS, typename>
+template <typename CB_SUCCESS>
 Transaction &
 Transaction::prepare(std::string_view query_name, std::string_view expr,
                      type_oid_sequence &&types, CB_SUCCESS &&on_success) {
@@ -255,7 +256,7 @@ Transaction::prepare(std::string_view query_name, std::string_view expr,
  * @param on_error Callback invoked if execution fails
  * @return Reference to this transaction for method chaining
  */
-template <typename CB_SUCCESS, typename CB_ERROR, typename>
+template <typename CB_SUCCESS, typename CB_ERROR>
 Transaction &
 Transaction::execute(std::string_view query_name, QueryParams &&params,
                      CB_SUCCESS &&on_success, CB_ERROR &&on_error) {
@@ -289,7 +290,7 @@ Transaction::execute(std::string_view query_name, QueryParams &&params,
  * @param on_success Callback invoked when execution succeeds
  * @return Reference to this transaction for method chaining
  */
-template <typename CB_SUCCESS, typename>
+template <typename CB_SUCCESS>
 Transaction &
 Transaction::execute(std::string_view query_name, QueryParams &&params,
                      CB_SUCCESS &&on_success) {
@@ -309,7 +310,7 @@ Transaction::execute(std::string_view query_name, QueryParams &&params,
  * @param params Parameters to bind to the prepared statement
  * @return Reference to this transaction for method chaining
  */
-template <typename CB_SUCCESS, typename>
+template <typename CB_SUCCESS>
 Transaction &
 Transaction::execute(std::string_view query_name, CB_SUCCESS &&on_success,
                      QueryParams &&params) {
@@ -388,7 +389,7 @@ Transaction::error(CB_ERROR &&on_error) {
  * @return Reference to this transaction for method chaining
  * @throws error::query_error If file doesn't exist, can't be opened, or there's an error reading it
  */
-template <typename CB_SUCCESS, typename CB_ERROR, typename>
+template <typename CB_SUCCESS, typename CB_ERROR>
 Transaction &
 Transaction::prepare_file(std::string_view query_name, 
                          const std::filesystem::path& file_path,
@@ -435,7 +436,7 @@ Transaction::prepare_file(std::string_view query_name,
  * @param on_success Callback invoked when preparation succeeds
  * @return Reference to this transaction for method chaining
  */
-template <typename CB_SUCCESS, typename>
+template <typename CB_SUCCESS>
 Transaction &
 Transaction::prepare_file(std::string_view query_name, 
                          const std::filesystem::path& file_path,
@@ -462,7 +463,7 @@ Transaction::prepare_file(std::string_view query_name,
  * @return Reference to this transaction for method chaining
  * @throws error::query_error If file doesn't exist, can't be opened, or there's an error reading it
  */
-template <typename CB_SUCCESS, typename CB_ERROR, typename>
+template <typename CB_SUCCESS, typename CB_ERROR>
 Transaction &
 Transaction::execute_file(const std::filesystem::path& file_path,
                          CB_SUCCESS &&on_success,
@@ -506,7 +507,7 @@ Transaction::execute_file(const std::filesystem::path& file_path,
  * @return Reference to this transaction for method chaining
  * @throws error::query_error If file doesn't exist, can't be opened, or there's an error reading it
  */
-template <typename CB_SUCCESS, typename>
+template <typename CB_SUCCESS>
 Transaction &
 Transaction::execute_file(const std::filesystem::path& file_path,
                          CB_SUCCESS &&on_success) {
@@ -514,5 +515,67 @@ Transaction::execute_file(const std::filesystem::path& file_path,
                        std::forward<CB_SUCCESS>(on_success),
                        [](error::db_error const &) {});
 }
+
+template <typename CB_SUCCESS, typename CB_ERROR>
+Transaction &
+Transaction::notify(std::string_view channel, std::string_view payload, CB_SUCCESS &&on_success,
+                    CB_ERROR &&on_error) {
+    try {
+        std::string sql = build_notify_sql(channel, payload);
+        return execute(std::string_view(sql), std::forward<CB_SUCCESS>(on_success),
+                       std::forward<CB_ERROR>(on_error));
+    } catch (error::db_error const &e) {
+        on_error(e);
+        throw;
+    }
+}
+
+template <typename CB_SUCCESS, typename CB_ERROR>
+Transaction &
+Transaction::notify(std::string_view channel, CB_SUCCESS &&on_success, CB_ERROR &&on_error) {
+    try {
+        std::string sql = build_notify_sql(channel, {});
+        return execute(std::string_view(sql), std::forward<CB_SUCCESS>(on_success),
+                       std::forward<CB_ERROR>(on_error));
+    } catch (error::db_error const &e) {
+        on_error(e);
+        throw;
+    }
+}
+
+template <typename CB_SUCCESS, typename CB_ERROR>
+Transaction &
+Transaction::listen(std::string_view channel, CB_SUCCESS &&on_success, CB_ERROR &&on_error) {
+    try {
+        std::string sql = build_listen_sql(channel);
+        return execute(std::string_view(sql), std::forward<CB_SUCCESS>(on_success),
+                       std::forward<CB_ERROR>(on_error));
+    } catch (error::db_error const &e) {
+        on_error(e);
+        throw;
+    }
+}
+
+template <typename CB_SUCCESS, typename CB_ERROR>
+Transaction &
+Transaction::unlisten(std::string_view channel, CB_SUCCESS &&on_success, CB_ERROR &&on_error) {
+    try {
+        std::string sql = build_unlisten_sql(channel);
+        return execute(std::string_view(sql), std::forward<CB_SUCCESS>(on_success),
+                       std::forward<CB_ERROR>(on_error));
+    } catch (error::db_error const &e) {
+        on_error(e);
+        throw;
+    }
+}
+
+template <typename CB_SUCCESS, typename CB_ERROR>
+Transaction &
+Transaction::unlisten_all(CB_SUCCESS &&on_success, CB_ERROR &&on_error) {
+    return execute(std::string_view(build_unlisten_all_sql()), std::forward<CB_SUCCESS>(on_success),
+                   std::forward<CB_ERROR>(on_error));
+}
+
+#include "./transaction_coro.inl"
 
 } // namespace qb::pg::detail

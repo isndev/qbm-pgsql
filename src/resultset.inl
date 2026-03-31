@@ -55,9 +55,7 @@ namespace resultset_ext {
 template <typename Tuple, std::size_t... I>
 inline void
 row_to_impl(resultset::row const &row, Tuple &t, std::index_sequence<I...>) {
-    ((std::get<I>(t) =
-          row[I].template as<typename std::tuple_element<I, Tuple>::type>()),
-     ...);
+    ((std::get<I>(t) = row[I].template as<typename std::tuple_element<I, Tuple>::type>()), ...);
 }
 
 // Convert row to tuple
@@ -79,8 +77,7 @@ template <typename Tuple, std::size_t... Is>
 inline void
 row_to_impl(Tuple &t, resultset::row const &row, std::index_sequence<Is...>) {
     ((std::get<Is>(t) =
-          row[Is]
-              .template as<std::tuple_element_t<Is, std::remove_reference_t<Tuple>>>()),
+          row[Is].template as<std::tuple_element_t<Is, std::remove_reference_t<Tuple>>>()),
      ...);
 }
 
@@ -145,9 +142,8 @@ struct field_by_name_extractor<qb::indexes_tuple<Indexes...>, T...> {
     static constexpr ::std::size_t size = sizeof...(T);
 
     static void
-    get_tuple(resultset::row const                         &row,
-              ::std::initializer_list<::std::string> const &names,
-              ::std::tuple<T...>                           &val) {
+    get_tuple(resultset::row const &row, ::std::initializer_list<::std::string> const &names,
+              ::std::tuple<T...> &val) {
         if (names.size() < size)
             throw error::db_error{"Not enough names in row data extraction"};
         ::std::tuple<T...> tmp(row[*(names.begin() + Indexes)].template as<T>()...);
@@ -155,8 +151,8 @@ struct field_by_name_extractor<qb::indexes_tuple<Indexes...>, T...> {
     }
 
     static void
-    get_values(resultset::row const                         &row,
-               ::std::initializer_list<::std::string> const &names, T &...val) {
+    get_values(resultset::row const &row, ::std::initializer_list<::std::string> const &names,
+               T &...val) {
         qb::expand{row[*(names.begin() + Indexes)].to(val)...};
     }
 };
@@ -203,8 +199,7 @@ resultset::row::to(::std::initializer_list<::std::string> const &names,
 
 template <typename... T>
 void
-resultset::row::to(::std::initializer_list<::std::string> const &names,
-                   T &...val) const {
+resultset::row::to(::std::initializer_list<::std::string> const &names, T &...val) const {
     detail::row_data_by_name_extractor<T...>::get_values(*this, names, val...);
 }
 

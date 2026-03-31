@@ -34,6 +34,10 @@
  */
 
 #include <gtest/gtest.h>
+#include <qb/io/async.h>
+#include <qb/io/async/coroutine.h>
+#include <qb/io/async/coroutine/utils.h>
+
 #include "../pgsql.h"
 
 using namespace qb::pg;
@@ -69,8 +73,7 @@ public:
     // Check if a parameter is in binary format
     bool
     is_binary_format(int index) const {
-        return index < static_cast<int>(_binary_formats.size()) &&
-               _binary_formats[index];
+        return index < static_cast<int>(_binary_formats.size()) && _binary_formats[index];
     }
 
     // Get parameter count from buffer
@@ -152,8 +155,7 @@ protected:
      */
     void
     printBuffer(const std::vector<byte> &buffer, const std::string &label) {
-        std::cout << "\n=== " << label << " (" << buffer.size()
-                  << " bytes) ===" << std::endl;
+        std::cout << "\n=== " << label << " (" << buffer.size() << " bytes) ===" << std::endl;
 
         for (size_t i = 0; i < buffer.size(); ++i) {
             std::cout << std::setfill('0') << std::setw(2) << std::hex
@@ -410,8 +412,8 @@ TEST_F(ParamParsingTest, QueryParamsWithBoundaryValues) {
     double   double_nan   = std::numeric_limits<double>::quiet_NaN();
 
     // Create with boundary values
-    QueryParams params(smallint_min, smallint_max, integer_min, integer_max, bigint_min,
-                       bigint_max, float_inf, double_nan);
+    QueryParams params(smallint_min, smallint_max, integer_min, integer_max, bigint_min, bigint_max,
+                       float_inf, double_nan);
 
     // Check properties
     ASSERT_FALSE(params.empty());
@@ -477,23 +479,21 @@ TEST_F(ParamParsingTest, QueryParamsWithManyParameters) {
         // We need to specify the exact number of parameters at compile time
         // so we'll create it with the first 100 values directly
         return QueryParams(
-            values[0], values[1], values[2], values[3], values[4], values[5], values[6],
-            values[7], values[8], values[9], values[10], values[11], values[12],
-            values[13], values[14], values[15], values[16], values[17], values[18],
-            values[19], values[20], values[21], values[22], values[23], values[24],
-            values[25], values[26], values[27], values[28], values[29], values[30],
-            values[31], values[32], values[33], values[34], values[35], values[36],
-            values[37], values[38], values[39], values[40], values[41], values[42],
-            values[43], values[44], values[45], values[46], values[47], values[48],
-            values[49], values[50], values[51], values[52], values[53], values[54],
-            values[55], values[56], values[57], values[58], values[59], values[60],
-            values[61], values[62], values[63], values[64], values[65], values[66],
-            values[67], values[68], values[69], values[70], values[71], values[72],
-            values[73], values[74], values[75], values[76], values[77], values[78],
-            values[79], values[80], values[81], values[82], values[83], values[84],
-            values[85], values[86], values[87], values[88], values[89], values[90],
-            values[91], values[92], values[93], values[94], values[95], values[96],
-            values[97], values[98], values[99]);
+            values[0], values[1], values[2], values[3], values[4], values[5], values[6], values[7],
+            values[8], values[9], values[10], values[11], values[12], values[13], values[14],
+            values[15], values[16], values[17], values[18], values[19], values[20], values[21],
+            values[22], values[23], values[24], values[25], values[26], values[27], values[28],
+            values[29], values[30], values[31], values[32], values[33], values[34], values[35],
+            values[36], values[37], values[38], values[39], values[40], values[41], values[42],
+            values[43], values[44], values[45], values[46], values[47], values[48], values[49],
+            values[50], values[51], values[52], values[53], values[54], values[55], values[56],
+            values[57], values[58], values[59], values[60], values[61], values[62], values[63],
+            values[64], values[65], values[66], values[67], values[68], values[69], values[70],
+            values[71], values[72], values[73], values[74], values[75], values[76], values[77],
+            values[78], values[79], values[80], values[81], values[82], values[83], values[84],
+            values[85], values[86], values[87], values[88], values[89], values[90], values[91],
+            values[92], values[93], values[94], values[95], values[96], values[97], values[98],
+            values[99]);
     }();
 
     // Check properties
@@ -668,8 +668,7 @@ TEST_F(ParamParsingTest, ParamUnserializerWithNull) {
     std::optional<int> null_int = unserializer->get_param<std::optional<int>>(0);
     ASSERT_FALSE(null_int.has_value());
 
-    std::optional<std::string> null_string =
-        unserializer->get_param<std::optional<std::string>>(1);
+    std::optional<std::string> null_string = unserializer->get_param<std::optional<std::string>>(1);
     ASSERT_FALSE(null_string.has_value());
 
     // Note: In our TestParamUnserializer, we don't throw exceptions for non-nullable
@@ -699,8 +698,7 @@ TEST_F(ParamParsingTest, ParamUnserializerBinaryFormat) {
     // First parameter: integer (42) in binary format (4 bytes)
     integer           int_value  = 42;
     std::vector<byte> int_binary = createBinaryBuffer(int_value);
-    auto              int_binary_pkg =
-        createPgBinaryString(std::string(int_binary.begin(), int_binary.end()));
+    auto int_binary_pkg = createPgBinaryString(std::string(int_binary.begin(), int_binary.end()));
     buffer.insert(buffer.end(), int_binary_pkg.begin(), int_binary_pkg.end());
 
     // Second parameter: float (3.14159) in binary format (4 bytes)
@@ -713,8 +711,7 @@ TEST_F(ParamParsingTest, ParamUnserializerBinaryFormat) {
 
     // Third parameter: bytea data
     std::vector<byte> bytea_data = {0x01, 0x02, 0x03, 0x04, 0x05};
-    auto              bytea_pkg =
-        createPgBinaryString(std::string(bytea_data.begin(), bytea_data.end()));
+    auto bytea_pkg = createPgBinaryString(std::string(bytea_data.begin(), bytea_data.end()));
     buffer.insert(buffer.end(), bytea_pkg.begin(), bytea_pkg.end());
 
     // Initialize the unserializer with our buffer and set binary format for the
@@ -746,8 +743,7 @@ TEST_F(ParamParsingTest, ParamUnserializerBinaryFormat) {
  */
 TEST_F(ParamParsingTest, UUIDParams) {
     // Create a UUID value
-    qb::uuid test_uuid =
-        qb::uuid::from_string("123e4567-e89b-12d3-a456-426614174000").value();
+    qb::uuid test_uuid = qb::uuid::from_string("123e4567-e89b-12d3-a456-426614174000").value();
 
     // Create QueryParams with UUID
     QueryParams params(test_uuid);
@@ -784,8 +780,7 @@ TEST_F(ParamParsingTest, UUIDParams) {
  */
 TEST_F(ParamParsingTest, TimestampParams) {
     // Create a Timestamp value
-    qb::Timestamp
-        test_timestamp; // Default constructor since Timestamp::now() is not available
+    qb::Timestamp test_timestamp; // Default constructor since Timestamp::now() is not available
 
     // Create QueryParams with Timestamp
     QueryParams params(test_timestamp);
@@ -893,8 +888,7 @@ TEST_F(ParamParsingTest, QueryParamsWithLongStrings) {
 
     // We don't print the whole buffer as it would be too large
     std::cout << "\n=== QueryParams with long string (" << buffer.size()
-              << " bytes, string length: " << string_length
-              << " bytes) ===" << std::endl;
+              << " bytes, string length: " << string_length << " bytes) ===" << std::endl;
 }
 
 /**
@@ -905,8 +899,7 @@ TEST_F(ParamParsingTest, QueryParamsWithLongStrings) {
  */
 TEST_F(ParamParsingTest, QueryParamsWithJSON) {
     // Simple JSON object as a string
-    std::string json_string =
-        R"({"name":"John Doe","age":30,"email":"john@example.com"})";
+    std::string json_string = R"({"name":"John Doe","age":30,"email":"john@example.com"})";
 
     // Create QueryParams with the JSON string
     // In a real implementation, this would use a special JSON type with OID 3802 (JSONB)
@@ -940,8 +933,7 @@ TEST_F(ParamParsingTest, QueryParamsWithHighPrecisionDecimals) {
     // High precision decimal numbers as strings
     // In a real implementation, these would use PostgreSQL NUMERIC type (OID 1700)
     // For our test, we're using standard strings
-    std::string pi =
-        "3.141592653589793238462643383279502884197169399375105820974944592307816406286";
+    std::string pi = "3.141592653589793238462643383279502884197169399375105820974944592307816406286";
     std::string financial = "12345678.90123456789";
 
     // Create QueryParams with high precision decimals
@@ -1149,15 +1141,15 @@ TEST_F(ParamParsingTest, QueryParamsWithMixedComplexTypes) {
     using namespace qb::pg::detail;
 
     // Create various parameter values
-    int32_t id = 12345;
-    numeric price("999.99");
-    pgdate date = pgdate::from_string("2024-12-25");
-    std::string name = "Test Product";
-    bool active = true;
+    int32_t     id = 12345;
+    numeric     price("999.99");
+    pgdate      date   = pgdate::from_string("2024-12-25");
+    std::string name   = "Test Product";
+    bool        active = true;
 
     // Convert to text for QueryParams
     std::string price_text = TypeConverter<numeric>::to_text(price);
-    std::string date_text = TypeConverter<pgdate>::to_text(date);
+    std::string date_text  = TypeConverter<pgdate>::to_text(date);
 
     // Create QueryParams with mixed types
     QueryParams params(id, price_text, date_text, name, active);
@@ -1273,12 +1265,12 @@ TEST_F(ParamParsingTest, QueryParamsEdgeCases) {
     EXPECT_EQ(n2.str()[0], '-');
 
     // Test 4: Far dates
-    std::string old_date = "1900-01-01";
+    std::string old_date    = "1900-01-01";
     std::string future_date = "2099-12-31";
     QueryParams params4(old_date, future_date);
     ASSERT_EQ(params4.param_count(), 2);
 
-    pgdate old = pgdate::from_string(old_date);
+    pgdate old    = pgdate::from_string(old_date);
     pgdate future = pgdate::from_string(future_date);
     EXPECT_EQ(old.to_string(), "1900-01-01");
     EXPECT_EQ(future.to_string(), "2099-12-31");

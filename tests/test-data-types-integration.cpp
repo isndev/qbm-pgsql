@@ -38,10 +38,13 @@
  */
 
 #include <gtest/gtest.h>
+#include <qb/io/async.h>
+#include <qb/io/async/coroutine.h>
+#include <qb/io/async/coroutine/utils.h>
+#include <string>
 #include "../pgsql.h"
 #include "../src/type_converter.h"
-
-constexpr std::string_view PGSQL_CONNECTION_STR = "tcp://test:test@localhost:5432[test]";
+#include "test_config.hpp"
 
 using namespace qb::pg;
 using namespace qb::pg::detail;
@@ -76,7 +79,7 @@ protected:
     void
     SetUp() override {
         db_ = std::make_unique<qb::pg::tcp::database>();
-        ASSERT_TRUE(db_->connect(PGSQL_CONNECTION_STR.data()));
+        ASSERT_TRUE(qb::io::async::run_sync(db_->connect(qb::pg::test::dsn_tcp_string())));
 
         // Create a table with all supported types
         auto status = db_->execute(R"(
@@ -98,7 +101,8 @@ protected:
                 json_val JSON,
                 jsonb_val JSONB
             )
-        )")
+        )",
+                                   discard_query, discard_error)
                           .await();
 
         ASSERT_TRUE(status);
@@ -116,7 +120,8 @@ protected:
     TearDown() override {
         if (db_) {
             // Clean up test tables
-            db_->execute("DROP TABLE IF EXISTS data_types_test").await();
+            db_->execute("DROP TABLE IF EXISTS data_types_test", discard_query, discard_error)
+                .await();
             db_->disconnect();
             db_.reset();
         }
@@ -132,195 +137,181 @@ protected:
     void
     prepareQueries() {
         // Query for inserting a SMALLINT
-        db_->prepare(
-               "insert_smallint",
-               "INSERT INTO data_types_test (smallint_val) VALUES ($1) RETURNING id",
-               {oid::int2})
+        db_->prepare("insert_smallint",
+                     "INSERT INTO data_types_test (smallint_val) VALUES ($1) RETURNING id",
+                     {oid::int2}, discard_prepare, discard_error)
             .await();
 
         // Query for selecting a SMALLINT
         db_->prepare("select_smallint",
-                     "SELECT smallint_val FROM data_types_test WHERE smallint_val = $1",
-                     {oid::int2})
+                     "SELECT smallint_val FROM data_types_test WHERE smallint_val = $1", {oid::int2},
+                     discard_prepare, discard_error)
             .await();
 
         // Query for inserting an INTEGER
-        db_->prepare(
-               "insert_integer",
-               "INSERT INTO data_types_test (integer_val) VALUES ($1) RETURNING id",
-               {oid::int4})
+        db_->prepare("insert_integer",
+                     "INSERT INTO data_types_test (integer_val) VALUES ($1) RETURNING id",
+                     {oid::int4}, discard_prepare, discard_error)
             .await();
 
         // Query for selecting an INTEGER
         db_->prepare("select_integer",
-                     "SELECT integer_val FROM data_types_test WHERE integer_val = $1",
-                     {oid::int4})
+                     "SELECT integer_val FROM data_types_test WHERE integer_val = $1", {oid::int4},
+                     discard_prepare, discard_error)
             .await();
 
         // Query for inserting a BIGINT
         db_->prepare("insert_bigint",
                      "INSERT INTO data_types_test (bigint_val) VALUES ($1) RETURNING id",
-                     {oid::int8})
+                     {oid::int8}, discard_prepare, discard_error)
             .await();
 
         // Query for selecting a BIGINT
-        db_->prepare("select_bigint",
-                     "SELECT bigint_val FROM data_types_test WHERE bigint_val = $1",
-                     {oid::int8})
+        db_->prepare("select_bigint", "SELECT bigint_val FROM data_types_test WHERE bigint_val = $1",
+                     {oid::int8}, discard_prepare, discard_error)
             .await();
 
         // Query for inserting a FLOAT
         db_->prepare("insert_float",
                      "INSERT INTO data_types_test (float_val) VALUES ($1) RETURNING id",
-                     {oid::float4})
+                     {oid::float4}, discard_prepare, discard_error)
             .await();
 
         // Query for selecting a FLOAT
-        db_->prepare("select_float",
-                     "SELECT float_val FROM data_types_test WHERE float_val = $1",
-                     {oid::float4})
+        db_->prepare("select_float", "SELECT float_val FROM data_types_test WHERE float_val = $1",
+                     {oid::float4}, discard_prepare, discard_error)
             .await();
 
         // Query for inserting a DOUBLE
         db_->prepare("insert_double",
                      "INSERT INTO data_types_test (double_val) VALUES ($1) RETURNING id",
-                     {oid::float8})
+                     {oid::float8}, discard_prepare, discard_error)
             .await();
 
         // Query for selecting a DOUBLE
-        db_->prepare("select_double",
-                     "SELECT double_val FROM data_types_test WHERE double_val = $1",
-                     {oid::float8})
+        db_->prepare("select_double", "SELECT double_val FROM data_types_test WHERE double_val = $1",
+                     {oid::float8}, discard_prepare, discard_error)
             .await();
 
         // Query for inserting a TEXT
         db_->prepare("insert_text",
-                     "INSERT INTO data_types_test (text_val) VALUES ($1) RETURNING id",
-                     {oid::text})
+                     "INSERT INTO data_types_test (text_val) VALUES ($1) RETURNING id", {oid::text},
+                     discard_prepare, discard_error)
             .await();
 
         // Query for selecting a TEXT
-        db_->prepare("select_text",
-                     "SELECT text_val FROM data_types_test WHERE text_val = $1",
-                     {oid::text})
+        db_->prepare("select_text", "SELECT text_val FROM data_types_test WHERE text_val = $1",
+                     {oid::text}, discard_prepare, discard_error)
             .await();
 
         // Query for inserting a VARCHAR
-        db_->prepare(
-               "insert_varchar",
-               "INSERT INTO data_types_test (varchar_val) VALUES ($1) RETURNING id",
-               {oid::varchar})
+        db_->prepare("insert_varchar",
+                     "INSERT INTO data_types_test (varchar_val) VALUES ($1) RETURNING id",
+                     {oid::varchar}, discard_prepare, discard_error)
             .await();
 
         // Query for selecting a VARCHAR
         db_->prepare("select_varchar",
                      "SELECT varchar_val FROM data_types_test WHERE varchar_val = $1",
-                     {oid::varchar})
+                     {oid::varchar}, discard_prepare, discard_error)
             .await();
 
         // Query for inserting a BOOLEAN
-        db_->prepare(
-               "insert_boolean",
-               "INSERT INTO data_types_test (boolean_val) VALUES ($1) RETURNING id",
-               {oid::boolean})
+        db_->prepare("insert_boolean",
+                     "INSERT INTO data_types_test (boolean_val) VALUES ($1) RETURNING id",
+                     {oid::boolean}, discard_prepare, discard_error)
             .await();
 
         // Query for selecting a BOOLEAN
         db_->prepare("select_boolean",
                      "SELECT boolean_val FROM data_types_test WHERE boolean_val = $1",
-                     {oid::boolean})
+                     {oid::boolean}, discard_prepare, discard_error)
             .await();
 
         // Query for inserting a BYTEA
         db_->prepare("insert_bytea",
                      "INSERT INTO data_types_test (bytea_val) VALUES ($1) RETURNING id",
-                     {oid::bytea})
+                     {oid::bytea}, discard_prepare, discard_error)
             .await();
 
         // Query for selecting a BYTEA
-        db_->prepare("select_bytea",
-                     "SELECT bytea_val FROM data_types_test WHERE bytea_val = $1",
-                     {oid::bytea})
+        db_->prepare("select_bytea", "SELECT bytea_val FROM data_types_test WHERE bytea_val = $1",
+                     {oid::bytea}, discard_prepare, discard_error)
             .await();
 
         // Query for inserting an empty string
         db_->prepare("insert_empty_string",
-                     "INSERT INTO data_types_test (text_val) VALUES ($1) RETURNING id",
-                     {oid::text})
+                     "INSERT INTO data_types_test (text_val) VALUES ($1) RETURNING id", {oid::text},
+                     discard_prepare, discard_error)
             .await();
 
         // Query for selecting an empty string
         db_->prepare("select_empty_string",
-                     "SELECT text_val FROM data_types_test WHERE text_val = $1",
-                     {oid::text})
+                     "SELECT text_val FROM data_types_test WHERE text_val = $1", {oid::text},
+                     discard_prepare, discard_error)
             .await();
 
         // Query for inserting a UUID
         db_->prepare("insert_uuid",
-                     "INSERT INTO data_types_test (uuid_val) VALUES ($1) RETURNING id",
-                     {oid::uuid})
+                     "INSERT INTO data_types_test (uuid_val) VALUES ($1) RETURNING id", {oid::uuid},
+                     discard_prepare, discard_error)
             .await();
 
         // Query for selecting a UUID
-        db_->prepare("select_uuid",
-                     "SELECT uuid_val FROM data_types_test WHERE uuid_val = $1",
-                     {oid::uuid})
+        db_->prepare("select_uuid", "SELECT uuid_val FROM data_types_test WHERE uuid_val = $1",
+                     {oid::uuid}, discard_prepare, discard_error)
             .await();
 
         // Query for inserting a TIMESTAMP
-        db_->prepare(
-               "insert_timestamp",
-               "INSERT INTO data_types_test (timestamp_val) VALUES ($1) RETURNING id",
-               {oid::timestamp})
+        db_->prepare("insert_timestamp",
+                     "INSERT INTO data_types_test (timestamp_val) VALUES ($1) RETURNING id",
+                     {oid::timestamp}, discard_prepare, discard_error)
             .await();
 
         // Query for selecting a TIMESTAMP
-        db_->prepare(
-               "select_timestamp",
-               "SELECT timestamp_val FROM data_types_test WHERE timestamp_val = $1",
-               {oid::timestamp})
+        db_->prepare("select_timestamp",
+                     "SELECT timestamp_val FROM data_types_test WHERE timestamp_val = $1",
+                     {oid::timestamp}, discard_prepare, discard_error)
             .await();
 
         // Query for inserting a TIMESTAMPTZ
-        db_->prepare(
-               "insert_timestamptz",
-               "INSERT INTO data_types_test (timestamptz_val) VALUES ($1) RETURNING id",
-               {oid::timestamptz})
+        db_->prepare("insert_timestamptz",
+                     "INSERT INTO data_types_test (timestamptz_val) VALUES ($1) RETURNING id",
+                     {oid::timestamptz}, discard_prepare, discard_error)
             .await();
 
         // Query for selecting a TIMESTAMPTZ
-        db_->prepare(
-               "select_timestamptz",
-               "SELECT timestamptz_val FROM data_types_test WHERE timestamptz_val = $1",
-               {oid::timestamptz})
+        db_->prepare("select_timestamptz",
+                     "SELECT timestamptz_val FROM data_types_test WHERE timestamptz_val = $1",
+                     {oid::timestamptz}, discard_prepare, discard_error)
             .await();
 
         // Query for inserting JSON
         db_->prepare("insert_json",
-                     "INSERT INTO data_types_test (json_val) VALUES ($1) RETURNING id",
-                     {oid::json})
+                     "INSERT INTO data_types_test (json_val) VALUES ($1) RETURNING id", {oid::json},
+                     discard_prepare, discard_error)
             .await();
 
         // Query for selecting JSON
         db_->prepare("select_json", "SELECT json_val FROM data_types_test WHERE id = $1",
-                     {oid::int4})
+                     {oid::int4}, discard_prepare, discard_error)
             .await();
 
         // Query for inserting JSONB
         db_->prepare("insert_jsonb",
                      "INSERT INTO data_types_test (jsonb_val) VALUES ($1) RETURNING id",
-                     {oid::jsonb})
+                     {oid::jsonb}, discard_prepare, discard_error)
             .await();
 
         // Query for selecting JSONB
-        db_->prepare("select_jsonb",
-                     "SELECT jsonb_val FROM data_types_test WHERE id = $1", {oid::int4})
+        db_->prepare("select_jsonb", "SELECT jsonb_val FROM data_types_test WHERE id = $1",
+                     {oid::int4}, discard_prepare, discard_error)
             .await();
 
         // Query for selecting JSONB with condition
         db_->prepare("select_jsonb_condition",
-                     "SELECT jsonb_val FROM data_types_test WHERE jsonb_val @> $1",
-                     {oid::jsonb})
+                     "SELECT jsonb_val FROM data_types_test WHERE jsonb_val @> $1", {oid::jsonb},
+                     discard_prepare, discard_error)
             .await();
     }
 
@@ -333,19 +324,28 @@ protected:
 TEST_F(PostgreSQLDataTypesIntegrationTest, ConnectionWorks) {
     bool success = false;
 
-    auto status =
-        db_->execute(
-               "SELECT 1 AS test_value",
-               [&success](Transaction &tr, results result) {
-                   ASSERT_EQ(result.size(), 1);
-                   ASSERT_EQ(result[0][0].as<int>(), 1);
-                   success = true;
-               },
-               [](error::db_error error) { FAIL() << "Query failed: " << error.code; })
-            .await();
+    auto status = db_->execute(
+                         "SELECT 1 AS test_value",
+                         [&success](Transaction &tr, results result) {
+                             ASSERT_EQ(result.size(), 1);
+                             ASSERT_EQ(result[0][0].as<int>(), 1);
+                             success = true;
+                         },
+                         [](error::db_error error) { FAIL() << "Query failed: " << error.code; })
+                      .await();
 
     ASSERT_TRUE(status);
     ASSERT_TRUE(success);
+}
+
+/** @brief Same as ConnectionWorks using `co_await query()`. */
+TEST_F(PostgreSQLDataTypesIntegrationTest, ConnectionWorks_Coroutine) {
+    bool ok = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        auto reply = co_await db_->query("SELECT 1 AS test_value");
+        ok         = reply.ok() && reply.result().size() == 1 && reply.result()[0][0].as<int>() == 1;
+    }());
+    ASSERT_TRUE(ok);
 }
 
 /**
@@ -357,37 +357,35 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, SmallintType) {
 
     // Insert the value
     bool insert_success = false;
-    auto status =
-        db_->execute(
-               "insert_smallint", QueryParams(expected_value),
-               [&insert_success](Transaction &tr, results result) {
-                   ASSERT_EQ(result.size(), 1);
-                   insert_success = true;
-               },
-               [](error::db_error error) { FAIL() << "Insert failed: " << error.code; })
-            .await();
+    auto status         = db_->execute(
+                         "insert_smallint", QueryParams(expected_value),
+                         [&insert_success](Transaction &tr, results result) {
+                             ASSERT_EQ(result.size(), 1);
+                             insert_success = true;
+                         },
+                         [](error::db_error error) { FAIL() << "Insert failed: " << error.code; })
+                      .await();
 
     ASSERT_TRUE(status);
     ASSERT_TRUE(insert_success);
 
     // Retrieve and verify the value
     bool select_success = false;
-    status =
-        db_->execute(
-               "select_smallint", QueryParams(expected_value),
-               [&](Transaction &tr, results result) {
-                   ASSERT_EQ(result.size(), 1);
-                   ASSERT_FALSE(result[0][0].is_null());
+    status              = db_->execute(
+                    "select_smallint", QueryParams(expected_value),
+                    [&](Transaction &tr, results result) {
+                        ASSERT_EQ(result.size(), 1);
+                        ASSERT_FALSE(result[0][0].is_null());
 
-                   smallint actual_value = result[0][0].as<smallint>();
-                   std::cout << "SMALLINT - Expected: " << expected_value
-                             << ", Actual: " << actual_value << std::endl;
+                        smallint actual_value = result[0][0].as<smallint>();
+                        std::cout << "SMALLINT - Expected: " << expected_value
+                                  << ", Actual: " << actual_value << std::endl;
 
-                   ASSERT_EQ(actual_value, expected_value);
-                   select_success = true;
-               },
-               [](error::db_error error) { FAIL() << "Select failed: " << error.code; })
-            .await();
+                        ASSERT_EQ(actual_value, expected_value);
+                        select_success = true;
+                    },
+                    [](error::db_error error) { FAIL() << "Select failed: " << error.code; })
+                 .await();
 
     ASSERT_TRUE(status);
     ASSERT_TRUE(select_success);
@@ -402,40 +400,60 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, IntegerType) {
 
     // Insert the value
     bool insert_success = false;
-    auto status =
-        db_->execute(
-               "insert_integer", QueryParams(expected_value),
-               [&insert_success](Transaction &tr, results result) {
-                   ASSERT_EQ(result.size(), 1);
-                   insert_success = true;
-               },
-               [](error::db_error error) { FAIL() << "Insert failed: " << error.code; })
-            .await();
+    auto status         = db_->execute(
+                         "insert_integer", QueryParams(expected_value),
+                         [&insert_success](Transaction &tr, results result) {
+                             ASSERT_EQ(result.size(), 1);
+                             insert_success = true;
+                         },
+                         [](error::db_error error) { FAIL() << "Insert failed: " << error.code; })
+                      .await();
 
     ASSERT_TRUE(status);
     ASSERT_TRUE(insert_success);
 
     // Retrieve and verify the value
     bool select_success = false;
-    status =
-        db_->execute(
-               "select_integer", QueryParams(expected_value),
-               [&](Transaction &tr, results result) {
-                   ASSERT_EQ(result.size(), 1);
-                   ASSERT_FALSE(result[0][0].is_null());
+    status              = db_->execute(
+                    "select_integer", QueryParams(expected_value),
+                    [&](Transaction &tr, results result) {
+                        ASSERT_EQ(result.size(), 1);
+                        ASSERT_FALSE(result[0][0].is_null());
 
-                   integer actual_value = result[0][0].as<integer>();
-                   std::cout << "INTEGER - Expected: " << expected_value
-                             << ", Actual: " << actual_value << std::endl;
+                        integer actual_value = result[0][0].as<integer>();
+                        std::cout << "INTEGER - Expected: " << expected_value
+                                  << ", Actual: " << actual_value << std::endl;
 
-                   ASSERT_EQ(actual_value, expected_value);
-                   select_success = true;
-               },
-               [](error::db_error error) { FAIL() << "Select failed: " << error.code; })
-            .await();
+                        ASSERT_EQ(actual_value, expected_value);
+                        select_success = true;
+                    },
+                    [](error::db_error error) { FAIL() << "Select failed: " << error.code; })
+                 .await();
 
     ASSERT_TRUE(status);
     ASSERT_TRUE(select_success);
+}
+
+/**
+ * @brief INTEGER round-trip: insert via prepared callback, read via `co_await query()`.
+ */
+TEST_F(PostgreSQLDataTypesIntegrationTest, IntegerType_CoroutineSelect) {
+    constexpr integer expected_value = 987654321;
+    ASSERT_TRUE(db_->execute(
+                       "insert_integer", QueryParams(expected_value),
+                       [](Transaction &, results r) { ASSERT_EQ(r.size(), 1); },
+                       [](error::db_error e) { FAIL() << e.what(); })
+                    .await());
+
+    bool ok = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        const std::string sql = "SELECT integer_val FROM data_types_test WHERE integer_val = " +
+                                std::to_string(expected_value);
+        auto reply = co_await db_->query(sql);
+        ok         = reply.ok() && reply.result().size() == 1 &&
+             reply.result()[0][0].as<integer>() == expected_value;
+    }());
+    ASSERT_TRUE(ok);
 }
 
 /**
@@ -447,37 +465,35 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, BigintType) {
 
     // Insert the value
     bool insert_success = false;
-    auto status =
-        db_->execute(
-               "insert_bigint", QueryParams(expected_value),
-               [&insert_success](Transaction &tr, results result) {
-                   ASSERT_EQ(result.size(), 1);
-                   insert_success = true;
-               },
-               [](error::db_error error) { FAIL() << "Insert failed: " << error.code; })
-            .await();
+    auto status         = db_->execute(
+                         "insert_bigint", QueryParams(expected_value),
+                         [&insert_success](Transaction &tr, results result) {
+                             ASSERT_EQ(result.size(), 1);
+                             insert_success = true;
+                         },
+                         [](error::db_error error) { FAIL() << "Insert failed: " << error.code; })
+                      .await();
 
     ASSERT_TRUE(status);
     ASSERT_TRUE(insert_success);
 
     // Retrieve and verify the value
     bool select_success = false;
-    status =
-        db_->execute(
-               "select_bigint", QueryParams(expected_value),
-               [&](Transaction &tr, results result) {
-                   ASSERT_EQ(result.size(), 1);
-                   ASSERT_FALSE(result[0][0].is_null());
+    status              = db_->execute(
+                    "select_bigint", QueryParams(expected_value),
+                    [&](Transaction &tr, results result) {
+                        ASSERT_EQ(result.size(), 1);
+                        ASSERT_FALSE(result[0][0].is_null());
 
-                   bigint actual_value = result[0][0].as<bigint>();
-                   std::cout << "BIGINT - Expected: " << expected_value
-                             << ", Actual: " << actual_value << std::endl;
+                        bigint actual_value = result[0][0].as<bigint>();
+                        std::cout << "BIGINT - Expected: " << expected_value
+                                  << ", Actual: " << actual_value << std::endl;
 
-                   ASSERT_EQ(actual_value, expected_value);
-                   select_success = true;
-               },
-               [](error::db_error error) { FAIL() << "Select failed: " << error.code; })
-            .await();
+                        ASSERT_EQ(actual_value, expected_value);
+                        select_success = true;
+                    },
+                    [](error::db_error error) { FAIL() << "Select failed: " << error.code; })
+                 .await();
 
     ASSERT_TRUE(status);
     ASSERT_TRUE(select_success);
@@ -515,9 +531,8 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, FloatType) {
                        // For floating point numbers, compute relative error
                        float abs_difference = std::fabs(actual_value - expected_value);
                        float abs_expected   = std::fabs(expected_value);
-                       float relative_error = abs_expected > 0.0f
-                                                  ? abs_difference / abs_expected
-                                                  : abs_difference;
+                       float relative_error =
+                           abs_expected > 0.0f ? abs_difference / abs_expected : abs_difference;
                        std::cout << "FLOAT - Absolute difference: " << abs_difference
                                  << ", Relative error: " << relative_error << std::endl;
 
@@ -531,9 +546,7 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, FloatType) {
                        EXPECT_NEAR(actual_value, expected_value, 0.001f);
                        select_success = true;
                    },
-                   [](error::db_error error) {
-                       FAIL() << "Float query failed: " << error.code;
-                   })
+                   [](error::db_error error) { FAIL() << "Float query failed: " << error.code; })
                 .await();
 
         ASSERT_TRUE(status);
@@ -543,36 +556,34 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, FloatType) {
         expected_value = -123.456f;
         select_success = false;
 
-        status =
-            db_->execute(
-                   "SELECT -123.456::float4 as test_float",
-                   [&](Transaction &tr, results result) {
-                       ASSERT_FALSE(result.empty());
-                       ASSERT_FALSE(result[0][0].is_null());
+        status = db_->execute(
+                        "SELECT -123.456::float4 as test_float",
+                        [&](Transaction &tr, results result) {
+                            ASSERT_FALSE(result.empty());
+                            ASSERT_FALSE(result[0][0].is_null());
 
-                       float actual_value = result[0][0].as<float>();
+                            float actual_value = result[0][0].as<float>();
 
-                       std::cout << "FLOAT (second test) - Expected: " << expected_value
-                                 << ", Actual: " << actual_value << std::endl;
+                            std::cout << "FLOAT (second test) - Expected: " << expected_value
+                                      << ", Actual: " << actual_value << std::endl;
 
-                       // For floating point numbers, compute relative error
-                       float abs_difference = std::fabs(actual_value - expected_value);
-                       float abs_expected   = std::fabs(expected_value);
-                       float relative_error = abs_expected > 0.0f
-                                                  ? abs_difference / abs_expected
-                                                  : abs_difference;
+                            // For floating point numbers, compute relative error
+                            float abs_difference = std::fabs(actual_value - expected_value);
+                            float abs_expected   = std::fabs(expected_value);
+                            float relative_error =
+                                abs_expected > 0.0f ? abs_difference / abs_expected : abs_difference;
 
-                       // For float, a relative error of 1e-5 (0.001%) should be
-                       // acceptable
-                       EXPECT_LE(relative_error, 1e-5f)
-                           << "Float value differs by more than acceptable tolerance";
+                            // For float, a relative error of 1e-5 (0.001%) should be
+                            // acceptable
+                            EXPECT_LE(relative_error, 1e-5f)
+                                << "Float value differs by more than acceptable tolerance";
 
-                       select_success = true;
-                   },
-                   [](error::db_error error) {
-                       FAIL() << "Float query (second test) failed: " << error.code;
-                   })
-                .await();
+                            select_success = true;
+                        },
+                        [](error::db_error error) {
+                            FAIL() << "Float query (second test) failed: " << error.code;
+                        })
+                     .await();
 
         ASSERT_TRUE(status);
         ASSERT_TRUE(select_success);
@@ -581,37 +592,34 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, FloatType) {
         expected_value = 1.0e-6f; // Small but not extreme
         select_success = false;
 
-        status =
-            db_->execute(
-                   "SELECT 0.000001::float4 as test_float",
-                   [&](Transaction &tr, results result) {
-                       ASSERT_FALSE(result.empty());
-                       ASSERT_FALSE(result[0][0].is_null());
+        status = db_->execute(
+                        "SELECT 0.000001::float4 as test_float",
+                        [&](Transaction &tr, results result) {
+                            ASSERT_FALSE(result.empty());
+                            ASSERT_FALSE(result[0][0].is_null());
 
-                       float actual_value = result[0][0].as<float>();
+                            float actual_value = result[0][0].as<float>();
 
-                       std::cout << "FLOAT (small value) - Expected: " << expected_value
-                                 << ", Actual: " << actual_value << std::endl;
+                            std::cout << "FLOAT (small value) - Expected: " << expected_value
+                                      << ", Actual: " << actual_value << std::endl;
 
-                       // For small values, compute relative error if not zero
-                       float abs_difference = std::fabs(actual_value - expected_value);
-                       float abs_expected   = std::fabs(expected_value);
-                       float relative_error = abs_expected > 0.0f
-                                                  ? abs_difference / abs_expected
-                                                  : abs_difference;
-                       std::cout
-                           << "FLOAT (small value) - Absolute diff: " << abs_difference
-                           << ", Relative error: " << relative_error << std::endl;
+                            // For small values, compute relative error if not zero
+                            float abs_difference = std::fabs(actual_value - expected_value);
+                            float abs_expected   = std::fabs(expected_value);
+                            float relative_error =
+                                abs_expected > 0.0f ? abs_difference / abs_expected : abs_difference;
+                            std::cout << "FLOAT (small value) - Absolute diff: " << abs_difference
+                                      << ", Relative error: " << relative_error << std::endl;
 
-                       // For small values, use a relative tolerance
-                       EXPECT_LE(relative_error, 1e-5f);
+                            // For small values, use a relative tolerance
+                            EXPECT_LE(relative_error, 1e-5f);
 
-                       select_success = true;
-                   },
-                   [](error::db_error error) {
-                       FAIL() << "Float query (small value) failed: " << error.code;
-                   })
-                .await();
+                            select_success = true;
+                        },
+                        [](error::db_error error) {
+                            FAIL() << "Float query (small value) failed: " << error.code;
+                        })
+                     .await();
 
         ASSERT_TRUE(status);
         ASSERT_TRUE(select_success);
@@ -620,37 +628,35 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, FloatType) {
         expected_value = 1.0e6f; // One million
         select_success = false;
 
-        status =
-            db_->execute(
-                   "SELECT 1000000.0::float4 as test_float",
-                   [&](Transaction &tr, results result) {
-                       ASSERT_FALSE(result.empty());
-                       ASSERT_FALSE(result[0][0].is_null());
+        status = db_->execute(
+                        "SELECT 1000000.0::float4 as test_float",
+                        [&](Transaction &tr, results result) {
+                            ASSERT_FALSE(result.empty());
+                            ASSERT_FALSE(result[0][0].is_null());
 
-                       float actual_value = result[0][0].as<float>();
+                            float actual_value = result[0][0].as<float>();
 
-                       std::cout << "FLOAT (large value) - Expected: " << expected_value
-                                 << ", Actual: " << actual_value << std::endl;
+                            std::cout << "FLOAT (large value) - Expected: " << expected_value
+                                      << ", Actual: " << actual_value << std::endl;
 
-                       // For large numbers, relative error
-                       float abs_difference = std::fabs(actual_value - expected_value);
-                       float abs_expected   = std::fabs(expected_value);
-                       float relative_error = abs_difference / abs_expected;
-                       std::cout
-                           << "FLOAT (large value) - Absolute diff: " << abs_difference
-                           << ", Relative error: " << relative_error << std::endl;
+                            // For large numbers, relative error
+                            float abs_difference = std::fabs(actual_value - expected_value);
+                            float abs_expected   = std::fabs(expected_value);
+                            float relative_error = abs_difference / abs_expected;
+                            std::cout << "FLOAT (large value) - Absolute diff: " << abs_difference
+                                      << ", Relative error: " << relative_error << std::endl;
 
-                       // Even for large values, float should be precise
-                       EXPECT_LE(relative_error, 1e-5f)
-                           << "Large float value differs by more than acceptable "
-                              "tolerance";
+                            // Even for large values, float should be precise
+                            EXPECT_LE(relative_error, 1e-5f)
+                                << "Large float value differs by more than acceptable "
+                                   "tolerance";
 
-                       select_success = true;
-                   },
-                   [](error::db_error error) {
-                       FAIL() << "Float query (large value) failed: " << error.code;
-                   })
-                .await();
+                            select_success = true;
+                        },
+                        [](error::db_error error) {
+                            FAIL() << "Float query (large value) failed: " << error.code;
+                        })
+                     .await();
 
         ASSERT_TRUE(status);
         ASSERT_TRUE(select_success);
@@ -691,9 +697,8 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, DoubleType) {
                        // For floating point numbers, compute relative error
                        double abs_difference = std::fabs(actual_value - expected_value);
                        double abs_expected   = std::fabs(expected_value);
-                       double relative_error = abs_expected > 0.0
-                                                   ? abs_difference / abs_expected
-                                                   : abs_difference;
+                       double relative_error =
+                           abs_expected > 0.0 ? abs_difference / abs_expected : abs_difference;
                        std::cout << "DOUBLE - Absolute difference: " << abs_difference
                                  << ", Relative error: " << relative_error << std::endl;
 
@@ -707,9 +712,7 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, DoubleType) {
                        EXPECT_NEAR(actual_value, expected_value, 1e-8);
                        select_success = true;
                    },
-                   [](error::db_error error) {
-                       FAIL() << "Double query failed: " << error.code;
-                   })
+                   [](error::db_error error) { FAIL() << "Double query failed: " << error.code; })
                 .await();
 
         ASSERT_TRUE(status);
@@ -719,36 +722,34 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, DoubleType) {
         expected_value = -9876.54321;
         select_success = false;
 
-        status =
-            db_->execute(
-                   "SELECT -9876.54321::float8 as test_double",
-                   [&](Transaction &tr, results result) {
-                       ASSERT_FALSE(result.empty());
-                       ASSERT_FALSE(result[0][0].is_null());
+        status = db_->execute(
+                        "SELECT -9876.54321::float8 as test_double",
+                        [&](Transaction &tr, results result) {
+                            ASSERT_FALSE(result.empty());
+                            ASSERT_FALSE(result[0][0].is_null());
 
-                       double actual_value = result[0][0].as<double>();
+                            double actual_value = result[0][0].as<double>();
 
-                       std::cout << "DOUBLE (second test) - Expected: " << expected_value
-                                 << ", Actual: " << actual_value << std::endl;
+                            std::cout << "DOUBLE (second test) - Expected: " << expected_value
+                                      << ", Actual: " << actual_value << std::endl;
 
-                       // For floating point numbers, compute relative error
-                       double abs_difference = std::fabs(actual_value - expected_value);
-                       double abs_expected   = std::fabs(expected_value);
-                       double relative_error = abs_expected > 0.0
-                                                   ? abs_difference / abs_expected
-                                                   : abs_difference;
+                            // For floating point numbers, compute relative error
+                            double abs_difference = std::fabs(actual_value - expected_value);
+                            double abs_expected   = std::fabs(expected_value);
+                            double relative_error =
+                                abs_expected > 0.0 ? abs_difference / abs_expected : abs_difference;
 
-                       // For double, a relative error of 1e-10 (0.0000000001%) should be
-                       // acceptable
-                       EXPECT_LE(relative_error, 1e-10)
-                           << "Double value differs by more than acceptable tolerance";
+                            // For double, a relative error of 1e-10 (0.0000000001%) should be
+                            // acceptable
+                            EXPECT_LE(relative_error, 1e-10)
+                                << "Double value differs by more than acceptable tolerance";
 
-                       select_success = true;
-                   },
-                   [](error::db_error error) {
-                       FAIL() << "Double query (second test) failed: " << error.code;
-                   })
-                .await();
+                            select_success = true;
+                        },
+                        [](error::db_error error) {
+                            FAIL() << "Double query (second test) failed: " << error.code;
+                        })
+                     .await();
 
         ASSERT_TRUE(status);
         ASSERT_TRUE(select_success);
@@ -758,44 +759,42 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, DoubleType) {
             3.141592653589793238462643383279502884197169399375105820974944592307816406286;
         select_success = false;
 
-        status =
-            db_->execute(
-                   "SELECT "
-                   "3."
-                   "14159265358979323846264338327950288419716939937510582097494459230781"
-                   "6406286::float8 as test_double",
-                   [&](Transaction &tr, results result) {
-                       ASSERT_FALSE(result.empty());
-                       ASSERT_FALSE(result[0][0].is_null());
+        status = db_->execute(
+                        "SELECT "
+                        "3."
+                        "14159265358979323846264338327950288419716939937510582097494459230781"
+                        "6406286::float8 as test_double",
+                        [&](Transaction &tr, results result) {
+                            ASSERT_FALSE(result.empty());
+                            ASSERT_FALSE(result[0][0].is_null());
 
-                       double actual_value = result[0][0].as<double>();
+                            double actual_value = result[0][0].as<double>();
 
-                       std::cout
-                           << "DOUBLE (high precision) - Expected: " << expected_value
-                           << ", Actual: " << actual_value << std::endl;
+                            std::cout << "DOUBLE (high precision) - Expected: " << expected_value
+                                      << ", Actual: " << actual_value << std::endl;
 
-                       // For floating point numbers, compute relative error
-                       double abs_difference = std::fabs(actual_value - expected_value);
-                       double abs_expected   = std::fabs(expected_value);
-                       double relative_error = abs_expected > 0.0
-                                                   ? abs_difference / abs_expected
-                                                   : abs_difference;
-                       std::cout << "DOUBLE (high precision) - Relative error: "
-                                 << relative_error << std::endl;
+                            // For floating point numbers, compute relative error
+                            double abs_difference = std::fabs(actual_value - expected_value);
+                            double abs_expected   = std::fabs(expected_value);
+                            double relative_error =
+                                abs_expected > 0.0 ? abs_difference / abs_expected : abs_difference;
+                            std::cout
+                                << "DOUBLE (high precision) - Relative error: " << relative_error
+                                << std::endl;
 
-                       // For double with many significant digits, expect precision to be
-                       // limited by IEEE 754 double precision (~15-17 significant
-                       // digits)
-                       EXPECT_LE(relative_error, 1e-15)
-                           << "High precision double value differs by more than "
-                              "acceptable tolerance";
+                            // For double with many significant digits, expect precision to be
+                            // limited by IEEE 754 double precision (~15-17 significant
+                            // digits)
+                            EXPECT_LE(relative_error, 1e-15)
+                                << "High precision double value differs by more than "
+                                   "acceptable tolerance";
 
-                       select_success = true;
-                   },
-                   [](error::db_error error) {
-                       FAIL() << "Double query (high precision) failed: " << error.code;
-                   })
-                .await();
+                            select_success = true;
+                        },
+                        [](error::db_error error) {
+                            FAIL() << "Double query (high precision) failed: " << error.code;
+                        })
+                     .await();
 
         ASSERT_TRUE(status);
         ASSERT_TRUE(select_success);
@@ -804,33 +803,33 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, DoubleType) {
         expected_value = 2.2250738585072014e-308; // Near minimum positive double
         select_success = false;
 
-        status =
-            db_->execute(
-                   "SELECT 2.2250738585072014e-308::float8 as test_double",
-                   [&](Transaction &tr, results result) {
-                       ASSERT_FALSE(result.empty());
-                       ASSERT_FALSE(result[0][0].is_null());
+        status = db_->execute(
+                        "SELECT 2.2250738585072014e-308::float8 as test_double",
+                        [&](Transaction &tr, results result) {
+                            ASSERT_FALSE(result.empty());
+                            ASSERT_FALSE(result[0][0].is_null());
 
-                       double actual_value = result[0][0].as<double>();
+                            double actual_value = result[0][0].as<double>();
 
-                       std::cout << "DOUBLE (small value) - Expected: " << expected_value
-                                 << ", Actual: " << actual_value << std::endl;
+                            std::cout << "DOUBLE (small value) - Expected: " << expected_value
+                                      << ", Actual: " << actual_value << std::endl;
 
-                       // For extremely small values, use absolute error or scaled
-                       // comparison
-                       double abs_difference = std::fabs(actual_value - expected_value);
-                       std::cout << "DOUBLE (small value) - Absolute difference: "
-                                 << abs_difference << std::endl;
+                            // For extremely small values, use absolute error or scaled
+                            // comparison
+                            double abs_difference = std::fabs(actual_value - expected_value);
+                            std::cout
+                                << "DOUBLE (small value) - Absolute difference: " << abs_difference
+                                << std::endl;
 
-                       // Scale the tolerance appropriately for very small values
-                       EXPECT_NEAR(actual_value, expected_value, 1e-323);
+                            // Scale the tolerance appropriately for very small values
+                            EXPECT_NEAR(actual_value, expected_value, 1e-323);
 
-                       select_success = true;
-                   },
-                   [](error::db_error error) {
-                       FAIL() << "Double query (small value) failed: " << error.code;
-                   })
-                .await();
+                            select_success = true;
+                        },
+                        [](error::db_error error) {
+                            FAIL() << "Double query (small value) failed: " << error.code;
+                        })
+                     .await();
 
         ASSERT_TRUE(status);
         ASSERT_TRUE(select_success);
@@ -839,37 +838,35 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, DoubleType) {
         expected_value = 1.7976931348623157e+308; // Near maximum double
         select_success = false;
 
-        status =
-            db_->execute(
-                   "SELECT 1.7976931348623157e+308::float8 as test_double",
-                   [&](Transaction &tr, results result) {
-                       ASSERT_FALSE(result.empty());
-                       ASSERT_FALSE(result[0][0].is_null());
+        status = db_->execute(
+                        "SELECT 1.7976931348623157e+308::float8 as test_double",
+                        [&](Transaction &tr, results result) {
+                            ASSERT_FALSE(result.empty());
+                            ASSERT_FALSE(result[0][0].is_null());
 
-                       double actual_value = result[0][0].as<double>();
+                            double actual_value = result[0][0].as<double>();
 
-                       std::cout << "DOUBLE (large value) - Expected: " << expected_value
-                                 << ", Actual: " << actual_value << std::endl;
+                            std::cout << "DOUBLE (large value) - Expected: " << expected_value
+                                      << ", Actual: " << actual_value << std::endl;
 
-                       // For very large values, use relative error
-                       double abs_difference = std::fabs(actual_value - expected_value);
-                       double abs_expected   = std::fabs(expected_value);
-                       double relative_error = abs_difference / abs_expected;
-                       std::cout
-                           << "DOUBLE (large value) - Relative error: " << relative_error
-                           << std::endl;
+                            // For very large values, use relative error
+                            double abs_difference = std::fabs(actual_value - expected_value);
+                            double abs_expected   = std::fabs(expected_value);
+                            double relative_error = abs_difference / abs_expected;
+                            std::cout << "DOUBLE (large value) - Relative error: " << relative_error
+                                      << std::endl;
 
-                       // Relax tolerance for very large values
-                       EXPECT_LE(relative_error, 1e-10)
-                           << "Large double value differs by more than acceptable "
-                              "tolerance";
+                            // Relax tolerance for very large values
+                            EXPECT_LE(relative_error, 1e-10)
+                                << "Large double value differs by more than acceptable "
+                                   "tolerance";
 
-                       select_success = true;
-                   },
-                   [](error::db_error error) {
-                       FAIL() << "Double query (large value) failed: " << error.code;
-                   })
-                .await();
+                            select_success = true;
+                        },
+                        [](error::db_error error) {
+                            FAIL() << "Double query (large value) failed: " << error.code;
+                        })
+                     .await();
 
         ASSERT_TRUE(status);
         ASSERT_TRUE(select_success);
@@ -887,37 +884,35 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, TextType) {
 
     // Insert the value
     bool insert_success = false;
-    auto status =
-        db_->execute(
-               "insert_text", QueryParams(expected_value),
-               [&insert_success](Transaction &tr, results result) {
-                   ASSERT_EQ(result.size(), 1);
-                   insert_success = true;
-               },
-               [](error::db_error error) { FAIL() << "Insert failed: " << error.code; })
-            .await();
+    auto status         = db_->execute(
+                         "insert_text", QueryParams(expected_value),
+                         [&insert_success](Transaction &tr, results result) {
+                             ASSERT_EQ(result.size(), 1);
+                             insert_success = true;
+                         },
+                         [](error::db_error error) { FAIL() << "Insert failed: " << error.code; })
+                      .await();
 
     ASSERT_TRUE(status);
     ASSERT_TRUE(insert_success);
 
     // Retrieve and verify the value
     bool select_success = false;
-    status =
-        db_->execute(
-               "select_text", QueryParams(expected_value),
-               [&](Transaction &tr, results result) {
-                   ASSERT_EQ(result.size(), 1);
-                   ASSERT_FALSE(result[0][0].is_null());
+    status              = db_->execute(
+                    "select_text", QueryParams(expected_value),
+                    [&](Transaction &tr, results result) {
+                        ASSERT_EQ(result.size(), 1);
+                        ASSERT_FALSE(result[0][0].is_null());
 
-                   std::string actual_value = result[0][0].as<std::string>();
-                   std::cout << "TEXT - Expected: '" << expected_value << "', Actual: '"
-                             << actual_value << "'" << std::endl;
+                        std::string actual_value = result[0][0].as<std::string>();
+                        std::cout << "TEXT - Expected: '" << expected_value << "', Actual: '"
+                                  << actual_value << "'" << std::endl;
 
-                   ASSERT_EQ(actual_value, expected_value);
-                   select_success = true;
-               },
-               [](error::db_error error) { FAIL() << "Select failed: " << error.code; })
-            .await();
+                        ASSERT_EQ(actual_value, expected_value);
+                        select_success = true;
+                    },
+                    [](error::db_error error) { FAIL() << "Select failed: " << error.code; })
+                 .await();
 
     ASSERT_TRUE(status);
     ASSERT_TRUE(select_success);
@@ -932,37 +927,35 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, VarcharType) {
 
     // Insert the value
     bool insert_success = false;
-    auto status =
-        db_->execute(
-               "insert_varchar", QueryParams(expected_value),
-               [&insert_success](Transaction &tr, results result) {
-                   ASSERT_EQ(result.size(), 1);
-                   insert_success = true;
-               },
-               [](error::db_error error) { FAIL() << "Insert failed: " << error.code; })
-            .await();
+    auto status         = db_->execute(
+                         "insert_varchar", QueryParams(expected_value),
+                         [&insert_success](Transaction &tr, results result) {
+                             ASSERT_EQ(result.size(), 1);
+                             insert_success = true;
+                         },
+                         [](error::db_error error) { FAIL() << "Insert failed: " << error.code; })
+                      .await();
 
     ASSERT_TRUE(status);
     ASSERT_TRUE(insert_success);
 
     // Retrieve and verify the value
     bool select_success = false;
-    status =
-        db_->execute(
-               "select_varchar", QueryParams(expected_value),
-               [&](Transaction &tr, results result) {
-                   ASSERT_EQ(result.size(), 1);
-                   ASSERT_FALSE(result[0][0].is_null());
+    status              = db_->execute(
+                    "select_varchar", QueryParams(expected_value),
+                    [&](Transaction &tr, results result) {
+                        ASSERT_EQ(result.size(), 1);
+                        ASSERT_FALSE(result[0][0].is_null());
 
-                   std::string actual_value = result[0][0].as<std::string>();
-                   std::cout << "VARCHAR - Expected: '" << expected_value
-                             << "', Actual: '" << actual_value << "'" << std::endl;
+                        std::string actual_value = result[0][0].as<std::string>();
+                        std::cout << "VARCHAR - Expected: '" << expected_value << "', Actual: '"
+                                  << actual_value << "'" << std::endl;
 
-                   ASSERT_EQ(actual_value, expected_value);
-                   select_success = true;
-               },
-               [](error::db_error error) { FAIL() << "Select failed: " << error.code; })
-            .await();
+                        ASSERT_EQ(actual_value, expected_value);
+                        select_success = true;
+                    },
+                    [](error::db_error error) { FAIL() << "Select failed: " << error.code; })
+                 .await();
 
     ASSERT_TRUE(status);
     ASSERT_TRUE(select_success);
@@ -977,39 +970,35 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, BooleanType) {
 
     // Insert the value
     bool insert_success = false;
-    auto status =
-        db_->execute(
-               "insert_boolean", QueryParams(expected_value),
-               [&insert_success](Transaction &tr, results result) {
-                   ASSERT_EQ(result.size(), 1);
-                   insert_success = true;
-               },
-               [](error::db_error error) { FAIL() << "Insert failed: " << error.code; })
-            .await();
+    auto status         = db_->execute(
+                         "insert_boolean", QueryParams(expected_value),
+                         [&insert_success](Transaction &tr, results result) {
+                             ASSERT_EQ(result.size(), 1);
+                             insert_success = true;
+                         },
+                         [](error::db_error error) { FAIL() << "Insert failed: " << error.code; })
+                      .await();
 
     ASSERT_TRUE(status);
     ASSERT_TRUE(insert_success);
 
     // Retrieve and verify the value
     bool select_success = false;
-    status =
-        db_->execute(
-               "select_boolean", QueryParams(expected_value),
-               [&](Transaction &tr, results result) {
-                   ASSERT_EQ(result.size(), 1);
-                   ASSERT_FALSE(result[0][0].is_null());
+    status              = db_->execute(
+                    "select_boolean", QueryParams(expected_value),
+                    [&](Transaction &tr, results result) {
+                        ASSERT_EQ(result.size(), 1);
+                        ASSERT_FALSE(result[0][0].is_null());
 
-                   bool actual_value = result[0][0].as<bool>();
-                   std::cout << "BOOLEAN - Expected: "
-                             << (expected_value ? "true" : "false")
-                             << ", Actual: " << (actual_value ? "true" : "false")
-                             << std::endl;
+                        bool actual_value = result[0][0].as<bool>();
+                        std::cout << "BOOLEAN - Expected: " << (expected_value ? "true" : "false")
+                                  << ", Actual: " << (actual_value ? "true" : "false") << std::endl;
 
-                   ASSERT_EQ(actual_value, expected_value);
-                   select_success = true;
-               },
-               [](error::db_error error) { FAIL() << "Select failed: " << error.code; })
-            .await();
+                        ASSERT_EQ(actual_value, expected_value);
+                        select_success = true;
+                    },
+                    [](error::db_error error) { FAIL() << "Select failed: " << error.code; })
+                 .await();
 
     ASSERT_TRUE(status);
     ASSERT_TRUE(select_success);
@@ -1022,59 +1011,55 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, ByteaType) {
     // Value to test - a byte array representing 0xDEADBEEF
     // Use explicit casts to avoid warnings
     std::vector<byte> expected_value = {static_cast<byte>(0xDE), static_cast<byte>(0xAD),
-                                        static_cast<byte>(0xBE),
-                                        static_cast<byte>(0xEF)};
+                                        static_cast<byte>(0xBE), static_cast<byte>(0xEF)};
 
     // Insert the value
     bool insert_success = false;
-    auto status =
-        db_->execute(
-               "insert_bytea", QueryParams(expected_value),
-               [&insert_success](Transaction &tr, results result) {
-                   ASSERT_EQ(result.size(), 1);
-                   insert_success = true;
-               },
-               [](error::db_error error) { FAIL() << "Insert failed: " << error.code; })
-            .await();
+    auto status         = db_->execute(
+                         "insert_bytea", QueryParams(expected_value),
+                         [&insert_success](Transaction &tr, results result) {
+                             ASSERT_EQ(result.size(), 1);
+                             insert_success = true;
+                         },
+                         [](error::db_error error) { FAIL() << "Insert failed: " << error.code; })
+                      .await();
 
     ASSERT_TRUE(status);
     ASSERT_TRUE(insert_success);
 
     // Retrieve and verify the value
     bool select_success = false;
-    status =
-        db_->execute(
-               "SELECT bytea_val FROM data_types_test ORDER BY id DESC LIMIT 1",
-               [&](Transaction &tr, results result) {
-                   ASSERT_EQ(result.size(), 1);
-                   ASSERT_FALSE(result[0][0].is_null());
+    status              = db_->execute(
+                    "SELECT bytea_val FROM data_types_test ORDER BY id DESC LIMIT 1",
+                    [&](Transaction &tr, results result) {
+                        ASSERT_EQ(result.size(), 1);
+                        ASSERT_FALSE(result[0][0].is_null());
 
-                   std::vector<byte> actual_value = result[0][0].as<std::vector<byte>>();
+                        std::vector<byte> actual_value = result[0][0].as<std::vector<byte>>();
 
-                   std::cout << "BYTEA - Expected: [" << expected_value.size()
-                             << " bytes] ";
-                   for (byte b : expected_value) {
-                       std::cout << std::hex << std::setw(2) << std::setfill('0')
-                                 << static_cast<int>(b) << " ";
-                   }
-                   std::cout << std::dec << std::endl;
+                        std::cout << "BYTEA - Expected: [" << expected_value.size() << " bytes] ";
+                        for (byte b : expected_value) {
+                            std::cout << std::hex << std::setw(2) << std::setfill('0')
+                                      << static_cast<int>(b) << " ";
+                        }
+                        std::cout << std::dec << std::endl;
 
-                   std::cout << "BYTEA - Actual: [" << actual_value.size() << " bytes] ";
-                   for (byte b : actual_value) {
-                       std::cout << std::hex << std::setw(2) << std::setfill('0')
-                                 << static_cast<int>(b) << " ";
-                   }
-                   std::cout << std::dec << std::endl;
+                        std::cout << "BYTEA - Actual: [" << actual_value.size() << " bytes] ";
+                        for (byte b : actual_value) {
+                            std::cout << std::hex << std::setw(2) << std::setfill('0')
+                                      << static_cast<int>(b) << " ";
+                        }
+                        std::cout << std::dec << std::endl;
 
-                   ASSERT_EQ(actual_value.size(), expected_value.size());
-                   for (size_t i = 0; i < expected_value.size(); ++i) {
-                       ASSERT_EQ(actual_value[i], expected_value[i]);
-                   }
+                        ASSERT_EQ(actual_value.size(), expected_value.size());
+                        for (size_t i = 0; i < expected_value.size(); ++i) {
+                            ASSERT_EQ(actual_value[i], expected_value[i]);
+                        }
 
-                   select_success = true;
-               },
-               [](error::db_error error) { FAIL() << "Select failed: " << error.code; })
-            .await();
+                        select_success = true;
+                    },
+                    [](error::db_error error) { FAIL() << "Select failed: " << error.code; })
+                 .await();
 
     ASSERT_TRUE(status);
     ASSERT_TRUE(select_success);
@@ -1086,35 +1071,33 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, ByteaType) {
 TEST_F(PostgreSQLDataTypesIntegrationTest, NullType) {
     // Insert a NULL value
     bool insert_success = false;
-    auto status =
-        db_->execute(
-               "INSERT INTO data_types_test (null_val) VALUES (NULL) RETURNING id",
-               [&insert_success](Transaction &tr, results result) {
-                   ASSERT_EQ(result.size(), 1);
-                   insert_success = true;
-               },
-               [](error::db_error error) { FAIL() << "Insert failed: " << error.code; })
-            .await();
+    auto status         = db_->execute(
+                         "INSERT INTO data_types_test (null_val) VALUES (NULL) RETURNING id",
+                         [&insert_success](Transaction &tr, results result) {
+                             ASSERT_EQ(result.size(), 1);
+                             insert_success = true;
+                         },
+                         [](error::db_error error) { FAIL() << "Insert failed: " << error.code; })
+                      .await();
 
     ASSERT_TRUE(status);
     ASSERT_TRUE(insert_success);
 
     // Retrieve and verify that it is indeed NULL
     bool select_success = false;
-    status =
-        db_->execute(
-               "SELECT null_val FROM data_types_test WHERE null_val IS NULL",
-               [&](Transaction &tr, results result) {
-                   ASSERT_EQ(result.size(), 1);
-                   ASSERT_TRUE(result[0][0].is_null());
+    status              = db_->execute(
+                    "SELECT null_val FROM data_types_test WHERE null_val IS NULL",
+                    [&](Transaction &tr, results result) {
+                        ASSERT_EQ(result.size(), 1);
+                        ASSERT_TRUE(result[0][0].is_null());
 
-                   std::cout << "NULL - is_null(): "
-                             << (result[0][0].is_null() ? "true" : "false") << std::endl;
+                        std::cout << "NULL - is_null(): "
+                                  << (result[0][0].is_null() ? "true" : "false") << std::endl;
 
-                   select_success = true;
-               },
-               [](error::db_error error) { FAIL() << "Select failed: " << error.code; })
-            .await();
+                        select_success = true;
+                    },
+                    [](error::db_error error) { FAIL() << "Select failed: " << error.code; })
+                 .await();
 
     ASSERT_TRUE(status);
     ASSERT_TRUE(select_success);
@@ -1129,37 +1112,35 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, EmptyStringType) {
 
     // Insert the value
     bool insert_success = false;
-    auto status =
-        db_->execute(
-               "insert_empty_string", QueryParams(expected_value),
-               [&insert_success](Transaction &tr, results result) {
-                   ASSERT_EQ(result.size(), 1);
-                   insert_success = true;
-               },
-               [](error::db_error error) { FAIL() << "Insert failed: " << error.code; })
-            .await();
+    auto status         = db_->execute(
+                         "insert_empty_string", QueryParams(expected_value),
+                         [&insert_success](Transaction &tr, results result) {
+                             ASSERT_EQ(result.size(), 1);
+                             insert_success = true;
+                         },
+                         [](error::db_error error) { FAIL() << "Insert failed: " << error.code; })
+                      .await();
 
     ASSERT_TRUE(status);
     ASSERT_TRUE(insert_success);
 
     // Retrieve and verify the value
     bool select_success = false;
-    status =
-        db_->execute(
-               "select_empty_string", QueryParams(expected_value),
-               [&](Transaction &tr, results result) {
-                   ASSERT_EQ(result.size(), 1);
-                   ASSERT_FALSE(result[0][0].is_null());
+    status              = db_->execute(
+                    "select_empty_string", QueryParams(expected_value),
+                    [&](Transaction &tr, results result) {
+                        ASSERT_EQ(result.size(), 1);
+                        ASSERT_FALSE(result[0][0].is_null());
 
-                   std::string actual_value = result[0][0].as<std::string>();
-                   std::cout << "EMPTY STRING - Expected: '" << expected_value
-                             << "', Actual: '" << actual_value << "'" << std::endl;
+                        std::string actual_value = result[0][0].as<std::string>();
+                        std::cout << "EMPTY STRING - Expected: '" << expected_value << "', Actual: '"
+                                  << actual_value << "'" << std::endl;
 
-                   ASSERT_EQ(actual_value, expected_value);
-                   select_success = true;
-               },
-               [](error::db_error error) { FAIL() << "Select failed: " << error.code; })
-            .await();
+                        ASSERT_EQ(actual_value, expected_value);
+                        select_success = true;
+                    },
+                    [](error::db_error error) { FAIL() << "Select failed: " << error.code; })
+                 .await();
 
     ASSERT_TRUE(status);
     ASSERT_TRUE(select_success);
@@ -1180,35 +1161,32 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, EmptyBytea) {
     std::vector<std::byte> expected_value;
 
     // Create a direct SQL query without using prepared statements
-    auto status =
-        db_->execute(
-               "INSERT INTO data_types_test (bytea_val) VALUES (E'\\\\x'::bytea) "
-               "RETURNING id",
-               [](Transaction &tr, results result) { ASSERT_EQ(result.size(), 1); },
-               [](error::db_error error) { FAIL() << "Insert failed: " << error.code; })
-            .await();
+    auto status = db_->execute(
+                         "INSERT INTO data_types_test (bytea_val) VALUES (E'\\\\x'::bytea) "
+                         "RETURNING id",
+                         [](Transaction &tr, results result) { ASSERT_EQ(result.size(), 1); },
+                         [](error::db_error error) { FAIL() << "Insert failed: " << error.code; })
+                      .await();
 
     ASSERT_TRUE(status);
 
     // Retrieve and verify the value
     bool select_success = false;
-    status =
-        db_->execute(
-               "SELECT bytea_val FROM data_types_test WHERE bytea_val = E'\\\\x'::bytea",
-               [&](Transaction &tr, results result) {
-                   ASSERT_EQ(result.size(), 1);
-                   ASSERT_FALSE(result[0][0].is_null());
+    status              = db_->execute(
+                    "SELECT bytea_val FROM data_types_test WHERE bytea_val = E'\\\\x'::bytea",
+                    [&](Transaction &tr, results result) {
+                        ASSERT_EQ(result.size(), 1);
+                        ASSERT_FALSE(result[0][0].is_null());
 
-                   std::vector<std::byte> actual_value =
-                       result[0][0].as<std::vector<std::byte>>();
-                   std::cout << "BYTEA (empty) - Length: " << actual_value.size()
-                             << std::endl;
+                        std::vector<std::byte> actual_value =
+                            result[0][0].as<std::vector<std::byte>>();
+                        std::cout << "BYTEA (empty) - Length: " << actual_value.size() << std::endl;
 
-                   ASSERT_EQ(actual_value.size(), expected_value.size());
-                   select_success = true;
-               },
-               [](error::db_error error) { FAIL() << "Select failed: " << error.code; })
-            .await();
+                        ASSERT_EQ(actual_value.size(), expected_value.size());
+                        select_success = true;
+                    },
+                    [](error::db_error error) { FAIL() << "Select failed: " << error.code; })
+                 .await();
 
     ASSERT_TRUE(status);
     ASSERT_TRUE(select_success);
@@ -1221,66 +1199,56 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, EmptyBytea) {
  * deserialization.
  */
 TEST_F(PostgreSQLDataTypesIntegrationTest, UUIDType) {
-    // Skip if no connection
-    if (!db_)
-        GTEST_SKIP();
-
     // Create a test UUID
-    qb::uuid test_uuid =
-        qb::uuid::from_string("12345678-1234-5678-1234-567812345678").value();
+    qb::uuid test_uuid = qb::uuid::from_string("12345678-1234-5678-1234-567812345678").value();
 
     // Test inserting and retrieving the UUID
     bool insert_success = false;
-    auto status =
-        db_->execute(
-               "insert_uuid", QueryParams(test_uuid),
-               [&insert_success](Transaction &tr, results result) {
-                   ASSERT_EQ(result.size(), 1);
-                   insert_success = true;
-               },
-               [](error::db_error error) { FAIL() << "Insert failed: " << error.code; })
-            .await();
+    auto status         = db_->execute(
+                         "insert_uuid", QueryParams(test_uuid),
+                         [&insert_success](Transaction &tr, results result) {
+                             ASSERT_EQ(result.size(), 1);
+                             insert_success = true;
+                         },
+                         [](error::db_error error) { FAIL() << "Insert failed: " << error.code; })
+                      .await();
 
     ASSERT_TRUE(status);
     ASSERT_TRUE(insert_success);
 
     // Retrieve and verify the value
     bool select_success = false;
-    status =
-        db_->execute(
-               "select_uuid", QueryParams(test_uuid),
-               [&](Transaction &tr, results result) {
-                   ASSERT_EQ(result.size(), 1);
-                   ASSERT_FALSE(result[0][0].is_null());
+    status              = db_->execute(
+                    "select_uuid", QueryParams(test_uuid),
+                    [&](Transaction &tr, results result) {
+                        ASSERT_EQ(result.size(), 1);
+                        ASSERT_FALSE(result[0][0].is_null());
 
-                   qb::uuid returned_uuid = result[0][0].as<qb::uuid>();
-                   std::cout << "UUID - Expected: " << uuids::to_string(test_uuid)
-                             << ", Actual: " << uuids::to_string(returned_uuid)
-                             << std::endl;
+                        qb::uuid returned_uuid = result[0][0].as<qb::uuid>();
+                        std::cout << "UUID - Expected: " << uuids::to_string(test_uuid)
+                                  << ", Actual: " << uuids::to_string(returned_uuid) << std::endl;
 
-                   ASSERT_EQ(returned_uuid, test_uuid);
-                   select_success = true;
-               },
-               [](error::db_error error) { FAIL() << "Select failed: " << error.code; })
-            .await();
+                        ASSERT_EQ(returned_uuid, test_uuid);
+                        select_success = true;
+                    },
+                    [](error::db_error error) { FAIL() << "Select failed: " << error.code; })
+                 .await();
 
     ASSERT_TRUE(status);
     ASSERT_TRUE(select_success);
 
     // Test with a different UUID value to ensure it's not just coincidence
-    qb::uuid second_uuid =
-        qb::uuid::from_string("550e8400-e29b-41d4-a716-446655440000").value();
+    qb::uuid second_uuid = qb::uuid::from_string("550e8400-e29b-41d4-a716-446655440000").value();
 
     insert_success = false;
-    status =
-        db_->execute(
-               "insert_uuid", QueryParams(second_uuid),
-               [&insert_success](Transaction &tr, results result) {
-                   ASSERT_EQ(result.size(), 1);
-                   insert_success = true;
-               },
-               [](error::db_error error) { FAIL() << "Insert failed: " << error.code; })
-            .await();
+    status         = db_->execute(
+                    "insert_uuid", QueryParams(second_uuid),
+                    [&insert_success](Transaction &tr, results result) {
+                        ASSERT_EQ(result.size(), 1);
+                        insert_success = true;
+                    },
+                    [](error::db_error error) { FAIL() << "Insert failed: " << error.code; })
+                 .await();
 
     ASSERT_TRUE(status);
     ASSERT_TRUE(insert_success);
@@ -1295,10 +1263,8 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, UUIDType) {
                    ASSERT_FALSE(result[0][0].is_null());
 
                    qb::uuid returned_uuid = result[0][0].as<qb::uuid>();
-                   std::cout << "UUID (second test) - Expected: "
-                             << uuids::to_string(second_uuid)
-                             << ", Actual: " << uuids::to_string(returned_uuid)
-                             << std::endl;
+                   std::cout << "UUID (second test) - Expected: " << uuids::to_string(second_uuid)
+                             << ", Actual: " << uuids::to_string(returned_uuid) << std::endl;
 
                    ASSERT_EQ(returned_uuid, second_uuid);
                    select_success = true;
@@ -1317,10 +1283,6 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, UUIDType) {
  * serialization and deserialization, including microsecond precision.
  */
 TEST_F(PostgreSQLDataTypesIntegrationTest, TimestampType) {
-    // Skip if no connection
-    if (!db_)
-        GTEST_SKIP();
-
     try {
         // Create timestamps for multiple known dates to test various cases
         std::vector<std::pair<std::string, qb::Timestamp>> test_cases;
@@ -1363,20 +1325,19 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, TimestampType) {
             const qb::Timestamp &test_timestamp = test_case.second;
 
             // Clean existing data
-            db_->execute("DELETE FROM data_types_test").await();
+            db_->execute("DELETE FROM data_types_test", discard_query, discard_error).await();
 
             // Insert timestamp value
             bool insert_success = false;
-            auto status         = db_->execute(
-                                 "insert_timestamp", QueryParams(test_timestamp),
-                                 [&insert_success](Transaction &tr, results result) {
-                                     ASSERT_EQ(result.size(), 1);
-                                     insert_success = true;
-                                 },
-                                 [](error::db_error error) {
-                                     FAIL() << "Insert failed: " << error.code;
-                                 })
-                              .await();
+            auto status =
+                db_->execute(
+                       "insert_timestamp", QueryParams(test_timestamp),
+                       [&insert_success](Transaction &tr, results result) {
+                           ASSERT_EQ(result.size(), 1);
+                           insert_success = true;
+                       },
+                       [](error::db_error error) { FAIL() << "Insert failed: " << error.code; })
+                    .await();
 
             ASSERT_TRUE(status);
             ASSERT_TRUE(insert_success);
@@ -1390,18 +1351,16 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, TimestampType) {
                            ASSERT_FALSE(result.empty());
                            ASSERT_FALSE(result[0][0].is_null());
 
-                           qb::Timestamp returned_timestamp =
-                               result[0][0].as<qb::Timestamp>();
+                           qb::Timestamp returned_timestamp = result[0][0].as<qb::Timestamp>();
                            std::cout << "TIMESTAMP (" << case_name << ")" << std::endl;
-                           std::cout << "TIMESTAMP - Expected seconds: "
-                                     << test_timestamp.seconds() << ", microseconds: "
-                                     << (test_timestamp.microseconds() % 1000000)
-                                     << std::endl;
-                           std::cout << "TIMESTAMP - Actual seconds: "
-                                     << returned_timestamp.seconds()
-                                     << ", microseconds: "
-                                     << (returned_timestamp.microseconds() % 1000000)
-                                     << std::endl;
+                           std::cout
+                               << "TIMESTAMP - Expected seconds: " << test_timestamp.seconds()
+                               << ", microseconds: " << (test_timestamp.microseconds() % 1000000)
+                               << std::endl;
+                           std::cout
+                               << "TIMESTAMP - Actual seconds: " << returned_timestamp.seconds()
+                               << ", microseconds: " << (returned_timestamp.microseconds() % 1000000)
+                               << std::endl;
 
                            // Allow differences due to timezone issues (up to 1 day =
                            // 86400 seconds) This is a very generous margin to ensure
@@ -1409,22 +1368,19 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, TimestampType) {
                            uint64_t t1             = returned_timestamp.seconds();
                            uint64_t t2             = test_timestamp.seconds();
                            uint64_t timestamp_diff = (t1 > t2) ? (t1 - t2) : (t2 - t1);
-                           std::cout
-                               << "TIMESTAMP - Difference in seconds: " << timestamp_diff
-                               << std::endl;
+                           std::cout << "TIMESTAMP - Difference in seconds: " << timestamp_diff
+                                     << std::endl;
                            EXPECT_LE(timestamp_diff, 86400ULL);
 
                            // The microseconds part should be fairly accurate
-                           uint64_t m1 = returned_timestamp.microseconds() % 1000000;
-                           uint64_t m2 = test_timestamp.microseconds() % 1000000;
+                           uint64_t m1          = returned_timestamp.microseconds() % 1000000;
+                           uint64_t m2          = test_timestamp.microseconds() % 1000000;
                            uint64_t micros_diff = (m1 > m2) ? (m1 - m2) : (m2 - m1);
                            EXPECT_LE(micros_diff, 1000ULL);
 
                            select_success = true;
                        },
-                       [](error::db_error error) {
-                           FAIL() << "Select failed: " << error.code;
-                       })
+                       [](error::db_error error) { FAIL() << "Select failed: " << error.code; })
                     .await();
 
             ASSERT_TRUE(status);
@@ -1442,10 +1398,6 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, TimestampType) {
  * serialization and deserialization, including timezone handling.
  */
 TEST_F(PostgreSQLDataTypesIntegrationTest, TimestampTZType) {
-    // Skip if no connection
-    if (!db_)
-        GTEST_SKIP();
-
     try {
         // Create UTC timestamps for multiple test cases
         std::vector<std::pair<std::string, qb::UtcTimestamp>> test_cases;
@@ -1480,20 +1432,19 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, TimestampTZType) {
             const qb::UtcTimestamp &test_timestamp = test_case.second;
 
             // Clean existing data
-            db_->execute("DELETE FROM data_types_test").await();
+            db_->execute("DELETE FROM data_types_test", discard_query, discard_error).await();
 
             // Insert timestamp value
             bool insert_success = false;
-            auto status         = db_->execute(
-                                 "insert_timestamptz", QueryParams(test_timestamp),
-                                 [&insert_success](Transaction &tr, results result) {
-                                     ASSERT_EQ(result.size(), 1);
-                                     insert_success = true;
-                                 },
-                                 [](error::db_error error) {
-                                     FAIL() << "Insert failed: " << error.code;
-                                 })
-                              .await();
+            auto status =
+                db_->execute(
+                       "insert_timestamptz", QueryParams(test_timestamp),
+                       [&insert_success](Transaction &tr, results result) {
+                           ASSERT_EQ(result.size(), 1);
+                           insert_success = true;
+                       },
+                       [](error::db_error error) { FAIL() << "Insert failed: " << error.code; })
+                    .await();
 
             ASSERT_TRUE(status);
             ASSERT_TRUE(insert_success);
@@ -1507,18 +1458,16 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, TimestampTZType) {
                            ASSERT_FALSE(result.empty());
                            ASSERT_FALSE(result[0][0].is_null());
 
-                           qb::UtcTimestamp returned_timestamp =
-                               result[0][0].as<qb::UtcTimestamp>();
+                           qb::UtcTimestamp returned_timestamp = result[0][0].as<qb::UtcTimestamp>();
                            std::cout << "TIMESTAMPTZ (" << case_name << ")" << std::endl;
-                           std::cout << "TIMESTAMPTZ - Expected seconds: "
-                                     << test_timestamp.seconds() << ", microseconds: "
-                                     << (test_timestamp.microseconds() % 1000000)
-                                     << std::endl;
-                           std::cout << "TIMESTAMPTZ - Actual seconds: "
-                                     << returned_timestamp.seconds()
-                                     << ", microseconds: "
-                                     << (returned_timestamp.microseconds() % 1000000)
-                                     << std::endl;
+                           std::cout
+                               << "TIMESTAMPTZ - Expected seconds: " << test_timestamp.seconds()
+                               << ", microseconds: " << (test_timestamp.microseconds() % 1000000)
+                               << std::endl;
+                           std::cout
+                               << "TIMESTAMPTZ - Actual seconds: " << returned_timestamp.seconds()
+                               << ", microseconds: " << (returned_timestamp.microseconds() % 1000000)
+                               << std::endl;
 
                            // Allow differences due to timezone issues (up to 1 day =
                            // 86400 seconds) This is a very generous margin to ensure
@@ -1526,21 +1475,19 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, TimestampTZType) {
                            uint64_t t1             = returned_timestamp.seconds();
                            uint64_t t2             = test_timestamp.seconds();
                            uint64_t timestamp_diff = (t1 > t2) ? (t1 - t2) : (t2 - t1);
-                           std::cout << "TIMESTAMPTZ - Difference in seconds: "
-                                     << timestamp_diff << std::endl;
+                           std::cout << "TIMESTAMPTZ - Difference in seconds: " << timestamp_diff
+                                     << std::endl;
                            EXPECT_LE(timestamp_diff, 86400ULL);
 
                            // The microseconds part should be fairly accurate
-                           uint64_t m1 = returned_timestamp.microseconds() % 1000000;
-                           uint64_t m2 = test_timestamp.microseconds() % 1000000;
+                           uint64_t m1          = returned_timestamp.microseconds() % 1000000;
+                           uint64_t m2          = test_timestamp.microseconds() % 1000000;
                            uint64_t micros_diff = (m1 > m2) ? (m1 - m2) : (m2 - m1);
                            EXPECT_LE(micros_diff, 1000ULL);
 
                            select_success = true;
                        },
-                       [](error::db_error error) {
-                           FAIL() << "Select failed: " << error.code;
-                       })
+                       [](error::db_error error) { FAIL() << "Select failed: " << error.code; })
                     .await();
 
             ASSERT_TRUE(status);
@@ -1549,7 +1496,7 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, TimestampTZType) {
 
         // Test comparison between local timestamp and UTC timestamp
         // Clean existing data
-        db_->execute("DELETE FROM data_types_test").await();
+        db_->execute("DELETE FROM data_types_test", discard_query, discard_error).await();
 
         // Get current time and create both timestamp types
         std::time_t      now             = std::time(nullptr);
@@ -1565,8 +1512,7 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, TimestampTZType) {
                                  local_insert_success = true;
                              },
                              [](error::db_error error) {
-                                 FAIL()
-                                     << "Local timestamp insert failed: " << error.code;
+                                 FAIL() << "Local timestamp insert failed: " << error.code;
                              })
                           .await();
 
@@ -1607,8 +1553,9 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, TimestampTZType) {
                             std::cout << "TIMESTAMP COMPARISON:" << std::endl;
                             std::cout << "Local timestamp - Expected seconds: "
                                       << local_timestamp.seconds() << std::endl;
-                            std::cout << "Local timestamp - Actual seconds: "
-                                      << returned_local.seconds() << std::endl;
+                            std::cout
+                                << "Local timestamp - Actual seconds: " << returned_local.seconds()
+                                << std::endl;
 
                             // Allow differences due to timezone issues (up to 1 day =
                             // 86400 seconds)
@@ -1616,8 +1563,8 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, TimestampTZType) {
                             uint64_t t2         = local_timestamp.seconds();
                             uint64_t local_diff = (t1 > t2) ? (t1 - t2) : (t2 - t1);
 
-                            std::cout << "Local timestamp difference: " << local_diff
-                                      << " seconds" << std::endl;
+                            std::cout << "Local timestamp difference: " << local_diff << " seconds"
+                                      << std::endl;
                             EXPECT_LE(local_diff, 86400ULL);
                         },
                         [](error::db_error error) {
@@ -1637,10 +1584,11 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, TimestampTZType) {
 
                             returned_utc = result[0][0].as<qb::UtcTimestamp>();
 
-                            std::cout << "UTC timestamp - Expected seconds: "
-                                      << utc_timestamp.seconds() << std::endl;
-                            std::cout << "UTC timestamp - Actual seconds: "
-                                      << returned_utc.seconds() << std::endl;
+                            std::cout
+                                << "UTC timestamp - Expected seconds: " << utc_timestamp.seconds()
+                                << std::endl;
+                            std::cout << "UTC timestamp - Actual seconds: " << returned_utc.seconds()
+                                      << std::endl;
 
                             // Allow differences due to timezone issues (up to 1 day =
                             // 86400 seconds)
@@ -1648,8 +1596,8 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, TimestampTZType) {
                             uint64_t t4       = utc_timestamp.seconds();
                             uint64_t utc_diff = (t3 > t4) ? (t3 - t4) : (t4 - t3);
 
-                            std::cout << "UTC timestamp difference: " << utc_diff
-                                      << " seconds" << std::endl;
+                            std::cout << "UTC timestamp difference: " << utc_diff << " seconds"
+                                      << std::endl;
                             EXPECT_LE(utc_diff, 86400ULL);
                         },
                         [](error::db_error error) {
@@ -1680,7 +1628,7 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, JSONType) {
             {"details", {{"active", true}, {"version", 1.5}, {"metadata", nullptr}}}};
 
         // Clean existing data
-        db_->execute("DELETE FROM data_types_test").await();
+        db_->execute("DELETE FROM data_types_test", discard_query, discard_error).await();
 
         // Insert the JSON value
         bool insert_success = false;
@@ -1693,12 +1641,9 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, JSONType) {
                        ASSERT_EQ(result.size(), 1);
                        insert_success = true;
                        inserted_id    = result[0][0].as<int>();
-                       std::cout << "Inserted JSON with ID: " << inserted_id
-                                 << std::endl;
+                       std::cout << "Inserted JSON with ID: " << inserted_id << std::endl;
                    },
-                   [](error::db_error error) {
-                       FAIL() << "Insert failed: " << error.code;
-                   })
+                   [](error::db_error error) { FAIL() << "Insert failed: " << error.code; })
                 .await();
 
         ASSERT_TRUE(insert_status);
@@ -1712,8 +1657,7 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, JSONType) {
         auto select_status =
             db_->execute(
                    "select_json", QueryParams(inserted_id),
-                   [&select_success, &retrieved_json, &test_json](Transaction &tr,
-                                                                  results      result) {
+                   [&select_success, &retrieved_json, &test_json](Transaction &tr, results result) {
                        ASSERT_EQ(result.size(), 1);
                        ASSERT_EQ(result[0].size(), 1);
                        ASSERT_FALSE(result[0][0].is_null());
@@ -1721,8 +1665,7 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, JSONType) {
                        select_success = true;
                        retrieved_json = result[0][0].as<qb::json>();
 
-                       std::cout << "Retrieved JSON: " << retrieved_json.dump(2)
-                                 << std::endl;
+                       std::cout << "Retrieved JSON: " << retrieved_json.dump(2) << std::endl;
 
                        // Verify structure is intact using path-based validation
                        ASSERT_TRUE(retrieved_json.contains("id"));
@@ -1731,15 +1674,13 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, JSONType) {
                        ASSERT_TRUE(retrieved_json.contains("details"));
 
                        // Verify values
-                       ASSERT_EQ(retrieved_json["id"].get<int>(),
-                                 test_json["id"].get<int>());
+                       ASSERT_EQ(retrieved_json["id"].get<int>(), test_json["id"].get<int>());
                        ASSERT_EQ(retrieved_json["name"].get<std::string>(),
                                  test_json["name"].get<std::string>());
 
                        // Verify array
                        ASSERT_TRUE(retrieved_json["tags"].is_array());
-                       ASSERT_EQ(retrieved_json["tags"].size(),
-                                 test_json["tags"].size());
+                       ASSERT_EQ(retrieved_json["tags"].size(), test_json["tags"].size());
                        for (size_t i = 0; i < test_json["tags"].size(); ++i) {
                            ASSERT_EQ(retrieved_json["tags"][i].get<std::string>(),
                                      test_json["tags"][i].get<std::string>());
@@ -1762,16 +1703,13 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, JSONType) {
                        try {
                            ASSERT_EQ(retrieved_json.dump(), test_json.dump());
                        } catch (const std::exception &e) {
-                           std::cout << "Warning: JSON exact comparison failed with: "
-                                     << e.what() << std::endl;
-                           std::cout
-                               << "This may be normal if PostgreSQL reordered the keys"
-                               << std::endl;
+                           std::cout << "Warning: JSON exact comparison failed with: " << e.what()
+                                     << std::endl;
+                           std::cout << "This may be normal if PostgreSQL reordered the keys"
+                                     << std::endl;
                        }
                    },
-                   [](error::db_error error) {
-                       FAIL() << "Select failed: " << error.code;
-                   })
+                   [](error::db_error error) { FAIL() << "Select failed: " << error.code; })
                 .await();
 
         ASSERT_TRUE(select_status);
@@ -1797,18 +1735,16 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, JSONBType) {
               {"name", "JSONB Test User"},
               {"email", "test@example.com"},
               {"active", true}}},
-            {"permissions",
-             {{"admin", true}, {"roles", {"editor", "reviewer", "author"}}}},
+            {"permissions", {{"admin", true}, {"roles", {"editor", "reviewer", "author"}}}},
             {"stats",
              {{"logins", 250},
               {"last_active", "2023-05-15T14:30:00Z"},
               {"scores", {98.5, 87.2, 92.0}}}},
             {"preferences",
-             {{"theme", "dark"},
-              {"notifications", {{"email", true}, {"push", false}}}}}};
+             {{"theme", "dark"}, {"notifications", {{"email", true}, {"push", false}}}}}};
 
         // Clean existing data
-        db_->execute("DELETE FROM data_types_test").await();
+        db_->execute("DELETE FROM data_types_test", discard_query, discard_error).await();
 
         // Insert the JSONB value
         bool insert_success = false;
@@ -1821,12 +1757,9 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, JSONBType) {
                        ASSERT_EQ(result.size(), 1);
                        insert_success = true;
                        inserted_id    = result[0][0].as<int>();
-                       std::cout << "Inserted JSONB with ID: " << inserted_id
-                                 << std::endl;
+                       std::cout << "Inserted JSONB with ID: " << inserted_id << std::endl;
                    },
-                   [](error::db_error error) {
-                       FAIL() << "Insert failed: " << error.code;
-                   })
+                   [](error::db_error error) { FAIL() << "Insert failed: " << error.code; })
                 .await();
 
         ASSERT_TRUE(insert_status);
@@ -1840,8 +1773,7 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, JSONBType) {
         auto select_status =
             db_->execute(
                    "select_jsonb", QueryParams(inserted_id),
-                   [&select_success, &retrieved_jsonb](Transaction &tr,
-                                                                    results result) {
+                   [&select_success, &retrieved_jsonb](Transaction &tr, results result) {
                        ASSERT_EQ(result.size(), 1);
                        ASSERT_EQ(result[0].size(), 1);
                        ASSERT_FALSE(result[0][0].is_null());
@@ -1849,33 +1781,27 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, JSONBType) {
                        select_success  = true;
                        retrieved_jsonb = result[0][0].as<qb::jsonb>();
 
-                       std::cout << "Retrieved JSONB: " << retrieved_jsonb.dump(2)
-                                 << std::endl;
+                       std::cout << "Retrieved JSONB: " << retrieved_jsonb.dump(2) << std::endl;
 
                        // Test the structure with stricter validation
                        try {
                            // PostgreSQL can return JSONB as an array of pairs
                            // Convert array format to object format if needed
                            if (retrieved_jsonb.is_array() && !retrieved_jsonb.empty() &&
-                               retrieved_jsonb[0].is_array() &&
-                               retrieved_jsonb[0].size() == 2) {
+                               retrieved_jsonb[0].is_array() && retrieved_jsonb[0].size() == 2) {
                                qb::jsonb converted_jsonb;
 
                                for (const auto &pair : retrieved_jsonb) {
-                                   if (pair.is_array() && pair.size() == 2 &&
-                                       pair[0].is_string()) {
-                                       converted_jsonb[pair[0].get<std::string>()] =
-                                           pair[1];
+                                   if (pair.is_array() && pair.size() == 2 && pair[0].is_string()) {
+                                       converted_jsonb[pair[0].get<std::string>()] = pair[1];
                                    }
                                }
 
-                               std::cout
-                                   << "JSONB - Converting array format to object format"
-                                   << std::endl;
+                               std::cout << "JSONB - Converting array format to object format"
+                                         << std::endl;
                                retrieved_jsonb = converted_jsonb;
-                               std::cout
-                                   << "JSONB - Converted to: " << retrieved_jsonb.dump(2)
-                                   << std::endl;
+                               std::cout << "JSONB - Converted to: " << retrieved_jsonb.dump(2)
+                                         << std::endl;
                            }
 
                            // User object
@@ -1891,17 +1817,15 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, JSONBType) {
                            ASSERT_TRUE(retrieved_jsonb.contains("permissions"));
                            ASSERT_TRUE(retrieved_jsonb["permissions"].is_object());
                            ASSERT_TRUE(retrieved_jsonb["permissions"].contains("roles"));
-                           ASSERT_TRUE(
-                               retrieved_jsonb["permissions"]["roles"].is_array());
+                           ASSERT_TRUE(retrieved_jsonb["permissions"]["roles"].is_array());
                            ASSERT_EQ(retrieved_jsonb["permissions"]["roles"].size(), 3);
 
                            // Make sure each role is present
-                           std::vector<std::string> expected_roles = {
-                               "editor", "reviewer", "author"};
+                           std::vector<std::string> expected_roles = {"editor", "reviewer",
+                                                                      "author"};
                            for (const auto &role : expected_roles) {
                                bool role_found = false;
-                               for (const auto &r :
-                                    retrieved_jsonb["permissions"]["roles"]) {
+                               for (const auto &r : retrieved_jsonb["permissions"]["roles"]) {
                                    if (r.is_string() && r.get<std::string>() == role) {
                                        role_found = true;
                                        break;
@@ -1922,36 +1846,27 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, JSONBType) {
                            ASSERT_TRUE(retrieved_jsonb.contains("preferences"));
                            ASSERT_TRUE(retrieved_jsonb["preferences"].is_object());
                            ASSERT_TRUE(retrieved_jsonb["preferences"].contains("theme"));
-                           ASSERT_EQ(retrieved_jsonb["preferences"]["theme"]
-                                         .get<std::string>(),
+                           ASSERT_EQ(retrieved_jsonb["preferences"]["theme"].get<std::string>(),
                                      "dark");
 
                            // Nested notifications
+                           ASSERT_TRUE(retrieved_jsonb["preferences"].contains("notifications"));
+                           ASSERT_TRUE(retrieved_jsonb["preferences"]["notifications"].is_object());
                            ASSERT_TRUE(
-                               retrieved_jsonb["preferences"].contains("notifications"));
-                           ASSERT_TRUE(retrieved_jsonb["preferences"]["notifications"]
-                                           .is_object());
+                               retrieved_jsonb["preferences"]["notifications"].contains("email"));
                            ASSERT_TRUE(
-                               retrieved_jsonb["preferences"]["notifications"].contains(
-                                   "email"));
+                               retrieved_jsonb["preferences"]["notifications"]["email"].get<bool>());
                            ASSERT_TRUE(
-                               retrieved_jsonb["preferences"]["notifications"]["email"]
-                                   .get<bool>());
-                           ASSERT_TRUE(
-                               retrieved_jsonb["preferences"]["notifications"].contains(
-                                   "push"));
+                               retrieved_jsonb["preferences"]["notifications"].contains("push"));
                            ASSERT_FALSE(
-                               retrieved_jsonb["preferences"]["notifications"]["push"]
-                                   .get<bool>());
+                               retrieved_jsonb["preferences"]["notifications"]["push"].get<bool>());
 
                        } catch (const std::exception &e) {
                            FAIL() << "JSONB structure validation failed: " << e.what()
                                   << "\nRetrieved JSONB: " << retrieved_jsonb.dump();
                        }
                    },
-                   [](error::db_error error) {
-                       FAIL() << "Select failed: " << error.code;
-                   })
+                   [](error::db_error error) { FAIL() << "Select failed: " << error.code; })
                 .await();
 
         ASSERT_TRUE(select_status);
@@ -1979,8 +1894,7 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, JSONBType) {
                            qb::jsonb converted_jsonb;
 
                            for (const auto &pair : found_jsonb) {
-                               if (pair.is_array() && pair.size() == 2 &&
-                                   pair[0].is_string()) {
+                               if (pair.is_array() && pair.size() == 2 && pair[0].is_string()) {
                                    converted_jsonb[pair[0].get<std::string>()] = pair[1];
                                }
                            }
@@ -1993,8 +1907,7 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, JSONBType) {
 
                        ASSERT_TRUE(found_jsonb.contains("user"));
                        ASSERT_TRUE(found_jsonb["user"].contains("name"));
-                       ASSERT_EQ(found_jsonb["user"]["name"].get<std::string>(),
-                                 "JSONB Test User");
+                       ASSERT_EQ(found_jsonb["user"]["name"].get<std::string>(), "JSONB Test User");
 
                        std::cout << "Successfully found JSONB using containment operator"
                                  << std::endl;
@@ -2042,65 +1955,61 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, JSONBType) {
  * PostgreSQL results to a JSON array with the expected structure.
  */
 TEST_F(PostgreSQLDataTypesIntegrationTest, JSONResultSetConversion) {
-    // Skip if no connection
-    if (!db_)
-        GTEST_SKIP();
-
     // Create rows with different types of data
-    auto status = db_->execute(R"(
+    ASSERT_TRUE(db_->execute(R"(
         DELETE FROM data_types_test;
         INSERT INTO data_types_test (
             smallint_val, integer_val, float_val, text_val, boolean_val, null_val
         ) VALUES
         (123, 456789, 3.14159, 'Text value', true, NULL),
         (456, 789012, 2.71828, 'Another text', false, NULL);
-    )").await();
-
-    ASSERT_TRUE(status);
+    )",
+                             discard_query, discard_error)
+                    .await());
 
     // Query the data
-    bool success = false;
-    status = db_->execute(
-        "SELECT id, smallint_val, integer_val, float_val, text_val, boolean_val, null_val FROM data_types_test ORDER BY id",
-        [&success](Transaction &tr, results result) {
-            ASSERT_FALSE(result.empty());
-            ASSERT_GE(result.size(), 2);
-            
-            // Convert resultset to JSON
-            qb::json json_result = result.json();
-            
-            // Print the JSON result for debugging
-            std::cout << "JSON Result: " << json_result.dump(2) << std::endl;
-            
-            // Verify JSON structure and content
-            ASSERT_TRUE(json_result.is_array());
-            ASSERT_EQ(json_result.size(), result.size());
-            
-            // Check first row values
-            ASSERT_TRUE(json_result[0].is_object());
-            ASSERT_EQ(json_result[0]["smallint_val"], "123");
-            ASSERT_EQ(json_result[0]["integer_val"], "456789");
-            // Float might have varying precision, so just check it exists
-            ASSERT_TRUE(json_result[0]["float_val"].is_string());
-            ASSERT_EQ(json_result[0]["text_val"], "Text value");
-            ASSERT_EQ(json_result[0]["boolean_val"], "t");
-            ASSERT_TRUE(json_result[0]["null_val"].is_null());
-            
-            // Check second row values
-            ASSERT_TRUE(json_result[1].is_object());
-            ASSERT_EQ(json_result[1]["smallint_val"], "456");
-            ASSERT_EQ(json_result[1]["integer_val"], "789012");
-            ASSERT_TRUE(json_result[1]["float_val"].is_string());
-            ASSERT_EQ(json_result[1]["text_val"], "Another text");
-            ASSERT_EQ(json_result[1]["boolean_val"], "f");
-            ASSERT_TRUE(json_result[1]["null_val"].is_null());
-            
-            success = true;
-        },
-        [](error::db_error error) {
-            FAIL() << "Select failed: " << error.code;
-        }
-    ).await();
+    bool                success = false;
+    Transaction::status status =
+        db_->execute(
+               "SELECT id, smallint_val, integer_val, float_val, text_val, boolean_val, null_val "
+               "FROM data_types_test ORDER BY id",
+               [&success](Transaction &tr, results result) {
+                   ASSERT_FALSE(result.empty());
+                   ASSERT_GE(result.size(), 2);
+
+                   // Convert resultset to JSON
+                   qb::json json_result = result.json();
+
+                   // Print the JSON result for debugging
+                   std::cout << "JSON Result: " << json_result.dump(2) << std::endl;
+
+                   // Verify JSON structure and content
+                   ASSERT_TRUE(json_result.is_array());
+                   ASSERT_EQ(json_result.size(), result.size());
+
+                   // Check first row values
+                   ASSERT_TRUE(json_result[0].is_object());
+                   ASSERT_EQ(json_result[0]["smallint_val"], "123");
+                   ASSERT_EQ(json_result[0]["integer_val"], "456789");
+                   // Float might have varying precision, so just check it exists
+                   ASSERT_TRUE(json_result[0]["float_val"].is_string());
+                   ASSERT_EQ(json_result[0]["text_val"], "Text value");
+                   ASSERT_EQ(json_result[0]["boolean_val"], "t");
+                   ASSERT_TRUE(json_result[0]["null_val"].is_null());
+
+                   // Check second row values
+                   ASSERT_TRUE(json_result[1].is_object());
+                   ASSERT_EQ(json_result[1]["smallint_val"], "456");
+                   ASSERT_EQ(json_result[1]["integer_val"], "789012");
+                   ASSERT_TRUE(json_result[1]["float_val"].is_string());
+                   ASSERT_EQ(json_result[1]["text_val"], "Another text");
+                   ASSERT_EQ(json_result[1]["boolean_val"], "f");
+                   ASSERT_TRUE(json_result[1]["null_val"].is_null());
+
+                   success = true;
+               },
+               [](error::db_error error) { FAIL() << "Select failed: " << error.code; })
+            .await();
 
     ASSERT_TRUE(status);
     ASSERT_TRUE(success);
@@ -2112,26 +2021,23 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, JSONResultSetConversion) {
  * Tests exact precision decimal with real PostgreSQL NUMERIC column.
  */
 TEST_F(PostgreSQLDataTypesIntegrationTest, NumericTypeNative) {
-    // Skip if no connection
-    if (!db_)
-        GTEST_SKIP();
-
     using namespace qb::pg::detail;
 
     // Use text_val column to store NUMERIC as text (preserves precision)
     // Test 1: Simple financial value
     numeric price("999.99");
-    bool insert_success = false;
+    bool    insert_success = false;
 
     auto status = db_->execute(
-           "insert_text",
-           QueryParams(std::string("NUMERIC:") + price.str()),
-           [&insert_success](Transaction &tr, results result) {
-               ASSERT_EQ(result.size(), 1);
-               insert_success = true;
-           },
-           [](error::db_error error) { std::cout << "NUMERIC error: " << error.what() << std::endl; })
-        .await();
+                         "insert_text", QueryParams(std::string("NUMERIC:") + price.str()),
+                         [&insert_success](Transaction &tr, results result) {
+                             ASSERT_EQ(result.size(), 1);
+                             insert_success = true;
+                         },
+                         [](error::db_error error) {
+                             std::cout << "NUMERIC error: " << error.what() << std::endl;
+                         })
+                      .await();
 
     ASSERT_TRUE(status) << "Failed to execute NUMERIC insert";
     ASSERT_TRUE(insert_success) << "NUMERIC insert did not return result";
@@ -2140,12 +2046,11 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, NumericTypeNative) {
 
     // Test 2: High precision value
     numeric high_precision("123456789.0123456789");
-    status = db_->execute(
-        "insert_text",
-        QueryParams(std::string("NUMERIC:") + high_precision.str())
-    ).await();
-
-    ASSERT_TRUE(status) << "Failed to insert high precision NUMERIC";
+    ASSERT_TRUE(db_->execute("insert_text",
+                             QueryParams(std::string("NUMERIC:") + high_precision.str()),
+                             discard_query, discard_error)
+                    .await())
+        << "Failed to insert high precision NUMERIC";
     std::cout << "NUMERIC High Precision inserted: " << high_precision.str() << std::endl;
 
     std::cout << "NUMERIC native integration test PASSED" << std::endl;
@@ -2157,25 +2062,21 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, NumericTypeNative) {
  * Tests date handling with real PostgreSQL DATE column.
  */
 TEST_F(PostgreSQLDataTypesIntegrationTest, DateTypeNative) {
-    // Skip if no connection
-    if (!db_)
-        GTEST_SKIP();
-
     using namespace qb::pg::detail;
 
     // Use insert_text for DATE storage as text
     // Test 1: Standard date
     bool insert_success = false;
-    auto status =
-        db_->execute(
-               "insert_text",
-               QueryParams(std::string("DATE:2024-12-25")),
-               [&insert_success](Transaction &tr, results result) {
-                   ASSERT_EQ(result.size(), 1);
-                   insert_success = true;
-               },
-               [](error::db_error error) { std::cout << "DATE error: " << error.what() << std::endl; })
-            .await();
+    auto status         = db_->execute(
+                         "insert_text", QueryParams(std::string("DATE:2024-12-25")),
+                         [&insert_success](Transaction &tr, results result) {
+                             ASSERT_EQ(result.size(), 1);
+                             insert_success = true;
+                         },
+                         [](error::db_error error) {
+                             std::cout << "DATE error: " << error.what() << std::endl;
+                         })
+                      .await();
 
     ASSERT_TRUE(status) << "Failed to execute DATE insert";
     ASSERT_TRUE(insert_success) << "DATE insert did not return result";
@@ -2183,13 +2084,17 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, DateTypeNative) {
     std::cout << "DATE Native - Created: 2024-12-25" << std::endl;
 
     // Second date
-    status = db_->execute("insert_text", QueryParams(std::string("DATE:2024-12-26"))).await();
-    ASSERT_TRUE(status) << "Failed to insert second DATE";
+    ASSERT_TRUE(db_->execute("insert_text", QueryParams(std::string("DATE:2024-12-26")),
+                             discard_query, discard_error)
+                    .await())
+        << "Failed to insert second DATE";
     std::cout << "DATE Native - Updated: 2024-12-26" << std::endl;
 
     // Test 2: Another date
-    status = db_->execute("insert_text", QueryParams(std::string("DATE:2024-06-15"))).await();
-    ASSERT_TRUE(status) << "Failed to insert third DATE";
+    ASSERT_TRUE(db_->execute("insert_text", QueryParams(std::string("DATE:2024-06-15")),
+                             discard_query, discard_error)
+                    .await())
+        << "Failed to insert third DATE";
 
     std::cout << "DATE native integration test PASSED" << std::endl;
 }
@@ -2200,31 +2105,29 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, DateTypeNative) {
  * Tests time handling with real PostgreSQL TIME column.
  */
 TEST_F(PostgreSQLDataTypesIntegrationTest, TimeType) {
-    // Skip if no connection
-    if (!db_)
-        GTEST_SKIP();
-
     using namespace qb::pg::detail;
 
     // Prepare statements for TIME and TIMETZ using text column for storage
-    db_->prepare("insert_time_text",
-                 "INSERT INTO data_types_test (text_val) VALUES ($1) RETURNING id",
-                 {oid::text}).await();
+    ASSERT_TRUE(db_->prepare("insert_time_text",
+                             "INSERT INTO data_types_test (text_val) VALUES ($1) RETURNING id",
+                             {oid::text}, discard_prepare, discard_error)
+                    .await());
 
     // Test 1: TIME using pgtime structure (store text representation)
-    pgtime start_time = pgtime::from_hmsu(14, 30, 45);
+    pgtime      start_time     = pgtime::from_hmsu(14, 30, 45);
     std::string start_time_str = std::string("TIME:") + start_time.to_string();
 
     bool insert_success = false;
-    auto status = db_->execute(
-        "insert_time_text",
-        QueryParams(start_time_str),
-        [&insert_success](Transaction &tr, results result) {
-            ASSERT_EQ(result.size(), 1);
-            insert_success = true;
-        },
-        [](error::db_error error) { std::cout << "TIME error: " << error.what() << std::endl; }
-    ).await();
+    auto status         = db_->execute(
+                         "insert_time_text", QueryParams(start_time_str),
+                         [&insert_success](Transaction &tr, results result) {
+                             ASSERT_EQ(result.size(), 1);
+                             insert_success = true;
+                         },
+                         [](error::db_error error) {
+                             std::cout << "TIME error: " << error.what() << std::endl;
+                         })
+                      .await();
 
     ASSERT_TRUE(status) << "Failed to insert TIME";
     ASSERT_TRUE(insert_success) << "TIME insert did not return result";
@@ -2232,11 +2135,13 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, TimeType) {
     std::cout << "TIME - Start inserted: " << start_time.to_string() << std::endl;
 
     // Test 2: TIMETZ using pgtimetz structure
-    pgtimetz end_time = pgtimetz::from_hmsu_tz(18, 0, 0, 0, 7200); // +02:00
+    pgtimetz    end_time     = pgtimetz::from_hmsu_tz(18, 0, 0, 0, 7200); // +02:00
     std::string end_time_str = std::string("TIMETZ:") + end_time.to_string();
 
-    status = db_->execute("insert_time_text", QueryParams(end_time_str)).await();
-    ASSERT_TRUE(status) << "Failed to insert TIMETZ";
+    ASSERT_TRUE(
+        db_->execute("insert_time_text", QueryParams(end_time_str), discard_query, discard_error)
+            .await())
+        << "Failed to insert TIMETZ";
 
     std::cout << "TIMETZ - End inserted: " << end_time.to_string() << std::endl;
 
@@ -2270,24 +2175,21 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, TimeType) {
  * Tests network address handling.
  */
 TEST_F(PostgreSQLDataTypesIntegrationTest, NetworkAddressTypes) {
-    // Skip if no connection
-    if (!db_)
-        GTEST_SKIP();
-
     using namespace qb::pg::detail;
 
     // Use text_val column for network address storage
     // Test IPv4
     bool insert_success = false;
-    auto status = db_->execute(
-        "insert_text",
-        QueryParams(std::string("INET:192.168.1.100")),
-        [&insert_success](Transaction &tr, results result) {
-            ASSERT_EQ(result.size(), 1);
-            insert_success = true;
-        },
-        [](error::db_error error) { std::cout << "INET error: " << error.what() << std::endl; }
-    ).await();
+    auto status         = db_->execute(
+                         "insert_text", QueryParams(std::string("INET:192.168.1.100")),
+                         [&insert_success](Transaction &tr, results result) {
+                             ASSERT_EQ(result.size(), 1);
+                             insert_success = true;
+                         },
+                         [](error::db_error error) {
+                             std::cout << "INET error: " << error.what() << std::endl;
+                         })
+                      .await();
 
     ASSERT_TRUE(status) << "Failed to insert INET";
     ASSERT_TRUE(insert_success) << "INET insert did not return result";
@@ -2295,18 +2197,24 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, NetworkAddressTypes) {
     std::cout << "INET - IPv4 inserted" << std::endl;
 
     // Test CIDR
-    status = db_->execute("insert_text", QueryParams(std::string("CIDR:192.168.0.0/16"))).await();
-    ASSERT_TRUE(status) << "Failed to insert CIDR";
+    ASSERT_TRUE(db_->execute("insert_text", QueryParams(std::string("CIDR:192.168.0.0/16")),
+                             discard_query, discard_error)
+                    .await())
+        << "Failed to insert CIDR";
     std::cout << "CIDR - Network inserted" << std::endl;
 
     // Test IPv6
-    status = db_->execute("insert_text", QueryParams(std::string("INET6:::1"))).await();
-    ASSERT_TRUE(status) << "Failed to insert IPv6";
+    ASSERT_TRUE(db_->execute("insert_text", QueryParams(std::string("INET6:::1")), discard_query,
+                             discard_error)
+                    .await())
+        << "Failed to insert IPv6";
     std::cout << "IPv6 - Loopback inserted" << std::endl;
 
     // Test MACADDR
-    status = db_->execute("insert_text", QueryParams(std::string("MAC:00:1a:2b:3c:4d:5e"))).await();
-    ASSERT_TRUE(status) << "Failed to insert MACADDR";
+    ASSERT_TRUE(db_->execute("insert_text", QueryParams(std::string("MAC:00:1a:2b:3c:4d:5e")),
+                             discard_query, discard_error)
+                    .await())
+        << "Failed to insert MACADDR";
     std::cout << "MACADDR - Address inserted" << std::endl;
 
     std::cout << "INET/CIDR/MACADDR integration test PASSED" << std::endl;
@@ -2318,55 +2226,58 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, NetworkAddressTypes) {
  * Tests extreme values and boundary conditions.
  */
 TEST_F(PostgreSQLDataTypesIntegrationTest, EdgeCases) {
-    // Skip if no connection
-    if (!db_)
-        GTEST_SKIP();
-
     using namespace qb::pg::detail;
 
     // Test 1: Big integer values using existing prepared statement
     int64_t big_int = std::numeric_limits<int64_t>::max();
-    auto status = db_->execute("insert_bigint", QueryParams(big_int)).await();
-    ASSERT_TRUE(status) << "Failed to insert max BIGINT";
+    ASSERT_TRUE(
+        db_->execute("insert_bigint", QueryParams(big_int), discard_query, discard_error).await())
+        << "Failed to insert max BIGINT";
 
     // Verify big int
-    bool verify_success = false;
-    status = db_->execute(
-        "select_bigint",
-        QueryParams(big_int),
-        [&](Transaction &tr, results result) {
-            if (result.empty()) return;
-            std::string val = result[0][0].as<std::string>();
-            std::cout << "Edge case - Big INT max: " << val << std::endl;
-            verify_success = (val == std::to_string(big_int));
-        },
-        [](error::db_error error) { }
-    ).await();
+    bool                verify_success = false;
+    Transaction::status verify_st      = db_->execute(
+                                           "select_bigint", QueryParams(big_int),
+                                           [&](Transaction &tr, results result) {
+                                               ASSERT_FALSE(result.empty());
+                                               bigint const actual = result[0][0].as<bigint>();
+                                               std::cout << "Edge case - Big INT max: " << actual
+                                                         << std::endl;
+                                               verify_success = (actual == big_int);
+                                           },
+                                           [](error::db_error error) {})
+                                        .await();
+    ASSERT_TRUE(verify_st);
     ASSERT_TRUE(verify_success) << "Failed to verify max BIGINT";
 
     // Test 2: High precision numeric using text
     numeric high_precision("999999999999999999999999999999.99999999999999999999");
-    status = db_->execute(
-        "insert_text",
-        QueryParams(std::string("HIGHPREC:") + high_precision.str())
-    ).await();
-    ASSERT_TRUE(status) << "Failed to insert high precision numeric";
+    ASSERT_TRUE(db_->execute("insert_text",
+                             QueryParams(std::string("HIGHPREC:") + high_precision.str()),
+                             discard_query, discard_error)
+                    .await())
+        << "Failed to insert high precision numeric";
     std::cout << "Edge case - High precision numeric inserted" << std::endl;
 
     // Test 3: Date edge cases using text format
     // Use dates within PostgreSQL reasonable range
-    status = db_->execute("insert_text", QueryParams(std::string("DATE:1970-01-01"))).await();
-    ASSERT_TRUE(status) << "Failed to insert old date";
+    ASSERT_TRUE(db_->execute("insert_text", QueryParams(std::string("DATE:1970-01-01")),
+                             discard_query, discard_error)
+                    .await())
+        << "Failed to insert old date";
     std::cout << "Edge case - Old date inserted: 1970-01-01" << std::endl;
 
-    status = db_->execute("insert_text", QueryParams(std::string("DATE:2050-12-31"))).await();
-    ASSERT_TRUE(status) << "Failed to insert future date";
+    ASSERT_TRUE(db_->execute("insert_text", QueryParams(std::string("DATE:2050-12-31")),
+                             discard_query, discard_error)
+                    .await())
+        << "Failed to insert future date";
     std::cout << "Edge case - Future date inserted: 2050-12-31" << std::endl;
 
     // Test 4: Negative bigint
     int64_t neg_big_int = std::numeric_limits<int64_t>::min();
-    status = db_->execute("insert_bigint", QueryParams(neg_big_int)).await();
-    ASSERT_TRUE(status) << "Failed to insert min BIGINT";
+    ASSERT_TRUE(db_->execute("insert_bigint", QueryParams(neg_big_int), discard_query, discard_error)
+                    .await())
+        << "Failed to insert min BIGINT";
     std::cout << "Edge case - Negative Big INT inserted: " << neg_big_int << std::endl;
 
     std::cout << "All edge case tests PASSED" << std::endl;
@@ -2374,6 +2285,7 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, EdgeCases) {
 
 int
 main(int argc, char **argv) {
+    qb::io::async::init();
     testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }

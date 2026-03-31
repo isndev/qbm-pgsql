@@ -58,6 +58,23 @@ result_impl::empty() const {
     return rows_.empty();
 }
 
+result_impl
+result_impl::clone_snapshot() const {
+    result_impl dup;
+    dup.row_description_ = row_description_;
+    dup.command_tag_     = command_tag_;
+    dup.rows_affected_   = rows_affected_;
+    dup.rows_.reserve(rows_.size());
+    for (auto const &r : rows_) {
+        row_data nr;
+        nr.offsets  = r.offsets;
+        nr.data     = r.data;
+        nr.null_map = r.null_map;
+        dup.rows_.push_back(std::move(nr));
+    }
+    return dup;
+}
+
 /**
  * Validates that a row index is within bounds
  * @param row The row index to check

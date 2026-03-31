@@ -44,8 +44,8 @@
 #include <istream>
 #include <iterator>
 #include <memory>
-#include <tuple>
 #include <qb/json.h>
+#include <tuple>
 #include "./common.h"
 #include "./data_iterator.h"
 #include "./error.h"
@@ -152,6 +152,11 @@ public:
      * @param Shared pointer to result set
      */
     resultset(result_impl_ptr);
+
+    /**
+     * @brief Deep copy of row data and column metadata (for async hand-off, e.g. query awaiter).
+     */
+    [[nodiscard]] resultset deep_snapshot() const;
     //@{
     /** @name Row-wise container interface */
     size_type size() const;  /**< Number of rows */
@@ -339,12 +344,10 @@ public:
         void to(T &...) const;
 
         template <typename... T>
-        void to(::std::initializer_list<::std::string> const &names,
-                ::std::tuple<T...> &) const;
+        void to(::std::initializer_list<::std::string> const &names, ::std::tuple<T...> &) const;
 
         template <typename... T>
-        void to(::std::initializer_list<::std::string> const &names,
-                ::std::tuple<T &...>) const;
+        void to(::std::initializer_list<::std::string> const &names, ::std::tuple<T &...>) const;
 
         template <typename... T>
         void to(::std::initializer_list<::std::string> const &names, T &...val) const;
@@ -439,8 +442,7 @@ public:
                 return true;
             } else {
                 typename std::decay<T>::type tmp;
-                to_impl(tmp,
-                        io::traits::has_parser<T, pg::protocol_data_format::Binary>());
+                to_impl(tmp, io::traits::has_parser<T, pg::protocol_data_format::Binary>());
                 val = std::optional<T>(tmp);
                 return true;
             }
@@ -471,9 +473,8 @@ public:
             }
 
             // 2. Retrieve the data and format
-            field_buffer buffer = input_buffer();
-            bool         is_binary =
-                (description().format_code == pg::protocol_data_format::Binary);
+            field_buffer buffer    = input_buffer();
+            bool         is_binary = (description().format_code == pg::protocol_data_format::Binary);
             // NOTE: buffer.to_vector() creates a copy - potential optimization area
             // For now keeping as-is since from_binary/from_text expect vectors
             auto data_vector = buffer.to_vector();
@@ -485,7 +486,7 @@ public:
                 // For text format, we first need to read the string
                 // QB Context: static is safe - we are always on a single VirtualCore (mono-thread)
                 static detail::ParamUnserializer unserializer;
-                std::string text_value = unserializer.read_string(data_vector);
+                std::string                      text_value = unserializer.read_string(data_vector);
                 return detail::TypeConverter<result_type>::from_text(text_value);
             }
         }
@@ -500,8 +501,7 @@ public:
                 nullable_traits::set_null(val);
                 return true;
             }
-            return to_impl(
-                val, io::traits::has_parser<T, pg::protocol_data_format::Binary>());
+            return to_impl(val, io::traits::has_parser<T, pg::protocol_data_format::Binary>());
         }
 
         template <typename T>
@@ -509,8 +509,7 @@ public:
         to_nullable(T &val, std::false_type const &) const {
             if (is_null())
                 throw error::value_is_null(name());
-            return to_impl(
-                val, io::traits::has_parser<T, pg::protocol_data_format::Binary>());
+            return to_impl(val, io::traits::has_parser<T, pg::protocol_data_format::Binary>());
         }
 
         template <typename T>
@@ -526,8 +525,7 @@ public:
             field_description const &fd = description();
             if (fd.format_code == pg::protocol_data_format::Binary) {
                 throw error::db_error{
-                    "Cannot find pg::protocol_data_format::Binary parser for field " +
-                    fd.name};
+                    "Cannot find pg::protocol_data_format::Binary parser for field " + fd.name};
             }
 
             field_buffer b = input_buffer();
@@ -570,7 +568,8 @@ public:
 
         const_row_iterator &advance(difference_type);
 
-        value_type operator*() const {
+        value_type
+        operator*() const {
             return result_->operator[](row_index_);
         }
 
@@ -589,8 +588,7 @@ public:
     /**
      * Iterator over the fields in a data row
      */
-    class const_field_iterator
-        : public detail::data_iterator<const_field_iterator, field> {
+    class const_field_iterator : public detail::data_iterator<const_field_iterator, field> {
         using base_type = detail::data_iterator<const_field_iterator, field>;
 
     public:
@@ -604,7 +602,8 @@ public:
 
         const_field_iterator &advance(difference_type distance);
 
-        value_type operator*() const {
+        value_type
+        operator*() const {
             return result_->operator[](row_index_)[field_index_];
         }
         //@{

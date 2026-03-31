@@ -35,7 +35,7 @@
 
 #include <iomanip>
 #include <iostream>
-#include <list>  // P2-1: LRU cache
+#include <list> // P2-1: LRU cache
 #include <qb/io.h>
 #include <qb/system/container/unordered_map.h>
 #include <qb/utility/branch_hints.h>
@@ -59,9 +59,9 @@ using namespace qb::pg;
  * including its name, SQL expression, parameter types, and result description.
  */
 struct PreparedQuery {
-    std::string          name;        ///< Name of the prepared query
-    std::string          expression;  ///< SQL expression
-    std::vector<oid>     param_types; ///< Types of parameters (was type_oid_sequence)
+    std::string          name;            ///< Name of the prepared query
+    std::string          expression;      ///< SQL expression
+    std::vector<oid>     param_types;     ///< Types of parameters (was type_oid_sequence)
     row_description_type row_description; ///< Description of result columns
 };
 
@@ -75,15 +75,16 @@ struct PreparedQuery {
 class PreparedStorage {
     // LRU cache implementation
     struct LruEntry {
-        std::string               name;    ///< Query name (key)
-        PreparedQuery             query;   ///< The prepared query
-        mutable std::list<std::string>::iterator lru_iter; ///< Iterator in LRU list (mutable for get())
+        std::string   name;  ///< Query name (key)
+        PreparedQuery query; ///< The prepared query
+        mutable std::list<std::string>::iterator
+            lru_iter; ///< Iterator in LRU list (mutable for get())
     };
 
     qb::unordered_map<std::string, LruEntry> _prepared_queries; ///< Map of queries
-    std::list<std::string>                     _lru_list;         ///< LRU order list
-    size_t                                     _max_size{100};    ///< Max capacity
-    size_t                                     _evicted_count{0}; ///< Stats: evicted
+    std::list<std::string>                   _lru_list;         ///< LRU order list
+    size_t                                   _max_size{100};    ///< Max capacity
+    size_t                                   _evicted_count{0}; ///< Stats: evicted
 
 public:
     /**
@@ -430,20 +431,25 @@ public:
  */
 template <typename CB_SUCCESS, typename CB_ERROR>
 class BeginQuery final : public SqlQuery<CB_SUCCESS, CB_ERROR> {
-    transaction_mode _mode; ///< Transaction mode
+    transaction_mode _mode;                   ///< Transaction mode
+    int              _statement_timeout_ms{}; ///< If &gt; 0, append SET LOCAL statement_timeout (ms)
 
 public:
     /**
      * @brief Constructs a BEGIN query
      *
      * @param mode Transaction mode
+     * @param statement_timeout_ms If positive, same round-trip runs
+     *        `SET LOCAL statement_timeout = N` (milliseconds) after BEGIN
      * @param success Success callback
      * @param error Error callback
      */
-    BeginQuery(transaction_mode mode, CB_SUCCESS &&success, CB_ERROR &&error)
+    BeginQuery(transaction_mode mode, int statement_timeout_ms, CB_SUCCESS &&success,
+               CB_ERROR &&error)
         : SqlQuery<CB_SUCCESS, CB_ERROR>(std::forward<CB_SUCCESS>(success),
                                          std::forward<CB_ERROR>(error))
-        , _mode(mode) {}
+        , _mode(mode)
+        , _statement_timeout_ms(statement_timeout_ms) {}
 
     /**
      * @brief Creates the BEGIN message
@@ -454,6 +460,10 @@ public:
     get() const final {
         std::string sql = "BEGIN ";
         sql += to_string(_mode);
+        if (_statement_timeout_ms > 0) {
+            sql += "; SET LOCAL statement_timeout = ";
+            sql += std::to_string(_statement_timeout_ms);
+        }
         LOG_DEBUG("[pgsql] Send BEGIN: \"" << sql << "\"");
         message m(query_tag);
         m.write(sql);
@@ -590,8 +600,7 @@ public:
      * @param success Success callback
      * @param error Error callback
      */
-    ReleaseSavePointQuery(std::string const &name, CB_SUCCESS &&success,
-                          CB_ERROR &&error)
+    ReleaseSavePointQuery(std::string const &name, CB_SUCCESS &&success, CB_ERROR &&error)
         : SqlQuery<CB_SUCCESS, CB_ERROR>(std::forward<CB_SUCCESS>(success),
                                          std::forward<CB_ERROR>(error))
         , _name(name) {}
@@ -630,8 +639,7 @@ public:
      * @param success Success callback
      * @param error Error callback
      */
-    RollbackSavePointQuery(std::string const &name, CB_SUCCESS &&success,
-                           CB_ERROR &&error)
+    RollbackSavePointQuery(std::string const &name, CB_SUCCESS &&success, CB_ERROR &&error)
         : SqlQuery<CB_SUCCESS, CB_ERROR>(std::forward<CB_SUCCESS>(success),
                                          std::forward<CB_ERROR>(error))
         , _name(name) {}
@@ -751,8 +759,8 @@ public:
      * @param success Success callback
      * @param error Error callback
      */
-    ExecuteQuery(const PreparedStorage &storage, std::string_view query_name,
-                 QueryParams &&params, CB_SUCCESS &&success, CB_ERROR &&error)
+    ExecuteQuery(const PreparedStorage &storage, std::string_view query_name, QueryParams &&params,
+                 CB_SUCCESS &&success, CB_ERROR &&error)
         : SqlQuery<CB_SUCCESS, CB_ERROR>(std::forward<CB_SUCCESS>(success),
                                          std::forward<CB_ERROR>(error))
         , _storage(storage)
@@ -779,13 +787,18 @@ public:
         // 2. Prepared statement name
         cmd.write(query.name);
 
-        // 3. Format codes section - 1 code for all parameters
-        // Format 1 = binary
-        cmd.write((smallint) 1); // Number of format codes
-        cmd.write((smallint) 1); // Format = 1 (binary)
+        // 3. Parameter format codes (PostgreSQL Bind message)
+        // 0 = no parameters or all default (text); 1 = single code applies to every
+        // parameter. We send binary (1) for all parameters when there are any.
+        const smallint param_count = _params.param_count();
+        if (param_count == 0) {
+            cmd.write(static_cast<smallint>(0));
+        } else {
+            cmd.write(static_cast<smallint>(1));
+            cmd.write(static_cast<smallint>(1)); // binary
+        }
 
         // 4. Total number of parameters
-        smallint param_count = _params.param_count();
         cmd.write(param_count);
 
         // 5. Parameter values
@@ -796,14 +809,28 @@ public:
                 const byte *data      = param_buffer.data() + sizeof(smallint);
                 size_t      data_size = param_buffer.size() - sizeof(smallint);
 
+                if (data_size == 0) {
+                    LOG_WARN("[pgsql] Bind: param_count=" << param_count
+                                                          << " but serialized payload is empty");
+                }
                 // Copy the raw data
                 auto out = cmd.output();
                 std::copy(data, data + data_size, out);
+            } else {
+                LOG_WARN("[pgsql] Bind: param_count=" << param_count
+                                                      << " but parameter buffer missing payload");
             }
         }
 
-        // 6. Result format = 0 (none)
-        cmd.write((smallint) 0);
+        // 6. Result-column format codes (one per column, or 0 = default all text).
+        // Binary for scalars; text for string-like OIDs so DataRow matches decoders.
+        const auto    &rd   = query.row_description;
+        const smallint ncol = static_cast<smallint>(rd.size());
+        cmd.write(ncol);
+        for (auto const &fd : rd) {
+            const smallint fmt = type_oid_prefers_binary_result_format(fd.type_oid) ? 1 : 0;
+            cmd.write(fmt);
+        }
 
         // 7. Execute message (empty portal, no row limit)
         message execute(execute_tag);
