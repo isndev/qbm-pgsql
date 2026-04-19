@@ -318,7 +318,7 @@ connection_options::parse(std::string const &literal) {
  * @return A new database alias object containing the specified string
  */
 qb::pg::dbalias
-operator"" _db(const char *v, size_t) {
+operator""_db(const char *v, size_t) {
     return qb::pg::dbalias{std::string{v}};
 }
 
@@ -335,6 +335,6 @@ operator"" _db(const char *v, size_t) {
  * @return A new connection_options object populated from the connection string
  */
 qb::pg::connection_options
-operator"" _pg(const char *literal, size_t) {
+operator""_pg(const char *literal, size_t) {
     return qb::pg::connection_options::parse(literal);
 }
