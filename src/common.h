@@ -549,7 +549,7 @@ inline constexpr std::string_view APPLICATION_NAME = "application_name";
  * @param n The length of the string literal
  * @return A database alias object
  */
-qb::pg::dbalias operator"" _db(const char *str, size_t n);
+qb::pg::dbalias operator""_db(const char *str, size_t n);
 
 /**
  * @brief User-defined literal for PostgreSQL connection strings
@@ -570,6 +570,6 @@ qb::pg::dbalias operator"" _db(const char *str, size_t n);
  * @param n The length of the string literal
  * @return A populated connection_options structure
  */
-qb::pg::connection_options operator"" _pg(const char *str, size_t n);
+qb::pg::connection_options operator""_pg(const char *str, size_t n);
 
 #endif /* QBM_PGSQL_NOT_QB_COMMON_H */

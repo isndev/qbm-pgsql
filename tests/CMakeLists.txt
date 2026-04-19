@@ -15,8 +15,6 @@
 #         limitations under the License.
 #
 
-include(CTest)
-
 set(QB_PGSQL_TESTS
         param-serializer
         param-unserializer
