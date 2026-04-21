@@ -1665,7 +1665,14 @@ public:
         socklen_t len        = sizeof(error_code);
         auto      sock_fd    = this->transport().native_handle();
 
-        if (getsockopt(sock_fd, SOL_SOCKET, SO_ERROR, &error_code, &len) < 0) {
+        if (getsockopt(sock_fd, SOL_SOCKET, SO_ERROR,
+#ifdef _WIN32
+                       reinterpret_cast<char *>(&error_code),
+#else
+                       &error_code,
+#endif
+                       &len)
+            < 0) {
             return false; // getsockopt failed
         }
 
@@ -1683,13 +1690,22 @@ private:
         }
 
         auto sock_fd = this->transport().native_handle();
+#ifdef _WIN32
+        if (sock_fd == INVALID_SOCKET) {
+            return;
+        }
+#else
         if (sock_fd < 0) {
             return;
         }
+#endif
 
-        // Enable TCP keepalive
+        // Enable TCP keepalive (Winsock: option value is const char*)
         int optval = 1;
-        if (setsockopt(sock_fd, SOL_SOCKET, SO_KEEPALIVE, &optval, sizeof(optval)) < 0) {
+        if (setsockopt(sock_fd, SOL_SOCKET, SO_KEEPALIVE,
+                       reinterpret_cast<const char *>(&optval),
+                       static_cast<int>(sizeof(optval)))
+            < 0) {
             LOG_WARN("[pgsql] Failed to enable TCP keepalive");
             return;
         }
@@ -1697,19 +1713,25 @@ private:
 #ifdef TCP_KEEPIDLE
         // Seconds idle before probing (Linux)
         optval = conn_opts_.keepalive_idle;
-        setsockopt(sock_fd, IPPROTO_TCP, TCP_KEEPIDLE, &optval, sizeof(optval));
+        setsockopt(sock_fd, IPPROTO_TCP, TCP_KEEPIDLE,
+                   reinterpret_cast<const char *>(&optval),
+                   static_cast<int>(sizeof(optval)));
 #endif
 
 #ifdef TCP_KEEPINTVL
         // Seconds between probes (Linux)
         optval = conn_opts_.keepalive_interval;
-        setsockopt(sock_fd, IPPROTO_TCP, TCP_KEEPINTVL, &optval, sizeof(optval));
+        setsockopt(sock_fd, IPPROTO_TCP, TCP_KEEPINTVL,
+                   reinterpret_cast<const char *>(&optval),
+                   static_cast<int>(sizeof(optval)));
 #endif
 
 #ifdef TCP_KEEPCNT
         // Number of probes (Linux)
         optval = conn_opts_.keepalive_probes;
-        setsockopt(sock_fd, IPPROTO_TCP, TCP_KEEPCNT, &optval, sizeof(optval));
+        setsockopt(sock_fd, IPPROTO_TCP, TCP_KEEPCNT,
+                   reinterpret_cast<const char *>(&optval),
+                   static_cast<int>(sizeof(optval)));
 #endif
 
         LOG_INFO("[pgsql] TCP keepalive enabled: idle="
