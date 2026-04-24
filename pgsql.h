@@ -1832,7 +1832,9 @@ public:
         static_cast<qb::io::async::tcp::client<Database<QB_IO_, NotifyDerived>, QB_IO_, void> &>(
             *this)
             .disconnect();
-        qb::io::async::run(EVRUN_NOWAIT);
+        // Same rationale as `Redis::await()` / `Transaction::await()`: may run from a
+        // coroutine or nested I/O path where `async::run()` would throw.
+        qb::io::async::listener::current.run(EVRUN_NOWAIT);
     }
 };
 
