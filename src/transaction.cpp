@@ -157,7 +157,7 @@ Transaction::await() {
     // `push_transaction` → `on_new_command` → `process_if_query_ready` can finish the whole
     // operation (including errors) synchronously before `execute()`/`prepare()` returns.
     // If we always reset `_result`/`_error` here, `await()` then sees an empty queue, runs
-    // zero `run_once()` iterations, and incorrectly reports success (prepared-statement
+    // zero loop iterations, and incorrectly reports success (prepared-statement
     // client validation, etc.). When the queue is already empty at entry, snapshot outcome
     // before resetting if that snapshot is not a clean success.
     results() = {};
@@ -171,8 +171,11 @@ Transaction::await() {
     _error  = error::db_error{"unknown error"};
     _result = true;
 
+    // Drive libev with `listener::current.run(EVRUN_ONCE)` — not `async::run_once()`:
+    // fluent `.await()` may run from inside a coroutine body (under `run_ready()`);
+    // `async::*` entry points reject that nesting to prevent re-entrant blocking pumps.
     while (!_sub_commands.empty() || !_queries.empty())
-        qb::io::async::run_once();
+        qb::io::async::listener::current.run(EVRUN_ONCE);
 
     if (empty_at_entry && pre_failure_error.has_value()) {
         _result = false;
