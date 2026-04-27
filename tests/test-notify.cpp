@@ -18,10 +18,12 @@ constexpr std::string_view kChan  = "qb_pgsql_notify_test_ch";
 constexpr std::string_view kChan2 = "qb_pgsql_notify_test_ch2";
 constexpr std::string_view kOther = "qb_pgsql_notify_other_ch";
 
+/** Non-blocking loop drain; uses `listener::current.run` so this is safe from `run_sync` coroutines
+ *  (where `async::run` would throw — see `ensure_not_inside_ready_drain`). */
 inline void
 io_pump(int iterations = 4000) noexcept {
     for (int i = 0; i < iterations; ++i)
-        qb::io::async::run(EVRUN_NOWAIT);
+        qb::io::async::listener::current.run(EVRUN_NOWAIT);
 }
 
 } // namespace
@@ -89,7 +91,7 @@ TEST_F(PgNotifyTest, NotifyCbConsumer_ReceivesPayload) {
     ASSERT_TRUE(sub.listen(std::string(kChan), discard_query, discard_error).await());
     ASSERT_TRUE(pub_->notify(std::string(kChan), "cb-ok", discard_query, discard_error).await());
     for (int i = 0; i < 2000 && hits == 0; ++i)
-        qb::io::async::run(EVRUN_NOWAIT);
+        qb::io::async::listener::current.run(EVRUN_NOWAIT);
     EXPECT_EQ(hits, 1);
     EXPECT_EQ(last_payload, "cb-ok");
     EXPECT_TRUE(sub.is_connected());
@@ -264,7 +266,7 @@ TEST_F(PgNotifyTest, PlainDatabase_OnIncomingNotify) {
     ASSERT_TRUE(pub_->notify(std::string(kChan), "plain", discard_query, discard_error).await());
 
     for (int i = 0; i < 2000 && hits == 0; ++i)
-        qb::io::async::run(EVRUN_NOWAIT);
+        qb::io::async::listener::current.run(EVRUN_NOWAIT);
 
     EXPECT_EQ(hits, 1);
     pub_->on_incoming_notify({});
