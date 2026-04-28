@@ -678,8 +678,13 @@ private:
             std::memcpy(ssl_request.data(), &len, 4);
             std::memcpy(ssl_request.data() + 4, &code, 4);
 
-            if (::send(raw_io.native_handle(), reinterpret_cast<const char *>(ssl_request.data()),
-                       ssl_request.size(), 0) != 8) {
+            const auto tcp_connect_timeout = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::duration<double>(t_out));
+
+            if (qb::io::socket::send_n(raw_io.native_handle(),
+                                       reinterpret_cast<const char *>(ssl_request.data()),
+                                       static_cast<int>(ssl_request.size()),
+                                       tcp_connect_timeout) != static_cast<int>(ssl_request.size())) {
                 LOG_CRIT("[pgsql] Failed to send SSL request");
                 connect_handshake_failed_ = true;
                 _error                    = error::connection_error{"ssl request send failed"};
@@ -688,7 +693,9 @@ private:
             }
 
             uint8_t response = 0;
-            if (::recv(raw_io.native_handle(), reinterpret_cast<char *>(&response), 1, 0) != 1) {
+            if (qb::io::socket::recv_n(raw_io.native_handle(),
+                                       reinterpret_cast<char *>(&response), 1,
+                                       tcp_connect_timeout) != 1) {
                 LOG_CRIT("[pgsql] Failed to receive SSL response");
                 connect_handshake_failed_ = true;
                 _error                    = error::connection_error{"ssl response recv failed"};
@@ -696,8 +703,6 @@ private:
                 return;
             }
 
-            const auto tcp_connect_timeout = std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::duration<double>(t_out));
             const qb::io::uri upgrade_uri{conn_opts_.schema + "://" + conn_opts_.uri};
 
             if (response == 'S') {
