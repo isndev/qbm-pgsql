@@ -155,6 +155,17 @@ struct connection_options {
     std::string password; /**< Database user's password for authentication */
     int         connect_timeout{10}; /**< Connection timeout in seconds (default: 10s) */
 
+    /**
+     * @brief Verify the server TLS certificate on `ssl://` connections.
+     * @details Defaults to `false` to preserve this client's historical
+     *          behavior (it has never verified) and to match libpq's common
+     *          `sslmode=prefer`/`require` semantics (encrypt without verifying).
+     *          Set to `true` to enable qb-io's chain + hostname verification.
+     * @note This client does not yet parse a libpq-style `sslmode`; full
+     *       `verify-ca` / `verify-full` modeling is a future enhancement.
+     */
+    bool        tls_verify_peer{false};
+
     // P1-1: Connection health check / keepalive settings
     int keepalive_interval{0}; /**< TCP keepalive interval in seconds (0 = disabled) */
     int keepalive_probes{3};   /**< Number of keepalive probes before considering dead */
