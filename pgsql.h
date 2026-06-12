@@ -709,6 +709,10 @@ private:
                 LOG_INFO("[pgsql] Server supports SSL");
                 qb::io::tcp::ssl::socket ssl_sock(nullptr, raw_io);
                 ssl_sock.init(nullptr);
+                // Preserve historical behavior (and libpq prefer/require semantics):
+                // do not verify the server certificate unless explicitly requested.
+                if (!conn_opts_.tls_verify_peer)
+                    ssl_sock.set_insecure();
                 if (ssl_sock.connect(upgrade_uri, tcp_connect_timeout) != 0) {
                     LOG_CRIT("[pgsql] Failed to connect to SSL server");
                     connect_handshake_failed_ = true;
