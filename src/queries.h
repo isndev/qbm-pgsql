@@ -260,10 +260,18 @@ public:
      * Uses template argument deduction to convert various parameter types
      * to their PostgreSQL binary representation.
      *
+     * The single-argument case is constrained to exclude QueryParams itself so
+     * this forwarding constructor does not hijack the copy/move constructors
+     * (a `QueryParams b(a)` from a non-const lvalue would otherwise bind here and
+     * try to *serialize* `a` instead of copying it).
+     *
      * @tparam T Parameter types
      * @param args Parameter values
      */
-    template <typename... T>
+    template <typename... T,
+              std::enable_if_t<!(sizeof...(T) == 1 &&
+                                 std::conjunction_v<std::is_same<std::decay_t<T>, QueryParams>...>),
+                               int> = 0>
     QueryParams(T &&...args) {
         if constexpr (sizeof...(T) > 0) {
             // Do not use format_codes_buffer, no longer used
