@@ -451,7 +451,23 @@ public:
             return;
 
         message_->reset_read();
-        this->_io.on(std::move(message_));
+        // This is a noexcept boundary: a message handler that throws would call
+        // std::terminate. A hostile or misconfigured server can make on_authentication
+        // throw before the connection is established (an unsupported auth method falls
+        // into its `default:` throw; a malformed SCRAM server message makes
+        // parse_header_attributes / the iteration-count parse / PBKDF2 throw). Contain any
+        // handler exception and mark the protocol invalid so the I/O layer disposes and
+        // fires event::disconnected, whose handler fails pending queries and resumes a
+        // pending connect awaiter with an error instead of crashing the process.
+        try {
+            this->_io.on(std::move(message_));
+        } catch (std::exception const &e) {
+            LOG_CRIT("[pgsql] exception in message handler, dropping connection: " << e.what());
+            this->not_ok();
+        } catch (...) {
+            LOG_CRIT("[pgsql] unknown exception in message handler, dropping connection");
+            this->not_ok();
+        }
         reset();
     }
 
