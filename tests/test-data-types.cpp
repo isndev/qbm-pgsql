@@ -946,6 +946,27 @@ TEST_F(PostgreSQLDataTypesTest, TimestampBinaryFormatDeserialization) {
 }
 
 /**
+ * @brief Regression: timestamp from_binary must reject a 9..11 byte field.
+ *
+ * The decoder takes a fast path for exactly 8 bytes and a legacy "4-byte length
+ * prefix" path for >= 12 bytes (reads buffer.data()+4 .. +12). A field length of
+ * 9, 10 or 11 — which a malformed/hostile server can supply as col_size — used to
+ * fall into the prefixed path and read 1..3 bytes past the end of the field
+ * buffer (heap over-read). It must now throw instead of reading out of bounds.
+ */
+TEST_F(PostgreSQLDataTypesTest, TimestampBinaryRejectsShortPrefixedBuffer) {
+    for (size_t sz : {9u, 10u, 11u}) {
+        std::vector<qb::pg::byte> buf(sz, byte{0x01});
+        ASSERT_THROW(TypeConverter<qb::Timestamp>::from_binary(buf), std::runtime_error)
+            << "size " << sz << " must be rejected, not read out of bounds";
+    }
+    // 8 (exact) and 12 (legacy prefixed) remain valid and must not throw.
+    ASSERT_NO_THROW(TypeConverter<qb::Timestamp>::from_binary(std::vector<qb::pg::byte>(8, byte{0})));
+    ASSERT_NO_THROW(
+        TypeConverter<qb::Timestamp>::from_binary(std::vector<qb::pg::byte>(12, byte{0})));
+}
+
+/**
  * @brief Test timestamp text format deserialization
  *
  * Verifies that timestamp values in text format are correctly deserialized.
