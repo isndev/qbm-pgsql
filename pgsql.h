@@ -1226,9 +1226,19 @@ public:
         if (!_current_command)
             return;
         row_description_type fields;
-        smallint             col_cnt;
-        msg.read(col_cnt);
-        fields.reserve(col_cnt);
+        // message::read leaves its target untouched when the payload is too short, so
+        // col_cnt must be initialized and the read result checked: a malformed/truncated
+        // RowDescription (length the server controls) would otherwise leave col_cnt
+        // indeterminate and feed garbage — possibly a negative value widening to a huge
+        // size_t — into reserve()/the loop bound.
+        smallint col_cnt = 0;
+        if (!msg.read(col_cnt) || col_cnt < 0) {
+            LOG_WARN("[pgsql] RowDescription with missing or negative column count");
+            _current_command->result(false);
+            _current_command->on_new_row_description({});
+            return;
+        }
+        fields.reserve(static_cast<std::size_t>(col_cnt));
         for (int i = 0; i < col_cnt; ++i) {
             field_description fd;
             if (msg.read(fd)) {
