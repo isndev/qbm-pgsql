@@ -724,6 +724,22 @@ public:
                                          std::forward<CB_ERROR>(error))
         , _query(query) {}
 
+    bool
+    is_valid() const final {
+        // The Parse message encodes the parameter-type count as an int16, but get()
+        // writes every OID entry. More than 32767 declared types would truncate the
+        // count while still emitting all entries, desynchronizing the wire stream.
+        // Reject here (like ExecuteQuery's missing-statement check) so the failure goes
+        // through the normal on_error path instead of corrupting the connection. This is
+        // the Parse-side twin of the Bind guard ParamSerializer::ensure_param_count_fits().
+        if (qb::likely(_query.param_types.size() <=
+                       static_cast<std::size_t>(std::numeric_limits<smallint>::max())))
+            return true;
+        LOG_CRIT("[pgsql] PARSE rejected: " << _query.param_types.size()
+                                            << " parameter types exceed protocol max 32767");
+        return false;
+    }
+
     [[nodiscard]] message
     get() const final {
         LOG_DEBUG("[pgsql] Send PARSE QUERY \"" << _query.expression << "\"");

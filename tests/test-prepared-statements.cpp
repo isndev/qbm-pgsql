@@ -124,6 +124,27 @@ TEST_F(PostgreSQLPreparedStatementsTest, BasicPrepare) {
 }
 
 /**
+ * @brief A prepare with more parameter types than the int16 count field can hold
+ *        must be rejected, not desynchronize the wire stream.
+ *
+ * The Parse message encodes the parameter-type count as an int16 while writing every
+ * OID entry. >32767 types would truncate the count but still emit all entries. The
+ * query is now rejected via ParseQuery::is_valid() (the Parse-side twin of the Bind
+ * guard), so it surfaces as a clean error instead of corrupting the connection.
+ */
+TEST_F(PostgreSQLPreparedStatementsTest, PrepareRejectsTooManyParamTypes) {
+    type_oid_sequence too_many(static_cast<std::size_t>(32768), oid::int4); // 32768 > 32767
+    auto status = db_->prepare("too_many_param_types", "SELECT 1", std::move(too_many),
+                               discard_prepare, discard_error)
+                      .await();
+    EXPECT_FALSE(status);
+
+    // The connection must still be usable afterwards (it was never corrupted).
+    auto ok = db_->execute("SELECT 1", discard_query, discard_error).await();
+    EXPECT_TRUE(ok);
+}
+
+/**
  * @brief Instantiate the success-callback-only prepare overload (no on_error).
  *
  * Regression: that 4-arg overload forwarded its named `type_oid_sequence&&` parameter
