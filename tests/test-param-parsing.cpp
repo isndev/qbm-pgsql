@@ -328,6 +328,38 @@ TEST_F(ParamParsingTest, QueryParamsWithInteger) {
 }
 
 /**
+ * @brief Copying/moving a QueryParams must duplicate it, not re-serialize it.
+ *
+ * Regression: the variadic forwarding constructor `QueryParams(T&&...)` was
+ * unconstrained, so copy-constructing from a non-const lvalue (`QueryParams b(a)`)
+ * bound to the forwarding ctor and tried to serialize `a` as if it were a query
+ * parameter instead of copying it. The ctor is now constrained to exclude the
+ * single-QueryParams case so the implicit copy/move constructors win.
+ */
+TEST_F(ParamParsingTest, QueryParamsCopyAndMovePreserveContents) {
+    QueryParams original(123, std::string("abc"), true);
+    ASSERT_EQ(original.param_count(), 3);
+
+    // Copy-construct from a non-const lvalue — must duplicate, byte for byte.
+    QueryParams copy(original);
+    ASSERT_EQ(copy.param_count(), original.param_count());
+    ASSERT_EQ(copy.param_types(), original.param_types());
+    ASSERT_EQ(copy.get(), original.get());
+    // Source is untouched by the copy.
+    ASSERT_EQ(original.param_count(), 3);
+
+    // Copy-assignment too.
+    QueryParams assigned;
+    assigned = original;
+    ASSERT_EQ(assigned.get(), original.get());
+
+    // Move-construct transfers the same bytes.
+    const auto bytes_before = original.get();
+    QueryParams moved(std::move(original));
+    ASSERT_EQ(moved.get(), bytes_before);
+}
+
+/**
  * @brief Tests creating QueryParams with multiple parameter types
  *
  * Verifies that a QueryParams object created with multiple parameter types
