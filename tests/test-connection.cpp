@@ -245,6 +245,27 @@ TEST_F(PostgreSQLConnectionTest, ConnectionPool_Coroutine) {
     ASSERT_TRUE(all_ok);
 }
 
+/**
+ * @brief DSN parsing must preserve high-bit bytes in credentials.
+ *
+ * The parser skipped whitespace via std::isspace(*p) on a plain char; a high-bit
+ * byte (e.g. 0xC3 in a non-ASCII password) is negative, and passing a negative
+ * value to std::isspace is undefined behavior that, depending on the libc ctype
+ * table, can misclassify the byte as whitespace and silently drop it from the
+ * password. The fix casts to unsigned char first; this guards the byte-for-byte
+ * round trip.
+ */
+TEST(PostgreSQLDsnParse, PreservesHighBitBytesInPassword) {
+    const std::string password = std::string("p\xC3\xA9ss"); // "péss" in UTF-8
+    const std::string dsn      = "tcp://user:" + password + "@localhost:5432[db]";
+
+    auto opts = connection_options::parse(dsn);
+
+    EXPECT_EQ(opts.user, "user");
+    EXPECT_EQ(opts.password, password);
+    EXPECT_EQ(opts.database, "db");
+}
+
 int
 main(int argc, char **argv) {
     qb::io::async::init();

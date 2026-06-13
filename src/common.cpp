@@ -263,8 +263,11 @@ struct connect_string_parser {
                         } else {
                             current.push_back(*p);
                         }
-                    } else if (!std::isspace(*p)) {
-                        // Add any non-whitespace character to the current token
+                    } else if (!std::isspace(static_cast<unsigned char>(*p))) {
+                        // Add any non-whitespace character to the current token.
+                        // Cast to unsigned char first: passing a negative char (a high-bit
+                        // byte in a password/database name) to std::isspace is undefined
+                        // behavior and could misclassify it as space and drop it.
                         current.push_back(*p);
                     }
                 }
