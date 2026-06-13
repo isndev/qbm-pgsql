@@ -159,6 +159,20 @@ TEST(ProtocolMessage, SmallintRoundTrip) {
     EXPECT_EQ(b, 1000);
 }
 
+// A short read of a smallint must fail AND leave the destination untouched. The
+// RowDescription handler relies on exactly this: it initializes the column count,
+// checks the read result, and bails — otherwise a truncated RowDescription (whose
+// length the server controls) would feed an indeterminate count into reserve()/the
+// field loop.
+TEST(ProtocolMessage, SmallintShortReadFailsAndLeavesTargetUntouched) {
+    message m(row_description_tag);
+    m.write(static_cast<char>(0x00)); // one byte only; smallint needs two
+    m.reset_read();
+    smallint col_cnt = -12345; // sentinel
+    EXPECT_FALSE(m.read(col_cnt));
+    EXPECT_EQ(col_cnt, -12345); // must be left exactly as it was
+}
+
 TEST(ProtocolMessage, IntegerRoundTrip) {
     message m(query_tag);
     m.write(static_cast<integer>(0x7FFFFFFFL));
