@@ -67,7 +67,11 @@ public:
     basic_input_iterator_buffer(const_iterator s, const_iterator e)
         : base()
         , s_(s)
-        , start_(const_cast<char_type *>(&*s))
+        // For an empty range (e.g. a non-NULL zero-length field) `&*s`
+        // dereferences a possibly past-the-end iterator (UB). Only take the
+        // address when there is at least one element; an empty buffer needs no
+        // valid pointer.
+        , start_(s != e ? const_cast<char_type *>(&*s) : nullptr)
         , count_(e - s) {
         base::setg(start_, start_, start_ + count_);
     }

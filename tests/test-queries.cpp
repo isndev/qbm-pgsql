@@ -201,6 +201,50 @@ TEST_F(PostgreSQLQueryTest, BasicSelect) {
 }
 
 /**
+ * @brief field::to(val) and row::to(vals...) must WRITE the target.
+ *
+ * Regression: field::to_impl() previously read the buffer but never assigned
+ * the out-parameter, so to()/row::to() silently returned true while leaving the
+ * destination unchanged. as<T>() was unaffected (used everywhere) so no test
+ * caught it.
+ */
+TEST_F(PostgreSQLQueryTest, FieldAndRowToWriteTarget) {
+    bool success = false;
+    auto status =
+        db_->execute(
+               "SELECT * FROM test_users ORDER BY id",
+               [&success](transaction &tr, results result) {
+                   ASSERT_EQ(result.size(), 3);
+
+                   // field::to(T&) writes the target.
+                   std::string name;
+                   ASSERT_TRUE(result[0][1].to(name));
+                   ASSERT_EQ(name, "John Doe");
+                   int age = -1;
+                   ASSERT_TRUE(result[0][2].to(age));
+                   ASSERT_EQ(age, 30);
+                   std::string email;
+                   ASSERT_TRUE(result[0][3].to(email));
+                   ASSERT_EQ(email, "john@example.com");
+
+                   // row::to(vals...) writes all columns positionally.
+                   int         id2{};
+                   std::string name2;
+                   int         age2{};
+                   std::string email2;
+                   result[0].to(id2, name2, age2, email2);
+                   ASSERT_EQ(name2, "John Doe");
+                   ASSERT_EQ(age2, 30);
+                   ASSERT_EQ(email2, "john@example.com");
+
+                   success = true;
+               },
+               [](error::db_error error) { ASSERT_TRUE(false) << "Query failed: " << error.code; })
+            .await();
+    ASSERT_TRUE(success);
+}
+
+/**
  * @brief Same rows as BasicSelect, verified via `co_await query()` (spawned task).
  */
 TEST_F(PostgreSQLQueryTest, BasicSelect_Coroutine) {

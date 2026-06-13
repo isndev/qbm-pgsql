@@ -418,8 +418,16 @@ public:
         } else if constexpr (detail::ParamUnserializer::is_optional<value_type>::value) {
             using inner_type = typename value_type::value_type;
 
-            if (buffer.empty() ||
-                (buffer.size() >= 4 && *reinterpret_cast<const integer *>(buffer.data()) == -1)) {
+            // A 4-byte all-ones length prefix is PostgreSQL's NULL sentinel.
+            // Read it with memcpy rather than a reinterpret_cast through the
+            // byte pointer, which is an unaligned load + strict-aliasing UB.
+            if (buffer.empty() || [&] {
+                    if (buffer.size() < 4)
+                        return false;
+                    integer len_prefix = 0;
+                    std::memcpy(&len_prefix, buffer.data(), sizeof(len_prefix));
+                    return len_prefix == -1;
+                }()) {
                 return std::nullopt;
             }
 

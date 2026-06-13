@@ -514,21 +514,25 @@ public:
 
         template <typename T>
         bool
-        to_impl(T &, std::true_type const &) const {
-            field_buffer b = input_buffer();
+        to_impl(T &val, std::true_type const &) const {
+            // as<T>() performs the actual format-aware conversion (binary or
+            // text per the field's declared format_code). The previous body
+            // read the buffer but never wrote `val`, so field::to(val) /
+            // row::to(...) silently left every target unchanged while returning
+            // true — an indeterminate read for the caller.
+            val = as<T>();
             return true;
         }
 
         template <typename T>
         bool
-        to_impl(T &, std::false_type const &) const {
+        to_impl(T &val, std::false_type const &) const {
             field_description const &fd = description();
             if (fd.format_code == pg::protocol_data_format::Binary) {
                 throw error::db_error{
                     "Cannot find pg::protocol_data_format::Binary parser for field " + fd.name};
             }
-
-            field_buffer b = input_buffer();
+            val = as<T>();
             return true;
         }
 

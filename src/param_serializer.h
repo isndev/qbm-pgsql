@@ -30,6 +30,7 @@
 #include <iomanip>
 #include <iostream>
 #include <optional>
+#include <stdexcept>
 #include <qb/io.h>
 #include <qb/system/endian.h>
 #include <sstream>
@@ -91,7 +92,29 @@ public:
      */
     smallint
     param_count() const {
-        return param_types_.size();
+        return static_cast<smallint>(param_types_.size());
+    }
+
+    /// PostgreSQL's Bind/Describe parameter count is a 16-bit wire field; more
+    /// than this many parameters cannot be represented and must be rejected
+    /// rather than silently wrapped into a corrupt (negative) count.
+    static constexpr size_t MAX_PARAMS = 32767;
+
+    /**
+     * @brief Throw if the accumulated parameter count exceeds the wire limit.
+     *
+     * Called before the count is written into the Bind message so an
+     * over-large parameter list fails loudly instead of desynchronizing the
+     * protocol stream with a wrapped int16 count.
+     */
+    void
+    ensure_param_count_fits() const {
+        if (param_types_.size() > MAX_PARAMS) {
+            throw std::length_error(
+                "pgsql: too many bind parameters (" +
+                std::to_string(param_types_.size()) + " > " +
+                std::to_string(MAX_PARAMS) + ")");
+        }
     }
 
     /**
@@ -417,6 +440,7 @@ public:
      */
     void
     finalize_params_buffer() {
+        ensure_param_count_fits();
         write_smallint_at(params_buffer_, 0, param_count());
     }
 
@@ -447,6 +471,7 @@ public:
 
         // Write the actual parameter count (may differ from expected when
         // vector<string> expands into multiple parameters).
+        ensure_param_count_fits();
         smallint actual_count_be = htons(param_count());
         std::memcpy(params_buffer_.data(), &actual_count_be, sizeof(smallint));
     }

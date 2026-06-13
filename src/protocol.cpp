@@ -375,13 +375,23 @@ message::read(row_data &row) {
     }
     smallint col_count(0);
     if (read(col_count)) {
+        // The column count is a signed 16-bit wire value: a malformed/hostile
+        // DataRow could carry a negative count, which would convert to a huge
+        // size_t in reserve()/resize() below and throw bad_alloc/length_error.
+        if (col_count < 0)
+            return false;
+        const auto ucol_count = static_cast<size_t>(col_count);
         row_data tmp;
-        tmp.offsets.reserve(col_count);
+        tmp.offsets.reserve(ucol_count);
         // OPTIMIZED: Pre-allocate null_map with correct size (P0-4 fix)
-        tmp.null_map.resize(col_count, false);
-        size_t expected_sz = len - sizeof(integer) * (col_count + 1) - sizeof(int16_t);
-        tmp.data.reserve(expected_sz);
-        for (int16_t i = 0; i < col_count; ++i) {
+        tmp.null_map.resize(ucol_count, false);
+        // Reserve at most the bytes physically remaining in this (fully-buffered)
+        // message body. The previous `len - sizeof(integer)*(col_count+1) - 2`
+        // hint underflowed to a near-SIZE_MAX value whenever the body and the
+        // declared column count were inconsistent, turning a malformed row into
+        // a huge allocation.
+        tmp.data.reserve(static_cast<size_t>(payload.cend() - curr_));
+        for (size_t i = 0; i < ucol_count; ++i) {
             tmp.offsets.push_back(tmp.data.size());
             integer col_size(0);
             if (!read(col_size))
@@ -390,9 +400,20 @@ message::read(row_data &row) {
                 // OPTIMIZED: Direct bitmap set instead of set insert (P0-4 fix)
                 tmp.null_map[i] = true;
             } else if (col_size > 0) {
+                // Bound the field length against the bytes actually remaining:
+                // a column length larger than the rest of the body would
+                // over-read the heap past the message buffer.
+                if (static_cast<size_t>(col_size) >
+                    static_cast<size_t>(payload.cend() - curr_)) {
+                    return false;
+                }
                 // OPTIMIZED: Use insert with iterator range instead of byte-by-byte (P0-14 fix)
                 tmp.data.insert(tmp.data.end(), curr_, curr_ + col_size);
                 curr_ += col_size;
+            } else if (col_size < -1) {
+                // Only -1 (NULL) and >=0 (length) are valid; anything else is
+                // a protocol violation.
+                return false;
             }
         }
         row.swap(tmp);
