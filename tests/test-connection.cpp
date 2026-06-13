@@ -246,6 +246,37 @@ TEST_F(PostgreSQLConnectionTest, ConnectionPool_Coroutine) {
 }
 
 /**
+ * @brief The handshake-deadline timer must not outlive the Database.
+ *
+ * The connection deadline used to be scheduled with qb::io::async::callback(), a
+ * self-deleting heap Timeout that is decoupled from the Database lifetime. After a
+ * successful connect the timer stays pending for the whole timeout window; if the
+ * Database is destroyed within it (the normal case — the handshake finishes in ms,
+ * the deadline is seconds) the timer later fires and dereferences a freed `this`
+ * (use-after-free). It is now an owned ScopedTimeout member, cancelled on
+ * destruction. This test connects with a short (1s) deadline, destroys the
+ * Database, then pumps the loop past the deadline: under ASan the old code reports
+ * a heap-use-after-free here; with the fix the timer was cancelled.
+ */
+TEST(PostgreSQLConnectDeadline, DeadlineTimerCancelledOnDestroy) {
+    {
+        auto db = std::make_unique<qb::pg::tcp::database>();
+        ASSERT_TRUE(qb::io::async::run_sync(db->connect(qb::pg::test::dsn_tcp_string())));
+        db->disconnect();
+        db->prepare_reconnect();
+        // Reconnect with a 1s handshake deadline (reuses the parsed connection options).
+        ASSERT_TRUE(qb::io::async::run_sync(db->connect(1.0)));
+    } // Database destroyed here; the owned ScopedTimeout is cancelled with it.
+
+    // Pump the event loop well past the 1s deadline. A fire-and-forget timer would
+    // come due now and run against the freed Database.
+    const auto start = std::chrono::steady_clock::now();
+    while (std::chrono::steady_clock::now() - start < std::chrono::milliseconds(1500))
+        qb::io::async::run(EVRUN_NOWAIT);
+    SUCCEED();
+}
+
+/**
  * @brief DSN parsing must preserve high-bit bytes in credentials.
  *
  * The parser skipped whitespace via std::isspace(*p) on a plain char; a high-bit

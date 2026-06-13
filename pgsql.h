@@ -537,6 +537,12 @@ private:
     std::shared_ptr<bool>   connect_suspend_valid_{};
     /// Bumps on each new handshake / reconnect prep so stale `callback(timeout)` ignores
     std::uint64_t connect_timer_generation_{0};
+    /// Owned handshake-deadline timer. MUST be a ScopedTimeout (cancelled on destruction),
+    /// not a fire-and-forget async::callback: the latter is a self-deleting heap Timeout that
+    /// outlives this Database and would dereference a freed `this` if the connection is dropped
+    /// within the timeout window (the common case — handshake finishes in ms, the deadline is
+    /// seconds). Destroying this member with the Database stops the watcher.
+    std::unique_ptr<qb::io::async::ScopedTimeout<std::function<void()>>> connect_deadline_timer_{};
 
     /// When `NotifyDerived` is `void`, optional handler for `NotificationResponse` (plain
     /// `database`).
@@ -624,8 +630,11 @@ private:
         this->start();
         send_startup_message();
 
-        qb::io::async::callback(
-            [this, t_out, timer_gen]() {
+        // Owned, cancellable deadline (see connect_deadline_timer_): reassigning here cancels
+        // any prior pending timer, and ~Database cancels this one — so the callback can never
+        // fire into a freed `this`. The timer_gen guard still covers an in-place reconnect.
+        connect_deadline_timer_ = qb::io::async::scoped_callback(
+            std::function<void()>([this, t_out, timer_gen]() {
                 if (timer_gen != connect_timer_generation_)
                     return;
                 if (!connect_coroutine_pending_ || is_connected_)
@@ -634,7 +643,7 @@ private:
                 _error                    = error::db_error{"connection timeout"};
                 connect_handshake_failed_ = true;
                 try_resume_connect_wait();
-            },
+            }),
             t_out);
 
         try_resume_connect_wait();
