@@ -210,16 +210,22 @@ resultset::const_field_iterator::advance(difference_type distance) {
 // resultset implementation - Core functionality for PostgreSQL result set handling
 //----------------------------------------------------------------------------
 resultset::resultset()
-    : pimpl_(new detail::result_impl) {}
+    : pimpl_(std::make_shared<detail::result_impl>()) {}
 
+// Borrowing constructor: wrap the caller-owned pointer with a no-op deleter so
+// this resultset observes the live result_impl without taking ownership (used
+// to pass the in-flight row buffer to a synchronous on_success callback).
 resultset::resultset(result_impl_ptr impl)
-    : pimpl_(impl) {}
+    : pimpl_(std::shared_ptr<const detail::result_impl>(
+          impl, [](const detail::result_impl *) {})) {}
 
 resultset
 resultset::deep_snapshot() const {
     if (!pimpl_)
         return resultset();
-    return resultset(new detail::result_impl(pimpl_->clone_snapshot()));
+    resultset snap;  // owns a fresh result_impl
+    snap.pimpl_ = std::make_shared<detail::result_impl>(pimpl_->clone_snapshot());
+    return snap;
 }
 
 resultset::size_type
