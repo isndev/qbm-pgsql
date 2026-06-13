@@ -124,6 +124,23 @@ TEST_F(PostgreSQLPreparedStatementsTest, BasicPrepare) {
 }
 
 /**
+ * @brief Instantiate the success-callback-only prepare overload (no on_error).
+ *
+ * Regression: that 4-arg overload forwarded its named `type_oid_sequence&&` parameter
+ * as an lvalue into the 5-arg prepare (which takes `type_oid_sequence&&`), which is
+ * ill-formed — so the public API simply did not compile when used. No test exercised
+ * it (all others pass both callbacks), so the build stayed green while the overload was
+ * unusable. This forces its instantiation and runs it.
+ */
+TEST_F(PostgreSQLPreparedStatementsTest, PrepareSuccessCallbackOnly) {
+    auto status = db_->prepare("test_prepare_success_only",
+                               "INSERT INTO test_prepared (value) VALUES ($1)",
+                               type_oid_sequence{}, discard_prepare)
+                      .await();
+    ASSERT_TRUE(status);
+}
+
+/**
  * @brief Test prepared statement execution with parameters
  *
  * Verifies that a prepared statement can be executed multiple times

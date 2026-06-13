@@ -236,7 +236,7 @@ template <typename CB_SUCCESS>
 Transaction &
 Transaction::prepare(std::string_view query_name, std::string_view expr,
                      type_oid_sequence &&types, CB_SUCCESS &&on_success) {
-    return prepare(query_name, expr, types, std::forward<CB_SUCCESS>(on_success),
+    return prepare(query_name, expr, std::move(types), std::forward<CB_SUCCESS>(on_success),
                    [](error::db_error const &) {});
 }
 
