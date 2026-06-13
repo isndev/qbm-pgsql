@@ -428,12 +428,17 @@ public:
             // Create a temporary variable to hold the timestamp
             int64_t pg_usecs = 0;
 
-            // If buffer contains EXACTLY the timestamp (8 bytes), use it directly
+            // The field value is normally EXACTLY 8 bytes — the protocol layer
+            // strips any length prefix. A legacy/defensive path also accepts a
+            // 4-byte prefix (>= 12 bytes total). A size of 9..11 would make the
+            // prefixed read run 1..3 bytes past the buffer on attacker-controlled
+            // col_size, so reject it rather than read out of bounds.
             if (buffer.size() == 8) {
                 std::memcpy(&pg_usecs, buffer.data(), 8);
-            } else {
-                // Otherwise, assume there's a 4-byte prefix
+            } else if (buffer.size() >= 12) {
                 std::memcpy(&pg_usecs, buffer.data() + 4, 8);
+            } else {
+                throw std::runtime_error("Malformed timestamp buffer size");
             }
 
             // Convert big-endian to native order
@@ -867,12 +872,17 @@ struct TypeConverter<qb::Timestamp> {
         // Create a temporary variable to hold the timestamp
         int64_t pg_usecs = 0;
 
-        // If buffer contains EXACTLY the timestamp (8 bytes), use it directly
+        // The field value is normally EXACTLY 8 bytes — the protocol layer strips
+        // any length prefix. A legacy/defensive path also accepts a 4-byte prefix
+        // (>= 12 bytes total). A size of 9..11 would make the prefixed read run
+        // 1..3 bytes past the buffer on attacker-controlled col_size, so reject it
+        // rather than read out of bounds.
         if (buffer.size() == 8) {
             std::memcpy(&pg_usecs, buffer.data(), 8);
-        } else {
-            // Otherwise, assume there's a 4-byte prefix
+        } else if (buffer.size() >= 12) {
             std::memcpy(&pg_usecs, buffer.data() + 4, 8);
+        } else {
+            throw std::runtime_error("Malformed timestamp buffer size");
         }
 
         // Convert big-endian to native order
