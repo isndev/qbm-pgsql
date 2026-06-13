@@ -394,19 +394,20 @@ public:
             max_bytes -= header_size;
 
             const qb::pg::uinteger wire_len = static_cast<qb::pg::uinteger>(message_->length());
-            if (wire_len < 4u) {
-                LOG_CRIT("[pgsql] Invalid wire message length " << wire_len << " (< 4)");
+            if (wire_len < 4u || wire_len > qb::pg::PG_PROTOCOL_MAX_MESSAGE_BYTES) {
+                LOG_CRIT("[pgsql] Invalid wire message length " << wire_len << " (must be 4.."
+                                                               << qb::pg::PG_PROTOCOL_MAX_MESSAGE_BYTES
+                                                               << "); dropping connection");
                 message_.reset();
                 offset_ = 0;
-                this->_io.prepare_reconnect();
-                return 0;
-            }
-            if (wire_len > qb::pg::PG_PROTOCOL_MAX_MESSAGE_BYTES) {
-                LOG_CRIT("[pgsql] Wire message length " << wire_len << " exceeds client cap "
-                                                        << qb::pg::PG_PROTOCOL_MAX_MESSAGE_BYTES);
-                message_.reset();
-                offset_ = 0;
-                this->_io.prepare_reconnect();
+                // Mark the protocol invalid (the documented contract for a malformed size
+                // field): the I/O layer then disposes and fires event::disconnected, whose
+                // handler fails every pending query and resumes any pending connect awaiter.
+                // The previous prepare_reconnect() tore the transport down synchronously from
+                // inside the read handler WITHOUT firing on(disconnected) — so queued query
+                // awaiters (and a pending co_await connect(), whose handle it cleared without
+                // resuming) hung forever, and it left the read watcher on a closed fd.
+                this->not_ok();
                 return 0;
             }
         }
