@@ -1103,7 +1103,10 @@ struct TypeConverter<qb::UtcTimestamp> {
         if (dot_pos != std::string::npos && dot_pos + 1 < text.length()) {
             // Find the first non-digit character after the dot
             size_t end_pos = dot_pos + 1;
-            while (end_pos < text.length() && std::isdigit(text[end_pos])) {
+            // Cast to unsigned char: text comes from the server and a negative char
+            // (high-bit byte after the dot) would make std::isdigit undefined behavior.
+            while (end_pos < text.length() &&
+                   std::isdigit(static_cast<unsigned char>(text[end_pos]))) {
                 end_pos++;
             }
 
