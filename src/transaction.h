@@ -192,6 +192,25 @@ public:
     std::unique_ptr<ISqlQuery> pop_query();
 
     /**
+     * @brief Fail and drain every still-queued query and sub-transaction.
+     *
+     * On a lost connection only the single in-flight query is failed by the
+     * driver; queries queued behind it (pipelined calls, multi-statement
+     * transaction blocks) and the queries of pending sub-transactions would
+     * otherwise never have their error callback invoked — their callers'
+     * `co_await` awaiters would suspend forever. This walks the whole subtree,
+     * invoking each query's on_error so awaiters resume with the failure.
+     *
+     * Safe to call from on(disconnected): the coroutine completion path only
+     * *schedules* a resume (it does not re-enter synchronously), and the queues
+     * are swapped out before draining so a callback that enqueues new work does
+     * not re-enter this traversal.
+     *
+     * @param err Error delivered to every drained query's on_error.
+     */
+    void fail_all_pending(error::db_error const &err);
+
+    /**
      * @brief Handles the result status of a sub-command
      *
      * Called when a sub-command completes to update this transaction's status

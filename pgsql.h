@@ -1786,6 +1786,11 @@ public:
             is_connected_ = false;
             on_error_query(error::client_error("database disconnected"));
         }
+        // on_error_query() only fails the single in-flight query. Fail every
+        // query still queued behind it (pipelined / multi-statement / pending
+        // sub-transactions) so their callers' coroutine awaiters resume with the
+        // failure instead of hanging forever.
+        root_transaction()->fail_all_pending(error::client_error("database disconnected"));
         _current_command = root_transaction();
         _current_query   = nullptr;
         _ready_for_query = false;

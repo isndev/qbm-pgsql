@@ -116,6 +116,36 @@ Transaction::pop_query() {
 }
 
 void
+Transaction::fail_all_pending(error::db_error const &err) {
+    _result = false;
+    // Swap the queues out before draining so an on_error callback that enqueues
+    // new work (or otherwise mutates this node) cannot make the loops re-enter
+    // or invalidate their own iteration.
+    std::queue<std::unique_ptr<ISqlQuery>>   queries;
+    std::queue<std::unique_ptr<Transaction>> subs;
+    queries.swap(_queries);
+    subs.swap(_sub_commands);
+
+    while (!queries.empty()) {
+        auto q = std::move(queries.front());
+        queries.pop();
+        if (q) {
+            try {
+                q->on_error(err);
+            } catch (...) {
+                // A failing user error-callback must not abort the drain.
+            }
+        }
+    }
+    while (!subs.empty()) {
+        auto sub = std::move(subs.front());
+        subs.pop();
+        if (sub)
+            sub->fail_all_pending(err);
+    }
+}
+
+void
 Transaction::on_sub_command_status(bool status) {
     _result &= status;
     if (_parent) {
