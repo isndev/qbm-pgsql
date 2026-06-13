@@ -70,6 +70,34 @@
 namespace qb::pg::detail {
 
 /**
+ * @brief Reentrant, range-checked replacements for std::gmtime / std::localtime.
+ *
+ * std::gmtime / std::localtime return a pointer into a process-wide static
+ * std::tm — a data race when more than one qb VirtualCore formats a timestamp
+ * concurrently — and return nullptr for an out-of-range time_t (whereupon the
+ * historical callers dereferenced it or passed it to strftime/mktime, i.e. UB
+ * / crash). These wrappers use the thread-safe *_r / *_s variants and report
+ * failure via the return value.
+ */
+[[nodiscard]] inline bool
+safe_gmtime(std::time_t t, std::tm &out) noexcept {
+#if defined(_WIN32)
+    return ::gmtime_s(&out, &t) == 0;
+#else
+    return ::gmtime_r(&t, &out) != nullptr;
+#endif
+}
+
+[[nodiscard]] inline bool
+safe_localtime(std::time_t t, std::tm &out) noexcept {
+#if defined(_WIN32)
+    return ::localtime_s(&out, &t) == 0;
+#else
+    return ::localtime_r(&t, &out) != nullptr;
+#endif
+}
+
+/**
  * @brief Unified PostgreSQL type conversion system
  *
  * Primary template class providing bidirectional conversion between C++ types
@@ -291,14 +319,21 @@ public:
                              std::is_same_v<value_type, qb::LocalTimestamp>) {
             // Format: YYYY-MM-DD HH:MM:SS.MMMMMM
             std::time_t timestamp = static_cast<std::time_t>(value.seconds());
-            std::tm    *tm_data   = std::gmtime(&timestamp);
+            std::tm     tm_data{};
+            if (!safe_gmtime(timestamp, tm_data))
+                throw error::client_error("timestamp out of range for text conversion");
+
+            // microseconds() can be negative for pre-epoch values; the
+            // sub-second field must stay in [0, 1e6).
+            auto frac = value.microseconds() % 1000000;
+            if (frac < 0)
+                frac += 1000000;
 
             std::ostringstream os;
-            os << std::setfill('0') << std::setw(4) << (tm_data->tm_year + 1900) << '-'
-               << std::setw(2) << (tm_data->tm_mon + 1) << '-' << std::setw(2) << tm_data->tm_mday
-               << ' ' << std::setw(2) << tm_data->tm_hour << ':' << std::setw(2) << tm_data->tm_min
-               << ':' << std::setw(2) << tm_data->tm_sec << '.' << std::setw(6)
-               << (value.microseconds() % 1000000);
+            os << std::setfill('0') << std::setw(4) << (tm_data.tm_year + 1900) << '-'
+               << std::setw(2) << (tm_data.tm_mon + 1) << '-' << std::setw(2) << tm_data.tm_mday
+               << ' ' << std::setw(2) << tm_data.tm_hour << ':' << std::setw(2) << tm_data.tm_min
+               << ':' << std::setw(2) << tm_data.tm_sec << '.' << std::setw(6) << frac;
 
             return os.str();
         } else if constexpr (detail::ParamUnserializer::is_optional<value_type>::value) {
@@ -783,11 +818,13 @@ struct TypeConverter<qb::Timestamp> {
         // Get the whole seconds part
         double      unix_secs_float = value.seconds_float();
         std::time_t unix_time       = static_cast<std::time_t>(unix_secs_float);
-        std::tm    *time_info       = std::localtime(&unix_time);
+        std::tm     time_info{};
+        if (!safe_localtime(unix_time, time_info))
+            throw error::client_error("timestamp out of range for text conversion");
         char        buf[32];
 
         // Format the date and time parts
-        std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", time_info);
+        std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &time_info);
 
         // Add microseconds with higher precision using fractional part
         std::string result(buf);
@@ -971,15 +1008,19 @@ struct TypeConverter<qb::UtcTimestamp> {
     static std::string
     to_text(const qb::UtcTimestamp &value) {
         std::time_t unix_time = value.seconds();
-        std::tm    *time_info = std::gmtime(&unix_time);
+        std::tm     time_info{};
+        if (!safe_gmtime(unix_time, time_info))
+            throw error::client_error("timestamp out of range for text conversion");
         char        buf[40];
 
         // Format the date and time parts
-        std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", time_info);
+        std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &time_info);
 
         // Add microseconds
         std::string result(buf);
         int64_t     microsecs = value.microseconds() % 1000000;
+        if (microsecs < 0)
+            microsecs += 1000000;
         if (microsecs > 0) {
             char usec_buf[8];
             std::snprintf(usec_buf, sizeof(usec_buf), ".%06ld", static_cast<long>(microsecs));
@@ -1075,26 +1116,16 @@ struct TypeConverter<qb::UtcTimestamp> {
         tm.tm_sec   = sec;
         tm.tm_isdst = 0; // No DST for UTC
 
-        // Convert to timestamp
-        // Use timegm (GMT/UTC version of mktime) if available, otherwise approximate
+        // Convert the UTC broken-down time to an epoch directly.
 #ifdef _WIN32
-        // Windows doesn't have timegm, use _mkgmtime
+        // Windows spells timegm as _mkgmtime.
         std::time_t time_secs = _mkgmtime(&tm);
 #else
-        std::time_t time_secs;
-        // Check if we have timegm available
-#ifdef __APPLE__
-        // macOS doesn't have timegm in the standard library
-        time_secs = std::mktime(&tm);
-        // Adjust for local timezone offset
-        std::time_t local_time = std::mktime(&tm);
-        std::tm    *gm_tm      = std::gmtime(&local_time);
-        std::time_t gm_time    = std::mktime(gm_tm);
-        time_secs += (local_time - gm_time);
-#else
-        // Linux and others might have timegm
-        time_secs = timegm(&tm);
-#endif
+        // timegm() is available on Linux AND the BSD/Darwin (macOS) libc, so the
+        // previous mktime()/gmtime() round-trip on __APPLE__ was unnecessary — and
+        // wrong: it used the (non-reentrant) std::gmtime static buffer and a
+        // local-timezone offset that drifts across DST boundaries.
+        std::time_t time_secs = timegm(&tm);
 #endif
 
         if (time_secs == -1) {
@@ -1676,14 +1707,14 @@ struct pgdate {
     // Simple to_string (YYYY-MM-DD format) - UTC
     std::string
     to_string() const {
-        time_t     unix_time = to_unix_time();
-        struct tm *tm_data   = std::gmtime(&unix_time);
-        if (!tm_data)
+        time_t   unix_time = to_unix_time();
+        std::tm  tm_data{};
+        if (!safe_gmtime(unix_time, tm_data))
             return "2000-01-01";
 
         char buf[11]; // YYYY-MM-DD\0
-        std::snprintf(buf, sizeof(buf), "%04d-%02d-%02d", tm_data->tm_year + 1900,
-                      tm_data->tm_mon + 1, tm_data->tm_mday);
+        std::snprintf(buf, sizeof(buf), "%04d-%02d-%02d", tm_data.tm_year + 1900,
+                      tm_data.tm_mon + 1, tm_data.tm_mday);
         return std::string(buf);
     }
 
