@@ -674,8 +674,15 @@ private:
 
     friend class field;
 
-    typedef const detail::result_impl *const_result_impl_ptr;
-    const_result_impl_ptr              pimpl_;
+    // Shared ownership so copies are safe and the backing result_impl is freed
+    // exactly once. An owning resultset (default ctor / deep_snapshot) holds a
+    // real allocation; a borrowing resultset (resultset(result_impl_ptr), used
+    // to hand the live row buffer to a synchronous on_success callback) wraps
+    // the pointer with a no-op deleter so it neither frees nor extends the
+    // borrowed object. Field/row views stay valid for the lifetime of the
+    // resultset that vends them.
+    typedef const detail::result_impl                  *const_result_impl_ptr;
+    std::shared_ptr<const detail::result_impl>          pimpl_;
 
     field_buffer at(size_type r, row::size_type c) const;
 
