@@ -143,6 +143,38 @@ TEST_F(PostgreSQLConnectionTest, ReconnectAfterDisconnect) {
 }
 
 /**
+ * @brief Disconnect must fail EVERY outstanding query, not just the in-flight one.
+ *
+ * Regression: on(disconnected) only failed _current_query; queries queued behind
+ * it had their error callback skipped, so a pipelined caller's coroutine awaiter
+ * would suspend forever. fail_all_pending() now drains the whole queue.
+ */
+TEST_F(PostgreSQLConnectionTest, DisconnectFailsAllQueuedQueries) {
+    ASSERT_TRUE(qb::io::async::run_sync(db_->connect(qb::pg::test::dsn_tcp_string())));
+
+    int  errors = 0;
+    auto on_ok  = [](transaction &, results) {};
+    auto on_err = [&errors](error::db_error const &) { ++errors; };
+
+    // First query parks the server; the next two queue behind it.
+    db_->execute("SELECT pg_sleep(3)", on_ok, on_err);
+    db_->execute("SELECT 1", on_ok, on_err);
+    db_->execute("SELECT 2", on_ok, on_err);
+
+    // Pump once so the first query is actually sent and in flight.
+    qb::io::async::run(EVRUN_NOWAIT);
+
+    // Drop the connection while all three are outstanding.
+    db_->disconnect();
+
+    // All three error callbacks must fire (was 1 before fail_all_pending).
+    for (int i = 0; i < 200 && errors < 3; ++i)
+        qb::io::async::run(EVRUN_NOWAIT);
+
+    EXPECT_EQ(errors, 3);
+}
+
+/**
  * @brief Test connection timeout handling
  *
  * Verifies that a connection attempt to an unreachable server
