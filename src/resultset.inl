@@ -51,11 +51,25 @@ namespace detail {
 // Extensions for tuple conversion
 namespace resultset_ext {
 
-// Implementation of row to tuple conversion
+// Implementation of row to tuple conversion (value tuple)
 template <typename Tuple, std::size_t... I>
 inline void
 row_to_impl(resultset::row const &row, Tuple &t, std::index_sequence<I...>) {
     ((std::get<I>(t) = row[I].template as<typename std::tuple_element<I, Tuple>::type>()), ...);
+}
+
+// Implementation for reference tuple. Defined BEFORE the row_to() overload that
+// calls it: this overload is found neither by ordinary lookup at the call site
+// (it is a dependent call) nor by ADL (it lives in the nested resultset_ext
+// namespace, which ADL on std::tuple / resultset::row does not reach), so it
+// must be declared before use or the reference-tuple row_to() fails to compile
+// when first instantiated (e.g. via row::to(T&...)).
+template <typename Tuple, std::size_t... Is>
+inline void
+row_to_impl(Tuple &t, resultset::row const &row, std::index_sequence<Is...>) {
+    ((std::get<Is>(t) =
+          row[Is].template as<std::tuple_element_t<Is, std::remove_reference_t<Tuple>>>()),
+     ...);
 }
 
 // Convert row to tuple
@@ -70,15 +84,6 @@ template <typename... Ts>
 inline void
 row_to(resultset::row const &row, std::tuple<Ts &...> t) {
     row_to_impl(t, row, std::index_sequence_for<Ts...>{});
-}
-
-// Implementation for reference tuple
-template <typename Tuple, std::size_t... Is>
-inline void
-row_to_impl(Tuple &t, resultset::row const &row, std::index_sequence<Is...>) {
-    ((std::get<Is>(t) =
-          row[Is].template as<std::tuple_element_t<Is, std::remove_reference_t<Tuple>>>()),
-     ...);
 }
 
 // Convert row to multiple parameters
