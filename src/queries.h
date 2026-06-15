@@ -447,17 +447,22 @@ public:
      * @brief Constructs a BEGIN query
      *
      * @param mode Transaction mode
-     * @param statement_timeout_ms If positive, same round-trip runs
+     * @param statement_timeout If positive, same round-trip runs
      *        `SET LOCAL statement_timeout = N` (milliseconds) after BEGIN
      * @param success Success callback
      * @param error Error callback
      */
-    BeginQuery(transaction_mode mode, int statement_timeout_ms, CB_SUCCESS &&success,
+    BeginQuery(transaction_mode mode, qb::duration statement_timeout, CB_SUCCESS &&success,
                CB_ERROR &&error)
         : SqlQuery<CB_SUCCESS, CB_ERROR>(std::forward<CB_SUCCESS>(success),
                                          std::forward<CB_ERROR>(error))
         , _mode(mode)
-        , _statement_timeout_ms(statement_timeout_ms) {}
+        , _statement_timeout_ms(
+              statement_timeout > qb::duration::zero()
+                  ? static_cast<int>(
+                        std::chrono::duration_cast<std::chrono::milliseconds>(statement_timeout)
+                            .count())
+                  : 0) {}
 
     /**
      * @brief Creates the BEGIN message

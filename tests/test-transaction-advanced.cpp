@@ -447,7 +447,7 @@ TEST_F(PostgreSQLAdvancedTransactionTest, TransactionTimeout) {
 TEST_F(PostgreSQLAdvancedTransactionTest, TransactionTimeout_ViaSetTimeoutBeforeBegin) {
     bool       saw_error = false;
     const auto st =
-        db1_->set_timeout(1000)
+        db1_->set_timeout(std::chrono::milliseconds(1000))
             .begin([&saw_error](Transaction &t) {
                 t.execute(
                     "SELECT pg_sleep(3)", [](Transaction &, results) { ASSERT_TRUE(false); },

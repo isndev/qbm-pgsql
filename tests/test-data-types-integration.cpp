@@ -1285,7 +1285,7 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, UUIDType) {
 TEST_F(PostgreSQLDataTypesIntegrationTest, TimestampType) {
     try {
         // Create timestamps for multiple known dates to test various cases
-        std::vector<std::pair<std::string, qb::Timestamp>> test_cases;
+        std::vector<std::pair<std::string, qb::wall_time>> test_cases;
 
         // Case 1: Standard date (2023-01-15 12:34:56.789)
         {
@@ -1298,8 +1298,8 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, TimestampType) {
             time_data.tm_sec      = 56;
             std::time_t unix_time = std::mktime(&time_data);
 
-            qb::Timestamp test_timestamp =
-                qb::Timestamp::from_seconds(unix_time) + qb::Timespan::from_microseconds(789000);
+            qb::wall_time test_timestamp =
+                qb::wall_from_unix_seconds(unix_time) + std::chrono::microseconds(789000);
             test_cases.emplace_back("Standard", test_timestamp);
         }
 
@@ -1314,15 +1314,15 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, TimestampType) {
             time_data.tm_sec      = 56;
             std::time_t unix_time = std::mktime(&time_data);
 
-            qb::Timestamp test_timestamp =
-                qb::Timestamp::from_seconds(unix_time) + qb::Timespan::from_microseconds(999999);
+            qb::wall_time test_timestamp =
+                qb::wall_from_unix_seconds(unix_time) + std::chrono::microseconds(999999);
             test_cases.emplace_back("Max microseconds", test_timestamp);
         }
 
         // Test each timestamp case
         for (const auto &test_case : test_cases) {
             const std::string   &case_name      = test_case.first;
-            const qb::Timestamp &test_timestamp = test_case.second;
+            const qb::wall_time &test_timestamp = test_case.second;
 
             // Clean existing data
             db_->execute("DELETE FROM data_types_test", discard_query, discard_error).await();
@@ -1351,30 +1351,30 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, TimestampType) {
                            ASSERT_FALSE(result.empty());
                            ASSERT_FALSE(result[0][0].is_null());
 
-                           qb::Timestamp returned_timestamp = result[0][0].as<qb::Timestamp>();
+                           qb::wall_time returned_timestamp = result[0][0].as<qb::wall_time>();
                            std::cout << "TIMESTAMP (" << case_name << ")" << std::endl;
                            std::cout
-                               << "TIMESTAMP - Expected seconds: " << test_timestamp.seconds()
-                               << ", microseconds: " << (test_timestamp.microseconds() % 1000000)
+                               << "TIMESTAMP - Expected seconds: " << qb::unix_seconds(test_timestamp)
+                               << ", microseconds: " << (qb::unix_micros(test_timestamp) % 1000000)
                                << std::endl;
                            std::cout
-                               << "TIMESTAMP - Actual seconds: " << returned_timestamp.seconds()
-                               << ", microseconds: " << (returned_timestamp.microseconds() % 1000000)
+                               << "TIMESTAMP - Actual seconds: " << qb::unix_seconds(returned_timestamp)
+                               << ", microseconds: " << (qb::unix_micros(returned_timestamp) % 1000000)
                                << std::endl;
 
                            // Allow differences due to timezone issues (up to 1 day =
                            // 86400 seconds) This is a very generous margin to ensure
                            // tests pass in all environments
-                           uint64_t t1             = returned_timestamp.seconds();
-                           uint64_t t2             = test_timestamp.seconds();
+                           uint64_t t1             = qb::unix_seconds(returned_timestamp);
+                           uint64_t t2             = qb::unix_seconds(test_timestamp);
                            uint64_t timestamp_diff = (t1 > t2) ? (t1 - t2) : (t2 - t1);
                            std::cout << "TIMESTAMP - Difference in seconds: " << timestamp_diff
                                      << std::endl;
                            EXPECT_LE(timestamp_diff, 86400ULL);
 
                            // The microseconds part should be fairly accurate
-                           uint64_t m1          = returned_timestamp.microseconds() % 1000000;
-                           uint64_t m2          = test_timestamp.microseconds() % 1000000;
+                           uint64_t m1          = qb::unix_micros(returned_timestamp) % 1000000;
+                           uint64_t m2          = qb::unix_micros(test_timestamp) % 1000000;
                            uint64_t micros_diff = (m1 > m2) ? (m1 - m2) : (m2 - m1);
                            EXPECT_LE(micros_diff, 1000ULL);
 
@@ -1400,12 +1400,12 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, TimestampType) {
 TEST_F(PostgreSQLDataTypesIntegrationTest, TimestampTZType) {
     try {
         // Create UTC timestamps for multiple test cases
-        std::vector<std::pair<std::string, qb::UtcTimestamp>> test_cases;
+        std::vector<std::pair<std::string, qb::wall_time>> test_cases;
 
         // Case 1: Current time
         {
-            qb::UtcTimestamp test_timestamp =
-                qb::UtcTimestamp(qb::Timestamp::from_seconds(std::time(nullptr)).nanoseconds());
+            qb::wall_time test_timestamp =
+                qb::wall_from_unix_seconds(std::time(nullptr));
             test_cases.emplace_back("Current time", test_timestamp);
         }
 
@@ -1420,16 +1420,16 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, TimestampTZType) {
             time_data.tm_sec      = 56;
             std::time_t unix_time = std::mktime(&time_data);
 
-            qb::Timestamp local_timestamp =
-                qb::Timestamp::from_seconds(unix_time) + qb::Timespan::from_microseconds(789000);
-            qb::UtcTimestamp test_timestamp = qb::UtcTimestamp(local_timestamp.nanoseconds());
+            qb::wall_time local_timestamp =
+                qb::wall_from_unix_seconds(unix_time) + std::chrono::microseconds(789000);
+            qb::wall_time test_timestamp = local_timestamp;
             test_cases.emplace_back("Specific date", test_timestamp);
         }
 
         // Test each timestamp case
         for (const auto &test_case : test_cases) {
             const std::string      &case_name      = test_case.first;
-            const qb::UtcTimestamp &test_timestamp = test_case.second;
+            const qb::wall_time &test_timestamp = test_case.second;
 
             // Clean existing data
             db_->execute("DELETE FROM data_types_test", discard_query, discard_error).await();
@@ -1458,30 +1458,30 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, TimestampTZType) {
                            ASSERT_FALSE(result.empty());
                            ASSERT_FALSE(result[0][0].is_null());
 
-                           qb::UtcTimestamp returned_timestamp = result[0][0].as<qb::UtcTimestamp>();
+                           qb::wall_time returned_timestamp = result[0][0].as<qb::wall_time>();
                            std::cout << "TIMESTAMPTZ (" << case_name << ")" << std::endl;
                            std::cout
-                               << "TIMESTAMPTZ - Expected seconds: " << test_timestamp.seconds()
-                               << ", microseconds: " << (test_timestamp.microseconds() % 1000000)
+                               << "TIMESTAMPTZ - Expected seconds: " << qb::unix_seconds(test_timestamp)
+                               << ", microseconds: " << (qb::unix_micros(test_timestamp) % 1000000)
                                << std::endl;
                            std::cout
-                               << "TIMESTAMPTZ - Actual seconds: " << returned_timestamp.seconds()
-                               << ", microseconds: " << (returned_timestamp.microseconds() % 1000000)
+                               << "TIMESTAMPTZ - Actual seconds: " << qb::unix_seconds(returned_timestamp)
+                               << ", microseconds: " << (qb::unix_micros(returned_timestamp) % 1000000)
                                << std::endl;
 
                            // Allow differences due to timezone issues (up to 1 day =
                            // 86400 seconds) This is a very generous margin to ensure
                            // tests pass in all environments
-                           uint64_t t1             = returned_timestamp.seconds();
-                           uint64_t t2             = test_timestamp.seconds();
+                           uint64_t t1             = qb::unix_seconds(returned_timestamp);
+                           uint64_t t2             = qb::unix_seconds(test_timestamp);
                            uint64_t timestamp_diff = (t1 > t2) ? (t1 - t2) : (t2 - t1);
                            std::cout << "TIMESTAMPTZ - Difference in seconds: " << timestamp_diff
                                      << std::endl;
                            EXPECT_LE(timestamp_diff, 86400ULL);
 
                            // The microseconds part should be fairly accurate
-                           uint64_t m1          = returned_timestamp.microseconds() % 1000000;
-                           uint64_t m2          = test_timestamp.microseconds() % 1000000;
+                           uint64_t m1          = qb::unix_micros(returned_timestamp) % 1000000;
+                           uint64_t m2          = qb::unix_micros(test_timestamp) % 1000000;
                            uint64_t micros_diff = (m1 > m2) ? (m1 - m2) : (m2 - m1);
                            EXPECT_LE(micros_diff, 1000ULL);
 
@@ -1500,8 +1500,8 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, TimestampTZType) {
 
         // Get current time and create both timestamp types
         std::time_t      now             = std::time(nullptr);
-        qb::Timestamp    local_timestamp = qb::Timestamp::from_seconds(now);
-        qb::UtcTimestamp utc_timestamp   = qb::UtcTimestamp(local_timestamp.nanoseconds());
+        qb::wall_time    local_timestamp = qb::wall_from_unix_seconds(now);
+        qb::wall_time utc_timestamp   = local_timestamp;
 
         // Insert a local timestamp
         bool local_insert_success = false;
@@ -1536,8 +1536,8 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, TimestampTZType) {
         ASSERT_TRUE(utc_insert_success);
 
         // Retrieve timestamps with direct queries to avoid WHERE clause issues
-        qb::Timestamp    returned_local;
-        qb::UtcTimestamp returned_utc;
+        qb::wall_time    returned_local;
+        qb::wall_time returned_utc;
         bool             comparison_success = false;
 
         status = db_->execute(
@@ -1547,20 +1547,20 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, TimestampTZType) {
                             ASSERT_FALSE(result.empty());
                             ASSERT_FALSE(result[0][0].is_null());
 
-                            returned_local     = result[0][0].as<qb::Timestamp>();
+                            returned_local     = result[0][0].as<qb::wall_time>();
                             comparison_success = true;
 
                             std::cout << "TIMESTAMP COMPARISON:" << std::endl;
                             std::cout << "Local timestamp - Expected seconds: "
-                                      << local_timestamp.seconds() << std::endl;
+                                      << qb::unix_seconds(local_timestamp) << std::endl;
                             std::cout
-                                << "Local timestamp - Actual seconds: " << returned_local.seconds()
+                                << "Local timestamp - Actual seconds: " << qb::unix_seconds(returned_local)
                                 << std::endl;
 
                             // Allow differences due to timezone issues (up to 1 day =
                             // 86400 seconds)
-                            uint64_t t1         = returned_local.seconds();
-                            uint64_t t2         = local_timestamp.seconds();
+                            uint64_t t1         = qb::unix_seconds(returned_local);
+                            uint64_t t2         = qb::unix_seconds(local_timestamp);
                             uint64_t local_diff = (t1 > t2) ? (t1 - t2) : (t2 - t1);
 
                             std::cout << "Local timestamp difference: " << local_diff << " seconds"
@@ -1582,18 +1582,18 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, TimestampTZType) {
                             ASSERT_FALSE(result.empty());
                             ASSERT_FALSE(result[0][0].is_null());
 
-                            returned_utc = result[0][0].as<qb::UtcTimestamp>();
+                            returned_utc = result[0][0].as<qb::wall_time>();
 
                             std::cout
-                                << "UTC timestamp - Expected seconds: " << utc_timestamp.seconds()
+                                << "UTC timestamp - Expected seconds: " << qb::unix_seconds(utc_timestamp)
                                 << std::endl;
-                            std::cout << "UTC timestamp - Actual seconds: " << returned_utc.seconds()
+                            std::cout << "UTC timestamp - Actual seconds: " << qb::unix_seconds(returned_utc)
                                       << std::endl;
 
                             // Allow differences due to timezone issues (up to 1 day =
                             // 86400 seconds)
-                            uint64_t t3       = returned_utc.seconds();
-                            uint64_t t4       = utc_timestamp.seconds();
+                            uint64_t t3       = qb::unix_seconds(returned_utc);
+                            uint64_t t4       = qb::unix_seconds(utc_timestamp);
                             uint64_t utc_diff = (t3 > t4) ? (t3 - t4) : (t4 - t3);
 
                             std::cout << "UTC timestamp difference: " << utc_diff << " seconds"

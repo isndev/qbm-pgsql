@@ -223,28 +223,17 @@ public:
             }
 
             buffer.insert(buffer.end(), bytes.begin(), bytes.end());
-        } else if constexpr (std::is_same_v<value_type, qb::Timestamp> ||
-                             std::is_same_v<value_type, qb::UtcTimestamp> ||
-                             std::is_same_v<value_type, qb::LocalTimestamp>) {
-            // PostgreSQL timestamp: length (8) + microseconds since 2000-01-01 00:00:00
+        } else if constexpr (std::is_same_v<value_type, qb::wall_time>) {
+            // PostgreSQL timestamptz: length (8) + microseconds since 2000-01-01 UTC
             write_integer(buffer, 8);
 
-            // Convert timestamp to PostgreSQL format (microseconds since 2000-01-01)
             // PostgreSQL epoch is 2000-01-01, Unix epoch is 1970-01-01
             // Difference is 30 years = 946684800 seconds
             constexpr int64_t POSTGRES_EPOCH_DIFF_SECONDS = 946684800;
 
-            // Get seconds since Unix epoch from the timestamp
-            double unix_seconds = value.seconds_float();
-
-            // Calculate the whole seconds and fractional part
-            int64_t whole_seconds      = static_cast<int64_t>(unix_seconds);
-            double  fractional_seconds = unix_seconds - whole_seconds;
-            int64_t microseconds       = static_cast<int64_t>(fractional_seconds * 1000000);
-
-            // Convert to PostgreSQL timestamp (microseconds since 2000-01-01)
+            // Exact integer micros since the PostgreSQL epoch (no double rounding).
             int64_t pg_timestamp =
-                (whole_seconds - POSTGRES_EPOCH_DIFF_SECONDS) * 1000000 + microseconds;
+                qb::unix_micros(value) - POSTGRES_EPOCH_DIFF_SECONDS * 1000000LL;
 
             // Convert to network byte order using the endian utility
             int64_t network_timestamp = qb::endian::to_big_endian(pg_timestamp);
@@ -314,20 +303,22 @@ public:
         } else if constexpr (std::is_same_v<value_type, qb::uuid>) {
             // UUID to string in standard format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
             return uuids::to_string(value);
-        } else if constexpr (std::is_same_v<value_type, qb::Timestamp> ||
-                             std::is_same_v<value_type, qb::UtcTimestamp> ||
-                             std::is_same_v<value_type, qb::LocalTimestamp>) {
-            // Format: YYYY-MM-DD HH:MM:SS.MMMMMM
-            std::time_t timestamp = static_cast<std::time_t>(value.seconds());
+        } else if constexpr (std::is_same_v<value_type, qb::wall_time>) {
+            // Format: YYYY-MM-DD HH:MM:SS.MMMMMM (UTC). Floored seconds/fraction
+            // split: system_clock is signed, so a pre-1970 instant with a
+            // sub-second part must borrow a second rather than truncate toward
+            // zero (else the seconds field is one too high).
+            const int64_t total_us  = qb::unix_micros(value);
+            int64_t       whole_sec = total_us / 1000000;
+            int64_t       frac      = total_us % 1000000;
+            if (frac < 0) {
+                frac += 1000000;
+                --whole_sec;
+            }
+            std::time_t timestamp = static_cast<std::time_t>(whole_sec);
             std::tm     tm_data{};
             if (!safe_gmtime(timestamp, tm_data))
                 throw error::client_error("timestamp out of range for text conversion");
-
-            // microseconds() can be negative for pre-epoch values; the
-            // sub-second field must stay in [0, 1e6).
-            auto frac = value.microseconds() % 1000000;
-            if (frac < 0)
-                frac += 1000000;
 
             std::ostringstream os;
             os << std::setfill('0') << std::setw(4) << (tm_data.tm_year + 1900) << '-'
@@ -414,9 +405,7 @@ public:
             std::copy_n(buffer.begin(), 16, uuid_bytes.begin());
 
             return qb::uuid(uuid_bytes);
-        } else if constexpr (std::is_same_v<value_type, qb::Timestamp> ||
-                             std::is_same_v<value_type, qb::UtcTimestamp> ||
-                             std::is_same_v<value_type, qb::LocalTimestamp>) {
+        } else if constexpr (std::is_same_v<value_type, qb::wall_time>) {
             if (buffer.size() < 8) {
                 throw std::runtime_error("Buffer too small for timestamp");
             }
@@ -453,8 +442,8 @@ public:
                 unix_usecs += 1000000;
             }
 
-            return qb::Timestamp::from_seconds(unix_secs) +
-                   qb::Timespan::from_microseconds(unix_usecs);
+            return qb::wall_from_unix_seconds(unix_secs) +
+                   std::chrono::microseconds(unix_usecs);
         } else if constexpr (detail::ParamUnserializer::is_optional<value_type>::value) {
             using inner_type = typename value_type::value_type;
 
@@ -571,16 +560,16 @@ public:
         } else if constexpr (std::is_same_v<value_type, qb::uuid>) {
             // Parse UUID from standard format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
             return qb::uuid::from_string(text).value_or(qb::uuid{});
-        } else if constexpr (std::is_same_v<value_type, qb::Timestamp> ||
-                             std::is_same_v<value_type, qb::UtcTimestamp> ||
-                             std::is_same_v<value_type, qb::LocalTimestamp>) {
+        } else if constexpr (std::is_same_v<value_type, qb::wall_time>) {
             // Parse PostgreSQL timestamp format: YYYY-MM-DD HH:MM:SS[.MMMMMM]
             std::tm tm = {};
             int     year, month, day, hour, minute, second, microsecond = 0;
 
-            // Regular expression to match PostgreSQL timestamp format
+            // Regular expression to match PostgreSQL timestamp / timestamptz text.
+            // The optional trailing timezone (e.g. "+00", "+02:00", "-0530") is
+            // tolerated so timestamptz values parse via std::regex_match.
             std::regex timestamp_regex(
-                R"((\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{1,2}):(\d{1,2})(?:\.(\d{1,6}))?)");
+                R"((\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{1,2}):(\d{1,2})(?:\.(\d{1,6}))?(?:[+-]\d{2}(?::?\d{2})?)?)");
 
             std::smatch matches;
             if (std::regex_match(text, matches, timestamp_regex)) {
@@ -606,14 +595,18 @@ public:
                 tm.tm_hour  = hour;        // Hours (0-23)
                 tm.tm_min   = minute;      // Minutes (0-59)
                 tm.tm_sec   = second;      // Seconds (0-61)
-                tm.tm_isdst = -1;          // Let system determine DST
+                tm.tm_isdst = 0;           // UTC-native: no DST
 
-                // Convert to Unix timestamp
-                std::time_t unix_timestamp = std::mktime(&tm);
+                // Convert the broken-down UTC time to an epoch (UTC-native).
+#ifdef _WIN32
+                std::time_t unix_timestamp = _mkgmtime(&tm);
+#else
+                std::time_t unix_timestamp = timegm(&tm);
+#endif
 
                 // Create timestamp from seconds and microseconds
-                return value_type(qb::Timestamp::from_seconds(unix_timestamp) +
-                                  qb::Timespan::from_microseconds(microsecond));
+                return qb::wall_from_unix_seconds(unix_timestamp) +
+                       std::chrono::microseconds(microsecond);
             }
 
             throw std::runtime_error("Invalid timestamp format");
@@ -764,19 +757,21 @@ private:
     }
 };
 
-// Specialization for Timestamp type
+// Specialization for the canonical UTC instant (qb::wall_time == system_clock).
+// Maps to PostgreSQL timestamptz; reads of both timestamp and timestamptz columns
+// decode into wall_time (identical micros-since-2000 wire representation).
 template <>
-struct TypeConverter<qb::Timestamp> {
-    using value_type = qb::Timestamp;
+struct TypeConverter<qb::wall_time> {
+    using value_type = qb::wall_time;
 
     /**
-     * @brief Returns the PostgreSQL OID for timestamp type
+     * @brief Returns the PostgreSQL OID for the timestamptz type
      *
-     * @return integer PostgreSQL type OID for timestamp
+     * @return integer PostgreSQL type OID for timestamptz
      */
     static integer
     get_oid() {
-        return static_cast<integer>(oid::timestamp);
+        return static_cast<integer>(oid::timestamptz);
     }
 
     /**
@@ -791,17 +786,15 @@ struct TypeConverter<qb::Timestamp> {
      * @param buffer The buffer to store the PostgreSQL binary format
      */
     static void
-    to_binary(const qb::Timestamp &value, std::vector<byte> &buffer) {
-        // PostgreSQL timestamp binary: 4-byte length (8) + 8-byte microseconds
-        // since 2000-01-01 in big-endian.
+    to_binary(const qb::wall_time &value, std::vector<byte> &buffer) {
+        // PostgreSQL timestamptz binary: 4-byte length (8) + 8-byte microseconds
+        // since 2000-01-01 UTC in big-endian.
 
         // Difference between PostgreSQL epoch (2000-01-01) and Unix epoch (1970-01-01)
         constexpr int64_t POSTGRES_EPOCH_DIFF = 946684800LL;
 
-        double  unix_secs_float = value.seconds_float();
-        int64_t whole_seconds   = static_cast<int64_t>(unix_secs_float);
-        int64_t unix_usecs = static_cast<int64_t>((unix_secs_float - whole_seconds) * 1000000LL);
-        int64_t pg_usecs   = (whole_seconds - POSTGRES_EPOCH_DIFF) * 1000000LL + unix_usecs;
+        // Exact integer micros since the PostgreSQL epoch (no double rounding).
+        const int64_t pg_usecs = qb::unix_micros(value) - POSTGRES_EPOCH_DIFF * 1000000LL;
 
         write_integer(buffer, 8);
         int64_t     be    = qb::endian::to_big_endian(pg_usecs);
@@ -819,35 +812,41 @@ struct TypeConverter<qb::Timestamp> {
      * @return std::string The PostgreSQL text representation of the timestamp
      */
     static std::string
-    to_text(const qb::Timestamp &value) {
-        // Get the whole seconds part
-        double      unix_secs_float = value.seconds_float();
-        std::time_t unix_time       = static_cast<std::time_t>(unix_secs_float);
-        std::tm     time_info{};
-        if (!safe_localtime(unix_time, time_info))
+    to_text(const qb::wall_time &value) {
+        // Floored seconds/fraction split (system_clock is signed): a pre-1970
+        // sub-second instant must borrow a second, not truncate toward zero.
+        const int64_t total_us  = qb::unix_micros(value);
+        int64_t       whole_sec = total_us / 1000000;
+        int64_t       microsecs = total_us % 1000000;
+        if (microsecs < 0) {
+            microsecs += 1000000;
+            --whole_sec;
+        }
+        std::time_t   unix_time = static_cast<std::time_t>(whole_sec);
+        std::tm       time_info{};
+        if (!safe_gmtime(unix_time, time_info))
             throw error::client_error("timestamp out of range for text conversion");
-        char        buf[32];
+        char buf[40];
 
-        // Format the date and time parts
+        // Format the date and time parts (UTC)
         std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &time_info);
 
-        // Add microseconds with higher precision using fractional part
+        // Add microseconds (already normalized to [0, 1e6) above)
         std::string result(buf);
-        double      fractional_part = unix_secs_float - std::floor(unix_secs_float);
-        int64_t     microsecs       = static_cast<int64_t>(fractional_part * 1000000);
         if (microsecs > 0) {
             char usec_buf[8];
             std::snprintf(usec_buf, sizeof(usec_buf), ".%06ld", static_cast<long>(microsecs));
             result += usec_buf;
         }
 
+        result += "+00";
         return result;
     }
 
     /**
      * @brief Converts PostgreSQL binary format to a Timestamp
      *
-     * Deserializes a PostgreSQL binary timestamp representation into a qb::Timestamp.
+     * Deserializes a PostgreSQL binary timestamp representation into a qb::wall_time.
      * PostgreSQL timestamps are stored as microseconds since 2000-01-01, while
      * Unix/C++ timestamps are seconds since 1970-01-01.
      *
@@ -856,10 +855,10 @@ struct TypeConverter<qb::Timestamp> {
      * - Standard PostgreSQL binary format with 4-byte length prefix
      *
      * @param buffer Buffer containing the PostgreSQL binary timestamp data
-     * @return qb::Timestamp Converted timestamp object
+     * @return qb::wall_time Converted timestamp object
      * @throws std::runtime_error If the buffer is too small or malformed
      */
-    static qb::Timestamp
+    static qb::wall_time
     from_binary(const std::vector<byte> &buffer) {
         // PostgreSQL timestamp is in microseconds since 2000-01-01
         if (buffer.size() < 8) { // at least 8 bytes for timestamp
@@ -897,21 +896,21 @@ struct TypeConverter<qb::Timestamp> {
             unix_usecs += 1000000;
         }
 
-        return qb::Timestamp::from_seconds(unix_secs) + qb::Timespan::from_microseconds(unix_usecs);
+        return qb::wall_from_unix_seconds(unix_secs) + std::chrono::microseconds(unix_usecs);
     }
 
     /**
      * @brief Converts PostgreSQL text format to a Timestamp
      *
-     * Parses a PostgreSQL text representation of a timestamp into a qb::Timestamp
+     * Parses a PostgreSQL text representation of a timestamp into a qb::wall_time
      * object. Handles the standard PostgreSQL timestamp format: "YYYY-MM-DD
      * HH:MM:SS.ssssss"
      *
      * @param text Text representation of a timestamp
-     * @return qb::Timestamp Converted timestamp object
+     * @return qb::wall_time Converted timestamp object
      * @throws std::runtime_error If the text is not a valid timestamp format
      */
-    static qb::Timestamp
+    static qb::wall_time
     from_text(const std::string &text) {
         // Expected format: "YYYY-MM-DD HH:MM:SS.ssssss" or "YYYY-MM-DD HH:MM:SS"
         std::tm tm   = {};
@@ -932,14 +931,22 @@ struct TypeConverter<qb::Timestamp> {
             throw std::runtime_error("Invalid timestamp format");
         }
 
-        // Read fractional part if it exists
+        // Read fractional part if it exists. timestamptz text carries a trailing
+        // timezone (e.g. ".789+00"), so the fractional digits must be delimited at
+        // the first non-digit — not the rest of the string — otherwise the digit
+        // count is wrong and the value is mis-scaled.
         size_t dot_pos = text.find('.');
         if (dot_pos != std::string::npos && dot_pos + 1 < text.length()) {
-            std::string usec_str = text.substr(dot_pos + 1);
+            size_t end_pos = dot_pos + 1;
+            while (end_pos < text.length() &&
+                   std::isdigit(static_cast<unsigned char>(text[end_pos]))) {
+                end_pos++;
+            }
+            std::string usec_str = text.substr(dot_pos + 1, end_pos - (dot_pos + 1));
             usec                 = std::stoi(usec_str);
 
             // Adjust to the correct scale (microseconds)
-            int digits = usec_str.length();
+            int digits = static_cast<int>(usec_str.length());
             for (int i = digits; i < 6; i++) {
                 usec *= 10;
             }
@@ -953,14 +960,18 @@ struct TypeConverter<qb::Timestamp> {
         tm.tm_min  = min;
         tm.tm_sec  = sec;
 
-        // Convert to timestamp
-        std::time_t time_secs = std::mktime(&tm);
+        // Convert the broken-down UTC time to an epoch (UTC-native).
+        tm.tm_isdst = 0;
+#ifdef _WIN32
+        std::time_t time_secs = _mkgmtime(&tm);
+#else
+        std::time_t time_secs = timegm(&tm);
+#endif
         if (time_secs == -1) {
             throw std::runtime_error("Invalid timestamp conversion");
         }
 
-        return value_type(qb::Timestamp::from_seconds(time_secs) +
-                          qb::Timespan::from_microseconds(usec));
+        return qb::wall_from_unix_seconds(time_secs) + std::chrono::microseconds(usec);
     }
 
 private:
@@ -969,189 +980,6 @@ private:
         integer     nbo   = htonl(value);
         const byte *bytes = reinterpret_cast<const byte *>(&nbo);
         buffer.insert(buffer.end(), bytes, bytes + sizeof(integer));
-    }
-};
-
-// Specialization for UtcTimestamp type
-template <>
-struct TypeConverter<qb::UtcTimestamp> {
-    using value_type = qb::UtcTimestamp;
-
-    /**
-     * @brief Returns the PostgreSQL OID for timestamptz type
-     *
-     * @return integer PostgreSQL type OID for timestamptz
-     */
-    static integer
-    get_oid() {
-        return static_cast<integer>(oid::timestamptz);
-    }
-
-    /**
-     * @brief Converts a UtcTimestamp to PostgreSQL binary format
-     *
-     * Creates a PostgreSQL binary representation of a timestamp with timezone,
-     * following PostgreSQL format specifications:
-     * - 4-byte integer length prefix (8)
-     * - 8-byte timestamp value in microseconds since 2000-01-01 UTC
-     *
-     * @param value The UTC timestamp to convert
-     * @param buffer The buffer to store the PostgreSQL binary format
-     */
-    static void
-    to_binary(const qb::UtcTimestamp &value, std::vector<byte> &buffer) {
-        // Convert to regular Timestamp and then serialize
-        // Use the value directly since UtcTimestamp is derived from Timestamp
-        TypeConverter<qb::Timestamp>::to_binary(static_cast<qb::Timestamp>(value), buffer);
-    }
-
-    /**
-     * @brief Converts a UtcTimestamp to PostgreSQL text format
-     *
-     * Creates a standard text representation of a UTC timestamp in ISO 8601 format:
-     * YYYY-MM-DD HH:MM:SS.ssssss+00
-     *
-     * @param value The UTC timestamp to convert
-     * @return std::string The PostgreSQL text representation of the timestamp with
-     * timezone
-     */
-    static std::string
-    to_text(const qb::UtcTimestamp &value) {
-        std::time_t unix_time = value.seconds();
-        std::tm     time_info{};
-        if (!safe_gmtime(unix_time, time_info))
-            throw error::client_error("timestamp out of range for text conversion");
-        char        buf[40];
-
-        // Format the date and time parts
-        std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &time_info);
-
-        // Add microseconds
-        std::string result(buf);
-        int64_t     microsecs = value.microseconds() % 1000000;
-        if (microsecs < 0)
-            microsecs += 1000000;
-        if (microsecs > 0) {
-            char usec_buf[8];
-            std::snprintf(usec_buf, sizeof(usec_buf), ".%06ld", static_cast<long>(microsecs));
-            result += usec_buf;
-        }
-
-        // Add UTC timezone indicator
-        result += "+00";
-
-        return result;
-    }
-
-    /**
-     * @brief Converts PostgreSQL binary format to a UtcTimestamp
-     *
-     * Deserializes a PostgreSQL binary timestamp with timezone representation
-     * into a qb::UtcTimestamp.
-     * PostgreSQL timestamptz are stored as UTC timestamps in microseconds since
-     * 2000-01-01.
-     *
-     * @param buffer Buffer containing the PostgreSQL binary timestamptz data
-     * @return qb::UtcTimestamp Converted UTC timestamp object
-     * @throws std::runtime_error If the buffer is too small or malformed
-     */
-    static qb::UtcTimestamp
-    from_binary(const std::vector<byte> &buffer) {
-        // Convert from binary to Timestamp, then to UtcTimestamp
-        qb::Timestamp ts = TypeConverter<qb::Timestamp>::from_binary(buffer);
-        // Create a new UtcTimestamp and assign the epoch value from the timestamp
-        qb::UtcTimestamp result;
-        result = qb::UtcTimestamp(ts.nanoseconds());
-        return result;
-    }
-
-    /**
-     * @brief Converts PostgreSQL text format to a UtcTimestamp
-     *
-     * Parses a PostgreSQL text representation of a timestamp with timezone into
-     * a qb::UtcTimestamp object. Handles formats with timezone information.
-     *
-     * @param text Text representation of a timestamp with timezone
-     * @return qb::UtcTimestamp Converted UTC timestamp object
-     * @throws std::runtime_error If the text is not a valid timestamptz format
-     */
-    static qb::UtcTimestamp
-    from_text(const std::string &text) {
-        // PostgreSQL will provide timestamps in various formats including timezone info
-        // We'll parse the basic timestamp part first
-
-        // Expected format: "YYYY-MM-DD HH:MM:SS.ssssss±TZ" or variations
-        std::tm tm   = {};
-        int     usec = 0;
-
-        if (text.empty()) {
-            throw std::runtime_error("Empty timestamp string");
-        }
-
-        int year = 0, month = 0, day = 0, hour = 0, min = 0, sec = 0;
-
-        // Use a simpler approach to extract the date/time portion
-        int matched =
-            sscanf(text.c_str(), "%d-%d-%d %d:%d:%d", &year, &month, &day, &hour, &min, &sec);
-
-        if (matched != 6) {
-            throw std::runtime_error("Invalid timestamp format");
-        }
-
-        // Read fractional part if it exists (ignoring timezone for initial parsing)
-        size_t dot_pos = text.find('.');
-        if (dot_pos != std::string::npos && dot_pos + 1 < text.length()) {
-            // Find the first non-digit character after the dot
-            size_t end_pos = dot_pos + 1;
-            // Cast to unsigned char: text comes from the server and a negative char
-            // (high-bit byte after the dot) would make std::isdigit undefined behavior.
-            while (end_pos < text.length() &&
-                   std::isdigit(static_cast<unsigned char>(text[end_pos]))) {
-                end_pos++;
-            }
-
-            std::string usec_str = text.substr(dot_pos + 1, end_pos - (dot_pos + 1));
-            usec                 = std::stoi(usec_str);
-
-            // Adjust to the correct scale (microseconds)
-            int digits = usec_str.length();
-            for (int i = digits; i < 6; i++) {
-                usec *= 10;
-            }
-        }
-
-        // Set up tm structure as UTC
-        tm.tm_year  = year - 1900;
-        tm.tm_mon   = month - 1;
-        tm.tm_mday  = day;
-        tm.tm_hour  = hour;
-        tm.tm_min   = min;
-        tm.tm_sec   = sec;
-        tm.tm_isdst = 0; // No DST for UTC
-
-        // Convert the UTC broken-down time to an epoch directly.
-#ifdef _WIN32
-        // Windows spells timegm as _mkgmtime.
-        std::time_t time_secs = _mkgmtime(&tm);
-#else
-        // timegm() is available on Linux AND the BSD/Darwin (macOS) libc, so the
-        // previous mktime()/gmtime() round-trip on __APPLE__ was unnecessary — and
-        // wrong: it used the (non-reentrant) std::gmtime static buffer and a
-        // local-timezone offset that drifts across DST boundaries.
-        std::time_t time_secs = timegm(&tm);
-#endif
-
-        if (time_secs == -1) {
-            throw std::runtime_error("Invalid timestamp conversion");
-        }
-
-        // Create a timestamp with the seconds and microseconds
-        auto ts = qb::Timestamp::from_seconds(time_secs) + qb::Timespan::from_microseconds(usec);
-
-        // Create a new UtcTimestamp and assign the epoch value from the timestamp
-        qb::UtcTimestamp result;
-        result = qb::UtcTimestamp(ts.nanoseconds());
-        return result;
     }
 };
 

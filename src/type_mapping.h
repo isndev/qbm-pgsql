@@ -142,18 +142,11 @@ struct type_mapping<qb::jsonb> {
 }; // jsonb type
 
 // Date and timestamp types
+// qb::wall_time is a UTC instant (system_clock) -> PostgreSQL timestamptz.
 template <>
-struct type_mapping<qb::Timestamp> {
-    static constexpr integer type_oid = 1114;
-}; // timestamp
-template <>
-struct type_mapping<qb::UtcTimestamp> {
+struct type_mapping<qb::wall_time> {
     static constexpr integer type_oid = 1184;
 }; // timestamptz
-template <>
-struct type_mapping<qb::LocalTimestamp> {
-    static constexpr integer type_oid = 1114;
-}; // timestamp
 
 // Optional types (use the underlying type's OID)
 template <typename T>

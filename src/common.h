@@ -32,12 +32,14 @@
 #ifndef QBM_PGSQL_NOT_QB_COMMON_H
 #define QBM_PGSQL_NOT_QB_COMMON_H
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <iosfwd>
 #include <memory>
 #include <optional>
 #include <qb/system/container/unordered_map.h>
+#include <qb/system/timestamp.h>
 #include <qb/uuid.h>
 #include <string>
 #include <string_view>
@@ -153,7 +155,7 @@ struct connection_options {
     std::string database; /**< Database name to connect to */
     std::string user;     /**< Database user name for authentication */
     std::string password; /**< Database user's password for authentication */
-    int         connect_timeout{10}; /**< Connection timeout in seconds (default: 10s) */
+    qb::duration connect_timeout{std::chrono::seconds(10)}; /**< Connection timeout (default: 10s). */
 
     /**
      * @brief Verify the server TLS certificate on `ssl://` connections.

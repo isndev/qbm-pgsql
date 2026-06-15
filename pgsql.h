@@ -594,11 +594,11 @@ private:
      *
      * @param h Coroutine handle to resume when the handshake attempt finishes (success or failure)
      * @param valid Shared flag cleared when the awaiter is destroyed (ignore stale callbacks)
-     * @param timeout_override_sec If &gt; 0, overrides `conn_opts_.connect_timeout` for this attempt
+     * @param timeout_override If positive, overrides `conn_opts_.connect_timeout` for this attempt
      */
     void
     start_connect_from_awaiter(std::coroutine_handle<> h, std::shared_ptr<bool> valid,
-                               double timeout_override_sec) {
+                               qb::duration timeout_override) {
         ++connect_timer_generation_;
         const std::uint64_t timer_gen = connect_timer_generation_;
 
@@ -614,10 +614,11 @@ private:
         }
 
         const double t_out =
-            timeout_override_sec > 0
-                ? timeout_override_sec
-                : (conn_opts_.connect_timeout > 0 ? static_cast<double>(conn_opts_.connect_timeout)
-                                                  : 10.0);
+            timeout_override > qb::duration::zero()
+                ? qb::detail::to_ev_seconds(timeout_override)
+                : (conn_opts_.connect_timeout > qb::duration::zero()
+                       ? qb::detail::to_ev_seconds(conn_opts_.connect_timeout)
+                       : 10.0);
 
         const qb::io::uri connect_uri{conn_opts_.schema + "://" + conn_opts_.uri};
         auto              awaiter_valid = connect_suspend_valid_;
@@ -629,7 +630,7 @@ private:
                     return;
                 on_async_tcp_connected(std::move(raw_io), timer_gen, t_out);
             },
-            t_out);
+            qb::detail::from_ev_seconds(t_out));
     }
 
     /**
@@ -661,7 +662,7 @@ private:
                 connect_handshake_failed_ = true;
                 try_resume_connect_wait();
             }),
-            t_out);
+            qb::detail::from_ev_seconds(t_out));
 
         try_resume_connect_wait();
     }
@@ -1601,12 +1602,13 @@ public:
      */
     struct connect_awaiter {
         Database<QB_IO_, NotifyDerived> &db;
-        double                           timeout_sec{0.};
+        qb::duration                     timeout{};
         std::shared_ptr<bool>            valid{std::make_shared<bool>(true)};
 
-        explicit connect_awaiter(Database<QB_IO_, NotifyDerived> &d, double t = 0.) noexcept
+        explicit connect_awaiter(Database<QB_IO_, NotifyDerived> &d,
+                                 qb::duration t = qb::duration::zero()) noexcept
             : db(d)
-            , timeout_sec(t) {}
+            , timeout(t) {}
 
         ~connect_awaiter() {
             if (valid)
@@ -1625,7 +1627,7 @@ public:
 
         void
         await_suspend(std::coroutine_handle<> h) {
-            db.start_connect_from_awaiter(h, valid, timeout_sec);
+            db.start_connect_from_awaiter(h, valid, timeout);
         }
 
         [[nodiscard]] bool
@@ -1639,13 +1641,13 @@ public:
      */
     [[nodiscard]] connect_awaiter
     connect() {
-        return connect_awaiter{*this, 0.};
+        return connect_awaiter{*this, qb::duration::zero()};
     }
 
-    /** @brief Same as connect() with an explicit timeout override (seconds). */
+    /** @brief Same as connect() with an explicit timeout override. */
     [[nodiscard]] connect_awaiter
-    connect(double timeout_sec) {
-        return connect_awaiter{*this, timeout_sec};
+    connect(qb::duration timeout) {
+        return connect_awaiter{*this, timeout};
     }
 
     /** @brief Parse connection string then connect. */

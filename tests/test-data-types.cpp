@@ -957,13 +957,13 @@ TEST_F(PostgreSQLDataTypesTest, TimestampBinaryFormatDeserialization) {
 TEST_F(PostgreSQLDataTypesTest, TimestampBinaryRejectsShortPrefixedBuffer) {
     for (size_t sz : {9u, 10u, 11u}) {
         std::vector<qb::pg::byte> buf(sz, byte{0x01});
-        ASSERT_THROW(TypeConverter<qb::Timestamp>::from_binary(buf), std::runtime_error)
+        ASSERT_THROW(TypeConverter<qb::wall_time>::from_binary(buf), std::runtime_error)
             << "size " << sz << " must be rejected, not read out of bounds";
     }
     // 8 (exact) and 12 (legacy prefixed) remain valid and must not throw.
-    ASSERT_NO_THROW(TypeConverter<qb::Timestamp>::from_binary(std::vector<qb::pg::byte>(8, byte{0})));
+    ASSERT_NO_THROW(TypeConverter<qb::wall_time>::from_binary(std::vector<qb::pg::byte>(8, byte{0})));
     ASSERT_NO_THROW(
-        TypeConverter<qb::Timestamp>::from_binary(std::vector<qb::pg::byte>(12, byte{0})));
+        TypeConverter<qb::wall_time>::from_binary(std::vector<qb::pg::byte>(12, byte{0})));
 }
 
 /**
