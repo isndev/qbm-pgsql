@@ -478,7 +478,7 @@ TEST_F(PgsqlCoroApiTest, WithTransaction_ReadOnlyRejectsInsertViaAbort) {
         transaction_mode mode;
         mode.read_only = true;
         auto r         = co_await with_transaction(
-            *db_, mode, [kRoGuard](Transaction &tr) -> qb::io::async::task<int> {
+            *db_, mode, [](Transaction &tr) -> qb::io::async::task<int> {
                 auto ins = co_await tr.execute(std::string("INSERT INTO ") + kRoGuard +
                                                        " (v) VALUES ('ro_violation')");
                 if (!ins)
