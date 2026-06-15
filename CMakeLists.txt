@@ -47,7 +47,7 @@ qb_register_module(
         src/param_unserializer.cpp
         pgsql.cpp
         DEFINES
-        QBM_PGSQL_VERSION=2.0.0
+        QBM_PGSQL_VERSION="2.0.0"
 )
 
 # Add tests if enabled
