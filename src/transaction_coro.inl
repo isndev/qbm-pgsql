@@ -21,7 +21,9 @@ namespace {
 
 /** Append `; SET LOCAL statement_timeout = N` (ms) when @p timeout_ms &gt; 0. */
 inline void
-pg_append_set_local_statement_timeout(std::string &sql, int timeout_ms) {
+pg_append_set_local_statement_timeout(std::string &sql, qb::duration timeout) {
+    const auto timeout_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count();
     if (timeout_ms <= 0)
         return;
     sql += "; SET LOCAL statement_timeout = ";

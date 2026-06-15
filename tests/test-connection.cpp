@@ -265,7 +265,7 @@ TEST(PostgreSQLConnectDeadline, DeadlineTimerCancelledOnDestroy) {
         db->disconnect();
         db->prepare_reconnect();
         // Reconnect with a 1s handshake deadline (reuses the parsed connection options).
-        ASSERT_TRUE(qb::io::async::run_sync(db->connect(1.0)));
+        ASSERT_TRUE(qb::io::async::run_sync(db->connect(std::chrono::seconds(1))));
     } // Database destroyed here; the owned ScopedTimeout is cancelled with it.
 
     // Pump the event loop well past the 1s deadline. A fire-and-forget timer would

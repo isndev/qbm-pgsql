@@ -101,8 +101,8 @@ public:
         } else if constexpr (std::is_same_v<T, qb::uuid>) {
             return qb::uuid::from_string("123e4567-e89b-12d3-a456-426614174000")
                 .value(); // Test UUID
-        } else if constexpr (std::is_same_v<T, qb::Timestamp>) {
-            return qb::Timestamp(); // Test timestamp
+        } else if constexpr (std::is_same_v<T, qb::wall_time>) {
+            return qb::wall_time{}; // Test timestamp
         } else if constexpr (std::is_same_v<T, std::optional<int>>) {
             return std::nullopt; // Test null value
         } else if constexpr (std::is_same_v<T, std::optional<std::string>>) {
@@ -812,7 +812,7 @@ TEST_F(ParamParsingTest, UUIDParams) {
  */
 TEST_F(ParamParsingTest, TimestampParams) {
     // Create a Timestamp value
-    qb::Timestamp test_timestamp; // Default constructor since Timestamp::now() is not available
+    qb::wall_time test_timestamp{}; // Default constructor since Timestamp::now() is not available
 
     // Create QueryParams with Timestamp
     QueryParams params(test_timestamp);
@@ -820,7 +820,7 @@ TEST_F(ParamParsingTest, TimestampParams) {
     // Check properties
     ASSERT_FALSE(params.empty());
     ASSERT_EQ(params.param_count(), 1);
-    ASSERT_EQ(params.param_types()[0], 1114); // TIMESTAMP OID
+    ASSERT_EQ(params.param_types()[0], 1184); // TIMESTAMPTZ OID (qb::wall_time is a UTC instant)
 
     // Get the parameter buffer
     const auto &buffer = params.get();
@@ -833,7 +833,7 @@ TEST_F(ParamParsingTest, TimestampParams) {
     unserializer->init(buffer);
 
     // Get the Timestamp parameter
-    // qb::Timestamp extracted_timestamp = unserializer->get_param<qb::Timestamp>(0);
+    // qb::wall_time extracted_timestamp = unserializer->get_param<qb::wall_time>(0);
 
     // Since our test implementation always returns the same timestamp value,
     // we don't need to compare with the original

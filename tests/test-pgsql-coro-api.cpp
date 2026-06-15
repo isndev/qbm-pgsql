@@ -61,7 +61,7 @@ protected:
 
 TEST_F(PgsqlCoroApiTest, CoroBegin_SetTimeout_AbortsLongStatement) {
     const bool ok = qb::io::async::run_sync([&]() -> qb::io::async::task<bool> {
-        db_->set_timeout(800);
+        db_->set_timeout(std::chrono::milliseconds(800));
         auto begun = co_await db_->begin();
         if (!begun.ok())
             co_return false;

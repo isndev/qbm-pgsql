@@ -560,27 +560,31 @@ public:
     /**
      * @brief Set PostgreSQL **statement_timeout** for the **next** `BEGIN` on this connection.
      *
-     * When @p timeout_ms &gt; 0, the following `begin()` (callback or `co_await`) sends
+     * When @p timeout is positive, the following `begin()` (callback or `co_await`) sends
      * `SET LOCAL statement_timeout = N` in the **same** simple-query round-trip as `BEGIN`,
      * so the limit is **transaction-scoped** and cleared at `COMMIT`/`ROLLBACK`. Call **before**
      * `begin()`; use `0` to omit (server default for new transactions).
      *
-     * @param timeout_ms Timeout in milliseconds (&lt;= 0 disables for subsequent begins)
+     * @param timeout Statement timeout as a `qb::duration` (zero or negative disables it)
      * @return Transaction& Reference to this transaction for chaining
      */
     Transaction &
-    set_timeout(int timeout_ms) {
-        _query_timeout_ms = timeout_ms > 0 ? timeout_ms : 0;
+    set_timeout(qb::duration timeout) {
+        _query_timeout_ms =
+            timeout > qb::duration::zero()
+                ? static_cast<int>(
+                      std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count())
+                : 0;
         return *this;
     }
 
     /**
-     * @brief Milliseconds passed into the next `SET LOCAL statement_timeout` with `begin()` (0 =
-     * none).
+     * @brief Statement timeout applied by the next `SET LOCAL statement_timeout` with `begin()`
+     *        (`qb::duration::zero()` = none).
      */
-    [[nodiscard]] int
+    [[nodiscard]] qb::duration
     get_timeout() const {
-        return _query_timeout_ms;
+        return std::chrono::milliseconds(_query_timeout_ms);
     }
 
     /**
