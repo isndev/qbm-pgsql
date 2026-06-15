@@ -1144,6 +1144,12 @@ public:
         }
     }
 
+    // Bring the base semantic hook Transaction::on_command_complete(const std::string&)
+    // into scope so this protocol-level overload (message&) does not hide it
+    // (-Woverloaded-virtual). The two are intentionally distinct: this one parses the
+    // wire message and forwards the parsed tag to the Transaction hook via _current_command.
+    using Transaction::on_command_complete;
+
     /**
      * @brief Handles command complete messages
      *

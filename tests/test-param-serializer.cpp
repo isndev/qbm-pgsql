@@ -1836,8 +1836,8 @@ TEST_F(ParamSerializerTest, IntervalSerialization) {
     EXPECT_FALSE(text.empty());
 
     // Test 6: Verify from_text doesn't crash
-    auto result = TypeConverter<hours>::from_text("3600");
-    // Result may vary, just verify it compiles and runs
+    // Result may vary, just verify it compiles and runs without throwing
+    EXPECT_NO_THROW((void) TypeConverter<hours>::from_text("3600"));
 
     std::cout << "INTERVAL serialization test passed (text format preferred)" << std::endl;
 }
@@ -1853,11 +1853,8 @@ TEST_F(ParamSerializerTest, MixedComplexTypes) {
     ParamSerializer serializer;
 
     // Add various parameter types
-    int32_t     id = 12345;
     numeric     price("999.99");
-    pgdate      date   = pgdate::from_string("2024-12-25");
-    std::string name   = "Test Product";
-    bool        active = true;
+    pgdate      date = pgdate::from_string("2024-12-25");
 
     // Serialize numeric (as text for precision)
     std::vector<byte> numeric_buffer;
