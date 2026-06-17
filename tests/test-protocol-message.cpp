@@ -165,7 +165,7 @@ TEST(ProtocolMessage, SmallintRoundTrip) {
 // length the server controls) would feed an indeterminate count into reserve()/the
 // field loop.
 TEST(ProtocolMessage, SmallintShortReadFailsAndLeavesTargetUntouched) {
-    message m(row_description_tag);
+    message m(query_tag);
     m.write(static_cast<char>(0x00)); // one byte only; smallint needs two
     m.reset_read();
     smallint col_cnt = -12345; // sentinel
@@ -189,6 +189,7 @@ TEST(ProtocolMessage, DataRowRejectsOversizedFieldLength) {
     m.write(static_cast<smallint>(1));      // 1 column
     m.write(static_cast<integer>(1000));    // claims 1000 bytes...
     m.write('a');                           // ...but only 1 byte follows
+    (void) m.buffer();
     m.reset_read();
     row_data row;
     EXPECT_FALSE(m.read(row));               // rejected, no OOB read / crash
@@ -199,6 +200,7 @@ TEST(ProtocolMessage, DataRowRejectsOversizedFieldLength) {
 TEST(ProtocolMessage, DataRowRejectsNegativeColumnCount) {
     message m(data_row_tag);
     m.write(static_cast<smallint>(-1));     // negative column count
+    (void) m.buffer();
     m.reset_read();
     row_data row;
     EXPECT_FALSE(m.read(row));
@@ -211,6 +213,7 @@ TEST(ProtocolMessage, DataRowValidRoundTrip) {
     m.write(static_cast<integer>(-1));      // col 0 = NULL
     m.write(static_cast<integer>(3));       // col 1 = 3 bytes
     m.write('a'); m.write('b'); m.write('c');
+    (void) m.buffer();
     m.reset_read();
     row_data row;
     ASSERT_TRUE(m.read(row));
