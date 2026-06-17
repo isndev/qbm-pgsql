@@ -1,7 +1,7 @@
 # `qbm-pgsql` — Technical documentation index
 
 This directory is the **long-form** companion to the [root README](../README.md). It tracks the **current**
-implementation: **C++23**, **callback** (ordered async) and **coroutine** APIs on **`qb::io::async`**, **`Reply<T>`**,
+implementation: **C++20/23**, **callback** (ordered async) and **coroutine** APIs on **`qb::io::async`**, **`Reply<T>`**,
 **`run_sync`** (via **`pgsql/pgsql.h`**), **`with_transaction`**, **LISTEN/NOTIFY**, and **`set_timeout()`** + **`BEGIN`
 **.
 

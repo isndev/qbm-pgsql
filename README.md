@@ -1,11 +1,11 @@
 # qbm-pgsql
 
-**PostgreSQL wire-protocol client for [QB](https://github.com/isndev/qb)** — a **qb-io** module: C++23, async I/O on the
+**PostgreSQL wire-protocol client for [QB](https://github.com/isndev/qb)** — a **qb-io** module: C++20/23, async I/O on the
 **qb-io** event loop (libev), **`co_await`** or callbacks, same API.
 
 <p align="center">
   <img src="https://img.shields.io/badge/PostgreSQL-13%2B-blue.svg" alt="PostgreSQL"/>
-  <img src="https://img.shields.io/badge/C%2B%2B-23-blue.svg" alt="C++23"/>
+  <img src="https://img.shields.io/badge/C%2B%2B-20%2F23-blue.svg" alt="C++20/23"/>
   <img src="https://img.shields.io/badge/qb--io-module-orange.svg" alt="qb-io module"/>
   <img src="https://img.shields.io/badge/Cross--Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg" alt="Cross Platform"/>
   <img src="https://img.shields.io/badge/License-Apache%202.0-green.svg" alt="License"/>
@@ -464,7 +464,7 @@ Your handle is **`qb::pg::tcp::database`** or **`qb::pg::tcp::ssl::database`** �
 ## Requirements
 
 - **qb-io** (libev, **`qb::io::async`**) — **required**; this module is built on it
-- **C++23**
+- **C++20/23**
 - **CMake** 3.14+ and QB **qbm** module registration (see `CMakeLists.txt`: `DEPENDS qb-core` for the monorepo graph)
 - **PostgreSQL** 13+ (typical)
 - **OpenSSL** when **`QB_HAS_SSL`** (TLS client + SCRAM)
