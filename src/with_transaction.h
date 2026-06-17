@@ -10,9 +10,10 @@
 #include <exception>
 #include <optional>
 #include <type_traits>
-#include <utility> // std::unreachable (C++23)
+#include <utility>
 
 #include <qb/io/async/coroutine.h>
+#include <qb/utility/compat.h>
 
 #include "./common.h"
 #include "./pg_reply.h"
@@ -93,7 +94,7 @@ with_transaction_impl(Transaction &tr, F &&f, BeginOp &&begin_op) {
         }
         co_return ::qb::pg::Reply<void>::success();
     } else {
-        std::unreachable();
+        qb::unreachable();
     }
 }
 
