@@ -139,10 +139,9 @@ TEST_F(PgNotifyTest, NotifyCoConsumer_Receive) {
         auto lr = co_await sub.listen(std::string(kChan));
         if (!lr.ok())
             co_return false;
-        if (!pub_->notify(std::string(kChan), "co-recv", discard_query, discard_error).await())
+        if (!(co_await pub_->notify(std::string(kChan), "co-recv")).ok())
             co_return false;
         auto n = co_await sub.receive();
-        sub.disconnect();
         co_return n.has_value() && n->channel == std::string(kChan) && n->payload == "co-recv";
     }()));
 }
@@ -154,13 +153,12 @@ TEST_F(PgNotifyTest, NotifyCoConsumer_TwoSequentialReceives_Ordered) {
             co_return false;
         if (!(co_await sub.listen(std::string(kChan))).ok())
             co_return false;
-        if (!pub_->notify(std::string(kChan), "first", discard_query, discard_error).await())
+        if (!(co_await pub_->notify(std::string(kChan), "first")).ok())
             co_return false;
-        if (!pub_->notify(std::string(kChan), "second", discard_query, discard_error).await())
+        if (!(co_await pub_->notify(std::string(kChan), "second")).ok())
             co_return false;
         auto a = co_await sub.receive();
         auto b = co_await sub.receive();
-        sub.disconnect();
         co_return a.has_value() && b.has_value() && a->payload == "first" && b->payload == "second";
     }()));
 }
@@ -177,10 +175,9 @@ TEST_F(PgNotifyTest, NotifyCoConsumer_CallbackAndReceive) {
             co_return false;
         if (!(co_await sub.listen(std::string(kChan))).ok())
             co_return false;
-        if (!pub_->notify(std::string(kChan), "both", discard_query, discard_error).await())
+        if (!(co_await pub_->notify(std::string(kChan), "both")).ok())
             co_return false;
         auto n = co_await sub.receive();
-        sub.disconnect();
         co_return n.has_value() && n->payload == "both" &&
             cb_hits.load(std::memory_order_relaxed) == 1;
     }()));
@@ -208,22 +205,26 @@ TEST_F(PgNotifyTest, NotifyCoConsumer_ServerBackendPidPositive) {
             co_return false;
         if (!(co_await sub.listen(std::string(kChan))).ok())
             co_return false;
-        if (!pub_->notify(std::string(kChan), "pid", discard_query, discard_error).await())
+        if (!(co_await pub_->notify(std::string(kChan), "pid")).ok())
             co_return false;
         auto n = co_await sub.receive();
-        sub.disconnect();
         co_return n.has_value() && n->server_backend_pid > 0;
     }()));
 }
 
 TEST_F(PgNotifyTest, NotifyCoConsumer_ReceiveNulloptAfterDisconnect) {
+    qb::pg::tcp::notify_co_consumer sub(qb::pg::test::dsn_tcp_string());
     ASSERT_TRUE(qb::io::async::run_sync([&]() -> qb::io::async::task<bool> {
-        qb::pg::tcp::notify_co_consumer sub(qb::pg::test::dsn_tcp_string());
         if (!co_await sub.connect(qb::pg::test::dsn_tcp_string()))
             co_return false;
         if (!(co_await sub.listen(std::string(kChan))).ok())
             co_return false;
-        sub.disconnect();
+        co_return true;
+    }()));
+
+    sub.disconnect();
+
+    ASSERT_TRUE(qb::io::async::run_sync([&]() -> qb::io::async::task<bool> {
         auto n = co_await sub.receive();
         co_return !n.has_value();
     }()));
@@ -231,29 +232,35 @@ TEST_F(PgNotifyTest, NotifyCoConsumer_ReceiveNulloptAfterDisconnect) {
 
 TEST_F(PgNotifyTest, NotifyCoConsumer_ChannelFull_DroppedHandler) {
     std::atomic<int> dropped{0};
+    qb::pg::tcp::notify_co_consumer sub(qb::pg::test::dsn_tcp_string(), /*capacity*/ 1);
+    sub.on_notify_dropped([&](qb::pg::notification &&n) {
+        if (n.channel == std::string(kChan))
+            dropped.fetch_add(1, std::memory_order_relaxed);
+    });
+
     ASSERT_TRUE(qb::io::async::run_sync([&]() -> qb::io::async::task<bool> {
-        qb::pg::tcp::notify_co_consumer sub(qb::pg::test::dsn_tcp_string(), /*capacity*/ 1);
-        sub.on_notify_dropped([&](qb::pg::notification &&n) {
-            if (n.channel == std::string(kChan))
-                dropped.fetch_add(1, std::memory_order_relaxed);
-        });
         if (!co_await sub.connect(qb::pg::test::dsn_tcp_string()))
             co_return false;
         if (!(co_await sub.listen(std::string(kChan))).ok())
             co_return false;
-        if (!pub_->notify(std::string(kChan), "one", discard_query, discard_error).await())
+        if (!(co_await pub_->notify(std::string(kChan), "one")).ok())
             co_return false;
-        if (!pub_->notify(std::string(kChan), "two", discard_query, discard_error).await())
+        if (!(co_await pub_->notify(std::string(kChan), "two")).ok())
             co_return false;
-        // Drain the subscriber socket so the second NotificationResponse reaches deliver_pg_notify
-        // before receive(); otherwise recv() can complete synchronously from the buffer and skip
-        // running the loop, leaving the second notify undelivered (dropped stays 0).
-        io_pump();
+        co_return true;
+    }()));
+
+    // Drain the subscriber socket so the second NotificationResponse reaches deliver_pg_notify
+    // before receive(); otherwise recv() can complete synchronously from the buffer and skip
+    // running the loop, leaving the second notify undelivered (dropped stays 0).
+    io_pump();
+
+    ASSERT_TRUE(qb::io::async::run_sync([&]() -> qb::io::async::task<bool> {
         auto first = co_await sub.receive();
-        sub.disconnect();
         co_return first.has_value() && first->payload == "one" &&
             dropped.load(std::memory_order_relaxed) == 1;
     }()));
+    sub.disconnect();
 }
 
 TEST_F(PgNotifyTest, PlainDatabase_OnIncomingNotify) {

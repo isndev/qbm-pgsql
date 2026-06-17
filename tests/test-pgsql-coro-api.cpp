@@ -76,14 +76,14 @@ TEST_F(PgsqlCoroApiTest, CoroBegin_SetTimeout_AbortsLongStatement) {
 
 TEST_F(PgsqlCoroApiTest, CoroConnectThenQuery) {
     bool ok = false;
+    auto fresh = std::make_unique<qb::pg::tcp::database>();
     qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
-        auto fresh = std::make_unique<qb::pg::tcp::database>();
         if (!co_await fresh->connect(qb::pg::test::dsn_tcp_string()))
             co_return;
         auto reply = co_await fresh->query("SELECT 1 AS one");
         ok         = reply.ok() && reply.result().size() == 1 && reply.result()[0][0].as<int>() == 1;
-        fresh->disconnect();
     }());
+    fresh->disconnect();
     ASSERT_TRUE(ok);
 }
 
