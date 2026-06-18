@@ -1,105 +1,89 @@
-# `qbm-pgsql` — Technical documentation index
+# qbm-pgsql documentation map
 
-This directory is the **long-form** companion to the [root README](../README.md). It tracks the **current**
-implementation: **C++20/23**, **callback** (ordered async) and **coroutine** APIs on **`qb::io::async`**, **`Reply<T>`**,
-**`run_sync`** (via **`pgsql/pgsql.h`**), **`with_transaction`**, **LISTEN/NOTIFY**, and **`set_timeout()`** + **`BEGIN`
-**.
+> **Audience:** Adopter · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 2.0.0 (C++20 default, C++23 supported)
 
----
+This is the table of contents for the qbm-pgsql narrative documentation: seven topic pages covering connection management, query execution, transactions, result sets, type mapping, error handling, and integration testing, ordered as a learning path.
 
-## How to read this module
+**Prerequisites:** working knowledge of the qb framework — see [`qb/README.md`](../../../qb/README.md) and the qb [`readme/`](../../../qb/readme/) docs for `qb-io` async, coroutines, and `run_sync`. **See also:** the module front door [`../README.md`](../README.md) for positioning, the build matrix, and a quickstart.
 
-### 1. One header for application code
+## What this module is
+
+qbm-pgsql is an asynchronous PostgreSQL client built on the qb-io event loop. It implements the PostgreSQL wire protocol directly — connection handshake and authentication, simple and prepared statements, transactions and savepoints, result decoding, type mapping, and LISTEN/NOTIFY — over a single non-blocking TCP (or TLS) session. The public surface lives in the `qb::pg` namespace; `qb::pg::detail` holds the implementation. The umbrella header is `<pgsql/pgsql.h>`.
+
+The module is a **compiled static library**, not header-only. The build registers it through `qb_register_module` with a `SOURCES` list of twelve translation units (`qbm/pgsql/CMakeLists.txt:32-50`), so consuming it links a real archive under the alias `qbm::pgsql`. It compiles at C++20 by default and C++23 when `QB_CXX_STANDARD=23`; the standard is governed by the framework, not the module, and propagates to consumers as a compile feature.
+
+Every database operation has two interchangeable completion models with the same method names:
+
+| Model | How work finishes | Drive it with |
+|---|---|---|
+| **Coroutine** | Overloads *without* callbacks return an awaiter; `co_await` yields `Reply<T>`. | `co_await` inside a coroutine, or `qb::io::async::run_sync(...)` from synchronous code. |
+| **Callback** | Overloads *with* success/error callbacks return `Transaction&` for fluent chaining. | `qb::io::async::run` / `run_once`, optionally `Transaction::await()` for a `status` snapshot. |
+
+Use one style per call stack. Do not place undriven coroutine awaiters inside a callback body — see the "Large-project conventions" note in `pgsql.h`.
+
+## Integration in one place
+
+You consume qbm-pgsql through the qb module loader, not `find_package`:
+
+<!-- src: qbm/pgsql/README.md:149-151 -->
+```cmake
+add_subdirectory(qb)                                   # the framework first
+qb_load_modules("${CMAKE_CURRENT_SOURCE_DIR}/qbm")     # discovers and adds qbm modules
+# ...
+target_link_libraries(your_app PRIVATE qbm::pgsql)     # links qb::core PUBLIC, qb::io transitively
+```
 
 ```cpp
-#include <pgsql/pgsql.h>
+#include <pgsql/pgsql.h>   // connection, transactions, Reply, with_transaction, types, discards
 ```
 
-You get **`qb::pg::tcp::database`**, **`Reply`**, **`transaction_abort`**, **`with_transaction`**, **`task`**, *
-*`run_sync`**, discards, OID aliases, and (through **`qb::io::async`**) **`init`**, **`run`**, **`run_once`**. For *
-*standalone** programs, call **`qb::io::async::init()`** before the first DB operation.
+`DEPENDS qb-core` in the module's `CMakeLists.txt` is build wiring: it links `qb::core` `PUBLIC`, which brings in `qb::io` transitively. At the API level the client depends on qb-io (`qb::io::async`, the TCP/TLS transport, the coroutine `task`, `run_sync`); qb-core is required only when you hold a `database` inside an actor. The module's `CMakeLists.txt` guards on `QB_FOUND` and returns early if the framework is absent, so `add_subdirectory(qb)` must come first.
 
-### 2. Two orthogonal completion models
+## A note on TLS and time
 
-| Model          | When to use                                      | How work finishes                                                                                                                                     |
-|:---------------|:-------------------------------------------------|:------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **Callbacks**  | Fluent chains, actor-friendly enqueue-only style | **`run_once`** / **`run`** drains **`_queries`**; **`Transaction::await()`** is **optional** (tests, init, or when you need a **`status`** snapshot). |
-| **Coroutines** | **`with_transaction`**, linear control flow      | **`co_await`** → **`Reply<T>`**; sync bridge **`run_sync`**.                                                                                        |
+- **TLS** — there is no pgsql-specific SSL option. Transport security follows the framework-wide `QB_HAS_SSL` (derived from OpenSSL detection). With SSL on, the `qb::pg::tcp::ssl::database` alias exists; with it off, the build emits a status note and only cleartext TCP is available. Transport is a compile-time choice (`tcp::database` vs `tcp::ssl::database`), independent of the connection-string scheme.
+- **Time** — connect, statement, and transaction timeouts are `qb::duration` (truncated to whole milliseconds where the wire requires it). The PostgreSQL `timestamptz` type (OID 1184) maps to `qb::wall_time`, round-tripped as integer microseconds. The PostgreSQL wire epoch (microseconds since 2000-01-01) is an internal native encoding decoded inside the type layer — it is never surfaced as `qb::duration`. Retired tokens such as `qb::Timestamp` do not appear anywhere in this API.
 
-**Ordered async:** Callback overloads push **`ISqlQuery`** and sub-commands onto queues ([
-`transaction.cpp`](../src/transaction.cpp)). They return **`Transaction&`** immediately. **`then` / `success` / `error`
-** enqueue **`Then` / `Error`** wrappers ([`transaction.inl`](../src/transaction.inl)); when those objects are **popped
-**, their destructors run the next success or error lambda ([`commands.h`](../src/commands.h) — see **`Then::~Then`**, *
-*`Error::~Error`**).
+## Pages
 
-**Never mix** undriven coroutine awaiters inside **`begin(...)`** callback bodies — see **`pgsql.h`** “Large-project
-conventions”.
+Read top to bottom for a first pass. Each row links the page and gives its one-line scope.
 
-### 3. Mental model
+| # | Page | What it covers |
+|---|---|---|
+| 1 | [Connection management](./connection.md) | DSN parsing, `connection_options`, the `connect` awaiter (no callback connect), handshake and authentication (MD5, SCRAM-SHA-256, cleartext), `disconnect` / `prepare_reconnect`, keepalive, and TLS. |
+| 2 | [Query execution](./queries.md) | Simple and prepared statements: `execute` / `query` / `prepare`, parameter binding, `execute_file` / `prepare_file`, the prepared-statement LRU, LISTEN / NOTIFY, and the `discard_*` no-op callbacks. |
+| 3 | [Transactions and command queues](./transaction.md) | `begin` / `commit` / `rollback`, `transaction_mode` (isolation, read-only, deferrable), savepoints, the callback `then` / `error` chain and optional `await()`, the coroutine `with_transaction` helper, `transaction_abort`, and `set_timeout`. |
+| 4 | [Result sets and row access](./results.md) | `results`, `row`, and `field`; `as<T>()` and tuple extraction; `std::optional<T>` for NULL; the deep-snapshot ownership of coroutine replies; and `results.json()`. |
+| 5 | [Data types and wire formats](./types.md) | The OID and `TypeConverter` model; scalars, `qb::wall_time` (`timestamptz`), `qb::uuid`, JSON/JSONB, BYTEA, NUMERIC, DATE/TIME; `type_mapping`, `nullable<T>`, and binary versus text formats. |
+| 6 | [Error handling](./error_handling.md) | `Reply<T>` success/failure, `error::db_error`, SQLSTATE codes, `error::client_error` and `value_is_null`, and the callback `status` snapshot after `await()`. |
+| 7 | [Integration testing](./testing.md) | The `QB_PG_*` environment variables (`QB_PG_SSL_DSN`, `QB_PG_INVALID_DSN`, `QB_PG_ASSERT_SSL_CONNECTED`), running the suite under CTest, and the test-to-feature map. |
 
-One **`database`** instance owns **one TCP (or TLS) session**, **one protocol state machine**, and **one
-prepared-statement LRU**. **`execute` / `prepare` / `begin`** enqueue work; the thread that drives **`qb::io::async`**
-executes wire I/O and invokes callbacks or resumes coroutines.
+## Suggested learning order
 
----
+The numbering is the recommended path; you do not need all of it for every task.
 
-## Guide files
+1. **Connect (1).** Start here — every operation needs a connected `database`, and the page establishes the coroutine-versus-callback split you will use throughout.
+2. **Run statements (2, 4).** Query execution and result access are the core of day-to-day work. Read them together: page 2 sends SQL, page 4 reads what comes back.
+3. **Group work atomically (3).** Transactions, savepoints, and `with_transaction` build on the single-statement model from pages 2 and 4.
+4. **Map your data (5).** The type page is reference material; consult it when binding parameters or decoding columns, especially for timestamps, UUIDs, JSON, and NUMERIC.
+5. **Handle failure (6).** `Reply<T>`, SQLSTATE, and the `status` snapshot apply to every operation; read this once you are past the happy path.
+6. **Test it (7).** The integration suite is executable documentation; the test map points you at the example that exercises any feature.
 
-| File                                         | Topics                                                                                                                                                                                                     |
-|:---------------------------------------------|:-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **[connection.md](./connection.md)**         | DSN, **`connection_options`**, **`connect_awaiter`** only (no callback connect), handshake, **`disconnect`/`prepare_reconnect`**, SSL, auth                                                                |
-| **[transaction.md](./transaction.md)**       | **`Begin`/`End`**, ordered async, **`then`/`error`** (inner vs root chain), optional **`await()`**, **`status`**, coroutine **`commit`/`rollback`**, **`with_transaction`**, **`set_timeout`**, savepoints |
-| **[queries.md](./queries.md)**               | Every op: coroutine + callback, **`execute` SFINAE**, prepared/file/NOTIFY/LISTEN, discards                                                                                                                |
-| **[results.md](./results.md)**               | **`results`**, **`result_impl`**, **`row`/`field`**, **`Reply<resultset>`**, JSON                                                                                                                        |
-| **[types.md](./types.md)**                   | OIDs, **`type_oid_prefers_binary_result_format`**, **`ParamSerializer`/`FieldHandler`**, **`params`**, NULL                                                                                                |
-| **[error_handling.md](./error_handling.md)** | **`Reply`**, **`Error` command**, **`status`**, SQLSTATE, **`client_error`**                                                                                                                             |
-| **[testing.md](./testing.md)**               | **`QB_PG_*`**, CTest, test map; **`.then`/`.error`** coverage gap                                                                                                                                          |
-
----
-
-## Source map (contributors)
-
-| Concern                                                  | Location                                                                                                                  |
-|:---------------------------------------------------------|:--------------------------------------------------------------------------------------------------------------------------|
-| Public API surface, routing, auth, COPY/notify handlers  | **`qbm/pgsql/pgsql.h`**                                                                                                   |
-| Command queue, **`await()`**, coroutine overloads        | **`src/transaction.h`**, **`transaction.cpp`**, **`transaction.inl`**, **`transaction_coro.inl`**                         |
-| **`Begin`/`End`/`SavePoint`/`Then`/`Error`**             | **`src/commands.h`**                                                                                                      |
-| **`BeginQuery`/`CommitQuery`/…** wire bytes              | **`src/queries.h`**                                                                                                       |
-| **`with_transaction`**                                   | **`src/coro_with_transaction.hpp`**                                                                                       |
-| **`pg_awaiter`**, **`Reply`**, **`transaction_abort`** | **`src/pg_awaiter.h`**, **`src/pg_reply.h`**                                                                              |
-| Framed messages                                          | **`src/protocol.h`**, **`src/protocol.cpp`**, **`qb::protocol::pgsql`** in **`pgsql.h`**                                  |
-| Types / bind / unbind                                    | **`type_mapping.h`**, **`type_converter.h`**, **`param_serializer.h`**, **`param_unserializer.h`**, **`field_handler.h`** |
-| Errors / SQLSTATE                                        | **`src/error.h`**, **`src/sqlstates.h`**                                                                                  |
-| NOTIFY SQL safety                                        | **`src/pg_notify_sql.h`**                                                                                               |
-
----
-
-## Optional: queue / drain flow
-
-```mermaid
-flowchart TD
-  enqueue[enqueue sub_commands and queries]
-  runOnce[run_once drives protocol]
-  pop[pop runs Then_Error dtors]
-  awaitOpt[optional await drains queues]
-  enqueue --> runOnce
-  runOnce --> pop
-  awaitOpt --> runOnce
-```
-
----
+If you only need to issue one-shot queries, read pages 1, 2, and 4. If you are writing transactional workloads, add page 3. Reach for pages 5 and 6 as reference whenever a type or error question comes up.
 
 ## Examples as specification
 
-Integration tests under **`qbm/pgsql/tests/`** are **executable documentation**. When in doubt, grep the test name or
-read:
+The integration tests under [`../tests/`](../tests/) are executable documentation. When a signature or behavior is unclear, grep a test name and read it:
 
-- **`test-pgsql-coro-api.cpp`** — coroutines, **`with_transaction`**, savepoints, **`run_sync`**
-- **`test-transaction.cpp`** — callback **`begin`**, nested **`savepoint`**, **`await()`**
-- **`test-notify.cpp`** — LISTEN/NOTIFY, **`notify_co_consumer`**, **`io_pump`** ordering
-- **`test-transaction-advanced.cpp`** — timeouts, constraints, cursors, **`set_timeout`**
-- **`test-prepared-statements.cpp`** — LRU, eviction, large results
-- **`test-protocol-integration.cpp`** — COPY edge, binary columns, integration
+- `test-pgsql-coro-api.cpp` — coroutines, `with_transaction`, savepoints, `run_sync`.
+- `test-transaction.cpp` — callback `begin`, nested savepoints, `await()`.
+- `test-notify.cpp` — LISTEN/NOTIFY, `notify_co_consumer`, and pump ordering.
+- `test-transaction-advanced.cpp` — timeouts, constraints, cursors, `set_timeout`.
+- `test-prepared-statements.cpp` — the prepared-statement LRU, eviction, and large results.
+- `test-protocol-integration.cpp` — COPY edges, binary columns, and end-to-end protocol coverage.
 
-**Note:** Fluent **`.then` / `.error` on the root `database`** after **`begin`** are **rarely exercised** in tests;
-behaviour is defined in **`src/commands.h`**. See [testing.md](./testing.md).
+## See also
+
+- [`../README.md`](../README.md) — module positioning, build matrix, and quickstart.
+- [`qb/README.md`](../../../qb/README.md) — the qb framework this module builds on.
+- The qb framework [`readme/`](../../../qb/readme/) — `qb-io` async, coroutines, and `run_sync`.
