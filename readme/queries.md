@@ -1,10 +1,14 @@
 # Query execution
 
-How **`qbm-pgsql`** runs **simple** queries, **extended** (prepared) queries, **files**, and **LISTEN/NOTIFY** — *
-*coroutine** and **callback** overloads for every SQL-facing operation except where noted
-in [transaction.md](./transaction.md) / [connection.md](./connection.md).
+> **Audience:** Adopter · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 2.0.0 (C++20 default, C++23 supported)
 
-**Include:** `#include <pgsql/pgsql.h>`.
+Run simple queries, extended (prepared) queries, SQL files, and `LISTEN`/`NOTIFY` against a `qb::pg::tcp::database` (or `qb::pg::tcp::ssl::database` on an OpenSSL build), using either the coroutine or the callback overload of each SQL-facing operation.
+
+**Prerequisites:** [connection.md](./connection.md) (open a connection first) — **See also:** [transaction.md](./transaction.md), [results.md](./results.md), [types.md](./types.md), [error_handling.md](./error_handling.md)
+
+**Include:** `#include <pgsql/pgsql.h>` — public surface is in namespace `qb::pg`.
+
+`qbm-pgsql` is a compiled static library (`qbm::pgsql`); link it with `target_link_libraries(app PRIVATE qbm::pgsql)`. It is not header-only.
 
 ---
 
@@ -25,10 +29,12 @@ From [`src/transaction.inl`](../src/transaction.inl) **`Transaction::execute(exp
 | **`(Transaction&, results)`** | **`ResultQuery`** | **`SELECT`** / any statement that returns rows you read in the callback |
 | **`(Transaction&)`** only     | **`Query`**       | Fire-and-forget or you read side effects elsewhere                      |
 
-Wrong arity fails at compile time (`static_assert` message in **`transaction.inl`**).
+The overload selects the command type from your lambda's arity via `if constexpr (std::is_invocable_v<...>)`
+([`transaction.inl`](../src/transaction.inl)). Only these two arities are valid; any other success
+signature stops compilation when the selected command instantiates against your callback.
 
 **Coroutine:** only **`co_await execute(expr)`** → **`Reply<resultset>`**; no SFINAE split (always a resultset
-payload, possibly empty).
+payload, possibly empty). Check **`reply.ok()`** before **`reply.result()`**.
 
 ---
 
@@ -74,7 +80,9 @@ db.execute(
 db.execute("NOTIFY chan, 'x'", [](qb::pg::transaction&) {}, [](qb::pg::error::db_error const&) {});
 ```
 
-**`query(sql)`** — alias of **`execute(sql)`** ([`transaction.h`](../src/transaction.h)).
+**`query(sql)`** is the coroutine simple-query entry point — it returns the same
+**`pg_reply_awaiter<resultset>`** as **`co_await execute(sql)`** ([`transaction.h`](../src/transaction.h)). There is no callback
+**`query`** overload; use **`execute(sql, cb, err)`** for the callback path.
 
 **Blocking:** **`qb::io::async::run_sync(db.execute("SELECT 1"))`** — no **`.await()`** on **`pg_reply_awaiter`**.
 
@@ -114,8 +122,14 @@ db.execute("by_email", qb::pg::params{email},
 
 ## `execute_file` / `prepare_file`
 
-**Implementation:** [`transaction.inl`](../src/transaction.inl) reads the file then delegates to **`execute` / `prepare`
-**; file errors can throw **`query_error`** after invoking **`on_error`**.
+Both read the file then delegate to **`execute` / `prepare`**. The two paths report a file error differently:
+
+- **Callback overloads** ([`transaction.inl`](../src/transaction.inl)) invoke **`on_error`** with an
+  **`error::query_error`**, then **rethrow** it — wrap the call in `try`/`catch` if a missing or unreadable file
+  must not propagate.
+- **Coroutine overloads** ([`transaction_coro.inl`](../src/transaction_coro.inl)) do not throw; they surface the
+  file error as a failed **`Reply`** (check **`reply.ok()`**). The coroutine **`prepare_file`** yields
+  **`Reply<PreparedQuery>`**, matching **`co_await prepare`**.
 
 **Coroutine**
 
@@ -175,11 +189,13 @@ db.unlisten("chan", qb::pg::discard_query, qb::pg::discard_error);
 db.unlisten_all(qb::pg::discard_query, qb::pg::discard_error);
 ```
 
-**Delivery:** register **`db.on_incoming_notify([](qb::pg::notification&& n) { … })`** on plain **`tcp::database`** ([
-`pgsql.h`](../pgsql.h)). **`notification`** holds channel, payload, process id.
+**Delivery:** register **`db.on_incoming_notify([](qb::pg::notification&& n) { … })`** on a plain **`tcp::database`** ([
+`pgsql.h`](../pgsql.h)). **`qb::pg::notification`** holds **`channel`**, **`payload`**, and the originating backend
+PID **`server_backend_pid`**. The handler runs on the I/O thread when a `NotificationResponse` arrives.
 
-**`notify_co_consumer`:** optional **`on_notify`**, **`on_notify_dropped`**, **`co_await receive()`** — same class as *
-*`notify_cb_consumer`**. See **`test-notify.cpp`** for **`io_pump`** / ordering.
+**`notify_co_consumer`:** optional **`on_notify`**, **`on_notify_dropped`**, **`co_await receive()`** —
+**`notify_cb_consumer`** is an alias of the same class ([`pgsql.h`](../pgsql.h)). See
+[`tests/test-notify.cpp`](../tests/test-notify.cpp) for the `io_pump` and ordering patterns.
 
 ---
 
@@ -219,7 +235,7 @@ Defined in **`pgsql.h`**.
 
 ## Related
 
-- [transaction.md](./transaction.md) — **`begin`**, **`then`/`error`**, **`await()`**
+- [transaction.md](./transaction.md) — **`begin`**, **`then`** / **`error`**, **`await()`**
 - [results.md](./results.md) — **`results`**, **`Reply`**
-- [types.md](./types.md) — **`params`**, OIDs
-- [error_handling.md](./error_handling.md) — **`on_err`**, **`Error` command**  
+- [types.md](./types.md) — **`params`**, OIDs, `timestamptz` ↔ **`qb::wall_time`**
+- [error_handling.md](./error_handling.md) — **`error::db_error`**, the **`Error`** command
