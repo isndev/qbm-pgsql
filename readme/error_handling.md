@@ -8,7 +8,7 @@ How `qbm-pgsql` reports failures: the `qb::pg::error::db_error` hierarchy, SQLST
 
 **Include:** `#include <pgsql/pgsql.h>` — the error surface lives in namespace `qb::pg` and `qb::pg::error`.
 
-`qbm-pgsql` is a compiled static library (`qbm::pgsql`); link it with `target_link_libraries(app PRIVATE qbm::pgsql)`. It is not header-only.
+`qbm-pgsql` is a compiled library (`qbm::pgsql`) — static by default, shared when `BUILD_SHARED_LIBS`/`QB_BUILD_SHARED_LIBS` is on; link it with `target_link_libraries(app PRIVATE qbm::pgsql)`. It is not header-only.
 
 ---
 
@@ -158,13 +158,19 @@ using namespace qb::pg;
 
 qb::io::async::task<Reply<void>> transfer(tcp::database &db, int from, int to, int amount) {
     co_return co_await with_transaction(db, [&](transaction &tr) -> qb::io::async::task<void> {
-        auto debit = co_await tr.execute(
-            "UPDATE accounts SET balance = balance - $1 WHERE id = $2", amount, from);
+        // Placeholders ($1/$2) bind only through a prepared statement executed by name —
+        // there is no execute(sql, arg1, arg2, ...) overload that binds against inline SQL.
+        auto prep = co_await tr.prepare("move_funds",
+            "UPDATE accounts SET balance = balance + $1 WHERE id = $2",
+            type_oid_sequence{oid::int4, oid::int4});
+        if (!prep.ok())
+            throw transaction_abort{prep.error()};
+
+        auto debit = co_await tr.execute("move_funds", params{-amount, from});
         if (!debit.ok())
             throw transaction_abort{debit.error()};
 
-        auto credit = co_await tr.execute(
-            "UPDATE accounts SET balance = balance + $1 WHERE id = $2", amount, to);
+        auto credit = co_await tr.execute("move_funds", params{amount, to});
         if (!credit.ok())
             throw transaction_abort{credit.error()};
 

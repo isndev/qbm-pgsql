@@ -11,7 +11,7 @@ Build and run the qbm-pgsql test suite under CTest: pure-unit suites run anywher
 The test tree lives in [`../tests/`](../tests/) and builds one GoogleTest executable per suite. The suites are executable specification: when this documentation and the code disagree, prefer the test and file a doc bug. Two facts govern how you run them:
 
 - **Tests are opt-in at configure time.** Nothing under `tests/` is built unless `QB_BUILD_TESTS` is on. The framework option defaults to `ON` (<!-- src: qb/cmake/qbConfig.cmake:59 -->), and the qb-dev super-project forces it on (<!-- src: CMakeLists.txt:14 -->), so a default build already produces the binaries.
-- **Integration suites need a live server.** Five suites are pure unit tests with no socket. The rest connect to PostgreSQL; each gates its fixture on a successful connect and calls `GTEST_SKIP()` when the server is unreachable, so the suite passes (as skipped) rather than failing on a machine with no database.
+- **Integration suites need a live server.** Six suites are pure unit tests with no socket. The rest connect to PostgreSQL; each gates its fixture on a successful connect and calls `GTEST_SKIP()` when the server is unreachable, so the suite passes (as skipped) rather than failing on a machine with no database.
 
 ## Concepts
 
