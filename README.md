@@ -18,7 +18,7 @@ The public surface lives in `qb::pg` (internals in `qb::pg::detail`). A single h
 #include <pgsql/pgsql.h>   // brings in <qb/io/async.h> transitively
 ```
 
-`qbm-pgsql` is a **compiled static library** (12 translation units), aliased `qbm::pgsql`. It is **not** header-only — link it; including the header alone will not resolve the protocol, type, and error symbols.
+`qbm-pgsql` is a **compiled library** (12 translation units), aliased `qbm::pgsql` — static by default, or shared when `BUILD_SHARED_LIBS`/`QB_BUILD_SHARED_LIBS` is on. It is **not** header-only — link it; including the header alone will not resolve the protocol, type, and error symbols.
 
 ### How it relates to qb-core
 
@@ -143,7 +143,7 @@ db.begin(
 
 ## Integrate in CMake
 
-Add the framework, load the modules, and link the alias. Requires CMake 3.14+.
+Add the framework, load the modules, and link the alias. Requires CMake 3.24+ (the qb framework's `cmake_minimum_required`).
 
 ```cmake
 add_subdirectory(qb)                                # the qb framework tree
