@@ -28,7 +28,7 @@
  * @see qb::pg::detail::Database
  *
  * @author qb - C++ Actor Framework
- * @copyright Copyright (c) 2011-2025 qb - isndev (cpp.actor)
+ * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -91,9 +91,7 @@ protected:
     TearDown() override {
         if (db_) {
             // Clean up the test table before disconnecting
-            auto status =
-                db_->execute("DROP TABLE IF EXISTS test_errors", discard_query, discard_error)
-                    .await();
+            auto status = db_->execute("DROP TABLE IF EXISTS test_errors", discard_query, discard_error).await();
 
             // Disconnect the database
             db_->disconnect();
@@ -110,8 +108,7 @@ protected:
     void
     setupTestTable() {
         // First drop the table if it exists
-        auto drop_status =
-            db_->execute("DROP TABLE IF EXISTS test_errors", discard_query, discard_error).await();
+        auto drop_status = db_->execute("DROP TABLE IF EXISTS test_errors", discard_query, discard_error).await();
 
         // Create the test table
         auto create_status = db_->execute("CREATE TABLE IF NOT EXISTS test_errors ("
@@ -137,14 +134,11 @@ TEST_F(PostgreSQLErrorHandlingTest, SyntaxError) {
     bool error_caught = false;
     auto status =
         db_->execute(
-               "INVALID SQL STATEMENT",
-               [](Transaction &tr, results result) { FAIL() << "Query should have failed"; },
+               "INVALID SQL STATEMENT", [](Transaction &tr, results result) { FAIL() << "Query should have failed"; },
                [&error_caught](error::db_error err) {
                    error_caught = true;
                    // Check error contains syntax-related info
-                   EXPECT_TRUE(err.what() != nullptr &&
-                               (std::string(err.what()).find("syntax") != std::string::npos ||
-                                err.code == "42601"));
+                   EXPECT_TRUE(err.what() != nullptr && (std::string(err.what()).find("syntax") != std::string::npos || err.code == "42601"));
                })
             .await();
 
@@ -164,19 +158,15 @@ TEST_F(PostgreSQLErrorHandlingTest, SyntaxError_Coroutine) {
 // Test handling of queries on non-existent tables
 TEST_F(PostgreSQLErrorHandlingTest, TableNotFound) {
     bool error_caught = false;
-    auto status =
-        db_->execute(
-               "SELECT * FROM non_existent_table",
-               [](Transaction &tr, results result) { FAIL() << "Query should have failed"; },
-               [&error_caught](error::db_error err) {
-                   error_caught = true;
-                   // Check error contains relation-related info
-                   EXPECT_TRUE(
-                       err.what() != nullptr &&
-                       (std::string(err.what()).find("does not exist") != std::string::npos ||
-                        err.code == "42P01"));
-               })
-            .await();
+    auto status       = db_->execute(
+                               "SELECT * FROM non_existent_table", [](Transaction &tr, results result) { FAIL() << "Query should have failed"; },
+                               [&error_caught](error::db_error err) {
+                             error_caught = true;
+                             // Check error contains relation-related info
+                             EXPECT_TRUE(err.what() != nullptr
+                                         && (std::string(err.what()).find("does not exist") != std::string::npos || err.code == "42P01"));
+                               })
+                            .await();
 
     EXPECT_TRUE(error_caught);
 }
@@ -195,14 +185,11 @@ TEST_F(PostgreSQLErrorHandlingTest, ColumnNotFound) {
     bool error_caught = false;
     auto status =
         db_->execute(
-               "SELECT non_existent_column FROM test_errors",
-               [](Transaction &tr, results result) { FAIL() << "Query should have failed"; },
+               "SELECT non_existent_column FROM test_errors", [](Transaction &tr, results result) { FAIL() << "Query should have failed"; },
                [&error_caught](error::db_error err) {
                    error_caught = true;
                    // Check error contains column-related info
-                   EXPECT_TRUE(err.what() != nullptr &&
-                               (std::string(err.what()).find("column") != std::string::npos ||
-                                err.code == "42703"));
+                   EXPECT_TRUE(err.what() != nullptr && (std::string(err.what()).find("column") != std::string::npos || err.code == "42703"));
                })
             .await();
 
@@ -214,14 +201,11 @@ TEST_F(PostgreSQLErrorHandlingTest, NotNullViolation) {
     bool error_caught = false;
     auto status =
         db_->execute(
-               "INSERT INTO test_errors (value) VALUES (NULL)",
-               [](Transaction &tr, results result) { FAIL() << "Query should have failed"; },
+               "INSERT INTO test_errors (value) VALUES (NULL)", [](Transaction &tr, results result) { FAIL() << "Query should have failed"; },
                [&error_caught](error::db_error err) {
                    error_caught = true;
                    // Check error contains null-related info
-                   EXPECT_TRUE(err.what() != nullptr &&
-                               (std::string(err.what()).find("null") != std::string::npos ||
-                                err.code == "23502"));
+                   EXPECT_TRUE(err.what() != nullptr && (std::string(err.what()).find("null") != std::string::npos || err.code == "23502"));
                })
             .await();
 
@@ -239,9 +223,7 @@ TEST_F(PostgreSQLErrorHandlingTest, UniqueViolation) {
                [&error_caught](error::db_error err) {
                    error_caught = true;
                    // Check error contains unique-related info
-                   EXPECT_TRUE(err.what() != nullptr &&
-                               (std::string(err.what()).find("unique") != std::string::npos ||
-                                err.code == "23505"));
+                   EXPECT_TRUE(err.what() != nullptr && (std::string(err.what()).find("unique") != std::string::npos || err.code == "23505"));
                })
             .await();
 
@@ -251,34 +233,28 @@ TEST_F(PostgreSQLErrorHandlingTest, UniqueViolation) {
 // Test connection to non-existent server
 TEST_F(PostgreSQLErrorHandlingTest, ConnectionError) {
     const auto invalid_db = std::make_unique<qb::pg::tcp::database>();
-    ASSERT_FALSE(qb::io::async::run_sync(
-        invalid_db->connect("tcp://postgres:postgres@non_existent_host:5432[postgres]")));
+    ASSERT_FALSE(qb::io::async::run_sync(invalid_db->connect("tcp://postgres:postgres@non_existent_host:5432[postgres]")));
 }
 
 // Test handling of prepared statement parameter errors
 TEST_F(PostgreSQLErrorHandlingTest, PreparedStatementParameterError) {
     bool error_caught = false;
 
-    auto prepare_status =
-        db_->prepare("test_prepare", "INSERT INTO test_errors (value, unique_value) VALUES ($1, $2)",
-                     type_oid_sequence{oid::text, oid::text}, discard_prepare, discard_error)
-            .await();
+    auto prepare_status = db_->prepare("test_prepare", "INSERT INTO test_errors (value, unique_value) VALUES ($1, $2)",
+                                       type_oid_sequence{oid::text, oid::text}, discard_prepare, discard_error)
+                              .await();
 
     ASSERT_TRUE(prepare_status);
 
-    auto exec_status =
-        db_->execute(
-               "test_prepare", {std::string("test_value")}, // Missing second parameter
-               [](Transaction &tr, results result) {
-                   FAIL() << "Execute should have failed due to missing parameter";
-               },
-               [&error_caught](error::db_error err) {
-                   error_caught = true;
-                   // Check error contains parameter-related info
-                   EXPECT_TRUE(err.what() != nullptr &&
-                               std::string(err.what()).find("parameter") != std::string::npos);
-               })
-            .await();
+    auto exec_status = db_->execute(
+                              "test_prepare", {std::string("test_value")}, // Missing second parameter
+                              [](Transaction &tr, results result) { FAIL() << "Execute should have failed due to missing parameter"; },
+                              [&error_caught](error::db_error err) {
+                                  error_caught = true;
+                                  // Check error contains parameter-related info
+                                  EXPECT_TRUE(err.what() != nullptr && std::string(err.what()).find("parameter") != std::string::npos);
+                              })
+                           .await();
 
     EXPECT_TRUE(error_caught);
 }

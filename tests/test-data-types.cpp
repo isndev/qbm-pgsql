@@ -36,7 +36,7 @@
  * @see qb::pg::detail::TypeConverter
  *
  * @author qb - C++ Actor Framework
- * @copyright Copyright (c) 2011-2025 qb - isndev (cpp.actor)
+ * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -163,8 +163,7 @@ protected:
     printBuffer(const std::vector<qb::pg::byte> &buffer, const std::string &label) {
         std::cout << label << " (size: " << buffer.size() << "): ";
         for (const auto &b : buffer) {
-            std::cout << std::hex << std::setw(2) << std::setfill('0')
-                      << static_cast<int>(static_cast<unsigned char>(b)) << " ";
+            std::cout << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(static_cast<unsigned char>(b)) << " ";
         }
         std::cout << std::dec << std::endl;
     }
@@ -637,8 +636,7 @@ TEST_F(PostgreSQLDataTypesTest, NonStandardSizeBuffers) {
     ASSERT_EQ(result, value);
 
     // Buffer with incorrect size for smallint
-    std::vector<byte> wrong_size_buffer = {
-        0x30, 0x39, static_cast<char>(0xFF)}; // smallint (12345) with an extra byte
+    std::vector<byte> wrong_size_buffer = {0x30, 0x39, static_cast<char>(0xFF)}; // smallint (12345) with an extra byte
     printBuffer(wrong_size_buffer, "Wrong Size Smallint Buffer");
 
     // Test if the parser handles this situation correctly
@@ -655,8 +653,7 @@ TEST_F(PostgreSQLDataTypesTest, NonStandardSizeBuffers) {
  */
 TEST_F(PostgreSQLDataTypesTest, CorruptedData) {
     // Create buffers with corrupted data
-    std::vector<byte> corrupted_smallint = {
-        static_cast<char>(0xFF), static_cast<char>(0xFF)}; // Value that might cause issues
+    std::vector<byte> corrupted_smallint = {static_cast<char>(0xFF), static_cast<char>(0xFF)}; // Value that might cause issues
 
     // Deserialize and verify
     smallint result = unserializer->read_smallint(corrupted_smallint);
@@ -820,15 +817,12 @@ TEST_F(PostgreSQLDataTypesTest, ComplexDeserializationSequence) {
  */
 TEST_F(PostgreSQLDataTypesTest, UUIDBinaryFormatDeserialization) {
     // Example UUID: 550e8400-e29b-41d4-a716-446655440000
-    std::vector<qb::pg::byte> uuidBytes = {
-        static_cast<qb::pg::byte>(0x55), static_cast<qb::pg::byte>(0x0e),
-        static_cast<qb::pg::byte>(0x84), static_cast<qb::pg::byte>(0x00),
-        static_cast<qb::pg::byte>(0xe2), static_cast<qb::pg::byte>(0x9b),
-        static_cast<qb::pg::byte>(0x41), static_cast<qb::pg::byte>(0xd4),
-        static_cast<qb::pg::byte>(0xa7), static_cast<qb::pg::byte>(0x16),
-        static_cast<qb::pg::byte>(0x44), static_cast<qb::pg::byte>(0x66),
-        static_cast<qb::pg::byte>(0x55), static_cast<qb::pg::byte>(0x44),
-        static_cast<qb::pg::byte>(0x00), static_cast<qb::pg::byte>(0x00)};
+    std::vector<qb::pg::byte> uuidBytes = {static_cast<qb::pg::byte>(0x55), static_cast<qb::pg::byte>(0x0e), static_cast<qb::pg::byte>(0x84),
+                                           static_cast<qb::pg::byte>(0x00), static_cast<qb::pg::byte>(0xe2), static_cast<qb::pg::byte>(0x9b),
+                                           static_cast<qb::pg::byte>(0x41), static_cast<qb::pg::byte>(0xd4), static_cast<qb::pg::byte>(0xa7),
+                                           static_cast<qb::pg::byte>(0x16), static_cast<qb::pg::byte>(0x44), static_cast<qb::pg::byte>(0x66),
+                                           static_cast<qb::pg::byte>(0x55), static_cast<qb::pg::byte>(0x44), static_cast<qb::pg::byte>(0x00),
+                                           static_cast<qb::pg::byte>(0x00)};
 
     // Debug
     printBuffer(uuidBytes, "UUID Binary Buffer");
@@ -962,8 +956,7 @@ TEST_F(PostgreSQLDataTypesTest, TimestampBinaryRejectsShortPrefixedBuffer) {
     }
     // 8 (exact) and 12 (legacy prefixed) remain valid and must not throw.
     ASSERT_NO_THROW(TypeConverter<qb::wall_time>::from_binary(std::vector<qb::pg::byte>(8, byte{0})));
-    ASSERT_NO_THROW(
-        TypeConverter<qb::wall_time>::from_binary(std::vector<qb::pg::byte>(12, byte{0})));
+    ASSERT_NO_THROW(TypeConverter<qb::wall_time>::from_binary(std::vector<qb::pg::byte>(12, byte{0})));
 }
 
 /**
@@ -1049,11 +1042,13 @@ TEST_F(PostgreSQLDataTypesTest, HighBitValues) {
  */
 TEST_F(PostgreSQLDataTypesTest, JSONBBinaryFormatDeserialization) {
     // Create a simple JSON object
-    qb::jsonb test_json = {{"id", 123},
-                           {"name", "test user"},
-                           {"active", true},
-                           {"scores", {98, 87, 95}},
-                           {"details", {{"address", "123 Test St"}, {"email", "test@example.com"}}}};
+    qb::jsonb test_json = {
+        {"id", 123},
+        {"name", "test user"},
+        {"active", true},
+        {"scores", {98, 87, 95}},
+        {"details", {{"address", "123 Test St"}, {"email", "test@example.com"}}}
+    };
 
     // Convert to string representation
     std::string json_str = test_json.dump();
@@ -1128,13 +1123,14 @@ TEST_F(PostgreSQLDataTypesTest, JSONBBinaryFormatDeserialization) {
  */
 TEST_F(PostgreSQLDataTypesTest, JSONTextFormatDeserialization) {
     // Test cases with different JSON structures
-    std::vector<std::string> json_test_cases = {R"({"id": 123, "name": "test"})",
-                                                R"(["apple", "banana", "cherry"])",
-                                                R"(42)",
-                                                R"("simple string")",
-                                                R"(true)",
-                                                R"(null)",
-                                                R"({
+    std::vector<std::string> json_test_cases = {
+        R"({"id": 123, "name": "test"})",
+        R"(["apple", "banana", "cherry"])",
+        R"(42)",
+        R"("simple string")",
+        R"(true)",
+        R"(null)",
+        R"({
             "complex": {
                 "nested": {
                     "array": [1, 2, 3],
@@ -1142,7 +1138,8 @@ TEST_F(PostgreSQLDataTypesTest, JSONTextFormatDeserialization) {
                 },
                 "types": [true, null, 42, "string"]
             }
-        })"};
+        })"
+    };
 
     for (const auto &test_case : json_test_cases) {
         try {
@@ -1157,8 +1154,7 @@ TEST_F(PostgreSQLDataTypesTest, JSONTextFormatDeserialization) {
 
             std::cout << "Successfully parsed JSON: " << result.dump(2) << std::endl;
         } catch (const std::exception &e) {
-            FAIL() << "Exception during JSON text deserialization for case '" << test_case
-                   << "': " << e.what();
+            FAIL() << "Exception during JSON text deserialization for case '" << test_case << "': " << e.what();
         }
     }
 

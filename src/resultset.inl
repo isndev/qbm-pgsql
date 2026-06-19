@@ -24,7 +24,7 @@
  * @see field.h
  *
  * @author qb - C++ Actor Framework
- * @copyright Copyright (c) 2011-2025 qb - isndev (cpp.actor)
+ * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -67,9 +67,7 @@ row_to_impl(resultset::row const &row, Tuple &t, std::index_sequence<I...>) {
 template <typename Tuple, std::size_t... Is>
 inline void
 row_to_impl(Tuple &t, resultset::row const &row, std::index_sequence<Is...>) {
-    ((std::get<Is>(t) =
-          row[Is].template as<std::tuple_element_t<Is, std::remove_reference_t<Tuple>>>()),
-     ...);
+    ((std::get<Is>(t) = row[Is].template as<std::tuple_element_t<Is, std::remove_reference_t<Tuple>>>()), ...);
 }
 
 // Convert row to tuple
@@ -136,8 +134,7 @@ struct row_data_extractor_base<qb::indexes_tuple<Indexes...>, T...> {
 };
 
 template <typename... T>
-struct row_data_extractor
-    : row_data_extractor_base<typename qb::index_builder<sizeof...(T)>::type, T...> {};
+struct row_data_extractor : row_data_extractor_base<typename qb::index_builder<sizeof...(T)>::type, T...> {};
 
 template <typename IndexTuple, typename... T>
 struct field_by_name_extractor;
@@ -147,8 +144,7 @@ struct field_by_name_extractor<qb::indexes_tuple<Indexes...>, T...> {
     static constexpr ::std::size_t size = sizeof...(T);
 
     static void
-    get_tuple(resultset::row const &row, ::std::initializer_list<::std::string> const &names,
-              ::std::tuple<T...> &val) {
+    get_tuple(resultset::row const &row, ::std::initializer_list<::std::string> const &names, ::std::tuple<T...> &val) {
         if (names.size() < size)
             throw error::db_error{"Not enough names in row data extraction"};
         ::std::tuple<T...> tmp(row[*(names.begin() + Indexes)].template as<T>()...);
@@ -156,15 +152,13 @@ struct field_by_name_extractor<qb::indexes_tuple<Indexes...>, T...> {
     }
 
     static void
-    get_values(resultset::row const &row, ::std::initializer_list<::std::string> const &names,
-               T &...val) {
+    get_values(resultset::row const &row, ::std::initializer_list<::std::string> const &names, T &...val) {
         qb::expand{row[*(names.begin() + Indexes)].to(val)...};
     }
 };
 
 template <typename... T>
-struct row_data_by_name_extractor
-    : field_by_name_extractor<typename qb::index_builder<sizeof...(T)>::type, T...> {};
+struct row_data_by_name_extractor : field_by_name_extractor<typename qb::index_builder<sizeof...(T)>::type, T...> {};
 
 } // namespace detail
 
@@ -188,15 +182,13 @@ resultset::row::to(T &...val) const {
 
 template <typename... T>
 void
-resultset::row::to(::std::initializer_list<::std::string> const &names,
-                   ::std::tuple<T...>                           &val) const {
+resultset::row::to(::std::initializer_list<::std::string> const &names, ::std::tuple<T...> &val) const {
     detail::row_data_by_name_extractor<T...>::get_tuple(*this, names, val);
 }
 
 template <typename... T>
 void
-resultset::row::to(::std::initializer_list<::std::string> const &names,
-                   ::std::tuple<T &...>                          val) const {
+resultset::row::to(::std::initializer_list<::std::string> const &names, ::std::tuple<T &...> val) const {
     std::tuple<T...> non_ref;
     detail::row_data_by_name_extractor<T...>::get_tuple(*this, names, non_ref);
     val = non_ref;

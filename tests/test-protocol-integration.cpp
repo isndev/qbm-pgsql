@@ -31,17 +31,14 @@ protected:
             GTEST_SKIP() << "PostgreSQL not reachable";
             return;
         }
-        ASSERT_TRUE(db_->execute("CREATE TEMP TABLE qb_proto_copy_t (v TEXT NOT NULL)",
-                                 discard_query, discard_error)
-                        .await());
+        ASSERT_TRUE(db_->execute("CREATE TEMP TABLE qb_proto_copy_t (v TEXT NOT NULL)", discard_query, discard_error).await());
         fixture_ready_ = true;
     }
 
     void
     TearDown() override {
         if (db_ && fixture_ready_) {
-            (void) db_->execute("DROP TABLE IF EXISTS qb_proto_copy_t", discard_query, discard_error)
-                .await();
+            (void) db_->execute("DROP TABLE IF EXISTS qb_proto_copy_t", discard_query, discard_error).await();
             db_->disconnect();
         }
         db_.reset();
@@ -56,12 +53,10 @@ protected:
 TEST_F(PgProtocolIntegrationTest, CopyFromStdin_RejectedThenNextQuerySucceeds) {
     bool saw_error = false;
     auto st        = db_->execute(
-                     "COPY qb_proto_copy_t FROM STDIN",
-                     [](qb::pg::transaction &, qb::pg::results) {
-                         FAIL() << "COPY FROM STDIN must not complete as a normal result query";
-                     },
-                     [&saw_error](qb::pg::error::db_error const &) { saw_error = true; })
-                  .await();
+                            "COPY qb_proto_copy_t FROM STDIN",
+                            [](qb::pg::transaction &, qb::pg::results) { FAIL() << "COPY FROM STDIN must not complete as a normal result query"; },
+                            [&saw_error](qb::pg::error::db_error const &) { saw_error = true; })
+                         .await();
     EXPECT_FALSE(st);
     EXPECT_TRUE(saw_error);
 
@@ -78,9 +73,7 @@ TEST_F(PgProtocolIntegrationTest, CopyToStdout_TextFormat_Completes) {
                          (void) r;
                          ok = true;
                      },
-                     [](qb::pg::error::db_error const &e) {
-                         FAIL() << "COPY TO STDOUT failed: " << e.what();
-                     })
+                     [](qb::pg::error::db_error const &e) { FAIL() << "COPY TO STDOUT failed: " << e.what(); })
                   .await();
     EXPECT_TRUE(st);
     EXPECT_TRUE(ok);
@@ -90,9 +83,7 @@ TEST_F(PgProtocolIntegrationTest, EmptySimpleQuery_Completes) {
     bool ok = false;
     auto st = db_->execute(
                      "", [&ok](qb::pg::transaction &, qb::pg::results) { ok = true; },
-                     [](qb::pg::error::db_error const &e) {
-                         FAIL() << "Empty query failed: " << e.what();
-                     })
+                     [](qb::pg::error::db_error const &e) { FAIL() << "Empty query failed: " << e.what(); })
                   .await();
     EXPECT_TRUE(st);
     EXPECT_TRUE(ok);
@@ -124,9 +115,8 @@ TEST_F(PgProtocolIntegrationTest, SimpleQuery_ResultColumnsAreText) {
 }
 
 TEST_F(PgProtocolIntegrationTest, PreparedStatement_ResultColumnsAreBinary) {
-    ASSERT_TRUE(db_->prepare("qb_proto_bin_one", "SELECT ($1::int * 2) AS n",
-                             type_oid_sequence{oid::int4}, discard_prepare, discard_error)
-                    .await());
+    ASSERT_TRUE(
+        db_->prepare("qb_proto_bin_one", "SELECT ($1::int * 2) AS n", type_oid_sequence{oid::int4}, discard_prepare, discard_error).await());
     bool ok = false;
     auto st = db_->execute(
                      "qb_proto_bin_one", params{11},
@@ -144,10 +134,8 @@ TEST_F(PgProtocolIntegrationTest, PreparedStatement_ResultColumnsAreBinary) {
 }
 
 TEST_F(PgProtocolIntegrationTest, PreparedStatement_MixedTypesBinaryColumns) {
-    ASSERT_TRUE(db_->prepare("qb_proto_bin_mix",
-                             "SELECT $1::int8 AS i, $2::text AS s, $3::float8 AS f",
-                             type_oid_sequence{oid::int8, oid::text, oid::float8}, discard_prepare,
-                             discard_error)
+    ASSERT_TRUE(db_->prepare("qb_proto_bin_mix", "SELECT $1::int8 AS i, $2::text AS s, $3::float8 AS f",
+                             type_oid_sequence{oid::int8, oid::text, oid::float8}, discard_prepare, discard_error)
                     .await());
     bool ok = false;
     auto st = db_->execute(
@@ -170,9 +158,8 @@ TEST_F(PgProtocolIntegrationTest, PreparedStatement_MixedTypesBinaryColumns) {
 }
 
 TEST_F(PgProtocolIntegrationTest, PreparedStatement_TextParameterBinaryResult) {
-    ASSERT_TRUE(db_->prepare("qb_proto_bin_textparam", "SELECT $1::text AS s",
-                             type_oid_sequence{oid::text}, discard_prepare, discard_error)
-                    .await());
+    ASSERT_TRUE(
+        db_->prepare("qb_proto_bin_textparam", "SELECT $1::text AS s", type_oid_sequence{oid::text}, discard_prepare, discard_error).await());
     bool ok = false;
     auto st = db_->execute(
                      "qb_proto_bin_textparam", params{std::string{"hello-binary"}},
@@ -229,12 +216,9 @@ TEST_F(PgProtocolIntegrationTest, PreparedStatement_InsertReturning_MixedBinaryA
 }
 
 TEST_F(PgProtocolIntegrationTest, PreparedStatement_JsonText_JsonbBinary) {
-    ASSERT_TRUE(db_->prepare("qb_proto_json_col", "SELECT '[]'::json AS j", type_oid_sequence{},
-                             discard_prepare, discard_error)
-                    .await());
-    ASSERT_TRUE(db_->prepare("qb_proto_jsonb_col", "SELECT '[true,1]'::jsonb AS jb",
-                             type_oid_sequence{}, discard_prepare, discard_error)
-                    .await());
+    ASSERT_TRUE(db_->prepare("qb_proto_json_col", "SELECT '[]'::json AS j", type_oid_sequence{}, discard_prepare, discard_error).await());
+    ASSERT_TRUE(
+        db_->prepare("qb_proto_jsonb_col", "SELECT '[true,1]'::jsonb AS jb", type_oid_sequence{}, discard_prepare, discard_error).await());
     bool json_ok = false;
     EXPECT_TRUE(db_->execute(
                        "qb_proto_json_col", params{},
@@ -268,15 +252,12 @@ TEST_F(PgProtocolIntegrationTest, PreparedStatement_JsonText_JsonbBinary) {
 
 TEST_F(PgProtocolIntegrationTest, PreparedStatement_UuidAndByteaRoundTrip) {
     auto const  test_uuid = qb::uuid::from_string("6ba7b810-9dad-11d1-80b4-00c04fd430c8").value();
-    bytea const bin{{static_cast<byte>(0xDE), static_cast<byte>(0xAD), static_cast<byte>(0xBE),
-                     static_cast<byte>(0xEF)}};
+    bytea const bin{{static_cast<byte>(0xDE), static_cast<byte>(0xAD), static_cast<byte>(0xBE), static_cast<byte>(0xEF)}};
 
-    ASSERT_TRUE(db_->prepare("qb_proto_uuid_echo", "SELECT $1::uuid AS u",
-                             type_oid_sequence{oid::uuid}, discard_prepare, discard_error)
-                    .await());
-    ASSERT_TRUE(db_->prepare("qb_proto_bytea_echo", "SELECT $1::bytea AS b",
-                             type_oid_sequence{oid::bytea}, discard_prepare, discard_error)
-                    .await());
+    ASSERT_TRUE(
+        db_->prepare("qb_proto_uuid_echo", "SELECT $1::uuid AS u", type_oid_sequence{oid::uuid}, discard_prepare, discard_error).await());
+    ASSERT_TRUE(
+        db_->prepare("qb_proto_bytea_echo", "SELECT $1::bytea AS b", type_oid_sequence{oid::bytea}, discard_prepare, discard_error).await());
 
     bool uuid_ok = false;
     EXPECT_TRUE(db_->execute(
@@ -307,9 +288,8 @@ TEST_F(PgProtocolIntegrationTest, PreparedStatement_UuidAndByteaRoundTrip) {
 }
 
 TEST_F(PgProtocolIntegrationTest, PreparedStatement_NoParameters_StillBinaryResults) {
-    ASSERT_TRUE(db_->prepare("qb_proto_bin_nop", "SELECT true AS b, 42::int AS n",
-                             type_oid_sequence{}, discard_prepare, discard_error)
-                    .await());
+    ASSERT_TRUE(
+        db_->prepare("qb_proto_bin_nop", "SELECT true AS b, 42::int AS n", type_oid_sequence{}, discard_prepare, discard_error).await());
     bool ok = false;
     auto st = db_->execute(
                      "qb_proto_bin_nop", params{},
@@ -331,16 +311,14 @@ TEST_F(PgProtocolIntegrationTest, PreparedStatement_NoParameters_StillBinaryResu
 TEST(PgProtocolIntegrationTwoConnections, PgNotifyFromPeerDoesNotBreakListener) {
     auto a = std::make_unique<qb::pg::tcp::database>();
     auto b = std::make_unique<qb::pg::tcp::database>();
-    if (!qb::io::async::run_sync(a->connect(qb::pg::test::dsn_tcp_string())) ||
-        !qb::io::async::run_sync(b->connect(qb::pg::test::dsn_tcp_string()))) {
+    if (!qb::io::async::run_sync(a->connect(qb::pg::test::dsn_tcp_string()))
+        || !qb::io::async::run_sync(b->connect(qb::pg::test::dsn_tcp_string()))) {
         GTEST_SKIP() << "PostgreSQL not reachable";
         return;
     }
 
     ASSERT_TRUE(a->execute("LISTEN qb_proto_peer", discard_query, discard_error).await());
-    ASSERT_TRUE(
-        b->execute("SELECT pg_notify('qb_proto_peer', 'from_b')", discard_query, discard_error)
-            .await());
+    ASSERT_TRUE(b->execute("SELECT pg_notify('qb_proto_peer', 'from_b')", discard_query, discard_error).await());
 
     EXPECT_TRUE(a->execute("SELECT 1", discard_query, discard_error).await());
 

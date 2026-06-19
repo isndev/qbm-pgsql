@@ -29,8 +29,7 @@ TEST(ProtocolMessageConstants, MaxMessageBytesMatches256MiB) {
 // SSL negotiation: length 8 (Int32, network byte order) + request code 80877103 (Int32, BE).
 // Same construction as `on_async_tcp_connected` in pgsql.h for `transport::stcp`.
 TEST(ProtocolSslRequestWireFormat, MatchesPostgresqlDocumentation) {
-    static constexpr std::array<std::uint8_t, 8> kExpected = {0x00, 0x00, 0x00, 0x08,
-                                                              0x04, 0xD2, 0x16, 0x2F};
+    static constexpr std::array<std::uint8_t, 8> kExpected = {0x00, 0x00, 0x00, 0x08, 0x04, 0xD2, 0x16, 0x2F};
     static_assert(80877103u == 0x04D2162Fu);
 
     std::uint32_t               len  = htonl(8);
@@ -186,20 +185,20 @@ TEST(ProtocolMessage, IntegerRoundTrip) {
 // (fully-buffered) message body must be rejected, not over-read off the heap.
 TEST(ProtocolMessage, DataRowRejectsOversizedFieldLength) {
     message m(data_row_tag);
-    m.write(static_cast<smallint>(1));      // 1 column
-    m.write(static_cast<integer>(1000));    // claims 1000 bytes...
-    m.write('a');                           // ...but only 1 byte follows
+    m.write(static_cast<smallint>(1));   // 1 column
+    m.write(static_cast<integer>(1000)); // claims 1000 bytes...
+    m.write('a');                        // ...but only 1 byte follows
     (void) m.buffer();
     m.reset_read();
     row_data row;
-    EXPECT_FALSE(m.read(row));               // rejected, no OOB read / crash
+    EXPECT_FALSE(m.read(row)); // rejected, no OOB read / crash
 }
 
 // A DataRow with a negative column count must be rejected, not converted to a
 // huge size_t in reserve()/resize() (which previously threw bad_alloc).
 TEST(ProtocolMessage, DataRowRejectsNegativeColumnCount) {
     message m(data_row_tag);
-    m.write(static_cast<smallint>(-1));     // negative column count
+    m.write(static_cast<smallint>(-1)); // negative column count
     (void) m.buffer();
     m.reset_read();
     row_data row;
@@ -209,10 +208,12 @@ TEST(ProtocolMessage, DataRowRejectsNegativeColumnCount) {
 // A well-formed DataRow still round-trips: one NULL column and one value.
 TEST(ProtocolMessage, DataRowValidRoundTrip) {
     message m(data_row_tag);
-    m.write(static_cast<smallint>(2));      // 2 columns
-    m.write(static_cast<integer>(-1));      // col 0 = NULL
-    m.write(static_cast<integer>(3));       // col 1 = 3 bytes
-    m.write('a'); m.write('b'); m.write('c');
+    m.write(static_cast<smallint>(2)); // 2 columns
+    m.write(static_cast<integer>(-1)); // col 0 = NULL
+    m.write(static_cast<integer>(3));  // col 1 = 3 bytes
+    m.write('a');
+    m.write('b');
+    m.write('c');
     (void) m.buffer();
     m.reset_read();
     row_data row;

@@ -27,7 +27,7 @@
  * @see qb::pg::detail::QueryParams
  *
  * @author qb - C++ Actor Framework
- * @copyright Copyright (c) 2011-2025 qb - isndev (cpp.actor)
+ * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -140,16 +140,14 @@ public:
         std::cout << "Number of types: " << types.size() << "\n";
 
         if (param_count != expected_values.size()) {
-            std::cout << "ERROR: The number of parameters (" << param_count
-                      << ") does not match the number of expected values (" << expected_values.size()
-                      << ")\n";
+            std::cout << "ERROR: The number of parameters (" << param_count << ") does not match the number of expected values ("
+                      << expected_values.size() << ")\n";
             return;
         }
 
         if (types.size() != expected_values.size()) {
-            std::cout << "ERROR: The number of types (" << types.size()
-                      << ") does not match the number of expected values (" << expected_values.size()
-                      << ")\n";
+            std::cout << "ERROR: The number of types (" << types.size() << ") does not match the number of expected values ("
+                      << expected_values.size() << ")\n";
             return;
         }
 
@@ -157,8 +155,7 @@ public:
         bool types_ok = true;
         for (size_t i = 0; i < types.size(); ++i) {
             if (static_cast<int>(types[i]) != static_cast<int>(oid::text)) {
-                std::cout << "ERROR: Parameter " << i << " has type " << types[i] << " instead of "
-                          << oid::text << " (text)\n";
+                std::cout << "ERROR: Parameter " << i << " has type " << types[i] << " instead of " << oid::text << " (text)\n";
                 types_ok = false;
             }
         }
@@ -199,8 +196,7 @@ public:
         std::cout << "\n===== Test NUMERIC type parameters =====\n";
 
         // Create numeric values
-        std::vector<numeric> values = {numeric("0"), numeric("123.45"), numeric("-999.99"),
-                                       numeric("123456789.0123456789")};
+        std::vector<numeric> values = {numeric("0"), numeric("123.45"), numeric("-999.99"), numeric("123456789.0123456789")};
 
         for (const auto &val : values) {
             std::cout << "Testing NUMERIC: " << val.str() << "\n";
@@ -215,8 +211,7 @@ public:
             if (result.str() == val.str()) {
                 std::cout << "  SUCCESS: Round-trip preserved value\n";
             } else {
-                std::cout << "  ERROR: Round-trip failed (expected " << val.str() << ", got "
-                          << result.str() << ")\n";
+                std::cout << "  ERROR: Round-trip failed (expected " << val.str() << ", got " << result.str() << ")\n";
             }
 
             // Test text format
@@ -240,10 +235,10 @@ public:
         std::cout << "\n===== Test DATE type parameters =====\n";
 
         // Create date values
-        std::vector<pgdate> values = {pgdate(0), // 2000-01-01 (epoch)
-                                      pgdate::from_string("2024-12-25"),
-                                      pgdate::from_string("1990-01-01"),
-                                      pgdate::from_string("1970-01-01")};
+        std::vector<pgdate> values = {
+            pgdate(0), // 2000-01-01 (epoch)
+            pgdate::from_string("2024-12-25"), pgdate::from_string("1990-01-01"), pgdate::from_string("1970-01-01")
+        };
 
         for (const auto &val : values) {
             std::cout << "Testing DATE: " << val.to_string() << "\n";
@@ -378,8 +373,7 @@ main() {
     ParamSerializerModuleTest tester;
 
     // Test with a standard string vector
-    std::vector<std::string> values1 = {"Test value 1", "Test value 2", "Test value 3",
-                                        "Test value 4"};
+    std::vector<std::string> values1 = {"Test value 1", "Test value 2", "Test value 3", "Test value 4"};
     tester.test_string_vector(values1);
 
     // Test with strings of different lengths
@@ -400,8 +394,7 @@ main() {
 
     // Test network types
     std::cout << "\n>>> Testing NETWORK ADDRESS types (INET/CIDR/MACADDR)...\n";
-    std::vector<std::string> network_values = {"192.168.1.100", "10.0.0.0/8", "2001:db8::1", "::1",
-                                               "00:1a:2b:3c:4d:5e"};
+    std::vector<std::string> network_values = {"192.168.1.100", "10.0.0.0/8", "2001:db8::1", "::1", "00:1a:2b:3c:4d:5e"};
     std::cout << "  IPv4: " << network_values[0] << "\n";
     std::cout << "  CIDR: " << network_values[1] << "\n";
     std::cout << "  IPv6: " << network_values[2] << "\n";
@@ -412,8 +405,7 @@ main() {
 
     // Test time types
     std::cout << "\n>>> Testing TIME types (TIME/TIMETZ)...\n";
-    std::vector<std::string> time_values = {"14:30:45", "14:30:45.123456", "18:00:00+02:00",
-                                            "00:00:00", "23:59:59.999999"};
+    std::vector<std::string> time_values = {"14:30:45", "14:30:45.123456", "18:00:00+02:00", "00:00:00", "23:59:59.999999"};
     std::cout << "  Time: " << time_values[0] << "\n";
     std::cout << "  Time with microseconds: " << time_values[1] << "\n";
     std::cout << "  Time with timezone: " << time_values[2] << "\n";

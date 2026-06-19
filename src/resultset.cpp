@@ -15,7 +15,7 @@
  * @see result_impl.h
  *
  * @author qb - C++ Actor Framework
- * @copyright Copyright (c) 2011-2025 qb - isndev (cpp.actor)
+ * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -38,9 +38,8 @@
 namespace qb {
 namespace pg {
 
-const resultset::size_type      resultset::npos = std::numeric_limits<resultset::size_type>::max();
-const resultset::row::size_type resultset::row::npos =
-    std::numeric_limits<resultset::row::size_type>::max();
+const resultset::size_type      resultset::npos      = std::numeric_limits<resultset::size_type>::max();
+const resultset::row::size_type resultset::row::npos = std::numeric_limits<resultset::row::size_type>::max();
 
 //----------------------------------------------------------------------------
 // resultset::row implementation - Container-like interface for database rows
@@ -84,8 +83,7 @@ resultset::row::operator[](size_type col_index) const {
     // Previously had TODO to check index - now implemented
     size_type col_count = size();
     if (col_index >= col_count) {
-        throw std::out_of_range("Column index " + std::to_string(col_index) +
-                                " is out of bounds [0.." + std::to_string(col_count) + ")");
+        throw std::out_of_range("Column index " + std::to_string(col_index) + " is out of bounds [0.." + std::to_string(col_count) + ")");
     }
     return reference(result_, row_index_, col_index);
 }
@@ -216,14 +214,13 @@ resultset::resultset()
 // this resultset observes the live result_impl without taking ownership (used
 // to pass the in-flight row buffer to a synchronous on_success callback).
 resultset::resultset(result_impl_ptr impl)
-    : pimpl_(std::shared_ptr<const detail::result_impl>(
-          impl, [](const detail::result_impl *) {})) {}
+    : pimpl_(std::shared_ptr<const detail::result_impl>(impl, [](const detail::result_impl *) {})) {}
 
 resultset
 resultset::deep_snapshot() const {
     if (!pimpl_)
         return resultset();
-    resultset snap;  // owns a fresh result_impl
+    resultset snap; // owns a fresh result_impl
     snap.pimpl_ = std::make_shared<detail::result_impl>(pimpl_->clone_snapshot());
     return snap;
 }
@@ -281,8 +278,7 @@ resultset::operator[](size_type index) const {
 resultset::reference
 resultset::at(size_type index) const {
     if (index >= size()) {
-        throw std::out_of_range("resultset::at: index " + std::to_string(index) +
-                                " out of range [0.." + std::to_string(size()) + ")");
+        throw std::out_of_range("resultset::at: index " + std::to_string(index) + " out of range [0.." + std::to_string(size()) + ")");
     }
     return row(this, index);
 }

@@ -15,7 +15,7 @@
  * data types, serving as a reference for data conversions.
  *
  * @author qb - C++ Actor Framework
- * @copyright Copyright (c) 2011-2025 qb - isndev (cpp.actor)
+ * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -147,14 +147,14 @@ struct dbalias : std::string {
  * connections, with optional SSL encryption.
  */
 struct connection_options {
-    dbalias     alias;    /**< Database alias for convenient reference */
-    std::string schema;   /**< Database connection schema. Currently supported are tcp and
-                             socket */
-    std::string uri;      /**< Database connection URI. `host:port` for tcp, `/path/to/file`
-                             for socket */
-    std::string database; /**< Database name to connect to */
-    std::string user;     /**< Database user name for authentication */
-    std::string password; /**< Database user's password for authentication */
+    dbalias     alias;                                      /**< Database alias for convenient reference */
+    std::string schema;                                     /**< Database connection schema. Currently supported are tcp and
+                                                               socket */
+    std::string uri;                                        /**< Database connection URI. `host:port` for tcp, `/path/to/file`
+                                                               for socket */
+    std::string  database;                                  /**< Database name to connect to */
+    std::string  user;                                      /**< Database user name for authentication */
+    std::string  password;                                  /**< Database user's password for authentication */
     qb::duration connect_timeout{std::chrono::seconds(10)}; /**< Connection timeout (default: 10s). */
 
     /**
@@ -166,7 +166,7 @@ struct connection_options {
      * @note This client does not yet parse a libpq-style `sslmode`; full
      *       `verify-ca` / `verify-full` modeling is a future enhancement.
      */
-    bool        tls_verify_peer{false};
+    bool tls_verify_peer{false};
 
     // P1-1: Connection health check / keepalive settings
     int keepalive_interval{0}; /**< TCP keepalive interval in seconds (0 = disabled) */
@@ -247,11 +247,10 @@ enum class isolation_level {
  * consistency guarantees and performance characteristics.
  */
 struct transaction_mode {
-    isolation_level isolation =
-        isolation_level::read_committed; /**< Isolation level for the transaction */
-    bool read_only  = false; /**< Whether the transaction is read-only (no writes allowed) */
-    bool deferrable = false; /**< Whether the transaction is deferrable (only applies to
-                                serializable transactions) */
+    isolation_level isolation  = isolation_level::read_committed; /**< Isolation level for the transaction */
+    bool            read_only  = false;                           /**< Whether the transaction is read-only (no writes allowed) */
+    bool            deferrable = false;                           /**< Whether the transaction is deferrable (only applies to
+                                                                     serializable transactions) */
 
     /**
      * @brief Default constructor
@@ -422,9 +421,7 @@ type_oid_prefers_binary_result_format(oid const t) noexcept {
 inline void
 sync_field_format_codes_with_extended_query_bind(row_description_type &desc) {
     for (field_description &fd : desc) {
-        fd.format_code = type_oid_prefers_binary_result_format(fd.type_oid)
-                             ? protocol_data_format::Binary
-                             : protocol_data_format::Text;
+        fd.format_code = type_oid_prefers_binary_result_format(fd.type_oid) ? protocol_data_format::Binary : protocol_data_format::Text;
     }
 }
 

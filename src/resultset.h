@@ -25,7 +25,7 @@
  * @see field.h
  *
  * @author qb - C++ Actor Framework
- * @copyright Copyright (c) 2011-2025 qb - isndev (cpp.actor)
+ * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -165,10 +165,8 @@ public:
     const_iterator begin() const; /**< Iterator to the beginning of rows sequence */
     const_iterator end() const;   /**< Iterator past the end of rows sequence. */
 
-    const_reverse_iterator
-    rbegin() const; /**< Iterator to the beginning of rows sequence in reverse order */
-    const_reverse_iterator
-    rend() const; /**< Iterator past the end of of rows sequence in reverse order */
+    const_reverse_iterator rbegin() const; /**< Iterator to the beginning of rows sequence in reverse order */
+    const_reverse_iterator rend() const;   /**< Iterator past the end of of rows sequence in reverse order */
 
     /**
      * Get the first row in the result set.
@@ -529,8 +527,7 @@ public:
         to_impl(T &val, std::false_type const &) const {
             field_description const &fd = description();
             if (fd.format_code == pg::protocol_data_format::Binary) {
-                throw error::db_error{
-                    "Cannot find pg::protocol_data_format::Binary parser for field " + fd.name};
+                throw error::db_error{"Cannot find pg::protocol_data_format::Binary parser for field " + fd.name};
             }
             val = as<T>();
             return true;
@@ -618,8 +615,7 @@ public:
          */
         bool
         valid() const {
-            return result_ && row_index_ < result_->size() &&
-                   field_index_ <= static_cast<std::size_t>(result_->columns_size());
+            return result_ && row_index_ < result_->size() && field_index_ <= static_cast<std::size_t>(result_->columns_size());
         }
 
     private:
@@ -681,8 +677,8 @@ private:
     // the pointer with a no-op deleter so it neither frees nor extends the
     // borrowed object. Field/row views stay valid for the lifetime of the
     // resultset that vends them.
-    typedef const detail::result_impl                  *const_result_impl_ptr;
-    std::shared_ptr<const detail::result_impl>          pimpl_;
+    typedef const detail::result_impl         *const_result_impl_ptr;
+    std::shared_ptr<const detail::result_impl> pimpl_;
 
     field_buffer at(size_type r, row::size_type c) const;
 

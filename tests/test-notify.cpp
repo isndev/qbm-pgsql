@@ -50,21 +50,20 @@ protected:
 };
 
 TEST_F(PgNotifyTest, Notify_Callback_WithPayload) {
-    ASSERT_TRUE(
-        pub_->notify(std::string(kChan), "hello-payload", discard_query, discard_error).await());
+    ASSERT_TRUE(pub_->notify(std::string(kChan), "hello-payload", discard_query, discard_error).await());
 }
 
 TEST_F(PgNotifyTest, Notify_Coro_WithPayload) {
     ASSERT_TRUE(qb::io::async::run_sync([&]() -> qb::io::async::task<bool> {
         auto r = co_await pub_->notify(std::string(kChan), "coro-payload");
-        co_return         r.ok();
+        co_return r.ok();
     }()));
 }
 
 TEST_F(PgNotifyTest, Notify_Coro_NoPayloadOverload) {
     ASSERT_TRUE(qb::io::async::run_sync([&]() -> qb::io::async::task<bool> {
         auto r = co_await pub_->notify(std::string(kChan));
-        co_return         r.ok();
+        co_return r.ok();
     }()));
 }
 
@@ -108,8 +107,7 @@ TEST_F(PgNotifyTest, NotifyCbConsumer_ListenUnlisten_NoDelivery) {
     ASSERT_TRUE(qb::io::async::run_sync(sub.connect(qb::pg::test::dsn_tcp_string())));
     ASSERT_TRUE(sub.listen(std::string(kChan), discard_query, discard_error).await());
     ASSERT_TRUE(sub.unlisten(std::string(kChan), discard_query, discard_error).await());
-    ASSERT_TRUE(
-        pub_->notify(std::string(kChan), "after-unlisten", discard_query, discard_error).await());
+    ASSERT_TRUE(pub_->notify(std::string(kChan), "after-unlisten", discard_query, discard_error).await());
     io_pump(2000);
     EXPECT_EQ(hits.load(std::memory_order_relaxed), 0);
     sub.disconnect();
@@ -178,8 +176,7 @@ TEST_F(PgNotifyTest, NotifyCoConsumer_CallbackAndReceive) {
         if (!(co_await pub_->notify(std::string(kChan), "both")).ok())
             co_return false;
         auto n = co_await sub.receive();
-        co_return n.has_value() && n->payload == "both" &&
-            cb_hits.load(std::memory_order_relaxed) == 1;
+        co_return n.has_value() && n->payload == "both" && cb_hits.load(std::memory_order_relaxed) == 1;
     }()));
 }
 
@@ -231,7 +228,7 @@ TEST_F(PgNotifyTest, NotifyCoConsumer_ReceiveNulloptAfterDisconnect) {
 }
 
 TEST_F(PgNotifyTest, NotifyCoConsumer_ChannelFull_DroppedHandler) {
-    std::atomic<int> dropped{0};
+    std::atomic<int>                dropped{0};
     qb::pg::tcp::notify_co_consumer sub(qb::pg::test::dsn_tcp_string(), /*capacity*/ 1);
     sub.on_notify_dropped([&](qb::pg::notification &&n) {
         if (n.channel == std::string(kChan))
@@ -257,8 +254,7 @@ TEST_F(PgNotifyTest, NotifyCoConsumer_ChannelFull_DroppedHandler) {
 
     ASSERT_TRUE(qb::io::async::run_sync([&]() -> qb::io::async::task<bool> {
         auto first = co_await sub.receive();
-        co_return first.has_value() && first->payload == "one" &&
-            dropped.load(std::memory_order_relaxed) == 1;
+        co_return first.has_value() && first->payload == "one" && dropped.load(std::memory_order_relaxed) == 1;
     }()));
     sub.disconnect();
 }

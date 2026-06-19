@@ -30,13 +30,11 @@ struct pg_task_result<qb::io::async::task<T>> {
 };
 
 template <typename F>
-using pg_with_transaction_value_t =
-    typename pg_task_result<std::invoke_result_t<std::decay_t<F> &, Transaction &>>::type;
+using pg_with_transaction_value_t = typename pg_task_result<std::invoke_result_t<std::decay_t<F> &, Transaction &>>::type;
 
 template <typename F>
-concept pg_with_transaction_fn = std::invocable<std::decay_t<F> &, Transaction &> && requires {
-    typename pg_task_result<std::invoke_result_t<std::decay_t<F> &, Transaction &>>::type;
-};
+concept pg_with_transaction_fn = std::invocable<std::decay_t<F> &, Transaction &>
+                                 && requires { typename pg_task_result<std::invoke_result_t<std::decay_t<F> &, Transaction &>>::type; };
 
 /**
  * @brief Shared implementation: `co_await begin_op(tr)`, run `f(tr)`, then COMMIT / ROLLBACK.
@@ -61,8 +59,8 @@ with_transaction_impl(Transaction &tr, F &&f, BeginOp &&begin_op) {
         if constexpr (std::is_void_v<T>) {
             co_await std::invoke(std::forward<F>(f), tr);
         } else {
-            T value = co_await std::invoke(std::forward<F>(f), tr);
-            auto c  = co_await tr.commit();
+            T    value = co_await std::invoke(std::forward<F>(f), tr);
+            auto c     = co_await tr.commit();
             if (!c.ok()) {
                 (void) co_await tr.rollback();
                 co_return ::qb::pg::Reply<T>::failure(c.error());
@@ -120,8 +118,7 @@ template <detail::pg_with_transaction_fn F>
 [[nodiscard]] inline qb::io::async::task<Reply<detail::pg_with_transaction_value_t<F>>>
 with_transaction(detail::Transaction &tr, F &&f) {
     using T = detail::pg_with_transaction_value_t<F>;
-    co_return co_await detail::with_transaction_impl<T>(
-        tr, std::forward<F>(f), [](detail::Transaction &t) { return t.begin(); });
+    co_return co_await detail::with_transaction_impl<T>(tr, std::forward<F>(f), [](detail::Transaction &t) { return t.begin(); });
 }
 
 /**
@@ -132,8 +129,7 @@ template <detail::pg_with_transaction_fn F>
 [[nodiscard]] inline qb::io::async::task<Reply<detail::pg_with_transaction_value_t<F>>>
 with_transaction(detail::Transaction &tr, transaction_mode mode, F &&f) {
     using T = detail::pg_with_transaction_value_t<F>;
-    co_return co_await detail::with_transaction_impl<T>(
-        tr, std::forward<F>(f), [mode](detail::Transaction &t) { return t.begin(mode); });
+    co_return co_await detail::with_transaction_impl<T>(tr, std::forward<F>(f), [mode](detail::Transaction &t) { return t.begin(mode); });
 }
 
 } // namespace qb::pg

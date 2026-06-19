@@ -19,7 +19,7 @@
  * @see qb::pg::detail::ParamUnserializer
  *
  * @author qb - C++ Actor Framework
- * @copyright Copyright (c) 2011-2025 qb - isndev (cpp.actor)
+ * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -99,8 +99,7 @@ public:
         } else if constexpr (std::is_same_v<T, std::string>) {
             return "test_string"; // Test string value
         } else if constexpr (std::is_same_v<T, qb::uuid>) {
-            return qb::uuid::from_string("123e4567-e89b-12d3-a456-426614174000")
-                .value(); // Test UUID
+            return qb::uuid::from_string("123e4567-e89b-12d3-a456-426614174000").value(); // Test UUID
         } else if constexpr (std::is_same_v<T, qb::wall_time>) {
             return qb::wall_time{}; // Test timestamp
         } else if constexpr (std::is_same_v<T, std::optional<int>>) {
@@ -158,8 +157,7 @@ protected:
         std::cout << "\n=== " << label << " (" << buffer.size() << " bytes) ===" << std::endl;
 
         for (size_t i = 0; i < buffer.size(); ++i) {
-            std::cout << std::setfill('0') << std::setw(2) << std::hex
-                      << static_cast<int>(static_cast<unsigned char>(buffer[i])) << " ";
+            std::cout << std::setfill('0') << std::setw(2) << std::hex << static_cast<int>(static_cast<unsigned char>(buffer[i])) << " ";
 
             if ((i + 1) % 16 == 0) {
                 std::cout << "  |  ";
@@ -354,7 +352,7 @@ TEST_F(ParamParsingTest, QueryParamsCopyAndMovePreserveContents) {
     ASSERT_EQ(assigned.get(), original.get());
 
     // Move-construct transfers the same bytes.
-    const auto bytes_before = original.get();
+    const auto  bytes_before = original.get();
     QueryParams moved(std::move(original));
     ASSERT_EQ(moved.get(), bytes_before);
 }
@@ -444,8 +442,7 @@ TEST_F(ParamParsingTest, QueryParamsWithBoundaryValues) {
     double   double_nan   = std::numeric_limits<double>::quiet_NaN();
 
     // Create with boundary values
-    QueryParams params(smallint_min, smallint_max, integer_min, integer_max, bigint_min, bigint_max,
-                       float_inf, double_nan);
+    QueryParams params(smallint_min, smallint_max, integer_min, integer_max, bigint_min, bigint_max, float_inf, double_nan);
 
     // Check properties
     ASSERT_FALSE(params.empty());
@@ -510,22 +507,17 @@ TEST_F(ParamParsingTest, QueryParamsWithManyParameters) {
         // This lambda creates the QueryParams object with all values
         // We need to specify the exact number of parameters at compile time
         // so we'll create it with the first 100 values directly
-        return QueryParams(
-            values[0], values[1], values[2], values[3], values[4], values[5], values[6], values[7],
-            values[8], values[9], values[10], values[11], values[12], values[13], values[14],
-            values[15], values[16], values[17], values[18], values[19], values[20], values[21],
-            values[22], values[23], values[24], values[25], values[26], values[27], values[28],
-            values[29], values[30], values[31], values[32], values[33], values[34], values[35],
-            values[36], values[37], values[38], values[39], values[40], values[41], values[42],
-            values[43], values[44], values[45], values[46], values[47], values[48], values[49],
-            values[50], values[51], values[52], values[53], values[54], values[55], values[56],
-            values[57], values[58], values[59], values[60], values[61], values[62], values[63],
-            values[64], values[65], values[66], values[67], values[68], values[69], values[70],
-            values[71], values[72], values[73], values[74], values[75], values[76], values[77],
-            values[78], values[79], values[80], values[81], values[82], values[83], values[84],
-            values[85], values[86], values[87], values[88], values[89], values[90], values[91],
-            values[92], values[93], values[94], values[95], values[96], values[97], values[98],
-            values[99]);
+        return QueryParams(values[0], values[1], values[2], values[3], values[4], values[5], values[6], values[7], values[8], values[9],
+                           values[10], values[11], values[12], values[13], values[14], values[15], values[16], values[17], values[18],
+                           values[19], values[20], values[21], values[22], values[23], values[24], values[25], values[26], values[27],
+                           values[28], values[29], values[30], values[31], values[32], values[33], values[34], values[35], values[36],
+                           values[37], values[38], values[39], values[40], values[41], values[42], values[43], values[44], values[45],
+                           values[46], values[47], values[48], values[49], values[50], values[51], values[52], values[53], values[54],
+                           values[55], values[56], values[57], values[58], values[59], values[60], values[61], values[62], values[63],
+                           values[64], values[65], values[66], values[67], values[68], values[69], values[70], values[71], values[72],
+                           values[73], values[74], values[75], values[76], values[77], values[78], values[79], values[80], values[81],
+                           values[82], values[83], values[84], values[85], values[86], values[87], values[88], values[89], values[90],
+                           values[91], values[92], values[93], values[94], values[95], values[96], values[97], values[98], values[99]);
     }();
 
     // Check properties
@@ -728,22 +720,21 @@ TEST_F(ParamParsingTest, ParamUnserializerBinaryFormat) {
     buffer.insert(buffer.end(), param_count_buffer.begin(), param_count_buffer.end());
 
     // First parameter: integer (42) in binary format (4 bytes)
-    integer           int_value  = 42;
-    std::vector<byte> int_binary = createBinaryBuffer(int_value);
-    auto int_binary_pkg = createPgBinaryString(std::string(int_binary.begin(), int_binary.end()));
+    integer           int_value      = 42;
+    std::vector<byte> int_binary     = createBinaryBuffer(int_value);
+    auto              int_binary_pkg = createPgBinaryString(std::string(int_binary.begin(), int_binary.end()));
     buffer.insert(buffer.end(), int_binary_pkg.begin(), int_binary_pkg.end());
 
     // Second parameter: float (3.14159) in binary format (4 bytes)
     float             float_value = 3.14159f;
     std::vector<byte> float_binary(4);
     std::memcpy(float_binary.data(), &float_value, 4);
-    auto float_binary_pkg =
-        createPgBinaryString(std::string(float_binary.begin(), float_binary.end()));
+    auto float_binary_pkg = createPgBinaryString(std::string(float_binary.begin(), float_binary.end()));
     buffer.insert(buffer.end(), float_binary_pkg.begin(), float_binary_pkg.end());
 
     // Third parameter: bytea data
     std::vector<byte> bytea_data = {0x01, 0x02, 0x03, 0x04, 0x05};
-    auto bytea_pkg = createPgBinaryString(std::string(bytea_data.begin(), bytea_data.end()));
+    auto              bytea_pkg  = createPgBinaryString(std::string(bytea_data.begin(), bytea_data.end()));
     buffer.insert(buffer.end(), bytea_pkg.begin(), bytea_pkg.end());
 
     // Initialize the unserializer with our buffer and set binary format for the
@@ -919,8 +910,8 @@ TEST_F(ParamParsingTest, QueryParamsWithLongStrings) {
     ASSERT_LT(string_length, 1100000);
 
     // We don't print the whole buffer as it would be too large
-    std::cout << "\n=== QueryParams with long string (" << buffer.size()
-              << " bytes, string length: " << string_length << " bytes) ===" << std::endl;
+    std::cout << "\n=== QueryParams with long string (" << buffer.size() << " bytes, string length: " << string_length
+              << " bytes) ===" << std::endl;
 }
 
 /**
@@ -965,7 +956,7 @@ TEST_F(ParamParsingTest, QueryParamsWithHighPrecisionDecimals) {
     // High precision decimal numbers as strings
     // In a real implementation, these would use PostgreSQL NUMERIC type (OID 1700)
     // For our test, we're using standard strings
-    std::string pi = "3.141592653589793238462643383279502884197169399375105820974944592307816406286";
+    std::string pi        = "3.141592653589793238462643383279502884197169399375105820974944592307816406286";
     std::string financial = "12345678.90123456789";
 
     // Create QueryParams with high precision decimals

@@ -41,8 +41,7 @@ namespace util {
  * @tparam container The container type that holds the data
  * @tparam traits Character traits for the stream
  */
-template <typename charT, typename container = std::vector<charT>,
-          typename traits = std::char_traits<charT>>
+template <typename charT, typename container = std::vector<charT>, typename traits = std::char_traits<charT>>
 class basic_input_iterator_buffer : public std::basic_streambuf<charT, traits> {
 public:
     typedef charT                                   char_type;      ///< Character type
@@ -150,8 +149,7 @@ protected:
      * @return The new absolute position, or -1 on failure
      */
     pos_type
-    seekoff(off_type off, ios_base::seekdir way,
-            ios_base::openmode which = ios_base::in | ios_base::out) {
+    seekoff(off_type off, ios_base::seekdir way, ios_base::openmode which = ios_base::in | ios_base::out) {
         (void) which;
         char_type *tgt(nullptr);
         switch (way) {

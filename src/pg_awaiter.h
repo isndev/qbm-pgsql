@@ -31,8 +31,8 @@ class pg_awaiter {
 public:
     struct Shared {
         std::optional<::qb::pg::Reply<T>> out{};
-        std::shared_ptr<bool>               alive{std::make_shared<bool>(true)};
-        std::coroutine_handle<>             h{};
+        std::shared_ptr<bool>             alive{std::make_shared<bool>(true)};
+        std::coroutine_handle<>           h{};
     };
 
 private:
@@ -76,9 +76,8 @@ public:
     [[nodiscard]] ::qb::pg::Reply<T>
     await_resume() {
         if (!shared_ || !shared_->out.has_value()) {
-            return ::qb::pg::Reply<T>::failure(
-                error::db_error{"pgsql coroutine awaiter resumed without result (cancelled or "
-                                "internal error)"});
+            return ::qb::pg::Reply<T>::failure(error::db_error{"pgsql coroutine awaiter resumed without result (cancelled or "
+                                                               "internal error)"});
         }
         return std::move(*shared_->out);
     }

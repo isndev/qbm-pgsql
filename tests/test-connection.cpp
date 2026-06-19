@@ -28,7 +28,7 @@
  * @see qb::pg::detail::Database
  *
  * @author qb - C++ Actor Framework
- * @copyright Copyright (c) 2011-2025 qb - isndev (cpp.actor)
+ * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -118,8 +118,7 @@ TEST_F(PostgreSQLConnectionTest, ConnectSuccess_Coroutine) {
  */
 TEST_F(PostgreSQLConnectionTest, ConnectWithInvalidCredentials) {
     const auto invalid_db = std::make_unique<qb::pg::tcp::database>();
-    const bool connected =
-        qb::io::async::run_sync(invalid_db->connect(qb::pg::test::dsn_invalid_auth_string()));
+    const bool connected  = qb::io::async::run_sync(invalid_db->connect(qb::pg::test::dsn_invalid_auth_string()));
     if (connected && std::getenv("QB_PG_INVALID_DSN") == nullptr) {
         GTEST_SKIP() << "Server accepted default wrong-password DSN (e.g. trust in "
                         "pg_hba). Set QB_PG_INVALID_DSN to a DSN that must fail auth.";
@@ -153,8 +152,11 @@ TEST_F(PostgreSQLConnectionTest, DisconnectFailsAllQueuedQueries) {
     ASSERT_TRUE(qb::io::async::run_sync(db_->connect(qb::pg::test::dsn_tcp_string())));
 
     int  errors = 0;
-    auto on_ok  = [](transaction &, results) {};
-    auto on_err = [&errors](error::db_error const &) { ++errors; };
+    auto on_ok  = [](transaction &, results) {
+    };
+    auto on_err = [&errors](error::db_error const &) {
+        ++errors;
+    };
 
     // First query parks the server; the next two queue behind it.
     db_->execute("SELECT pg_sleep(3)", on_ok, on_err);

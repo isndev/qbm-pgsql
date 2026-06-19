@@ -8,7 +8,7 @@
  * binary representation with proper endianness handling.
  *
  * @author qb - C++ Actor Framework
- * @copyright Copyright (c) 2011-2025 qb - isndev (cpp.actor)
+ * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -30,10 +30,10 @@
 #include <iomanip>
 #include <iostream>
 #include <optional>
-#include <stdexcept>
 #include <qb/io.h>
 #include <qb/system/endian.h>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -110,10 +110,8 @@ public:
     void
     ensure_param_count_fits() const {
         if (param_types_.size() > MAX_PARAMS) {
-            throw std::length_error(
-                "pgsql: too many bind parameters (" +
-                std::to_string(param_types_.size()) + " > " +
-                std::to_string(MAX_PARAMS) + ")");
+            throw std::length_error("pgsql: too many bind parameters (" + std::to_string(param_types_.size()) + " > "
+                                    + std::to_string(MAX_PARAMS) + ")");
         }
     }
 
@@ -362,8 +360,7 @@ public:
 
             // Write the string data without terminator
             if (!value.empty()) {
-                params_buffer_.insert(params_buffer_.end(), value.data(),
-                                      value.data() + value.size());
+                params_buffer_.insert(params_buffer_.end(), value.data(), value.data() + value.size());
             }
         }
     }
@@ -390,8 +387,7 @@ public:
                 return;
             }
             // Special cases for byte arrays - keep existing behavior
-            else if constexpr (std::is_same_v<value_type, std::vector<char>> ||
-                               std::is_same_v<value_type, std::vector<unsigned char>>) {
+            else if constexpr (std::is_same_v<value_type, std::vector<char>> || std::is_same_v<value_type, std::vector<unsigned char>>) {
                 if (!param.empty()) {
                     add_byte_array(reinterpret_cast<const byte *>(param.data()), param.size());
                 } else {

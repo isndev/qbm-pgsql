@@ -6,7 +6,7 @@
  * data, particularly for UUID types in both binary and text formats.
  *
  * @author qb - C++ Actor Framework
- * @copyright Copyright (c) 2011-2025 qb - isndev (cpp.actor)
+ * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -91,9 +91,8 @@ convert_from_text(const char *data, size_t size) {
  */
 template <>
 detail::message::const_iterator
-protocol_read<pg::protocol_data_format::Binary, qb::uuid>(detail::message::const_iterator begin,
-                                                          detail::message::const_iterator end,
-                                                          qb::uuid                       &value) {
+protocol_read<pg::protocol_data_format::Binary, qb::uuid>(detail::message::const_iterator begin, detail::message::const_iterator end,
+                                                          qb::uuid &value) {
     if (std::distance(begin, end) < 16) {
         return begin;
     }
@@ -122,9 +121,8 @@ protocol_read<pg::protocol_data_format::Binary, qb::uuid>(detail::message::const
  */
 template <>
 detail::message::const_iterator
-protocol_read<pg::protocol_data_format::Text, qb::uuid>(detail::message::const_iterator begin,
-                                                        detail::message::const_iterator end,
-                                                        qb::uuid                       &value) {
+protocol_read<pg::protocol_data_format::Text, qb::uuid>(detail::message::const_iterator begin, detail::message::const_iterator end,
+                                                        qb::uuid &value) {
     if (begin == end) {
         return begin;
     }

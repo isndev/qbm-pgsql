@@ -17,7 +17,7 @@
  * @see qb::pg::detail::Database
  *
  * @author qb - C++ Actor Framework
- * @copyright Copyright (c) 2011-2025 qb - isndev (cpp.actor)
+ * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -75,10 +75,9 @@ struct PreparedQuery {
 class PreparedStorage {
     // LRU cache implementation
     struct LruEntry {
-        std::string   name;  ///< Query name (key)
-        PreparedQuery query; ///< The prepared query
-        mutable std::list<std::string>::iterator
-            lru_iter; ///< Iterator in LRU list (mutable for get())
+        std::string                              name;     ///< Query name (key)
+        PreparedQuery                            query;    ///< The prepared query
+        mutable std::list<std::string>::iterator lru_iter; ///< Iterator in LRU list (mutable for get())
     };
 
     qb::unordered_map<std::string, LruEntry> _prepared_queries; ///< Map of queries
@@ -269,9 +268,7 @@ public:
      * @param args Parameter values
      */
     template <typename... T,
-              std::enable_if_t<!(sizeof...(T) == 1 &&
-                                 std::conjunction_v<std::is_same<std::decay_t<T>, QueryParams>...>),
-                               int> = 0>
+              std::enable_if_t<!(sizeof...(T) == 1 && std::conjunction_v<std::is_same<std::decay_t<T>, QueryParams>...>), int> = 0>
     QueryParams(T &&...args) {
         if constexpr (sizeof...(T) > 0) {
             // Do not use format_codes_buffer, no longer used
@@ -452,17 +449,12 @@ public:
      * @param success Success callback
      * @param error Error callback
      */
-    BeginQuery(transaction_mode mode, qb::duration statement_timeout, CB_SUCCESS &&success,
-               CB_ERROR &&error)
-        : SqlQuery<CB_SUCCESS, CB_ERROR>(std::forward<CB_SUCCESS>(success),
-                                         std::forward<CB_ERROR>(error))
+    BeginQuery(transaction_mode mode, qb::duration statement_timeout, CB_SUCCESS &&success, CB_ERROR &&error)
+        : SqlQuery<CB_SUCCESS, CB_ERROR>(std::forward<CB_SUCCESS>(success), std::forward<CB_ERROR>(error))
         , _mode(mode)
-        , _statement_timeout_ms(
-              statement_timeout > qb::duration::zero()
-                  ? static_cast<int>(
-                        std::chrono::duration_cast<std::chrono::milliseconds>(statement_timeout)
-                            .count())
-                  : 0) {}
+        , _statement_timeout_ms(statement_timeout > qb::duration::zero()
+                                    ? static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(statement_timeout).count())
+                                    : 0) {}
 
     /**
      * @brief Creates the BEGIN message
@@ -502,8 +494,7 @@ public:
      * @param error Error callback
      */
     CommitQuery(CB_SUCCESS &&success, CB_ERROR &&error)
-        : SqlQuery<CB_SUCCESS, CB_ERROR>(std::forward<CB_SUCCESS>(success),
-                                         std::forward<CB_ERROR>(error)) {}
+        : SqlQuery<CB_SUCCESS, CB_ERROR>(std::forward<CB_SUCCESS>(success), std::forward<CB_ERROR>(error)) {}
 
     /**
      * @brief Creates the COMMIT message
@@ -537,8 +528,7 @@ public:
      * @param error Error callback
      */
     RollbackQuery(CB_SUCCESS &&success, CB_ERROR &&error)
-        : SqlQuery<CB_SUCCESS, CB_ERROR>(std::forward<CB_SUCCESS>(success),
-                                         std::forward<CB_ERROR>(error)) {}
+        : SqlQuery<CB_SUCCESS, CB_ERROR>(std::forward<CB_SUCCESS>(success), std::forward<CB_ERROR>(error)) {}
 
     /**
      * @brief Creates the ROLLBACK message
@@ -575,8 +565,7 @@ public:
      * @param error Error callback
      */
     SavePointQuery(std::string const &name, CB_SUCCESS &&success, CB_ERROR &&error)
-        : SqlQuery<CB_SUCCESS, CB_ERROR>(std::forward<CB_SUCCESS>(success),
-                                         std::forward<CB_ERROR>(error))
+        : SqlQuery<CB_SUCCESS, CB_ERROR>(std::forward<CB_SUCCESS>(success), std::forward<CB_ERROR>(error))
         , _name(name) {}
 
     /**
@@ -614,8 +603,7 @@ public:
      * @param error Error callback
      */
     ReleaseSavePointQuery(std::string const &name, CB_SUCCESS &&success, CB_ERROR &&error)
-        : SqlQuery<CB_SUCCESS, CB_ERROR>(std::forward<CB_SUCCESS>(success),
-                                         std::forward<CB_ERROR>(error))
+        : SqlQuery<CB_SUCCESS, CB_ERROR>(std::forward<CB_SUCCESS>(success), std::forward<CB_ERROR>(error))
         , _name(name) {}
 
     /**
@@ -653,8 +641,7 @@ public:
      * @param error Error callback
      */
     RollbackSavePointQuery(std::string const &name, CB_SUCCESS &&success, CB_ERROR &&error)
-        : SqlQuery<CB_SUCCESS, CB_ERROR>(std::forward<CB_SUCCESS>(success),
-                                         std::forward<CB_ERROR>(error))
+        : SqlQuery<CB_SUCCESS, CB_ERROR>(std::forward<CB_SUCCESS>(success), std::forward<CB_ERROR>(error))
         , _name(name) {}
 
     /**
@@ -692,8 +679,7 @@ public:
      * @param error Error callback
      */
     SimpleQuery(std::string &&expr, CB_SUCCESS &&success, CB_ERROR &&error)
-        : SqlQuery<CB_SUCCESS, CB_ERROR>(std::forward<CB_SUCCESS>(success),
-                                         std::forward<CB_ERROR>(error))
+        : SqlQuery<CB_SUCCESS, CB_ERROR>(std::forward<CB_SUCCESS>(success), std::forward<CB_ERROR>(error))
         , _expression(std::move(expr)) {}
 
     /**
@@ -725,8 +711,7 @@ class ParseQuery final : public SqlQuery<CB_SUCCESS, CB_ERROR> {
 
 public:
     ParseQuery(PreparedQuery const &query, CB_SUCCESS &&success, CB_ERROR &&error)
-        : SqlQuery<CB_SUCCESS, CB_ERROR>(std::forward<CB_SUCCESS>(success),
-                                         std::forward<CB_ERROR>(error))
+        : SqlQuery<CB_SUCCESS, CB_ERROR>(std::forward<CB_SUCCESS>(success), std::forward<CB_ERROR>(error))
         , _query(query) {}
 
     bool
@@ -737,11 +722,9 @@ public:
         // Reject here (like ExecuteQuery's missing-statement check) so the failure goes
         // through the normal on_error path instead of corrupting the connection. This is
         // the Parse-side twin of the Bind guard ParamSerializer::ensure_param_count_fits().
-        if (qb::likely(_query.param_types.size() <=
-                       static_cast<std::size_t>(std::numeric_limits<smallint>::max())))
+        if (qb::likely(_query.param_types.size() <= static_cast<std::size_t>(std::numeric_limits<smallint>::max())))
             return true;
-        LOG_CRIT("[pgsql] PARSE rejected: " << _query.param_types.size()
-                                            << " parameter types exceed protocol max 32767");
+        LOG_CRIT("[pgsql] PARSE rejected: " << _query.param_types.size() << " parameter types exceed protocol max 32767");
         return false;
     }
 
@@ -788,10 +771,8 @@ public:
      * @param success Success callback
      * @param error Error callback
      */
-    ExecuteQuery(const PreparedStorage &storage, std::string_view query_name, QueryParams &&params,
-                 CB_SUCCESS &&success, CB_ERROR &&error)
-        : SqlQuery<CB_SUCCESS, CB_ERROR>(std::forward<CB_SUCCESS>(success),
-                                         std::forward<CB_ERROR>(error))
+    ExecuteQuery(const PreparedStorage &storage, std::string_view query_name, QueryParams &&params, CB_SUCCESS &&success, CB_ERROR &&error)
+        : SqlQuery<CB_SUCCESS, CB_ERROR>(std::forward<CB_SUCCESS>(success), std::forward<CB_ERROR>(error))
         , _storage(storage)
         , _query_name(query_name)
         , _params(std::move(params)) {}
@@ -839,15 +820,13 @@ public:
                 size_t      data_size = param_buffer.size() - sizeof(smallint);
 
                 if (data_size == 0) {
-                    LOG_WARN("[pgsql] Bind: param_count=" << param_count
-                                                          << " but serialized payload is empty");
+                    LOG_WARN("[pgsql] Bind: param_count=" << param_count << " but serialized payload is empty");
                 }
                 // Copy the raw data
                 auto out = cmd.output();
                 std::copy(data, data + data_size, out);
             } else {
-                LOG_WARN("[pgsql] Bind: param_count=" << param_count
-                                                      << " but parameter buffer missing payload");
+                LOG_WARN("[pgsql] Bind: param_count=" << param_count << " but parameter buffer missing payload");
             }
         }
 
