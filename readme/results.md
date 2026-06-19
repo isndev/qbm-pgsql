@@ -10,7 +10,7 @@ How to read rows and columns from `qb::pg::results` — the container a query ha
 
 ## Summary
 
-A query returns a `qb::pg::results` object. `results` is a public type alias for `qb::pg::detail::resultset` (`pgsql.h:2039`), so the two names are interchangeable; the same type is also named `qb::pg::resultset`. You reach one through three paths:
+A query returns a `qb::pg::results` object. `results` is the public type alias for `qb::pg::detail::resultset` (`pgsql.h:2039`) — that is the only public spelling. The class itself only exists as `qb::pg::detail::resultset` (used internally, e.g. in `pg_reply_awaiter<resultset>`); there is no public `qb::pg::resultset`. You reach a result set through three paths:
 
 - **Callback** — the success callback's second parameter, `(qb::pg::transaction&, qb::pg::results)`.
 - **Coroutine** — `co_await tr.execute(...)` yields a `Reply<resultset>`; on success `reply.result()` is the result set.

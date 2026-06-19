@@ -33,7 +33,8 @@ both the success and the malformed-input paths when your change touches wire-pro
 
 ## Conventions
 
-Use the `qb::pgsql` / `qb::pg` namespaces and include the module's umbrella header. Express time with the
+Use the `qb::pg` namespace and include the module's umbrella header (the CMake link target is
+`qbm::pgsql`, but the C++ namespace is `qb::pg`). Express time with the
 `qb::duration` / `qb::wall_time` vocabulary: connect, statement, and transaction timeouts are
 `qb::duration`, and `timestamptz` values are `qb::wall_time`. The PostgreSQL wire epoch (microseconds since
 2000) is an internal encoding detail and stays native. Never use the removed `qb::Timestamp` /
