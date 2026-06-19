@@ -7,7 +7,7 @@
  * for binary and text data formats for standard types.
  *
  * @author qb - C++ Actor Framework
- * @copyright Copyright (c) 2011-2025 qb - isndev (cpp.actor)
+ * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -217,8 +217,7 @@ struct has_parser<qb::uuid, pg::protocol_data_format::Binary> : std::true_type {
  * @tparam T The type contained in std::optional
  */
 template <typename T>
-struct has_parser<std::optional<T>, pg::protocol_data_format::Text>
-    : has_parser<T, pg::protocol_data_format::Text> {};
+struct has_parser<std::optional<T>, pg::protocol_data_format::Text> : has_parser<T, pg::protocol_data_format::Text> {};
 
 /**
  * @brief Specialization for optional types in binary format
@@ -228,8 +227,7 @@ struct has_parser<std::optional<T>, pg::protocol_data_format::Text>
  * @tparam T The type contained in std::optional
  */
 template <typename T>
-struct has_parser<std::optional<T>, pg::protocol_data_format::Binary>
-    : has_parser<T, pg::protocol_data_format::Binary> {};
+struct has_parser<std::optional<T>, pg::protocol_data_format::Binary> : has_parser<T, pg::protocol_data_format::Binary> {};
 
 /**
  * @brief Tuples can be parsed from text format
@@ -707,8 +705,7 @@ struct text_reader<bool> {
         std::string text_value(begin, null_terminator);
 
         // PostgreSQL uses 'true'/'false' or 't'/'f'
-        value = (text_value == "true" || text_value == "t" || text_value == "1" ||
-                 text_value == "yes" || text_value == "y");
+        value = (text_value == "true" || text_value == "t" || text_value == "1" || text_value == "yes" || text_value == "y");
         return null_terminator + 1; // Skip the \0
     }
 };
@@ -851,8 +848,8 @@ protocol_read(InputIterator begin, InputIterator end, T &value) {
  * @return detail::message::const_iterator New start iterator (after reading)
  */
 template <>
-detail::message::const_iterator protocol_read<pg::protocol_data_format::Binary, qb::uuid>(
-    detail::message::const_iterator begin, detail::message::const_iterator end, qb::uuid &value);
+detail::message::const_iterator protocol_read<pg::protocol_data_format::Binary, qb::uuid>(detail::message::const_iterator begin,
+                                                                                          detail::message::const_iterator end, qb::uuid &value);
 
 /**
  * @brief Specialization for reading UUID from text format
@@ -863,8 +860,8 @@ detail::message::const_iterator protocol_read<pg::protocol_data_format::Binary, 
  * @return detail::message::const_iterator New start iterator (after reading)
  */
 template <>
-detail::message::const_iterator protocol_read<pg::protocol_data_format::Text, qb::uuid>(
-    detail::message::const_iterator begin, detail::message::const_iterator end, qb::uuid &value);
+detail::message::const_iterator protocol_read<pg::protocol_data_format::Text, qb::uuid>(detail::message::const_iterator begin,
+                                                                                        detail::message::const_iterator end, qb::uuid &value);
 
 } // namespace io
 } // namespace pg

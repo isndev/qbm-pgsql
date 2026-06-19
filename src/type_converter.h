@@ -20,7 +20,7 @@
  * @see qb::pg::detail::type_mapping
  *
  * @author qb - C++ Actor Framework
- * @copyright Copyright (c) 2011-2025 qb - isndev (cpp.actor)
+ * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -152,8 +152,7 @@ public:
      */
     static void
     to_binary(const value_type &value, std::vector<byte> &buffer) {
-        if constexpr (std::is_same_v<value_type, std::string> ||
-                      std::is_same_v<value_type, std::string_view>) {
+        if constexpr (std::is_same_v<value_type, std::string> || std::is_same_v<value_type, std::string_view>) {
             // Write length
             integer len = static_cast<integer>(value.size());
             write_integer(buffer, len);
@@ -202,8 +201,7 @@ public:
             uint64_t    be    = qb::endian::to_big_endian(raw);
             const byte *bytes = reinterpret_cast<const byte *>(&be);
             buffer.insert(buffer.end(), bytes, bytes + sizeof(double));
-        } else if constexpr (std::is_same_v<value_type, bytea> ||
-                             std::is_same_v<value_type, std::vector<byte>>) {
+        } else if constexpr (std::is_same_v<value_type, bytea> || std::is_same_v<value_type, std::vector<byte>>) {
             // PostgreSQL bytea: length + raw bytes
             integer len = static_cast<integer>(value.size());
             write_integer(buffer, len);
@@ -232,8 +230,7 @@ public:
             constexpr int64_t POSTGRES_EPOCH_DIFF_SECONDS = 946684800;
 
             // Exact integer micros since the PostgreSQL epoch (no double rounding).
-            int64_t pg_timestamp =
-                qb::unix_micros(value) - POSTGRES_EPOCH_DIFF_SECONDS * 1000000LL;
+            int64_t pg_timestamp = qb::unix_micros(value) - POSTGRES_EPOCH_DIFF_SECONDS * 1000000LL;
 
             // Convert to network byte order using the endian utility
             int64_t network_timestamp = qb::endian::to_big_endian(pg_timestamp);
@@ -274,8 +271,7 @@ public:
      */
     static std::string
     to_text(const value_type &value) {
-        if constexpr (std::is_same_v<value_type, std::string> ||
-                      std::is_same_v<value_type, std::string_view>) {
+        if constexpr (std::is_same_v<value_type, std::string> || std::is_same_v<value_type, std::string_view>) {
             return std::string(value);
         } else if constexpr (std::is_same_v<value_type, bool>) {
             return value ? "t" : "f";
@@ -289,8 +285,7 @@ public:
                 return value > 0 ? "Infinity" : "-Infinity";
             }
             return std::to_string(value);
-        } else if constexpr (std::is_same_v<value_type, bytea> ||
-                             std::is_same_v<value_type, std::vector<byte>>) {
+        } else if constexpr (std::is_same_v<value_type, bytea> || std::is_same_v<value_type, std::vector<byte>>) {
             std::string result = "\\x";
             char        hex[3];
 
@@ -321,10 +316,9 @@ public:
                 throw error::client_error("timestamp out of range for text conversion");
 
             std::ostringstream os;
-            os << std::setfill('0') << std::setw(4) << (tm_data.tm_year + 1900) << '-'
-               << std::setw(2) << (tm_data.tm_mon + 1) << '-' << std::setw(2) << tm_data.tm_mday
-               << ' ' << std::setw(2) << tm_data.tm_hour << ':' << std::setw(2) << tm_data.tm_min
-               << ':' << std::setw(2) << tm_data.tm_sec << '.' << std::setw(6) << frac;
+            os << std::setfill('0') << std::setw(4) << (tm_data.tm_year + 1900) << '-' << std::setw(2) << (tm_data.tm_mon + 1) << '-'
+               << std::setw(2) << tm_data.tm_mday << ' ' << std::setw(2) << tm_data.tm_hour << ':' << std::setw(2) << tm_data.tm_min << ':'
+               << std::setw(2) << tm_data.tm_sec << '.' << std::setw(6) << frac;
 
             return os.str();
         } else if constexpr (detail::ParamUnserializer::is_optional<value_type>::value) {
@@ -368,8 +362,8 @@ public:
             }
             if (buffer.size() == sizeof(bigint)) {
                 const bigint wide = unserializer.read_bigint(buffer);
-                if (wide > static_cast<bigint>(std::numeric_limits<integer>::max()) ||
-                    wide < static_cast<bigint>(std::numeric_limits<integer>::min())) {
+                if (wide > static_cast<bigint>(std::numeric_limits<integer>::max())
+                    || wide < static_cast<bigint>(std::numeric_limits<integer>::min())) {
                     throw std::runtime_error("Integer value out of range for int32");
                 }
                 return static_cast<integer>(wide);
@@ -389,8 +383,7 @@ public:
                 throw std::runtime_error("Empty buffer for boolean value");
             }
             return buffer[0] != 0;
-        } else if constexpr (std::is_same_v<value_type, bytea> ||
-                             std::is_same_v<value_type, std::vector<byte>>) {
+        } else if constexpr (std::is_same_v<value_type, bytea> || std::is_same_v<value_type, std::vector<byte>>) {
             value_type result;
             result.assign(buffer.begin(), buffer.end());
             return result;
@@ -442,8 +435,7 @@ public:
                 unix_usecs += 1000000;
             }
 
-            return qb::wall_from_unix_seconds(unix_secs) +
-                   std::chrono::microseconds(unix_usecs);
+            return qb::wall_from_unix_seconds(unix_secs) + std::chrono::microseconds(unix_usecs);
         } else if constexpr (detail::ParamUnserializer::is_optional<value_type>::value) {
             using inner_type = typename value_type::value_type;
 
@@ -492,22 +484,19 @@ public:
             try {
                 return static_cast<smallint>(std::stoi(text));
             } catch (const std::exception &e) {
-                throw error::client_error("Cannot parse smallint from text: " + text + " (" +
-                                          e.what() + ")");
+                throw error::client_error("Cannot parse smallint from text: " + text + " (" + e.what() + ")");
             }
         } else if constexpr (std::is_same_v<value_type, integer>) {
             try {
                 return static_cast<integer>(std::stoi(text));
             } catch (const std::exception &e) {
-                throw error::client_error("Cannot parse integer from text: " + text + " (" +
-                                          e.what() + ")");
+                throw error::client_error("Cannot parse integer from text: " + text + " (" + e.what() + ")");
             }
         } else if constexpr (std::is_same_v<value_type, bigint>) {
             try {
                 return static_cast<bigint>(std::stoll(text));
             } catch (const std::exception &e) {
-                throw error::client_error("Cannot parse bigint from text: " + text + " (" +
-                                          e.what() + ")");
+                throw error::client_error("Cannot parse bigint from text: " + text + " (" + e.what() + ")");
             }
         } else if constexpr (std::is_same_v<value_type, float>) {
             // Special values
@@ -520,8 +509,7 @@ public:
             try {
                 return std::stof(text);
             } catch (const std::exception &e) {
-                throw error::client_error("Cannot parse float from text: " + text + " (" + e.what() +
-                                          ")");
+                throw error::client_error("Cannot parse float from text: " + text + " (" + e.what() + ")");
             }
         } else if constexpr (std::is_same_v<value_type, double>) {
             // Special values
@@ -534,14 +522,11 @@ public:
             try {
                 return std::strtod(text.c_str(), nullptr);
             } catch (const std::exception &e) {
-                throw error::client_error("Cannot parse double from text: " + text + " (" +
-                                          e.what() + ")");
+                throw error::client_error("Cannot parse double from text: " + text + " (" + e.what() + ")");
             }
         } else if constexpr (std::is_same_v<value_type, bool>) {
-            return (text == "t" || text == "true" || text == "1" || text == "yes" || text == "y" ||
-                    text == "on");
-        } else if constexpr (std::is_same_v<value_type, bytea> ||
-                             std::is_same_v<value_type, std::vector<byte>>) {
+            return (text == "t" || text == "true" || text == "1" || text == "yes" || text == "y" || text == "on");
+        } else if constexpr (std::is_same_v<value_type, bytea> || std::is_same_v<value_type, std::vector<byte>>) {
             value_type result;
 
             // Hexadecimal format (\x...)
@@ -605,8 +590,7 @@ public:
 #endif
 
                 // Create timestamp from seconds and microseconds
-                return qb::wall_from_unix_seconds(unix_timestamp) +
-                       std::chrono::microseconds(microsecond);
+                return qb::wall_from_unix_seconds(unix_timestamp) + std::chrono::microseconds(microsecond);
             }
 
             throw std::runtime_error("Invalid timestamp format");
@@ -822,8 +806,8 @@ struct TypeConverter<qb::wall_time> {
             microsecs += 1000000;
             --whole_sec;
         }
-        std::time_t   unix_time = static_cast<std::time_t>(whole_sec);
-        std::tm       time_info{};
+        std::time_t unix_time = static_cast<std::time_t>(whole_sec);
+        std::tm     time_info{};
         if (!safe_gmtime(unix_time, time_info))
             throw error::client_error("timestamp out of range for text conversion");
         char buf[40];
@@ -924,8 +908,7 @@ struct TypeConverter<qb::wall_time> {
         int year = 0, month = 0, day = 0, hour = 0, min = 0, sec = 0;
 
         // Use sscanf which is more tolerant of formats
-        int matched =
-            sscanf(text.c_str(), "%d-%d-%d %d:%d:%d", &year, &month, &day, &hour, &min, &sec);
+        int matched = sscanf(text.c_str(), "%d-%d-%d %d:%d:%d", &year, &month, &day, &hour, &min, &sec);
 
         if (matched != 6) {
             throw std::runtime_error("Invalid timestamp format");
@@ -938,8 +921,7 @@ struct TypeConverter<qb::wall_time> {
         size_t dot_pos = text.find('.');
         if (dot_pos != std::string::npos && dot_pos + 1 < text.length()) {
             size_t end_pos = dot_pos + 1;
-            while (end_pos < text.length() &&
-                   std::isdigit(static_cast<unsigned char>(text[end_pos]))) {
+            while (end_pos < text.length() && std::isdigit(static_cast<unsigned char>(text[end_pos]))) {
                 end_pos++;
             }
             std::string usec_str = text.substr(dot_pos + 1, end_pos - (dot_pos + 1));
@@ -1056,8 +1038,7 @@ struct TypeConverter<qb::json> {
             }
 
             // Skip the 4-byte length prefix
-            std::string json_str(reinterpret_cast<const char *>(buffer.data() + 4),
-                                 buffer.size() - 4);
+            std::string json_str(reinterpret_cast<const char *>(buffer.data() + 4), buffer.size() - 4);
 
             // OPTIMIZED: Single parse with format detection (P0-10 fix)
             // Previously called parse TWICE on error path - wasteful CPU usage
@@ -1211,8 +1192,7 @@ struct TypeConverter<qb::jsonb> {
                 throw std::runtime_error("Unsupported JSONB binary format or version");
             }
 
-            std::string json_str(reinterpret_cast<const char *>(buffer.data() + json_off),
-                                 buffer.size() - json_off);
+            std::string json_str(reinterpret_cast<const char *>(buffer.data() + json_off), buffer.size() - json_off);
 
             // OPTIMIZED: Single parse with format detection (P0-10 fix)
             // Previously called parse TWICE on error path - wasteful CPU usage
@@ -1548,14 +1528,13 @@ struct pgdate {
     // Simple to_string (YYYY-MM-DD format) - UTC
     std::string
     to_string() const {
-        time_t   unix_time = to_unix_time();
-        std::tm  tm_data{};
+        time_t  unix_time = to_unix_time();
+        std::tm tm_data{};
         if (!safe_gmtime(unix_time, tm_data))
             return "2000-01-01";
 
         char buf[11]; // YYYY-MM-DD\0
-        std::snprintf(buf, sizeof(buf), "%04d-%02d-%02d", tm_data.tm_year + 1900,
-                      tm_data.tm_mon + 1, tm_data.tm_mday);
+        std::snprintf(buf, sizeof(buf), "%04d-%02d-%02d", tm_data.tm_year + 1900, tm_data.tm_mon + 1, tm_data.tm_mday);
         return std::string(buf);
     }
 
@@ -1733,8 +1712,7 @@ struct pgtimetz {
         char tz_sign = '+';
 
         // Try format with timezone HH:MM:SS+HH:MM or HH:MM:SS-HH:MM
-        if (std::sscanf(str.c_str(), "%d:%d:%d%c%d:%d", &hour, &min, &sec, &tz_sign, &tz_hour,
-                        &tz_min) >= 5) {
+        if (std::sscanf(str.c_str(), "%d:%d:%d%c%d:%d", &hour, &min, &sec, &tz_sign, &tz_hour, &tz_min) >= 5) {
             int tz_seconds = (tz_hour * 3600) + (tz_min * 60);
             if (tz_sign == '-')
                 tz_seconds = -tz_seconds;
@@ -1760,8 +1738,7 @@ struct pgtimetz {
         char sign       = tz_offset >= 0 ? '+' : '-';
 
         char buf[32];
-        std::snprintf(buf, sizeof(buf), "%02d:%02d:%02d%c%02d:%02d", hour, min, sec, sign, tz_h,
-                      tz_m);
+        std::snprintf(buf, sizeof(buf), "%02d:%02d:%02d%c%02d:%02d", hour, min, sec, sign, tz_h, tz_m);
         return std::string(buf);
     }
 
@@ -1857,8 +1834,7 @@ struct TypeConverter<pgtimetz> {
         int32_t net_offset;
         std::memcpy(&net_micros, buffer.data() + 4, sizeof(int64_t));
         std::memcpy(&net_offset, buffer.data() + 12, sizeof(int32_t));
-        return pgtimetz(qb::endian::from_big_endian(net_micros),
-                        qb::endian::from_big_endian(net_offset));
+        return pgtimetz(qb::endian::from_big_endian(net_micros), qb::endian::from_big_endian(net_offset));
     }
 
     static value_type

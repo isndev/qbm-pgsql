@@ -7,7 +7,7 @@
  * It includes endianness conversion, buffer validation, and format detection logic.
  *
  * @author qb - C++ Actor Framework
- * @copyright Copyright (c) 2011-2025 qb - isndev (cpp.actor)
+ * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -190,8 +190,7 @@ ParamUnserializer::read_string(const std::vector<byte> &buffer) {
 
     // Automatic format detection - only for reasonably sized buffers to avoid
     // mistaking large data buffers for binary format
-    if (buffer.size() >= 4 && buffer.size() <= 1024 * 1024 &&
-        (buffer[0] == 0 || buffer[1] == 0 || buffer[2] == 0)) {
+    if (buffer.size() >= 4 && buffer.size() <= 1024 * 1024 && (buffer[0] == 0 || buffer[1] == 0 || buffer[2] == 0)) {
         // This is likely a binary format with a 4-byte length prefix
         try {
             return read_binary_string(buffer);
@@ -284,12 +283,11 @@ ParamUnserializer::read_bool(const std::vector<byte> &buffer) {
     }
 
     // Text format ("true"/"false", "t"/"f", "1"/"0", etc.)
-    if (buffer.size() >= 1 &&
-        (buffer[0] == 't' || buffer[0] == 'T' || buffer[0] == 'f' || buffer[0] == 'F' ||
-         buffer[0] == '1' || buffer[0] == '0' || buffer[0] == 'y' || buffer[0] == 'n')) {
+    if (buffer.size() >= 1
+        && (buffer[0] == 't' || buffer[0] == 'T' || buffer[0] == 'f' || buffer[0] == 'F' || buffer[0] == '1' || buffer[0] == '0'
+            || buffer[0] == 'y' || buffer[0] == 'n')) {
         std::string text = read_text_string(buffer);
-        return (text == "true" || text == "t" || text == "1" || text == "y" || text == "yes" ||
-                text == "on");
+        return (text == "true" || text == "t" || text == "1" || text == "y" || text == "yes" || text == "on");
     }
 
     // Raw binary format (single byte) - last resort

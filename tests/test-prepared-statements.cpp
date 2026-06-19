@@ -30,7 +30,7 @@
  * @see qb::pg::detail::params
  *
  * @author qb - C++ Actor Framework
- * @copyright Copyright (c) 2011-2025 qb - isndev (cpp.actor)
+ * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -83,10 +83,7 @@ protected:
         }
 
         // Create test table
-        auto status =
-            db_->execute("CREATE TEMP TABLE test_prepared (id SERIAL PRIMARY KEY, value TEXT)",
-                         discard_query, discard_error)
-                .await();
+        auto status = db_->execute("CREATE TEMP TABLE test_prepared (id SERIAL PRIMARY KEY, value TEXT)", discard_query, discard_error).await();
         ASSERT_TRUE(status);
         fixture_ready_ = true;
     }
@@ -99,8 +96,7 @@ protected:
     void
     TearDown() override {
         if (db_ && fixture_ready_) {
-            (void) db_->execute("DROP TABLE IF EXISTS test_prepared", discard_query, discard_error)
-                .await();
+            (void) db_->execute("DROP TABLE IF EXISTS test_prepared", discard_query, discard_error).await();
             db_->disconnect();
         }
         db_.reset();
@@ -117,9 +113,9 @@ protected:
  * executed successfully with parameter binding.
  */
 TEST_F(PostgreSQLPreparedStatementsTest, BasicPrepare) {
-    auto status = db_->prepare("test_prepare", "INSERT INTO test_prepared (value) VALUES ($1)",
-                               type_oid_sequence{}, discard_prepare, discard_error)
-                      .await();
+    auto status =
+        db_->prepare("test_prepare", "INSERT INTO test_prepared (value) VALUES ($1)", type_oid_sequence{}, discard_prepare, discard_error)
+            .await();
     ASSERT_TRUE(status);
 }
 
@@ -134,9 +130,7 @@ TEST_F(PostgreSQLPreparedStatementsTest, BasicPrepare) {
  */
 TEST_F(PostgreSQLPreparedStatementsTest, PrepareRejectsTooManyParamTypes) {
     type_oid_sequence too_many(static_cast<std::size_t>(32768), oid::int4); // 32768 > 32767
-    auto status = db_->prepare("too_many_param_types", "SELECT 1", std::move(too_many),
-                               discard_prepare, discard_error)
-                      .await();
+    auto              status = db_->prepare("too_many_param_types", "SELECT 1", std::move(too_many), discard_prepare, discard_error).await();
     EXPECT_FALSE(status);
 
     // The connection must still be usable afterwards (it was never corrupted).
@@ -154,10 +148,9 @@ TEST_F(PostgreSQLPreparedStatementsTest, PrepareRejectsTooManyParamTypes) {
  * unusable. This forces its instantiation and runs it.
  */
 TEST_F(PostgreSQLPreparedStatementsTest, PrepareSuccessCallbackOnly) {
-    auto status = db_->prepare("test_prepare_success_only",
-                               "INSERT INTO test_prepared (value) VALUES ($1)",
-                               type_oid_sequence{}, discard_prepare)
-                      .await();
+    auto status =
+        db_->prepare("test_prepare_success_only", "INSERT INTO test_prepared (value) VALUES ($1)", type_oid_sequence{}, discard_prepare)
+            .await();
     ASSERT_TRUE(status);
 }
 
@@ -169,30 +162,24 @@ TEST_F(PostgreSQLPreparedStatementsTest, PrepareSuccessCallbackOnly) {
  * advantage of prepared statements.
  */
 TEST_F(PostgreSQLPreparedStatementsTest, PrepareAndExecute) {
-    ASSERT_TRUE(db_->prepare("test_prepare", "INSERT INTO test_prepared (value) VALUES ($1)",
-                             type_oid_sequence{}, discard_prepare, discard_error)
-                    .await());
     ASSERT_TRUE(
-        db_->execute("test_prepare", params{std::string("test1")}, discard_query, discard_error)
+        db_->prepare("test_prepare", "INSERT INTO test_prepared (value) VALUES ($1)", type_oid_sequence{}, discard_prepare, discard_error)
             .await());
-    ASSERT_TRUE(
-        db_->execute("test_prepare", params{std::string("test2")}, discard_query, discard_error)
-            .await());
+    ASSERT_TRUE(db_->execute("test_prepare", params{std::string("test1")}, discard_query, discard_error).await());
+    ASSERT_TRUE(db_->execute("test_prepare", params{std::string("test2")}, discard_query, discard_error).await());
 
     // Verify data was inserted correctly
     bool verify_success = false;
     auto status         = db_->execute(
-                         "SELECT value FROM test_prepared ORDER BY id",
-                         [&verify_success](Transaction &tr, results result) {
+                                 "SELECT value FROM test_prepared ORDER BY id",
+                                 [&verify_success](Transaction &tr, results result) {
                              ASSERT_EQ(result.size(), 2);
                              ASSERT_EQ(result[0][0].as<std::string>(), "test1");
                              ASSERT_EQ(result[1][0].as<std::string>(), "test2");
                              verify_success = true;
-                         },
-                         [](error::db_error error) {
-                             ASSERT_TRUE(false) << "Failed to verify data: " << error.what();
-                         })
-                      .await();
+                                 },
+                                 [](error::db_error error) { ASSERT_TRUE(false) << "Failed to verify data: " << error.what(); })
+                              .await();
     ASSERT_TRUE(status);
     ASSERT_TRUE(verify_success);
 }
@@ -201,15 +188,11 @@ TEST_F(PostgreSQLPreparedStatementsTest, PrepareAndExecute) {
  * @brief Same inserts as PrepareAndExecute; row check via `co_await query()` (spawned task).
  */
 TEST_F(PostgreSQLPreparedStatementsTest, PrepareAndExecute_CoroutineVerify) {
-    ASSERT_TRUE(db_->prepare("test_prepare_coro", "INSERT INTO test_prepared (value) VALUES ($1)",
-                             type_oid_sequence{}, discard_prepare, discard_error)
-                    .await());
     ASSERT_TRUE(
-        db_->execute("test_prepare_coro", params{std::string("c1")}, discard_query, discard_error)
+        db_->prepare("test_prepare_coro", "INSERT INTO test_prepared (value) VALUES ($1)", type_oid_sequence{}, discard_prepare, discard_error)
             .await());
-    ASSERT_TRUE(
-        db_->execute("test_prepare_coro", params{std::string("c2")}, discard_query, discard_error)
-            .await());
+    ASSERT_TRUE(db_->execute("test_prepare_coro", params{std::string("c1")}, discard_query, discard_error).await());
+    ASSERT_TRUE(db_->execute("test_prepare_coro", params{std::string("c2")}, discard_query, discard_error).await());
 
     bool ok = false;
     qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
@@ -218,8 +201,7 @@ TEST_F(PostgreSQLPreparedStatementsTest, PrepareAndExecute_CoroutineVerify) {
         if (!ok)
             co_return;
         const auto n = reply.result().size();
-        ok           = reply.result()[n - 2][0].as<std::string>() == "c1" &&
-             reply.result()[n - 1][0].as<std::string>() == "c2";
+        ok           = reply.result()[n - 2][0].as<std::string>() == "c1" && reply.result()[n - 1][0].as<std::string>() == "c2";
     }());
     ASSERT_TRUE(ok);
 }
@@ -233,9 +215,7 @@ TEST_F(PostgreSQLPreparedStatementsTest, PrepareCoroExecutePreparedCoro) {
 
     bool ok = false;
     qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
-        auto         pr =
-            co_await db_->prepare("prep_coro_only", "INSERT INTO test_prepared (value) VALUES ($1)",
-                                  type_oid_sequence{oid::text});
+        auto pr = co_await db_->prepare("prep_coro_only", "INSERT INTO test_prepared (value) VALUES ($1)", type_oid_sequence{oid::text});
         if (!pr)
             co_return;
         auto ex = co_await db_->execute("prep_coro_only", params{std::string("coro_prep")});
@@ -255,11 +235,8 @@ TEST_F(PostgreSQLPreparedStatementsTest, PrepareCoroExecutePreparedCoro) {
  */
 TEST_F(PostgreSQLPreparedStatementsTest, MultipleParameters) {
     // First recreate test table to ensure clean state
-    ASSERT_TRUE(
-        db_->execute("DROP TABLE IF EXISTS test_prepared", discard_query, discard_error).await());
-    ASSERT_TRUE(db_->execute("CREATE TEMP TABLE test_prepared (id SERIAL PRIMARY KEY, value TEXT)",
-                             discard_query, discard_error)
-                    .await());
+    ASSERT_TRUE(db_->execute("DROP TABLE IF EXISTS test_prepared", discard_query, discard_error).await());
+    ASSERT_TRUE(db_->execute("CREATE TEMP TABLE test_prepared (id SERIAL PRIMARY KEY, value TEXT)", discard_query, discard_error).await());
 
     // Prepare with a different approach - use PostgreSQL's concatenation operator
     ASSERT_TRUE(db_->prepare("test_prepare",
@@ -268,24 +245,20 @@ TEST_F(PostgreSQLPreparedStatementsTest, MultipleParameters) {
                              type_oid_sequence{}, discard_prepare, discard_error)
                     .await());
     ASSERT_TRUE(
-        db_->execute("test_prepare",
-                     params{std::string("string"), std::string("42"), std::string("3.14159")},
-                     discard_query, discard_error)
+        db_->execute("test_prepare", params{std::string("string"), std::string("42"), std::string("3.14159")}, discard_query, discard_error)
             .await());
 
     // Verify data was inserted correctly
     bool verify_success = false;
     auto status         = db_->execute(
-                         "SELECT value FROM test_prepared ORDER BY id",
-                         [&verify_success](Transaction &tr, results result) {
+                                 "SELECT value FROM test_prepared ORDER BY id",
+                                 [&verify_success](Transaction &tr, results result) {
                              ASSERT_GT(result.size(), 0);
                              ASSERT_EQ(result[0][0].as<std::string>(), "string - 42 - 3.14159");
                              verify_success = true;
-                         },
-                         [](error::db_error error) {
-                             ASSERT_TRUE(false) << "Failed to verify data: " << error.what();
-                         })
-                      .await();
+                                 },
+                                 [](error::db_error error) { ASSERT_TRUE(false) << "Failed to verify data: " << error.what(); })
+                              .await();
     ASSERT_TRUE(status);
     ASSERT_TRUE(verify_success);
 }
@@ -298,29 +271,27 @@ TEST_F(PostgreSQLPreparedStatementsTest, MultipleParameters) {
  * since statement preparation might only validate syntax, not object existence.
  */
 TEST_F(PostgreSQLPreparedStatementsTest, PrepareNonexistentTable) {
-    auto prep_reply = db_->prepare("test_prepare", "INSERT INTO nonexistent (value) VALUES ($1)",
-                                   type_oid_sequence{}, discard_prepare, discard_error)
-                          .await();
+    auto prep_reply =
+        db_->prepare("test_prepare", "INSERT INTO nonexistent (value) VALUES ($1)", type_oid_sequence{}, discard_prepare, discard_error)
+            .await();
 
     // Don't assert status - just log the result for reference
     // Some implementations might defer existence validation until execution
     if (prep_reply) {
-        std::cout << "Prepare succeeded for nonexistent table (deferred validation likely)"
-                  << std::endl;
+        std::cout << "Prepare succeeded for nonexistent table (deferred validation likely)" << std::endl;
     } else {
         std::cout << "Prepare failed for nonexistent table (immediate validation)" << std::endl;
     }
 
     // Test that execution fails regardless of preparation outcome
     bool                error_detected = false;
-    Transaction::status status =
-        db_->execute(
-               "test_prepare", params{std::string("test")},
-               [](Transaction &tr, results result) {
-                   // Should not succeed
-               },
-               [&error_detected](error::db_error error) { error_detected = true; })
-            .await();
+    Transaction::status status         = db_->execute(
+                                                "test_prepare", params{std::string("test")},
+                                                [](Transaction &tr, results result) {
+                                            // Should not succeed
+                                                },
+                                                [&error_detected](error::db_error error) { error_detected = true; })
+                                             .await();
 
     // The execution should fail since the table doesn't exist
     ASSERT_FALSE(status);
@@ -335,80 +306,66 @@ TEST_F(PostgreSQLPreparedStatementsTest, PrepareNonexistentTable) {
  */
 TEST_F(PostgreSQLPreparedStatementsTest, NullParameters) {
     // First recreate the table with a column that can be NULL
-    ASSERT_TRUE(
-        db_->execute("DROP TABLE IF EXISTS test_prepared", discard_query, discard_error).await());
+    ASSERT_TRUE(db_->execute("DROP TABLE IF EXISTS test_prepared", discard_query, discard_error).await());
     ASSERT_TRUE(db_->execute("CREATE TEMP TABLE test_prepared (id SERIAL PRIMARY KEY, "
                              "value TEXT, optional_value INTEGER)",
                              discard_query, discard_error)
                     .await());
 
     // Prepare statement with parameters
-    ASSERT_TRUE(db_->prepare("test_null_param",
-                             "INSERT INTO test_prepared (value, optional_value) VALUES ($1, NULL)",
-                             type_oid_sequence{}, discard_prepare, discard_error)
+    ASSERT_TRUE(db_->prepare("test_null_param", "INSERT INTO test_prepared (value, optional_value) VALUES ($1, NULL)", type_oid_sequence{},
+                             discard_prepare, discard_error)
                     .await());
 
     // Execute the prepared statement with NULL value
     Transaction::status status = db_->execute(
-                                        "test_null_param", params{std::string("with_null")},
-                                        [](Transaction &tr, results result) {},
-                                        [&](error::db_error error) {
-                                            ASSERT_TRUE(false)
-                                                << "Failed with NULL value: " << error.what();
-                                        })
+                                        "test_null_param", params{std::string("with_null")}, [](Transaction &tr, results result) {},
+                                        [&](error::db_error error) { ASSERT_TRUE(false) << "Failed with NULL value: " << error.what(); })
                                      .await();
     ASSERT_TRUE(status);
 
     // Prepare another statement for non-NULL value
-    ASSERT_TRUE(db_->prepare("test_value_param",
-                             "INSERT INTO test_prepared (value, optional_value) VALUES ($1, $2)",
-                             type_oid_sequence{}, discard_prepare, discard_error)
+    ASSERT_TRUE(db_->prepare("test_value_param", "INSERT INTO test_prepared (value, optional_value) VALUES ($1, $2)", type_oid_sequence{},
+                             discard_prepare, discard_error)
                     .await());
 
     // Execute with a non-NULL value
     status = db_->execute(
-                    "test_value_param", params{std::string("with_value"), 42},
-                    [](Transaction &tr, results result) {},
-                    [&](error::db_error error) {
-                        ASSERT_TRUE(false) << "Failed with non-null insert: " << error.what();
-                    })
+                    "test_value_param", params{std::string("with_value"), 42}, [](Transaction &tr, results result) {},
+                    [&](error::db_error error) { ASSERT_TRUE(false) << "Failed with non-null insert: " << error.what(); })
                  .await();
     ASSERT_TRUE(status);
 
     // Verify the NULL was properly inserted
     bool verify_success = false;
     status              = db_->execute(
-                    "SELECT value, optional_value FROM test_prepared WHERE value = "
+                                 "SELECT value, optional_value FROM test_prepared WHERE value = "
                                  "'with_null'",
-                    [&verify_success](Transaction &tr, results result) {
+                                 [&verify_success](Transaction &tr, results result) {
                         ASSERT_GT(result.size(), 0);
                         ASSERT_EQ(result[0][0].as<std::string>(), "with_null");
                         ASSERT_TRUE(result[0][1].is_null());
                         verify_success = true;
-                    },
-                    [&](error::db_error error) {
-                        ASSERT_TRUE(false) << "Failed to verify null data: " << error.what();
-                    })
-                 .await();
+                                 },
+                                 [&](error::db_error error) { ASSERT_TRUE(false) << "Failed to verify null data: " << error.what(); })
+                              .await();
     ASSERT_TRUE(status);
     ASSERT_TRUE(verify_success);
 
     // Verify the non-NULL value was properly inserted
     verify_success = false;
     status         = db_->execute(
-                    "SELECT value, optional_value FROM test_prepared WHERE value = "
+                            "SELECT value, optional_value FROM test_prepared WHERE value = "
                             "'with_value'",
-                    [&verify_success](Transaction &tr, results result) {
+                            [&verify_success](Transaction &tr, results result) {
                         ASSERT_GT(result.size(), 0);
                         ASSERT_EQ(result[0][0].as<std::string>(), "with_value");
                         ASSERT_FALSE(result[0][1].is_null());
                         ASSERT_EQ(result[0][1].as<int>(), 42);
                         verify_success = true;
-                    },
-                    [&](error::db_error error) {
-                        ASSERT_TRUE(false) << "Failed to verify non-null data: " << error.what();
-                    })
-                 .await();
+                            },
+                            [&](error::db_error error) { ASSERT_TRUE(false) << "Failed to verify non-null data: " << error.what(); })
+                         .await();
     ASSERT_TRUE(status);
     ASSERT_TRUE(verify_success);
 }
@@ -421,8 +378,7 @@ TEST_F(PostgreSQLPreparedStatementsTest, NullParameters) {
  */
 TEST_F(PostgreSQLPreparedStatementsTest, VariousDataTypes) {
     // Create a table with multiple column types
-    ASSERT_TRUE(
-        db_->execute("DROP TABLE IF EXISTS test_types", discard_query, discard_error).await());
+    ASSERT_TRUE(db_->execute("DROP TABLE IF EXISTS test_types", discard_query, discard_error).await());
     ASSERT_TRUE(db_->execute("CREATE TEMP TABLE test_types ("
                              "id SERIAL PRIMARY KEY, "
                              "int_val INTEGER, "
@@ -447,18 +403,15 @@ TEST_F(PostgreSQLPreparedStatementsTest, VariousDataTypes) {
                                             true                       // BOOLEAN
                                         },
                                         [](Transaction &tr, results result) {},
-                                        [](error::db_error error) {
-                                            ASSERT_TRUE(false)
-                                                << "Failed to insert data: " << error.what();
-                                        })
+                                        [](error::db_error error) { ASSERT_TRUE(false) << "Failed to insert data: " << error.what(); })
                                      .await();
     ASSERT_TRUE(status);
 
     // Verify data was inserted correctly
     bool verify_success = false;
     status              = db_->execute(
-                    "SELECT int_val, text_val, bool_val FROM test_types LIMIT 1",
-                    [&verify_success](Transaction &tr, results result) {
+                                 "SELECT int_val, text_val, bool_val FROM test_types LIMIT 1",
+                                 [&verify_success](Transaction &tr, results result) {
                         ASSERT_GT(result.size(), 0);
 
                         // Verify each data type
@@ -467,11 +420,9 @@ TEST_F(PostgreSQLPreparedStatementsTest, VariousDataTypes) {
                         ASSERT_EQ(result[0][2].as<bool>(), true);
 
                         verify_success = true;
-                    },
-                    [](error::db_error error) {
-                        ASSERT_TRUE(false) << "Failed to verify data: " << error.what();
-                    })
-                 .await();
+                                 },
+                                 [](error::db_error error) { ASSERT_TRUE(false) << "Failed to verify data: " << error.what(); })
+                              .await();
     ASSERT_TRUE(status);
     ASSERT_TRUE(verify_success);
 }
@@ -484,21 +435,17 @@ TEST_F(PostgreSQLPreparedStatementsTest, VariousDataTypes) {
  */
 TEST_F(PostgreSQLPreparedStatementsTest, ParameterCountBehavior) {
     // Prepare statement expecting 2 parameters
-    ASSERT_TRUE(db_->prepare("two_params",
-                             "INSERT INTO test_prepared (value) VALUES ($1 || ' - ' || $2)",
-                             type_oid_sequence{}, discard_prepare, discard_error)
+    ASSERT_TRUE(db_->prepare("two_params", "INSERT INTO test_prepared (value) VALUES ($1 || ' - ' || $2)", type_oid_sequence{}, discard_prepare,
+                             discard_error)
                     .await());
 
     // Test with correct parameter count (should succeed)
     bool                success = false;
-    Transaction::status status =
-        db_->execute(
-               "two_params", params{std::string("param1"), std::string("param2")},
-               [&success](Transaction &tr, results result) { success = true; },
-               [](error::db_error error) {
-                   ASSERT_TRUE(false) << "Failed with correct params: " << error.what();
-               })
-            .await();
+    Transaction::status status  = db_->execute(
+                                         "two_params", params{std::string("param1"), std::string("param2")},
+                                         [&success](Transaction &tr, results result) { success = true; },
+                                         [](error::db_error error) { ASSERT_TRUE(false) << "Failed with correct params: " << error.what(); })
+                                      .await();
     ASSERT_TRUE(status);
     ASSERT_TRUE(success);
 
@@ -509,25 +456,23 @@ TEST_F(PostgreSQLPreparedStatementsTest, ParameterCountBehavior) {
     // Too few parameters - try to catch error
     bool too_few_error_caught = false;
     status                    = db_->execute(
-                    "two_params", params{std::string("only one param")},
-                    [](Transaction &tr, results result) {},
-                    [&too_few_error_caught](error::db_error error) {
+                                       "two_params", params{std::string("only one param")}, [](Transaction &tr, results result) {},
+                                       [&too_few_error_caught](error::db_error error) {
                         too_few_error_caught = true;
                         std::cout << "Error with too few params: " << error.what() << std::endl;
-                    })
-                 .await();
+                                       })
+                                    .await();
 
     // Too many parameters - try to catch error
     bool too_many_error_caught = false;
-    status                     = db_->execute(
-                    "two_params",
-                    params{std::string("param1"), std::string("param2"), std::string("extra")},
-                    [](Transaction &tr, results result) {},
-                    [&too_many_error_caught](error::db_error error) {
-                        too_many_error_caught = true;
-                        std::cout << "Error with too many params: " << error.what() << std::endl;
-                    })
-                 .await();
+    status =
+        db_->execute(
+               "two_params", params{std::string("param1"), std::string("param2"), std::string("extra")}, [](Transaction &tr, results result) {},
+               [&too_many_error_caught](error::db_error error) {
+                   too_many_error_caught = true;
+                   std::cout << "Error with too many params: " << error.what() << std::endl;
+               })
+            .await();
 
     std::cout << "Parameter count behavior: "
               << "Too few error caught: " << (too_few_error_caught ? "yes" : "no")
@@ -546,70 +491,59 @@ TEST_F(PostgreSQLPreparedStatementsTest, StatementNameReuse) {
     ASSERT_TRUE(setup);
 
     // Prepare first statement with name "test_stmt"
-    ASSERT_TRUE(db_->prepare("test_stmt_reuse", "INSERT INTO test_prepared (value) VALUES ('first')",
-                             type_oid_sequence{}, discard_prepare, discard_error)
+    ASSERT_TRUE(db_->prepare("test_stmt_reuse", "INSERT INTO test_prepared (value) VALUES ('first')", type_oid_sequence{}, discard_prepare,
+                             discard_error)
                     .await());
 
     // Execute first statement
-    Transaction::status status =
-        db_->execute(
-               "test_stmt_reuse", params{}, [](Transaction &tr, results result) {},
-               [&](error::db_error error) {
-                   ASSERT_TRUE(false) << "Failed to execute first: " << error.what();
-               })
-            .await();
+    Transaction::status status = db_->execute(
+                                        "test_stmt_reuse", params{}, [](Transaction &tr, results result) {},
+                                        [&](error::db_error error) { ASSERT_TRUE(false) << "Failed to execute first: " << error.what(); })
+                                     .await();
     ASSERT_TRUE(status);
 
     // Verify first value is in the database
     bool first_verify_success = false;
     status                    = db_->execute(
-                    "SELECT value FROM test_prepared WHERE value = 'first'",
-                    [&first_verify_success](Transaction &tr, results result) {
+                                       "SELECT value FROM test_prepared WHERE value = 'first'",
+                                       [&first_verify_success](Transaction &tr, results result) {
                         ASSERT_GT(result.size(), 0);
                         first_verify_success = true;
-                    },
-                    [&](error::db_error error) {
-                        ASSERT_TRUE(false) << "Failed to verify first value: " << error.what();
-                    })
-                 .await();
+                                       },
+                                       [&](error::db_error error) { ASSERT_TRUE(false) << "Failed to verify first value: " << error.what(); })
+                                    .await();
     ASSERT_TRUE(status);
     ASSERT_TRUE(first_verify_success);
 
     // Prepare a different statement with a different name
-    ASSERT_TRUE(db_->prepare("test_stmt_reuse_second",
-                             "INSERT INTO test_prepared (value) VALUES ('second')",
-                             type_oid_sequence{}, discard_prepare, discard_error)
+    ASSERT_TRUE(db_->prepare("test_stmt_reuse_second", "INSERT INTO test_prepared (value) VALUES ('second')", type_oid_sequence{},
+                             discard_prepare, discard_error)
                     .await());
 
     // Execute second statement
     status = db_->execute(
                     "test_stmt_reuse_second", params{}, [](Transaction &tr, results result) {},
-                    [&](error::db_error error) {
-                        ASSERT_TRUE(false) << "Failed to execute second: " << error.what();
-                    })
+                    [&](error::db_error error) { ASSERT_TRUE(false) << "Failed to execute second: " << error.what(); })
                  .await();
     ASSERT_TRUE(status);
 
     // Verify both values are in the database
     bool second_verify_success = false;
-    status =
-        db_->execute(
-               "SELECT value FROM test_prepared WHERE value IN ('first', 'second') "
-               "ORDER BY value",
-               [&second_verify_success](Transaction &tr, results result) {
-                   ASSERT_EQ(result.size(), 2);
-                   ASSERT_EQ(result[0][0].as<std::string>(), "first");
-                   ASSERT_EQ(result[1][0].as<std::string>(), "second");
-                   second_verify_success = true;
+    status                     = db_->execute(
+                                        "SELECT value FROM test_prepared WHERE value IN ('first', 'second') "
+                                        "ORDER BY value",
+                                        [&second_verify_success](Transaction &tr, results result) {
+                        ASSERT_EQ(result.size(), 2);
+                        ASSERT_EQ(result[0][0].as<std::string>(), "first");
+                        ASSERT_EQ(result[1][0].as<std::string>(), "second");
+                        second_verify_success = true;
 
-                   // Log the values
-                   std::cout << "Statement reuse - First row: " << result[0][0].as<std::string>()
-                             << ", Second row: " << result[1][0].as<std::string>() << std::endl;
-               },
-               [&](error::db_error error) {
-                   ASSERT_TRUE(false) << "Failed to verify data: " << error.what();
-               })
-            .await();
+                        // Log the values
+                        std::cout << "Statement reuse - First row: " << result[0][0].as<std::string>()
+                                  << ", Second row: " << result[1][0].as<std::string>() << std::endl;
+                                        },
+                                        [&](error::db_error error) { ASSERT_TRUE(false) << "Failed to verify data: " << error.what(); })
+                                     .await();
     ASSERT_TRUE(status);
     ASSERT_TRUE(second_verify_success);
 }
@@ -622,61 +556,49 @@ TEST_F(PostgreSQLPreparedStatementsTest, StatementNameReuse) {
  */
 TEST_F(PostgreSQLPreparedStatementsTest, PreparedSelect) {
     // Insert test data
-    ASSERT_TRUE(db_->execute("INSERT INTO test_prepared (value) VALUES ('select_test_1')",
-                             discard_query, discard_error)
-                    .await());
-    ASSERT_TRUE(db_->execute("INSERT INTO test_prepared (value) VALUES ('select_test_2')",
-                             discard_query, discard_error)
-                    .await());
-    ASSERT_TRUE(db_->execute("INSERT INTO test_prepared (value) VALUES ('other_value')",
-                             discard_query, discard_error)
-                    .await());
+    ASSERT_TRUE(db_->execute("INSERT INTO test_prepared (value) VALUES ('select_test_1')", discard_query, discard_error).await());
+    ASSERT_TRUE(db_->execute("INSERT INTO test_prepared (value) VALUES ('select_test_2')", discard_query, discard_error).await());
+    ASSERT_TRUE(db_->execute("INSERT INTO test_prepared (value) VALUES ('other_value')", discard_query, discard_error).await());
 
     // Prepare a SELECT statement with parameters
-    ASSERT_TRUE(db_->prepare("test_select",
-                             "SELECT id, value FROM test_prepared WHERE value LIKE $1 ORDER BY id",
-                             type_oid_sequence{}, discard_prepare, discard_error)
+    ASSERT_TRUE(db_->prepare("test_select", "SELECT id, value FROM test_prepared WHERE value LIKE $1 ORDER BY id", type_oid_sequence{},
+                             discard_prepare, discard_error)
                     .await());
 
     // Execute prepared SELECT
     bool                select_success = false;
-    Transaction::status status =
-        db_->execute(
-               "test_select", params{std::string("select\\_test\\_%")},
-               [&select_success](Transaction &tr, results result) {
-                   ASSERT_EQ(result.size(), 2);
+    Transaction::status status         = db_->execute(
+                                                "test_select", params{std::string("select\\_test\\_%")},
+                                                [&select_success](Transaction &tr, results result) {
+                                            ASSERT_EQ(result.size(), 2);
 
-                   // Check row 1
-                   ASSERT_FALSE(result[0][0].is_null());
-                   ASSERT_FALSE(result[0][1].is_null());
-                   ASSERT_EQ(result[0][1].as<std::string>(), "select_test_1");
+                                            // Check row 1
+                                            ASSERT_FALSE(result[0][0].is_null());
+                                            ASSERT_FALSE(result[0][1].is_null());
+                                            ASSERT_EQ(result[0][1].as<std::string>(), "select_test_1");
 
-                   // Check row 2
-                   ASSERT_FALSE(result[1][0].is_null());
-                   ASSERT_FALSE(result[1][1].is_null());
-                   ASSERT_EQ(result[1][1].as<std::string>(), "select_test_2");
+                                            // Check row 2
+                                            ASSERT_FALSE(result[1][0].is_null());
+                                            ASSERT_FALSE(result[1][1].is_null());
+                                            ASSERT_EQ(result[1][1].as<std::string>(), "select_test_2");
 
-                   select_success = true;
-               },
-               [](error::db_error error) {
-                   ASSERT_TRUE(false) << "Failed to execute select: " << error.what();
-               })
-            .await();
+                                            select_success = true;
+                                                },
+                                                [](error::db_error error) { ASSERT_TRUE(false) << "Failed to execute select: " << error.what(); })
+                                             .await();
     ASSERT_TRUE(status);
     ASSERT_TRUE(select_success);
 
     // Test with parameter that should return no results
     bool empty_success = false;
     status             = db_->execute(
-                    "test_select", params{std::string("nonexistent\\_%")},
-                    [&empty_success](Transaction &tr, results result) {
+                                "test_select", params{std::string("nonexistent\\_%")},
+                                [&empty_success](Transaction &tr, results result) {
                         ASSERT_EQ(result.size(), 0);
                         empty_success = true;
-                    },
-                    [](error::db_error error) {
-                        ASSERT_TRUE(false) << "Failed to execute empty select: " << error.what();
-                    })
-                 .await();
+                                },
+                                [](error::db_error error) { ASSERT_TRUE(false) << "Failed to execute empty select: " << error.what(); })
+                             .await();
     ASSERT_TRUE(status);
     ASSERT_TRUE(empty_success);
 }
@@ -691,18 +613,14 @@ TEST_F(PostgreSQLPreparedStatementsTest, NonExistentPreparedStatement) {
     // Try to execute a statement that was never prepared
     bool error_detected = false;
     auto status         = db_->execute(
-                         "never_prepared_statement", params{std::string("value")},
-                         [](Transaction &tr, results result) {
-                             ASSERT_TRUE(false) << "Should not succeed with non-existent statement";
-                         },
-                         [&error_detected](error::db_error error) {
+                                 "never_prepared_statement", params{std::string("value")},
+                                 [](Transaction &tr, results result) { ASSERT_TRUE(false) << "Should not succeed with non-existent statement"; },
+                                 [&error_detected](error::db_error error) {
                              // Error should be detected here
                              error_detected = true;
-                             std::cout
-                                 << "Error when executing non-existent statement: " << error.what()
-                                 << std::endl;
-                         })
-                      .await();
+                             std::cout << "Error when executing non-existent statement: " << error.what() << std::endl;
+                                 })
+                              .await();
 
     // Should fail with an error
     ASSERT_FALSE(status);
@@ -718,51 +636,43 @@ TEST_F(PostgreSQLPreparedStatementsTest, NonExistentPreparedStatement) {
 TEST_F(PostgreSQLPreparedStatementsTest, ExecuteAfterDeallocateFailsThenReprepareWorks) {
     constexpr char const *name = "p_qb_dealloc_session";
 
-    auto status = db_->prepare(name, "SELECT $1::int", type_oid_sequence{oid::int4}, discard_prepare,
-                               discard_error)
-                      .await();
+    auto status = db_->prepare(name, "SELECT $1::int", type_oid_sequence{oid::int4}, discard_prepare, discard_error).await();
     ASSERT_TRUE(status);
 
     bool first_ok = false;
     status        = db_->execute(
-                    name, params{7},
-                    [&first_ok](Transaction &, results r) {
+                           name, params{7},
+                           [&first_ok](Transaction &, results r) {
                         ASSERT_EQ(r.size(), 1U);
                         EXPECT_EQ(r[0][0].as<int>(), 7);
                         first_ok = true;
-                    },
-                    [](error::db_error const &e) { FAIL() << e.what(); })
-                 .await();
+                           },
+                           [](error::db_error const &e) { FAIL() << e.what(); })
+                        .await();
     ASSERT_TRUE(status);
     ASSERT_TRUE(first_ok);
 
-    ASSERT_TRUE(
-        db_->execute("DEALLOCATE " + std::string(name), discard_query, discard_error).await());
+    ASSERT_TRUE(db_->execute("DEALLOCATE " + std::string(name), discard_query, discard_error).await());
 
     bool saw_execute_error = false;
     status                 = db_->execute(
-                    name, params{1},
-                    [](Transaction &, results) {
-                        FAIL() << "execute after DEALLOCATE should not succeed";
-                    },
-                    [&saw_execute_error](error::db_error const &) { saw_execute_error = true; })
-                 .await();
+                                    name, params{1}, [](Transaction &, results) { FAIL() << "execute after DEALLOCATE should not succeed"; },
+                                    [&saw_execute_error](error::db_error const &) { saw_execute_error = true; })
+                                 .await();
     EXPECT_FALSE(status);
     EXPECT_TRUE(saw_execute_error);
 
-    ASSERT_TRUE(db_->prepare(name, "SELECT $1::int + 1", type_oid_sequence{oid::int4},
-                             discard_prepare, discard_error)
-                    .await());
+    ASSERT_TRUE(db_->prepare(name, "SELECT $1::int + 1", type_oid_sequence{oid::int4}, discard_prepare, discard_error).await());
     bool second_ok = false;
     status         = db_->execute(
-                    name, params{10},
-                    [&second_ok](Transaction &, results r) {
+                            name, params{10},
+                            [&second_ok](Transaction &, results r) {
                         ASSERT_EQ(r.size(), 1U);
                         EXPECT_EQ(r[0][0].as<int>(), 11);
                         second_ok = true;
-                    },
-                    [](error::db_error const &e) { FAIL() << e.what(); })
-                 .await();
+                            },
+                            [](error::db_error const &e) { FAIL() << e.what(); })
+                         .await();
     ASSERT_TRUE(status);
     ASSERT_TRUE(second_ok);
 }
@@ -780,23 +690,20 @@ TEST_F(PostgreSQLPreparedStatementsTest, PerformanceComparison) {
     auto start_time = std::chrono::high_resolution_clock::now();
 
     for (int i = 0; i < iterations; i++) {
-        std::string sql =
-            "INSERT INTO test_prepared (value) VALUES ('non_prepared_" + std::to_string(i) + "')";
-        auto status = db_->execute(sql, discard_query, discard_error).await();
+        std::string sql    = "INSERT INTO test_prepared (value) VALUES ('non_prepared_" + std::to_string(i) + "')";
+        auto        status = db_->execute(sql, discard_query, discard_error).await();
         ASSERT_TRUE(status);
     }
 
-    auto end_time = std::chrono::high_resolution_clock::now();
-    auto non_prepared_duration =
-        std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+    auto end_time              = std::chrono::high_resolution_clock::now();
+    auto non_prepared_duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
 
     // Clear table for prepared statement test
     auto status = db_->execute("DELETE FROM test_prepared", discard_query, discard_error).await();
     ASSERT_TRUE(status);
 
     // Prepare statement
-    ASSERT_TRUE(db_->prepare("perf_test", "INSERT INTO test_prepared (value) VALUES ($1)",
-                             type_oid_sequence{}, discard_prepare, discard_error)
+    ASSERT_TRUE(db_->prepare("perf_test", "INSERT INTO test_prepared (value) VALUES ($1)", type_oid_sequence{}, discard_prepare, discard_error)
                     .await());
 
     // Measure time for prepared statements
@@ -805,25 +712,21 @@ TEST_F(PostgreSQLPreparedStatementsTest, PerformanceComparison) {
     for (int i = 0; i < iterations; i++) {
         std::string value = "prepared_" + std::to_string(i);
         status            = db_->execute(
-                        "perf_test", params{value}, [](Transaction &tr, results result) {},
-                        [](error::db_error error) {
-                            ASSERT_TRUE(false) << "Failed prepared insert: " << error.what();
-                        })
-                     .await();
+                                   "perf_test", params{value}, [](Transaction &tr, results result) {},
+                                   [](error::db_error error) { ASSERT_TRUE(false) << "Failed prepared insert: " << error.what(); })
+                                .await();
         ASSERT_TRUE(status);
     }
 
-    end_time = std::chrono::high_resolution_clock::now();
-    auto prepared_duration =
-        std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+    end_time               = std::chrono::high_resolution_clock::now();
+    auto prepared_duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
 
     // Output performance comparison
     std::cout << "Performance comparison (ms) for " << iterations << " iterations:" << std::endl;
     std::cout << "Non-prepared: " << non_prepared_duration << std::endl;
     std::cout << "Prepared: " << prepared_duration << std::endl;
     std::cout << "Difference: " << (non_prepared_duration - prepared_duration) << std::endl;
-    std::cout << "Speedup: " << (static_cast<double>(non_prepared_duration) / prepared_duration)
-              << "x" << std::endl;
+    std::cout << "Speedup: " << (static_cast<double>(non_prepared_duration) / prepared_duration) << "x" << std::endl;
 
     // Prepared statements should generally be faster, but we don't assert
     // this as it depends on the environment, database load, etc.
@@ -849,16 +752,13 @@ TEST_F(PostgreSQLPreparedStatementsTest, AsyncPerformanceComparison) {
     db_->begin(
         [&non_prepared_success](Transaction &tr) {
             for (int i = 0; i < iterations; i++) {
-                std::string sql = "INSERT INTO test_prepared (value) VALUES ('non_prepared_" +
-                                  std::to_string(i) + "')";
+                std::string sql = "INSERT INTO test_prepared (value) VALUES ('non_prepared_" + std::to_string(i) + "')";
                 tr.execute(
                     sql,
                     [](auto &tr, auto results) {
                         // No action needed in callback
                     },
-                    [i](error::db_error error) {
-                        ASSERT_TRUE(false) << "Failed at " << i << ": " << error.what();
-                    });
+                    [i](error::db_error error) { ASSERT_TRUE(false) << "Failed at " << i << ": " << error.what(); });
             }
             non_prepared_success = true;
         },
@@ -869,18 +769,17 @@ TEST_F(PostgreSQLPreparedStatementsTest, AsyncPerformanceComparison) {
     ASSERT_TRUE(status);
     ASSERT_TRUE(non_prepared_success);
 
-    auto end_time = std::chrono::high_resolution_clock::now();
-    auto non_prepared_duration =
-        std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+    auto end_time              = std::chrono::high_resolution_clock::now();
+    auto non_prepared_duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
 
     // Clear table for prepared statement test
     status = db_->execute("DELETE FROM test_prepared", discard_query, discard_error).await();
     ASSERT_TRUE(status);
 
     // 2. Prepare statement
-    ASSERT_TRUE(db_->prepare("async_perf_test", "INSERT INTO test_prepared (value) VALUES ($1)",
-                             type_oid_sequence{}, discard_prepare, discard_error)
-                    .await());
+    ASSERT_TRUE(
+        db_->prepare("async_perf_test", "INSERT INTO test_prepared (value) VALUES ($1)", type_oid_sequence{}, discard_prepare, discard_error)
+            .await());
 
     // Measure time for prepared statements with async transaction
     start_time = std::chrono::high_resolution_clock::now();
@@ -896,9 +795,7 @@ TEST_F(PostgreSQLPreparedStatementsTest, AsyncPerformanceComparison) {
                     [](auto &tr, auto results) {
                         // No action needed in callback
                     },
-                    [i](error::db_error error) {
-                        ASSERT_TRUE(false) << "Failed at " << i << ": " << error.what();
-                    });
+                    [i](error::db_error error) { ASSERT_TRUE(false) << "Failed at " << i << ": " << error.what(); });
             }
             prepared_success = true;
         },
@@ -909,17 +806,14 @@ TEST_F(PostgreSQLPreparedStatementsTest, AsyncPerformanceComparison) {
     ASSERT_TRUE(status);
     ASSERT_TRUE(prepared_success);
 
-    end_time = std::chrono::high_resolution_clock::now();
-    auto prepared_duration =
-        std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+    end_time               = std::chrono::high_resolution_clock::now();
+    auto prepared_duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
 
     // Verify all data was inserted
     int row_count = 0;
     status        = db_->execute("SELECT COUNT(*) FROM test_prepared",
-                                 [&row_count](Transaction &tr, results result) {
-                              row_count = result[0][0].as<int>();
-                          })
-                 .await();
+                                 [&row_count](Transaction &tr, results result) { row_count = result[0][0].as<int>(); })
+                        .await();
     ASSERT_TRUE(status);
 
     // We expect to have 'iterations' rows because the table is cleared between tests
@@ -928,9 +822,8 @@ TEST_F(PostgreSQLPreparedStatementsTest, AsyncPerformanceComparison) {
 
     // 3. Bonus test: Measure select performance with async batch
     // Prepare the select statement first
-    ASSERT_TRUE(db_->prepare("async_perf_select",
-                             "SELECT * FROM test_prepared WHERE value = $1 LIMIT 1",
-                             type_oid_sequence{}, discard_prepare, discard_error)
+    ASSERT_TRUE(db_->prepare("async_perf_select", "SELECT * FROM test_prepared WHERE value = $1 LIMIT 1", type_oid_sequence{}, discard_prepare,
+                             discard_error)
                     .await());
 
     // Use fewer iterations for select to avoid overwhelming the connection
@@ -941,12 +834,9 @@ TEST_F(PostgreSQLPreparedStatementsTest, AsyncPerformanceComparison) {
     std::vector<bool> select_results(select_iterations, false);
     for (int i = 0; i < select_iterations; i++) {
         db_->execute(
-            "async_perf_select",
-            params{std::string("prepared_") + std::to_string(i % 100)}, // Use values we know exist
+            "async_perf_select", params{std::string("prepared_") + std::to_string(i % 100)}, // Use values we know exist
             [i, &select_results](Transaction &tr, results result) { select_results[i] = true; },
-            [i](error::db_error error) {
-                ASSERT_TRUE(false) << "Select failed at " << i << ": " << error.what();
-            });
+            [i](error::db_error error) { ASSERT_TRUE(false) << "Select failed at " << i << ": " << error.what(); });
     }
 
     // Single await after all selects
@@ -958,20 +848,16 @@ TEST_F(PostgreSQLPreparedStatementsTest, AsyncPerformanceComparison) {
         ASSERT_TRUE(select_results[i]) << "Select at index " << i << " did not succeed";
     }
 
-    end_time = std::chrono::high_resolution_clock::now();
-    auto select_batch_duration =
-        std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+    end_time                   = std::chrono::high_resolution_clock::now();
+    auto select_batch_duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
 
     // Output performance comparison
-    std::cout << "Async Performance comparison (ms) for " << iterations
-              << " iterations:" << std::endl;
+    std::cout << "Async Performance comparison (ms) for " << iterations << " iterations:" << std::endl;
     std::cout << "Non-prepared (async batch): " << non_prepared_duration << std::endl;
     std::cout << "Prepared (async batch): " << prepared_duration << std::endl;
-    std::cout << "Select queries (async batch, " << select_iterations
-              << " queries): " << select_batch_duration << std::endl;
+    std::cout << "Select queries (async batch, " << select_iterations << " queries): " << select_batch_duration << std::endl;
     std::cout << "Difference: " << (non_prepared_duration - prepared_duration) << std::endl;
-    std::cout << "Speedup: " << (static_cast<double>(non_prepared_duration) / prepared_duration)
-              << "x" << std::endl;
+    std::cout << "Speedup: " << (static_cast<double>(non_prepared_duration) / prepared_duration) << "x" << std::endl;
 }
 
 /**
@@ -983,17 +869,14 @@ TEST_F(PostgreSQLPreparedStatementsTest, AsyncPerformanceComparison) {
  */
 TEST_F(PostgreSQLPreparedStatementsTest, BatchPrepareAndExecute) {
     // Prepare multiple statements in batch
-    ASSERT_TRUE(db_->prepare("batch_insert_1",
-                             "INSERT INTO test_prepared (value) VALUES ('batch_1')",
-                             type_oid_sequence{}, discard_prepare, discard_error)
+    ASSERT_TRUE(db_->prepare("batch_insert_1", "INSERT INTO test_prepared (value) VALUES ('batch_1')", type_oid_sequence{}, discard_prepare,
+                             discard_error)
                     .await());
-    ASSERT_TRUE(db_->prepare("batch_insert_2",
-                             "INSERT INTO test_prepared (value) VALUES ('batch_2')",
-                             type_oid_sequence{}, discard_prepare, discard_error)
+    ASSERT_TRUE(db_->prepare("batch_insert_2", "INSERT INTO test_prepared (value) VALUES ('batch_2')", type_oid_sequence{}, discard_prepare,
+                             discard_error)
                     .await());
-    ASSERT_TRUE(db_->prepare("batch_insert_3",
-                             "INSERT INTO test_prepared (value) VALUES ('batch_3')",
-                             type_oid_sequence{}, discard_prepare, discard_error)
+    ASSERT_TRUE(db_->prepare("batch_insert_3", "INSERT INTO test_prepared (value) VALUES ('batch_3')", type_oid_sequence{}, discard_prepare,
+                             discard_error)
                     .await());
 
     // Execute multiple prepared statements in batch
@@ -1004,17 +887,15 @@ TEST_F(PostgreSQLPreparedStatementsTest, BatchPrepareAndExecute) {
     // Verify all batch data was inserted
     bool verify_success = false;
     auto status         = db_->execute(
-                         "SELECT COUNT(*) FROM test_prepared WHERE value IN ('batch_1', "
+                                 "SELECT COUNT(*) FROM test_prepared WHERE value IN ('batch_1', "
                                  "'batch_2', 'batch_3')",
-                         [&verify_success](Transaction &tr, results result) {
+                                 [&verify_success](Transaction &tr, results result) {
                              ASSERT_EQ(result.size(), 1);
                              ASSERT_EQ(result[0][0].as<int>(), 3);
                              verify_success = true;
-                         },
-                         [&](error::db_error error) {
-                             ASSERT_TRUE(false) << "Failed to verify batch data: " << error.what();
-                         })
-                      .await();
+                                 },
+                                 [&](error::db_error error) { ASSERT_TRUE(false) << "Failed to verify batch data: " << error.what(); })
+                              .await();
     ASSERT_TRUE(status);
     ASSERT_TRUE(verify_success);
 }
@@ -1027,8 +908,7 @@ TEST_F(PostgreSQLPreparedStatementsTest, BatchPrepareAndExecute) {
  */
 TEST_F(PostgreSQLPreparedStatementsTest, LargeResultSet) {
     // First, create a table with lots of rows
-    ASSERT_TRUE(db_->execute("DROP TABLE IF EXISTS test_large_results", discard_query, discard_error)
-                    .await());
+    ASSERT_TRUE(db_->execute("DROP TABLE IF EXISTS test_large_results", discard_query, discard_error).await());
     ASSERT_TRUE(db_->execute("CREATE TEMP TABLE test_large_results (id SERIAL PRIMARY "
                              "KEY, value TEXT)",
                              discard_query, discard_error)
@@ -1051,38 +931,31 @@ TEST_F(PostgreSQLPreparedStatementsTest, LargeResultSet) {
     }
 
     // Prepare a statement to retrieve all rows
-    ASSERT_TRUE(db_->prepare("select_large", "SELECT id, value FROM test_large_results ORDER BY id",
-                             type_oid_sequence{}, discard_prepare, discard_error)
+    ASSERT_TRUE(db_->prepare("select_large", "SELECT id, value FROM test_large_results ORDER BY id", type_oid_sequence{}, discard_prepare,
+                             discard_error)
                     .await());
 
     // Execute the prepared statement and check results
     bool large_success = false;
     auto status        = db_->execute(
-                         "select_large", params{},
-                         [&large_success, num_rows](Transaction &tr, results result) {
+                                "select_large", params{},
+                                [&large_success, num_rows](Transaction &tr, results result) {
                              ASSERT_EQ(result.size(), num_rows);
 
                              // Check a few rows to verify ordering and content
                              ASSERT_EQ(result[0][1].as<std::string>(), "large_row_0");
-                             ASSERT_EQ(result[num_rows / 2][1].as<std::string>(),
-                                              "large_row_" + std::to_string(num_rows / 2));
-                             ASSERT_EQ(result[num_rows - 1][1].as<std::string>(),
-                                              "large_row_" + std::to_string(num_rows - 1));
+                             ASSERT_EQ(result[num_rows / 2][1].as<std::string>(), "large_row_" + std::to_string(num_rows / 2));
+                             ASSERT_EQ(result[num_rows - 1][1].as<std::string>(), "large_row_" + std::to_string(num_rows - 1));
 
                              large_success = true;
-                         },
-                         [&](error::db_error error) {
-                             ASSERT_TRUE(false)
-                                 << "Failed to execute large select: " << error.what();
-                         })
-                      .await();
+                                },
+                                [&](error::db_error error) { ASSERT_TRUE(false) << "Failed to execute large select: " << error.what(); })
+                             .await();
     ASSERT_TRUE(status);
     ASSERT_TRUE(large_success);
 
     // Clean up the temporary table
-    auto cleanup =
-        db_->execute("DROP TABLE IF EXISTS test_large_results", discard_query, discard_error)
-            .await();
+    auto cleanup = db_->execute("DROP TABLE IF EXISTS test_large_results", discard_query, discard_error).await();
     ASSERT_TRUE(cleanup);
 }
 
@@ -1102,12 +975,9 @@ TEST_F(PostgreSQLPreparedStatementsTest, SqlTransactionBehavior) {
     ASSERT_TRUE(status);
 
     // Prepare and execute an insert within the transaction
-    ASSERT_TRUE(db_->prepare("tx_insert", "INSERT INTO test_prepared (value) VALUES ($1)",
-                             type_oid_sequence{}, discard_prepare, discard_error)
+    ASSERT_TRUE(db_->prepare("tx_insert", "INSERT INTO test_prepared (value) VALUES ($1)", type_oid_sequence{}, discard_prepare, discard_error)
                     .await());
-    status = db_->execute("tx_insert", params{std::string("sql_transaction_test")}, discard_query,
-                          discard_error)
-                 .await();
+    status = db_->execute("tx_insert", params{std::string("sql_transaction_test")}, discard_query, discard_error).await();
     ASSERT_TRUE(status);
 
     // Commit the transaction
@@ -1117,15 +987,13 @@ TEST_F(PostgreSQLPreparedStatementsTest, SqlTransactionBehavior) {
     // Verify data was committed
     bool verify_success = false;
     status              = db_->execute(
-                    "SELECT value FROM test_prepared WHERE value = 'sql_transaction_test'",
-                    [&verify_success](Transaction &tr, results result) {
+                                 "SELECT value FROM test_prepared WHERE value = 'sql_transaction_test'",
+                                 [&verify_success](Transaction &tr, results result) {
                         ASSERT_GT(result.size(), 0);
                         verify_success = true;
-                    },
-                    [&](error::db_error error) {
-                        ASSERT_TRUE(false) << "Failed to verify committed data: " << error.what();
-                    })
-                 .await();
+                                 },
+                                 [&](error::db_error error) { ASSERT_TRUE(false) << "Failed to verify committed data: " << error.what(); })
+                              .await();
     ASSERT_TRUE(status);
     ASSERT_TRUE(verify_success);
 
@@ -1134,12 +1002,10 @@ TEST_F(PostgreSQLPreparedStatementsTest, SqlTransactionBehavior) {
     ASSERT_TRUE(status);
 
     // Prepare and execute another insert that will be rolled back
-    ASSERT_TRUE(db_->prepare("tx_rollback_insert", "INSERT INTO test_prepared (value) VALUES ($1)",
-                             type_oid_sequence{}, discard_prepare, discard_error)
-                    .await());
-    status = db_->execute("tx_rollback_insert", params{std::string("should_be_rolled_back")},
-                          discard_query, discard_error)
-                 .await();
+    ASSERT_TRUE(
+        db_->prepare("tx_rollback_insert", "INSERT INTO test_prepared (value) VALUES ($1)", type_oid_sequence{}, discard_prepare, discard_error)
+            .await());
+    status = db_->execute("tx_rollback_insert", params{std::string("should_be_rolled_back")}, discard_query, discard_error).await();
     ASSERT_TRUE(status);
 
     // Rollback the transaction
@@ -1149,15 +1015,13 @@ TEST_F(PostgreSQLPreparedStatementsTest, SqlTransactionBehavior) {
     // Verify rolled back data is not in the database
     bool rollback_verify = false;
     status               = db_->execute(
-                    "SELECT value FROM test_prepared WHERE value = 'should_be_rolled_back'",
-                    [&rollback_verify](Transaction &tr, results result) {
+                                  "SELECT value FROM test_prepared WHERE value = 'should_be_rolled_back'",
+                                  [&rollback_verify](Transaction &tr, results result) {
                         ASSERT_EQ(result.size(), 0);
                         rollback_verify = true;
-                    },
-                    [&](error::db_error error) {
-                        ASSERT_TRUE(false) << "Failed to verify rolled back data: " << error.what();
-                    })
-                 .await();
+                                  },
+                                  [&](error::db_error error) { ASSERT_TRUE(false) << "Failed to verify rolled back data: " << error.what(); })
+                               .await();
     ASSERT_TRUE(status);
     ASSERT_TRUE(rollback_verify);
 }
@@ -1170,8 +1034,7 @@ TEST_F(PostgreSQLPreparedStatementsTest, SqlTransactionBehavior) {
  */
 TEST_F(PostgreSQLPreparedStatementsTest, ParameterTypeEdgeCases) {
     // Set up a test table with different types
-    ASSERT_TRUE(
-        db_->execute("DROP TABLE IF EXISTS test_param_types", discard_query, discard_error).await());
+    ASSERT_TRUE(db_->execute("DROP TABLE IF EXISTS test_param_types", discard_query, discard_error).await());
     ASSERT_TRUE(db_->execute("CREATE TEMP TABLE test_param_types ("
                              "id SERIAL PRIMARY KEY, "
                              "int_val INTEGER, "
@@ -1180,15 +1043,13 @@ TEST_F(PostgreSQLPreparedStatementsTest, ParameterTypeEdgeCases) {
                     .await());
 
     // Prepare a statement for insertion
-    ASSERT_TRUE(db_->prepare("insert_types",
-                             "INSERT INTO test_param_types (int_val, text_val) VALUES ($1, $2)",
-                             type_oid_sequence{}, discard_prepare, discard_error)
+    ASSERT_TRUE(db_->prepare("insert_types", "INSERT INTO test_param_types (int_val, text_val) VALUES ($1, $2)", type_oid_sequence{},
+                             discard_prepare, discard_error)
                     .await());
 
     // Named execute() takes a prepared statement name, not raw SQL — prepare the verify query.
-    ASSERT_TRUE(db_->prepare("verify_by_int",
-                             "SELECT text_val FROM test_param_types WHERE int_val = $1",
-                             type_oid_sequence{}, discard_prepare, discard_error)
+    ASSERT_TRUE(db_->prepare("verify_by_int", "SELECT text_val FROM test_param_types WHERE int_val = $1", type_oid_sequence{}, discard_prepare,
+                             discard_error)
                     .await());
 
     // Test with safe edge case values that shouldn't cause errors
@@ -1205,17 +1066,16 @@ TEST_F(PostgreSQLPreparedStatementsTest, ParameterTypeEdgeCases) {
         // Unicode text
         {45, "Unicode: áéíóúñÁÉÍÓÚÑ¿¡€£¥₹"},
         // SQL injection attempt
-        {46, "'; DROP TABLE students; --"}};
+        {46, "'; DROP TABLE students; --"}
+    };
 
     // Insert all test cases
     for (const auto &test_case : test_cases) {
         auto insert_status = db_->execute(
-                                    "insert_types", params{test_case.first, test_case.second},
-                                    [](Transaction &tr, results result) {},
+                                    "insert_types", params{test_case.first, test_case.second}, [](Transaction &tr, results result) {},
                                     [&test_case](error::db_error error) {
-                                        ASSERT_TRUE(false)
-                                            << "Failed to insert test case: " << test_case.first
-                                            << ", " << test_case.second << ": " << error.what();
+                                        ASSERT_TRUE(false) << "Failed to insert test case: " << test_case.first << ", " << test_case.second
+                                                           << ": " << error.what();
                                     })
                                  .await();
         ASSERT_TRUE(insert_status);
@@ -1225,20 +1085,19 @@ TEST_F(PostgreSQLPreparedStatementsTest, ParameterTypeEdgeCases) {
     for (const auto &test_case : test_cases) {
         bool verify_success = false;
         auto verify_status  = db_->execute(
-                                    "verify_by_int", params{test_case.first},
-                                    [&verify_success, &test_case](Transaction &tr, results result) {
+                                     "verify_by_int", params{test_case.first},
+                                     [&verify_success, &test_case](Transaction &tr, results result) {
                                         ASSERT_GT(result.size(), 0);
                                         std::string retrieved = result[0][0].as<std::string>();
                                         ASSERT_EQ(retrieved, test_case.second);
                                         verify_success = true;
-                                    },
-                                    [&test_case, &verify_success](error::db_error error) {
-                                        std::cout << "Failed to verify test case " << test_case.first
-                                                  << ": " << error.what() << std::endl;
+                                     },
+                                     [&test_case, &verify_success](error::db_error error) {
+                                        std::cout << "Failed to verify test case " << test_case.first << ": " << error.what() << std::endl;
                                         // Don't fail the test, just mark it as not successful
                                         verify_success = false;
-                                    })
-                                 .await();
+                                     })
+                                  .await();
 
         if (!verify_status) {
             std::cout << "Query status was false for test case: " << test_case.first << std::endl;
@@ -1249,8 +1108,7 @@ TEST_F(PostgreSQLPreparedStatementsTest, ParameterTypeEdgeCases) {
     }
 
     // Clean up
-    auto cleanup =
-        db_->execute("DROP TABLE IF EXISTS test_param_types", discard_query, discard_error).await();
+    auto cleanup = db_->execute("DROP TABLE IF EXISTS test_param_types", discard_query, discard_error).await();
     ASSERT_TRUE(cleanup);
 }
 
@@ -1282,20 +1140,17 @@ TEST_F(PostgreSQLPreparedStatementsTest, PrepareFromFile) {
 
     // Test prepare_file with callbacks
     bool prepare_success = false;
-    auto status =
-        db_->prepare_file(
-               "file_prepared_stmt", temp_file, {oid::text},
-               [&prepare_success](Transaction &tr, PreparedQuery const &query) {
-                   prepare_success = true;
-                   ASSERT_EQ(query.name, "file_prepared_stmt");
+    auto status          = db_->prepare_file(
+                                  "file_prepared_stmt", temp_file, {oid::text},
+                                  [&prepare_success](Transaction &tr, PreparedQuery const &query) {
+                             prepare_success = true;
+                             ASSERT_EQ(query.name, "file_prepared_stmt");
 
-                   // Verify the query string contains our SQL
-                   ASSERT_NE(query.expression.find("INSERT INTO test_prepared"), std::string::npos);
-               },
-               [](error::db_error const &err) {
-                   ASSERT_TRUE(false) << "Failed to prepare from file: " << err.what();
-               })
-            .await();
+                             // Verify the query string contains our SQL
+                             ASSERT_NE(query.expression.find("INSERT INTO test_prepared"), std::string::npos);
+                                  },
+                                  [](error::db_error const &err) { ASSERT_TRUE(false) << "Failed to prepare from file: " << err.what(); })
+                               .await();
 
     ASSERT_TRUE(status);
     ASSERT_TRUE(prepare_success);
@@ -1303,17 +1158,14 @@ TEST_F(PostgreSQLPreparedStatementsTest, PrepareFromFile) {
     // Execute the prepared statement
     bool execute_success = false;
     status               = db_->execute(
-                    "file_prepared_stmt", params{std::string("from_file_test")},
-                    [&execute_success](Transaction &tr, results result) {
+                                  "file_prepared_stmt", params{std::string("from_file_test")},
+                                  [&execute_success](Transaction &tr, results result) {
                         ASSERT_EQ(result.size(), 1);
                         ASSERT_EQ(result[0][1].as<std::string>(), "from_file_test");
                         execute_success = true;
-                    },
-                    [](error::db_error const &err) {
-                        ASSERT_TRUE(false)
-                            << "Failed to execute file-prepared statement: " << err.what();
-                    })
-                 .await();
+                                  },
+                                  [](error::db_error const &err) { ASSERT_TRUE(false) << "Failed to execute file-prepared statement: " << err.what(); })
+                               .await();
 
     ASSERT_TRUE(status);
     ASSERT_TRUE(execute_success);
@@ -1329,10 +1181,8 @@ TEST_F(PostgreSQLPreparedStatementsTest, PrepareFromFile) {
 
     bool prepare2_success = false;
     status                = db_->prepare_file("file_select_stmt", temp_file2, {oid::text},
-                                              [&prepare2_success](Transaction &tr, PreparedQuery const &query) {
-                                   prepare2_success = true;
-                               })
-                 .await();
+                                              [&prepare2_success](Transaction &tr, PreparedQuery const &query) { prepare2_success = true; })
+                                .await();
 
     ASSERT_TRUE(status);
     ASSERT_TRUE(prepare2_success);
@@ -1347,9 +1197,7 @@ TEST_F(PostgreSQLPreparedStatementsTest, PrepareFromFile) {
         sql_file.close();
     }
 
-    status = db_->prepare_file("file_count_stmt", temp_file3, type_oid_sequence{}, discard_prepare,
-                               discard_error)
-                 .await();
+    status = db_->prepare_file("file_count_stmt", temp_file3, type_oid_sequence{}, discard_prepare, discard_error).await();
     ASSERT_TRUE(status);
 
     // Execute the statement prepared without callbacks
@@ -1359,8 +1207,8 @@ TEST_F(PostgreSQLPreparedStatementsTest, PrepareFromFile) {
                               ASSERT_EQ(result.size(), 1);
                               ASSERT_GT(result[0][0].as<int>(), 0); // Should have at least one row
                               count_success = true;
-                          })
-                 .await();
+                                      })
+                             .await();
 
     ASSERT_TRUE(status);
     ASSERT_TRUE(count_success);
@@ -1370,11 +1218,8 @@ TEST_F(PostgreSQLPreparedStatementsTest, PrepareFromFile) {
     try {
         // This should throw an exception since the file doesn't exist
         db_->prepare_file(
-            "nonexistent_file", std::filesystem::temp_directory_path() / "nonexistent.sql",
-            {oid::text},
-            [](Transaction &tr, PreparedQuery const &query) {
-                ASSERT_TRUE(false) << "Should not succeed with non-existent file";
-            },
+            "nonexistent_file", std::filesystem::temp_directory_path() / "nonexistent.sql", {oid::text},
+            [](Transaction &tr, PreparedQuery const &query) { ASSERT_TRUE(false) << "Should not succeed with non-existent file"; },
             [&error_caught](error::db_error const &err) {
                 error_caught = true;
                 std::cout << "Error on non-existent file (expected): " << err.what() << std::endl;
@@ -1384,8 +1229,7 @@ TEST_F(PostgreSQLPreparedStatementsTest, PrepareFromFile) {
         std::cout << "Exception caught as expected: " << e.what() << std::endl;
     }
 
-    ASSERT_TRUE(error_caught)
-        << "Error callback should have been called before the exception was thrown";
+    ASSERT_TRUE(error_caught) << "Error callback should have been called before the exception was thrown";
 
     // Cleanup temporary files
     std::filesystem::remove(temp_file);
@@ -1506,8 +1350,8 @@ TEST(PreparedStorageStressTest, HighVolumeEviction) {
         }
     }
 
-    std::cout << "LRU stress test passed: " << NUM_QUERIES << " queries, cache size " << CACHE_SIZE
-              << ", evicted " << storage.evicted_count() << std::endl;
+    std::cout << "LRU stress test passed: " << NUM_QUERIES << " queries, cache size " << CACHE_SIZE << ", evicted " << storage.evicted_count()
+              << std::endl;
 }
 
 /**

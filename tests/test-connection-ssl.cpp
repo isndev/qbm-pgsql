@@ -28,7 +28,7 @@
  * @see qb::pg::detail::Database
  *
  * @author qb - C++ Actor Framework
- * @copyright Copyright (c) 2011-2025 qb - isndev (cpp.actor)
+ * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -54,15 +54,14 @@
 using namespace qb::pg;
 
 /** Skip SSL tests when default DSN cannot complete TLS (no QB_PG_SSL_DSN set). */
-#define QB_PG_ASSERT_SSL_CONNECTED(db_expr)                                                         \
-    do {                                                                                            \
-        const bool qb_pg_ok =                                                                       \
-            qb::io::async::run_sync((db_expr).connect(qb::pg::test::dsn_ssl_string()));             \
-        if (!qb_pg_ok && std::getenv("QB_PG_SSL_DSN") == nullptr) {                                 \
-            GTEST_SKIP() << "SSL connect failed with default DSN; set QB_PG_SSL_DSN or enable TLS " \
-                            "on the server.";                                                       \
-        }                                                                                           \
-        ASSERT_TRUE(qb_pg_ok);                                                                      \
+#define QB_PG_ASSERT_SSL_CONNECTED(db_expr)                                                               \
+    do {                                                                                                  \
+        const bool qb_pg_ok = qb::io::async::run_sync((db_expr).connect(qb::pg::test::dsn_ssl_string())); \
+        if (!qb_pg_ok && std::getenv("QB_PG_SSL_DSN") == nullptr) {                                       \
+            GTEST_SKIP() << "SSL connect failed with default DSN; set QB_PG_SSL_DSN or enable TLS "       \
+                            "on the server.";                                                             \
+        }                                                                                                 \
+        ASSERT_TRUE(qb_pg_ok);                                                                            \
     } while (0)
 
 /**
@@ -133,8 +132,7 @@ TEST_F(PostgreSQLConnectionTest, ConnectSuccess_Coroutine) {
  */
 TEST_F(PostgreSQLConnectionTest, ConnectWithInvalidCredentials) {
     auto invalid_db = std::make_unique<qb::pg::tcp::ssl::database>();
-    ASSERT_FALSE(
-        qb::io::async::run_sync(invalid_db->connect(qb::pg::test::dsn_invalid_auth_string())));
+    ASSERT_FALSE(qb::io::async::run_sync(invalid_db->connect(qb::pg::test::dsn_invalid_auth_string())));
 }
 
 /**

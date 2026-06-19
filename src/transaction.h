@@ -29,7 +29,7 @@
  * @see qb::pg::detail::result_impl
  *
  * @author qb - C++ Actor Framework
- * @copyright Copyright (c) 2011-2025 qb - isndev (cpp.actor)
+ * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -76,13 +76,13 @@ using namespace qb::pg;
  */
 class Transaction {
 protected:
-    Transaction *_parent{nullptr}; ///< Parent transaction (for nested transactions)
-    std::queue<std::unique_ptr<Transaction>> _sub_commands;  ///< Queue of sub-transactions
-    std::queue<std::unique_ptr<ISqlQuery>>   _queries;       ///< Queue of SQL queries to execute
-    PreparedQueryStorage                    &_query_storage; ///< Storage for prepared queries
-    bool                                     _result{true};  ///< Result status of the transaction
-    error::db_error                          _error;         ///< Error message of the transaction
-    result_impl                              _results;       ///< Last results of the transaction
+    Transaction                             *_parent{nullptr}; ///< Parent transaction (for nested transactions)
+    std::queue<std::unique_ptr<Transaction>> _sub_commands;    ///< Queue of sub-transactions
+    std::queue<std::unique_ptr<ISqlQuery>>   _queries;         ///< Queue of SQL queries to execute
+    PreparedQueryStorage                    &_query_storage;   ///< Storage for prepared queries
+    bool                                     _result{true};    ///< Result status of the transaction
+    error::db_error                          _error;           ///< Error message of the transaction
+    result_impl                              _results;         ///< Last results of the transaction
 
     // Statement timeout: applied on the server in the same simple-query batch as `BEGIN`
     // (`SET LOCAL statement_timeout`, transaction-scoped). Not socket idle time — see set_timeout().
@@ -363,8 +363,7 @@ public:
      * clause (server default). Payload length is capped (see `notify_payload_max_bytes`).
      */
     template <typename CB_SUCCESS, typename CB_ERROR>
-    Transaction &notify(std::string_view channel, std::string_view payload, CB_SUCCESS &&on_success,
-                        CB_ERROR &&on_error);
+    Transaction &notify(std::string_view channel, std::string_view payload, CB_SUCCESS &&on_success, CB_ERROR &&on_error);
 
     /**
      * @brief NOTIFY without payload (same as `notify(channel, "", cb, err)` but omits payload in
@@ -375,8 +374,7 @@ public:
 
     /** @brief Coroutine NOTIFY (`co_await` → `Reply<void>`). Empty @p payload omits payload in
      * SQL. */
-    [[nodiscard]] pg_reply_awaiter<void> notify(std::string_view channel,
-                                                std::string_view payload = {});
+    [[nodiscard]] pg_reply_awaiter<void> notify(std::string_view channel, std::string_view payload = {});
 
     /**
      * @brief LISTEN on a channel (SQL `LISTEN "name"`).
@@ -408,8 +406,8 @@ public:
      * @return Transaction& Reference to this transaction for chaining
      */
     template <typename CB_SUCCESS, typename CB_ERROR>
-    Transaction &prepare(std::string_view query_name, std::string_view expr,
-                         type_oid_sequence &&types, CB_SUCCESS &&on_success, CB_ERROR &&on_error);
+    Transaction &prepare(std::string_view query_name, std::string_view expr, type_oid_sequence &&types, CB_SUCCESS &&on_success,
+                         CB_ERROR &&on_error);
 
     /**
      * @brief Prepares a SQL query with parameter types and success callback
@@ -422,8 +420,7 @@ public:
      * @return Transaction& Reference to this transaction for chaining
      */
     template <typename CB_SUCCESS>
-    Transaction &prepare(std::string_view query_name, std::string_view expr,
-                         type_oid_sequence &&types, CB_SUCCESS &&on_success);
+    Transaction &prepare(std::string_view query_name, std::string_view expr, type_oid_sequence &&types, CB_SUCCESS &&on_success);
 
     /**
      * @brief Prepares for coroutines only (`co_await` → Reply<PreparedQuery>).
@@ -431,8 +428,7 @@ public:
      * Synchronous blocking: use `prepare(..., discard_prepare, discard_error)` then
      * `Transaction::await()`.
      */
-    [[nodiscard]] pg_reply_awaiter<PreparedQuery>
-    prepare(std::string_view query_name, std::string_view expr, type_oid_sequence types = {});
+    [[nodiscard]] pg_reply_awaiter<PreparedQuery> prepare(std::string_view query_name, std::string_view expr, type_oid_sequence types = {});
 
     /**
      * @brief Prepares a SQL query from a file with parameter types and callbacks
@@ -447,9 +443,8 @@ public:
      * @return Transaction& Reference to this transaction for chaining
      */
     template <typename CB_SUCCESS, typename CB_ERROR>
-    Transaction &prepare_file(std::string_view query_name, const std::filesystem::path &file_path,
-                              type_oid_sequence &&types, CB_SUCCESS &&on_success,
-                              CB_ERROR &&on_error);
+    Transaction &prepare_file(std::string_view query_name, const std::filesystem::path &file_path, type_oid_sequence &&types,
+                              CB_SUCCESS &&on_success, CB_ERROR &&on_error);
 
     /**
      * @brief Prepares a SQL query from a file with parameter types and success callback
@@ -462,8 +457,8 @@ public:
      * @return Transaction& Reference to this transaction for chaining
      */
     template <typename CB_SUCCESS>
-    Transaction &prepare_file(std::string_view query_name, const std::filesystem::path &file_path,
-                              type_oid_sequence &&types, CB_SUCCESS &&on_success);
+    Transaction &prepare_file(std::string_view query_name, const std::filesystem::path &file_path, type_oid_sequence &&types,
+                              CB_SUCCESS &&on_success);
 
     /**
      * @brief Prepare from file for coroutines only (`co_await` → Reply<PreparedQuery>).
@@ -471,9 +466,8 @@ public:
      * Synchronous blocking: `prepare_file(..., types, discard_prepare, discard_error)` then
      * `Transaction::await()`.
      */
-    [[nodiscard]] pg_reply_awaiter<PreparedQuery>
-    prepare_file(std::string_view query_name, const std::filesystem::path &file_path,
-                 type_oid_sequence types = {});
+    [[nodiscard]] pg_reply_awaiter<PreparedQuery> prepare_file(std::string_view query_name, const std::filesystem::path &file_path,
+                                                               type_oid_sequence types = {});
 
     /**
      * @brief Executes a prepared query with parameters and callbacks
@@ -487,8 +481,7 @@ public:
      * @return Transaction& Reference to this transaction for chaining
      */
     template <typename CB_SUCCESS, typename CB_ERROR>
-    Transaction &execute(std::string_view query_name, QueryParams &&params, CB_SUCCESS &&on_success,
-                         CB_ERROR &&on_error);
+    Transaction &execute(std::string_view query_name, QueryParams &&params, CB_SUCCESS &&on_success, CB_ERROR &&on_error);
 
     /**
      * @brief Executes a prepared query with parameters and success callback
@@ -521,8 +514,7 @@ public:
      * Synchronous blocking: `execute(name, params, discard_query, discard_error)` then
      * `Transaction::await()`.
      */
-    [[nodiscard]] pg_reply_awaiter<resultset> execute(std::string_view query_name,
-                                                      QueryParams    &&params);
+    [[nodiscard]] pg_reply_awaiter<resultset> execute(std::string_view query_name, QueryParams &&params);
 
     /**
      * @brief Executes a SQL query from a file
@@ -535,8 +527,7 @@ public:
      * @return Transaction& Reference to this transaction for chaining
      */
     template <typename CB_SUCCESS, typename CB_ERROR>
-    Transaction &execute_file(const std::filesystem::path &file_path, CB_SUCCESS &&on_success,
-                              CB_ERROR &&on_error);
+    Transaction &execute_file(const std::filesystem::path &file_path, CB_SUCCESS &&on_success, CB_ERROR &&on_error);
 
     /**
      * @brief Executes a SQL query from a file with success callback
@@ -571,10 +562,7 @@ public:
     Transaction &
     set_timeout(qb::duration timeout) {
         _query_timeout_ms =
-            timeout > qb::duration::zero()
-                ? static_cast<int>(
-                      std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count())
-                : 0;
+            timeout > qb::duration::zero() ? static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count()) : 0;
         return *this;
     }
 

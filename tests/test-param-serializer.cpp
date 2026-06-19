@@ -28,7 +28,7 @@
  * @see qb::pg::detail::params
  *
  * @author qb - C++ Actor Framework
- * @copyright Copyright (c) 2011-2025 qb - isndev (cpp.actor)
+ * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -164,8 +164,7 @@ protected:
     printBuffer(const std::vector<byte> &buffer, const std::string &label) {
         std::cout << label << " (size: " << buffer.size() << "): ";
         for (const auto &b : buffer) {
-            std::cout << std::hex << std::setw(2) << std::setfill('0')
-                      << static_cast<int>(static_cast<unsigned char>(b)) << " ";
+            std::cout << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(static_cast<unsigned char>(b)) << " ";
         }
         std::cout << std::dec << std::endl;
     }
@@ -928,8 +927,9 @@ TEST_F(ParamSerializerTest, StringWithNullCharacters) {
 TEST_F(ParamSerializerTest, ExtendedCharacterSetSerialization) {
     // Collection of strings to test
     std::vector<std::string> testStrings = {
-        "Escape sequences: \n\r\t\b\f\\\"\'", "Unicode characters: \u00A9 \u2603 \u03C0 \u221E",
-        "Emoji: 😀 😃 😄 😁 😆 😎", "Mixed symbols: ✓✗★☆♥♦♣♠", "Mathematical: ∑∏√∞≠≈∈∉"};
+        "Escape sequences: \n\r\t\b\f\\\"\'", "Unicode characters: \u00A9 \u2603 \u03C0 \u221E", "Emoji: 😀 😃 😄 😁 😆 😎",
+        "Mixed symbols: ✓✗★☆♥♦♣♠", "Mathematical: ∑∏√∞≠≈∈∉"
+    };
 
     for (const auto &testString : testStrings) {
         serializer->reset();
@@ -1058,9 +1058,11 @@ TEST_F(ParamSerializerTest, ComplexPreparedStatementSequence) {
         double          rating;
     };
 
-    std::vector<Article> articles = {{101, "Article 1", "Content for article 1", 4.5},
-                                     {102, "Article 2", "Content for article 2", 3.8},
-                                     {103, "Article 3", "Content for article 3", 4.2}};
+    std::vector<Article> articles = {
+        {101, "Article 1", "Content for article 1", 4.5},
+        {102, "Article 2", "Content for article 2", 3.8},
+        {103, "Article 3", "Content for article 3", 4.2}
+    };
 
     // For each article, add parameters and verify
     for (const auto &article : articles) {
@@ -1142,8 +1144,7 @@ TEST_F(ParamSerializerTest, LargeBinaryDataSerialization) {
 
     // Verify specific values at specific positions
     ASSERT_EQ(static_cast<unsigned char>(buffer[sizeof(integer)]), 0);
-    ASSERT_EQ(static_cast<unsigned char>(buffer[sizeof(integer) + 255]),
-              static_cast<unsigned char>(255));
+    ASSERT_EQ(static_cast<unsigned char>(buffer[sizeof(integer) + 255]), static_cast<unsigned char>(255));
     ASSERT_EQ(static_cast<unsigned char>(buffer[sizeof(integer) + 256]), 0);
 }
 
@@ -1399,13 +1400,10 @@ TEST_F(ParamSerializerTest, DifferentNumericVectorTypes) {
 TEST_F(ParamSerializerTest, UUIDBinaryFormat) {
     // Example UUID: 550e8400-e29b-41d4-a716-446655440000
     // We'll create a binary buffer with UUID bytes and check serialization works
-    std::vector<byte> uuidBytes = {
-        static_cast<byte>(0x55), static_cast<byte>(0x0e), static_cast<byte>(0x84),
-        static_cast<byte>(0x00), static_cast<byte>(0xe2), static_cast<byte>(0x9b),
-        static_cast<byte>(0x41), static_cast<byte>(0xd4), static_cast<byte>(0xa7),
-        static_cast<byte>(0x16), static_cast<byte>(0x44), static_cast<byte>(0x66),
-        static_cast<byte>(0x55), static_cast<byte>(0x44), static_cast<byte>(0x00),
-        static_cast<byte>(0x00)};
+    std::vector<byte> uuidBytes = {static_cast<byte>(0x55), static_cast<byte>(0x0e), static_cast<byte>(0x84), static_cast<byte>(0x00),
+                                   static_cast<byte>(0xe2), static_cast<byte>(0x9b), static_cast<byte>(0x41), static_cast<byte>(0xd4),
+                                   static_cast<byte>(0xa7), static_cast<byte>(0x16), static_cast<byte>(0x44), static_cast<byte>(0x66),
+                                   static_cast<byte>(0x55), static_cast<byte>(0x44), static_cast<byte>(0x00), static_cast<byte>(0x00)};
 
     // Add as byte array
     serializer->add_byte_array(uuidBytes.data(), uuidBytes.size());
@@ -1571,12 +1569,14 @@ TEST_F(ParamSerializerTest, TimestampTextFormat) {
  */
 TEST_F(ParamSerializerTest, JSONSerialization) {
     // Create a sample JSON object with various nested structures and types
-    qb::jsonb test_json = {{"id", 12345},
-                           {"name", "Test JSON"},
-                           {"active", true},
-                           {"tags", {"database", "postgres", "json"}},
-                           {"metrics", {{"queries", 1000}, {"errors", 5}, {"success_rate", 99.5}}},
-                           {"nullable", nullptr}};
+    qb::jsonb test_json = {
+        {"id", 12345},
+        {"name", "Test JSON"},
+        {"active", true},
+        {"tags", {"database", "postgres", "json"}},
+        {"metrics", {{"queries", 1000}, {"errors", 5}, {"success_rate", 99.5}}},
+        {"nullable", nullptr}
+    };
 
     // Serialize the JSON object
     serializer->add_param(test_json);
@@ -1634,8 +1634,7 @@ TEST_F(ParamSerializerTest, JSONSerialization) {
         ASSERT_EQ(parsed_json["metrics"]["success_rate"].get<double>(), 99.5);
         ASSERT_TRUE(parsed_json["nullable"].is_null());
 
-        std::cout << "Successfully serialized and verified JSON: " << parsed_json.dump(2)
-                  << std::endl;
+        std::cout << "Successfully serialized and verified JSON: " << parsed_json.dump(2) << std::endl;
     } catch (const std::exception &e) {
         FAIL() << "Failed to parse serialized JSON content: " << e.what();
     }
@@ -1652,19 +1651,12 @@ TEST_F(ParamSerializerTest, ComplexJSONSerialization) {
         {"data",
          {{"users",
            {{{"id", 1},
-             {"profile",
-              {{"name", "User 1"},
-               {"settings",
-                {{"theme", "dark"}, {"notifications", true}, {"limits", {10, 20, 30}}}}}}},
+             {"profile", {{"name", "User 1"}, {"settings", {{"theme", "dark"}, {"notifications", true}, {"limits", {10, 20, 30}}}}}}},
             {{"id", 2},
-             {"profile",
-              {{"name", "User 2"},
-               {"settings",
-                {{"theme", "light"}, {"notifications", false}, {"limits", {5, 15, 25}}}}}}}}},
+             {"profile", {{"name", "User 2"}, {"settings", {{"theme", "light"}, {"notifications", false}, {"limits", {5, 15, 25}}}}}}}}},
           {"stats",
-           {{"total_users", 2},
-            {"active_users", 1},
-            {"historical", {{"2023", {{"q1", 100}, {"q2", 150}}}, {"2024", {{"q1", 200}}}}}}}}}};
+           {{"total_users", 2}, {"active_users", 1}, {"historical", {{"2023", {{"q1", 100}, {"q2", 150}}}, {"2024", {{"q1", 200}}}}}}}}}
+    };
 
     // Reset serializer
     serializer->reset();
@@ -1704,8 +1696,7 @@ TEST_F(ParamSerializerTest, ComplexJSONSerialization) {
         // Verify deep nested elements
         ASSERT_EQ(parsed_json["data"]["users"][0]["id"].get<int>(), 1);
         ASSERT_EQ(parsed_json["data"]["users"][1]["profile"]["name"].get<std::string>(), "User 2");
-        ASSERT_EQ(parsed_json["data"]["users"][0]["profile"]["settings"]["limits"][2].get<int>(),
-                  30);
+        ASSERT_EQ(parsed_json["data"]["users"][0]["profile"]["settings"]["limits"][2].get<int>(), 30);
         ASSERT_EQ(parsed_json["data"]["stats"]["historical"]["2023"]["q2"].get<int>(), 150);
 
         // We can't compare the complete structure directly since our original was an
@@ -1853,8 +1844,8 @@ TEST_F(ParamSerializerTest, MixedComplexTypes) {
     ParamSerializer serializer;
 
     // Add various parameter types
-    numeric     price("999.99");
-    pgdate      date = pgdate::from_string("2024-12-25");
+    numeric price("999.99");
+    pgdate  date = pgdate::from_string("2024-12-25");
 
     // Serialize numeric (as text for precision)
     std::vector<byte> numeric_buffer;

@@ -7,7 +7,7 @@
  * communication.
  *
  * @author qb - C++ Actor Framework
- * @copyright Copyright (c) 2011-2025 qb - isndev (cpp.actor)
+ * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -47,20 +47,18 @@ namespace detail {
  */
 namespace {
 /** @brief Set of allowed message tags for frontend (client) */
-tag_set_type FRONTEND_COMMANDS{empty_tag,     bind_tag,          close_tag,    copy_data_tag,
-                               copy_done_tag, copy_fail_tag,     describe_tag, execute_tag,
-                               flush_tag,     function_call_tag, parse_tag,    password_message_tag,
-                               query_tag,     sync_tag,          terminate_tag};
+tag_set_type FRONTEND_COMMANDS{empty_tag,    bind_tag,    close_tag,    copy_data_tag,     copy_done_tag, copy_fail_tag,
+                               describe_tag, execute_tag, flush_tag,    function_call_tag, parse_tag,     password_message_tag,
+                               query_tag,    sync_tag,    terminate_tag};
 /** @brief Set of allowed message tags for backend (server) */
-tag_set_type BACKEND_COMMANDS{
-    authentication_tag,     backend_key_data_tag,   bind_complete_tag,
-    close_complete_tag,     command_complete_tag,   copy_data_tag,
-    copy_done_tag,          copy_in_response_tag,   copy_out_response_tag,
-    copy_both_response_tag, data_row_tag,           empty_query_response_tag,
-    error_response_tag,     function_call_resp_tag, no_data_tag,
-    notice_response_tag,    notification_resp_tag,  parameter_description_tag,
-    parameter_status_tag,   parse_complete_tag,     portal_suspended_tag,
-    ready_for_query_tag,    row_description_tag};
+tag_set_type BACKEND_COMMANDS{authentication_tag,     backend_key_data_tag,   bind_complete_tag,
+                              close_complete_tag,     command_complete_tag,   copy_data_tag,
+                              copy_done_tag,          copy_in_response_tag,   copy_out_response_tag,
+                              copy_both_response_tag, data_row_tag,           empty_query_response_tag,
+                              error_response_tag,     function_call_resp_tag, no_data_tag,
+                              notice_response_tag,    notification_resp_tag,  parameter_description_tag,
+                              parameter_status_tag,   parse_complete_tag,     portal_suspended_tag,
+                              ready_for_query_tag,    row_description_tag};
 } // namespace
 
 /**
@@ -104,8 +102,7 @@ message::message()
 message::message(message_tag tag)
     : payload(5, 0)
     , packed_(false) {
-    assert(message::frontend_tags().count(tag) != 0 &&
-           "Outgoing PostgreSQL messages must use a frontend protocol tag");
+    assert(message::frontend_tags().count(tag) != 0 && "Outgoing PostgreSQL messages must use a frontend protocol tag");
     payload[0] = static_cast<char>(tag);
 }
 
@@ -276,8 +273,7 @@ write_int(message::buffer_type &payload, T val) {
  */
 bool
 message::read(smallint &val) {
-    const_iterator c =
-        io::protocol_read<pg::protocol_data_format::Binary>(curr_, payload.cend(), val);
+    const_iterator c = io::protocol_read<pg::protocol_data_format::Binary>(curr_, payload.cend(), val);
     if (curr_ == c)
         return false;
     curr_ = c;
@@ -292,8 +288,7 @@ message::read(smallint &val) {
  */
 bool
 message::read(integer &val) {
-    const_iterator c =
-        io::protocol_read<pg::protocol_data_format::Binary>(curr_, payload.cend(), val);
+    const_iterator c = io::protocol_read<pg::protocol_data_format::Binary>(curr_, payload.cend(), val);
     if (curr_ == c)
         return false;
     curr_ = c;
@@ -347,8 +342,8 @@ message::read(field_description &fd) {
     tmp.max_size = 0;
     integer  type_oid;
     smallint fmt;
-    if (read(tmp.name) && read(tmp.table_oid) && read(tmp.attribute_number) && read(type_oid) &&
-        read(tmp.type_size) && read(tmp.type_mod) && read(fmt)) {
+    if (read(tmp.name) && read(tmp.table_oid) && read(tmp.attribute_number) && read(type_oid) && read(tmp.type_size) && read(tmp.type_mod)
+        && read(fmt)) {
         tmp.type_oid    = static_cast<oid>(type_oid);
         tmp.format_code = static_cast<protocol_data_format>(fmt);
         fd              = tmp;
@@ -381,7 +376,7 @@ message::read(row_data &row) {
         if (col_count < 0)
             return false;
         const auto ucol_count = static_cast<size_t>(col_count);
-        row_data tmp;
+        row_data   tmp;
         tmp.offsets.reserve(ucol_count);
         // OPTIMIZED: Pre-allocate null_map with correct size (P0-4 fix)
         tmp.null_map.resize(ucol_count, false);
@@ -403,8 +398,7 @@ message::read(row_data &row) {
                 // Bound the field length against the bytes actually remaining:
                 // a column length larger than the rest of the body would
                 // over-read the heap past the message buffer.
-                if (static_cast<size_t>(col_size) >
-                    static_cast<size_t>(payload.cend() - curr_)) {
+                if (static_cast<size_t>(col_size) > static_cast<size_t>(payload.cend() - curr_)) {
                     return false;
                 }
                 // OPTIMIZED: Use insert with iterator range instead of byte-by-byte (P0-14 fix)
@@ -633,7 +627,8 @@ const std::map<char, std::string notice_message::*> notice_fields{
     {'n', &notice_message::constraint_name},
     {'F', &notice_message::file_name},
     {'L', &notice_message::line},
-    {'R', &notice_message::routine}};
+    {'R', &notice_message::routine}
+};
 
 } // namespace
 
@@ -678,8 +673,7 @@ std::ostream &
 operator<<(std::ostream &out, notice_message const &msg) {
     std::ostream::sentry s(out);
     if (s) {
-        out << "severity: " << msg.severity << " SQL code: " << msg.sqlstate << " message: '"
-            << msg.message << "'";
+        out << "severity: " << msg.severity << " SQL code: " << msg.sqlstate << " message: '" << msg.message << "'";
         if (!msg.detail.empty()) {
             out << " detail: '" << msg.detail << "'";
         }

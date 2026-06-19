@@ -15,7 +15,7 @@
  * @see qb::pg::detail::ISqlQuery
  *
  * @author qb - C++ Actor Framework
- * @copyright Copyright (c) 2011-2025 qb - isndev (cpp.actor)
+ * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -79,13 +79,9 @@ public:
      */
     void
     on_end_transaction() {
-        push_query(_result ? std::unique_ptr<ISqlQuery>(new CommitQuery(
-                                 []() {}, [this](auto const &err) { _on_error(err); }))
+        push_query(_result ? std::unique_ptr<ISqlQuery>(new CommitQuery([]() {}, [this](auto const &err) { _on_error(err); }))
                            : std::unique_ptr<ISqlQuery>(new RollbackQuery(
-                                 [this]() {
-                                     _on_error((error::db_error) error::query_error(
-                                         "rollback processed due to a query failure"));
-                                 },
+                                 [this]() { _on_error((error::db_error) error::query_error("rollback processed due to a query failure")); },
                                  [this](auto const &err) { _on_error(err); })));
     }
 };
@@ -229,9 +225,8 @@ public:
                                   : std::unique_ptr<ISqlQuery>(new RollbackSavePointQuery(
                                         _name,
                                         [this]() {
-                                            _on_error((error::db_error) error::query_error(
-                                                "savepoint rollback processed due to a "
-                                                "query failure"));
+                                            _on_error((error::db_error) error::query_error("savepoint rollback processed due to a "
+                                                                                           "query failure"));
                                         },
                                         [this](auto const &err) { _on_error(err); })));
     }
@@ -378,8 +373,7 @@ public:
      * @param on_success Callback for successful query execution with results
      * @param on_error Callback for query execution errors
      */
-    ResultQuery(Transaction *parent, std::string &&expr, CB_SUCCESS &&on_success,
-                CB_ERROR &&on_error)
+    ResultQuery(Transaction *parent, std::string &&expr, CB_SUCCESS &&on_success, CB_ERROR &&on_error)
         : Transaction(parent)
         , _on_success(std::forward<CB_SUCCESS>(on_success))
         , _on_error(std::forward<CB_ERROR>(on_error)) {
@@ -613,8 +607,7 @@ public:
      * @param on_success Callback for successful execution
      * @param on_error Callback for execution errors
      */
-    ExecutePrepared(Transaction *parent, std::string &&query_name, QueryParams &&params,
-                    CB_SUCCESS &&on_success, CB_ERROR &&on_error)
+    ExecutePrepared(Transaction *parent, std::string &&query_name, QueryParams &&params, CB_SUCCESS &&on_success, CB_ERROR &&on_error)
         : Transaction(parent)
         , _query_name(std::move(query_name))
         , _on_success(std::forward<CB_SUCCESS>(on_success))
@@ -666,8 +659,7 @@ public:
      * @param on_success Callback for successful execution with results
      * @param on_error Callback for execution errors
      */
-    QueryPrepared(Transaction *parent, std::string const &query_name, QueryParams &&params,
-                  CB_SUCCESS &&on_success, CB_ERROR &&on_error)
+    QueryPrepared(Transaction *parent, std::string const &query_name, QueryParams &&params, CB_SUCCESS &&on_success, CB_ERROR &&on_error)
         : Transaction(parent)
         , _on_success(std::forward<CB_SUCCESS>(on_success))
         , _on_error(std::forward<CB_ERROR>(on_error))

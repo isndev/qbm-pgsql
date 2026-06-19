@@ -79,7 +79,7 @@
  * @see qb::pg::detail::Transaction
  *
  * @author qb - C++ Actor Framework
- * @copyright Copyright (c) 2011-2025 qb - isndev (cpp.actor)
+ * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -183,11 +183,7 @@ inline qb::icase_unordered_map<std::string>
 parse_header_attributes(const char *ptr, const size_t len) {
     qb::icase_unordered_map<std::string> dict;
 
-    enum AttributeParseState {
-        ATTRIBUTE_PARSE_NAME,
-        ATTRIBUTE_PARSE_VALUE,
-        ATTRIBUTE_PARSE_IGNORE
-    } parse_state = ATTRIBUTE_PARSE_NAME;
+    enum AttributeParseState { ATTRIBUTE_PARSE_NAME, ATTRIBUTE_PARSE_VALUE, ATTRIBUTE_PARSE_IGNORE } parse_state = ATTRIBUTE_PARSE_NAME;
 
     // misc other variables used for parsing
     const char *const end = ptr + len;
@@ -242,12 +238,10 @@ parse_header_attributes(const char *ptr, const size_t len) {
                             // assume character is part of the (unquoted) value
                             attribute_value.push_back(*ptr);
                         }
-                    } else if (*ptr != ' ' ||
-                               !attribute_value.empty()) { // ignore leading unquoted whitespace
+                    } else if (*ptr != ' ' || !attribute_value.empty()) { // ignore leading unquoted whitespace
                         // check if control character detected, or max sized exceeded
                         if (is_control(*ptr) || attribute_value.size() >= ATTRIBUTE_VALUE_MAX)
-                            throw std::runtime_error(
-                                "ctrl in value found or max attribute value length");
+                            throw std::runtime_error("ctrl in value found or max attribute value length");
                         // character is part of the (unquoted) value
                         attribute_value.push_back(*ptr);
                     }
@@ -395,9 +389,8 @@ public:
 
             const qb::pg::uinteger wire_len = static_cast<qb::pg::uinteger>(message_->length());
             if (wire_len < 4u || wire_len > qb::pg::PG_PROTOCOL_MAX_MESSAGE_BYTES) {
-                LOG_CRIT("[pgsql] Invalid wire message length " << wire_len << " (must be 4.."
-                                                               << qb::pg::PG_PROTOCOL_MAX_MESSAGE_BYTES
-                                                               << "); dropping connection");
+                LOG_CRIT("[pgsql] Invalid wire message length " << wire_len << " (must be 4.." << qb::pg::PG_PROTOCOL_MAX_MESSAGE_BYTES
+                                                                << "); dropping connection");
                 message_.reset();
                 offset_ = 0;
                 // Mark the protocol invalid (the documented contract for a malformed size
@@ -569,8 +562,7 @@ private:
     try_resume_connect_wait() {
         if (!connect_coroutine_pending_)
             return;
-        const bool terminal =
-            is_connected_ || connect_handshake_failed_ || (has_error() && !is_connected_);
+        const bool terminal = is_connected_ || connect_handshake_failed_ || (has_error() && !is_connected_);
         if (!terminal)
             return;
         auto h                     = connect_suspend_handle_;
@@ -597,8 +589,7 @@ private:
      * @param timeout_override If positive, overrides `conn_opts_.connect_timeout` for this attempt
      */
     void
-    start_connect_from_awaiter(std::coroutine_handle<> h, std::shared_ptr<bool> valid,
-                               qb::duration timeout_override) {
+    start_connect_from_awaiter(std::coroutine_handle<> h, std::shared_ptr<bool> valid, qb::duration timeout_override) {
         ++connect_timer_generation_;
         const std::uint64_t timer_gen = connect_timer_generation_;
 
@@ -616,9 +607,7 @@ private:
         const double t_out =
             timeout_override > qb::duration::zero()
                 ? qb::detail::to_ev_seconds(timeout_override)
-                : (conn_opts_.connect_timeout > qb::duration::zero()
-                       ? qb::detail::to_ev_seconds(conn_opts_.connect_timeout)
-                       : 10.0);
+                : (conn_opts_.connect_timeout > qb::duration::zero() ? qb::detail::to_ev_seconds(conn_opts_.connect_timeout) : 10.0);
 
         const qb::io::uri connect_uri{conn_opts_.schema + "://" + conn_opts_.uri};
         auto              awaiter_valid = connect_suspend_valid_;
@@ -651,18 +640,17 @@ private:
         // Owned, cancellable deadline (see connect_deadline_timer_): reassigning here cancels
         // any prior pending timer, and ~Database cancels this one — so the callback can never
         // fire into a freed `this`. The timer_gen guard still covers an in-place reconnect.
-        connect_deadline_timer_ = qb::io::async::scoped_callback(
-            std::function<void()>([this, t_out, timer_gen]() {
-                if (timer_gen != connect_timer_generation_)
-                    return;
-                if (!connect_coroutine_pending_ || is_connected_)
-                    return;
-                LOG_WARN("[pgsql] Connection timed out after " << t_out << "s");
-                _error                    = error::db_error{"connection timeout"};
-                connect_handshake_failed_ = true;
-                try_resume_connect_wait();
-            }),
-            qb::detail::from_ev_seconds(t_out));
+        connect_deadline_timer_ = qb::io::async::scoped_callback(std::function<void()>([this, t_out, timer_gen]() {
+                                                                     if (timer_gen != connect_timer_generation_)
+                                                                         return;
+                                                                     if (!connect_coroutine_pending_ || is_connected_)
+                                                                         return;
+                                                                     LOG_WARN("[pgsql] Connection timed out after " << t_out << "s");
+                                                                     _error                    = error::db_error{"connection timeout"};
+                                                                     connect_handshake_failed_ = true;
+                                                                     try_resume_connect_wait();
+                                                                 }),
+                                                                 qb::detail::from_ev_seconds(t_out));
 
         try_resume_connect_wait();
     }
@@ -705,13 +693,11 @@ private:
             std::memcpy(ssl_request.data(), &len, 4);
             std::memcpy(ssl_request.data() + 4, &code, 4);
 
-            const auto tcp_connect_timeout = std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::duration<double>(t_out));
+            const auto tcp_connect_timeout = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::duration<double>(t_out));
 
-            if (qb::io::socket::send_n(raw_io.native_handle(),
-                                       reinterpret_cast<const char *>(ssl_request.data()),
-                                       static_cast<int>(ssl_request.size()),
-                                       tcp_connect_timeout) != static_cast<int>(ssl_request.size())) {
+            if (qb::io::socket::send_n(raw_io.native_handle(), reinterpret_cast<const char *>(ssl_request.data()),
+                                       static_cast<int>(ssl_request.size()), tcp_connect_timeout)
+                != static_cast<int>(ssl_request.size())) {
                 LOG_CRIT("[pgsql] Failed to send SSL request");
                 connect_handshake_failed_ = true;
                 _error                    = error::connection_error{"ssl request send failed"};
@@ -720,9 +706,7 @@ private:
             }
 
             uint8_t response = 0;
-            if (qb::io::socket::recv_n(raw_io.native_handle(),
-                                       reinterpret_cast<char *>(&response), 1,
-                                       tcp_connect_timeout) != 1) {
+            if (qb::io::socket::recv_n(raw_io.native_handle(), reinterpret_cast<char *>(&response), 1, tcp_connect_timeout) != 1) {
                 LOG_CRIT("[pgsql] Failed to receive SSL response");
                 connect_handshake_failed_ = true;
                 _error                    = error::connection_error{"ssl response recv failed"};
@@ -743,7 +727,7 @@ private:
                 if (ssl_sock.connect(upgrade_uri, tcp_connect_timeout) != 0) {
                     LOG_CRIT("[pgsql] Failed to connect to SSL server");
                     connect_handshake_failed_ = true;
-                    _error = error::connection_error{"tls handshake / connect failed"};
+                    _error                    = error::connection_error{"tls handshake / connect failed"};
                     try_resume_connect_wait();
                     return;
                 }
@@ -755,7 +739,7 @@ private:
             } else {
                 LOG_CRIT("[pgsql] Invalid SSL response byte from server");
                 connect_handshake_failed_ = true;
-                _error = error::connection_error{"invalid SSLRequest response from server"};
+                _error                    = error::connection_error{"invalid SSLRequest response from server"};
                 try_resume_connect_wait();
                 return;
             }
@@ -890,8 +874,7 @@ private:
                 return true;
             } else {
                 LOG_DEBUG("[pgsql] error processing query not valid");
-                _error =
-                    error::client_error{"query couldn't be processed check logs for more infos"};
+                _error = error::client_error{"query couldn't be processed check logs for more infos"};
                 on_error_query(error());
                 return process_query(_current_command) || (_ready_for_query = true);
             }
@@ -1003,11 +986,9 @@ public:
                 msg.read(salt, 4);
                 // Calculate hash
                 std::string pwdhash =
-                    qb::crypto::to_hex_string(qb::crypto::md5(conn_opts_.password + conn_opts_.user),
-                                              qb::crypto::range_hex_lower);
+                    qb::crypto::to_hex_string(qb::crypto::md5(conn_opts_.password + conn_opts_.user), qb::crypto::range_hex_lower);
                 std::string md5digest =
-                    std::string("md5") + qb::crypto::to_hex_string(qb::crypto::md5(pwdhash + salt),
-                                                                   qb::crypto::range_hex_lower);
+                    std::string("md5") + qb::crypto::to_hex_string(qb::crypto::md5(pwdhash + salt), qb::crypto::range_hex_lower);
                 // Construct and send message
                 message pm(password_message_tag);
                 pm.write(md5digest);
@@ -1018,7 +999,7 @@ public:
                 LOG_INFO("[pgsql] SCRAM-SHA-256 authentication requested");
                 message pm(password_message_tag);
                 // Set new nonce
-                _nonce = qb::crypto::generate_random_string(32, qb::crypto::range_hex_lower);
+                _nonce          = qb::crypto::generate_random_string(32, qb::crypto::range_hex_lower);
                 const auto data = "n,,n=" + conn_opts_.user + ",r=" + _nonce;
                 // Add mechanism
                 pm.write("SCRAM-SHA-256");
@@ -1037,8 +1018,7 @@ public:
                 const std::string clientNonce = _nonce; // Nonce generated by client
                 const std::string username    = conn_opts_.user;
                 const std::string password    = conn_opts_.password;
-                const std::string serverNonce =
-                    std::move(params["r"]); // Combined nonce (client + server)
+                const std::string serverNonce = std::move(params["r"]); // Combined nonce (client + server)
                 const std::string salt_base64 = std::move(params["s"]); // Salt (base64)
 
                 // Validate and parse iteration count safely
@@ -1055,43 +1035,34 @@ public:
                         throw error::connection_error("Invalid iteration count: must be positive");
                     }
                 } catch (const std::exception &e) {
-                    throw error::connection_error(std::string("Invalid SCRAM iteration count: ") +
-                                                  e.what());
+                    throw error::connection_error(std::string("Invalid SCRAM iteration count: ") + e.what());
                 }
 
                 // Client-first-message-bare
-                std::string client_first_message_bare = "n=" + username + ",r=" + clientNonce;
-                std::string server_first_message =
-                    "r=" + serverNonce + ",s=" + salt_base64 + ",i=" + std::to_string(iteration);
-                std::string client_final_message_without_proof =
-                    "c=biws,r=" + serverNonce; // "biws" is the base64 encoding of "n,,"
-                _auth_message = client_first_message_bare + "," + server_first_message + "," +
-                                client_final_message_without_proof;
+                std::string client_first_message_bare          = "n=" + username + ",r=" + clientNonce;
+                std::string server_first_message               = "r=" + serverNonce + ",s=" + salt_base64 + ",i=" + std::to_string(iteration);
+                std::string client_final_message_without_proof = "c=biws,r=" + serverNonce; // "biws" is the base64 encoding of "n,,"
+                _auth_message = client_first_message_bare + "," + server_first_message + "," + client_final_message_without_proof;
                 // Compute SaltedPassword using PBKDF2-HMAC-SHA256
                 std::vector<unsigned char> salt = qb::crypto::base64_decode(salt_base64);
                 std::vector<unsigned char> saltedPassword(32); // 32 bytes for SHA256
-                if (PKCS5_PBKDF2_HMAC(password.c_str(), static_cast<int>(password.size()),
-                                      salt.data(), static_cast<int>(salt.size()), iteration,
-                                      EVP_sha256(), 32, saltedPassword.data()) != 1) {
+                if (PKCS5_PBKDF2_HMAC(password.c_str(), static_cast<int>(password.size()), salt.data(), static_cast<int>(salt.size()),
+                                      iteration, EVP_sha256(), 32, saltedPassword.data())
+                    != 1) {
                     throw std::runtime_error("error during PBKDF2 computing");
                 }
                 // Compute clientKey: HMAC(saltedPassword, "Client Key")
-                std::vector<unsigned char> clientKey =
-                    qb::crypto::hmac_sha256(saltedPassword, "Client Key");
+                std::vector<unsigned char> clientKey = qb::crypto::hmac_sha256(saltedPassword, "Client Key");
                 // Compute storedKey: SHA256(clientKey)
                 std::vector<unsigned char> storedKey = qb::crypto::sha256(clientKey);
                 // Compute clientSignature: HMAC(storedKey, authMessage)
-                std::vector<unsigned char> clientSignature =
-                    qb::crypto::hmac_sha256(storedKey, _auth_message);
+                std::vector<unsigned char> clientSignature = qb::crypto::hmac_sha256(storedKey, _auth_message);
                 // Compute clientProof: XOR(clientKey, clientSignature)
-                std::vector<unsigned char> clientProof =
-                    qb::crypto::xor_bytes(clientKey, clientSignature);
+                std::vector<unsigned char> clientProof = qb::crypto::xor_bytes(clientKey, clientSignature);
                 // Encode clientProof in base64
-                std::string clientProofBase64 =
-                    qb::crypto::base64_encode(clientProof.data(), clientProof.size());
+                std::string clientProofBase64 = qb::crypto::base64_encode(clientProof.data(), clientProof.size());
                 // Construction of final message to send
-                std::string client_final_message =
-                    "c=biws,r=" + serverNonce + ",p=" + clientProofBase64;
+                std::string client_final_message = "c=biws,r=" + serverNonce + ",p=" + clientProofBase64;
 
                 message pm(password_message_tag);
                 pm.write_sv(client_final_message);
@@ -1107,39 +1078,32 @@ public:
                     const std::string prefix = "v=";
                     size_t            pos    = serverFinalMessage.find(prefix);
                     if (pos == std::string::npos) {
-                        throw std::runtime_error(
-                            "server final message does not contain a signature");
+                        throw std::runtime_error("server final message does not contain a signature");
                     }
-                    std::string receivedServerSignatureBase64 =
-                        serverFinalMessage.substr(pos + prefix.size());
+                    std::string receivedServerSignatureBase64 = serverFinalMessage.substr(pos + prefix.size());
                     // Compute the ServerKey: HMAC(saltedPassword, "Server Key")
-                    std::vector<unsigned char> serverKey =
-                        qb::crypto::hmac_sha256(_password_salt, "Server Key");
+                    std::vector<unsigned char> serverKey = qb::crypto::hmac_sha256(_password_salt, "Server Key");
                     // Compute the ServerSignature: HMAC(serverKey, authMessage)
-                    std::vector<unsigned char> computedServerSignature =
-                        qb::crypto::hmac_sha256(serverKey, _auth_message);
+                    std::vector<unsigned char> computedServerSignature = qb::crypto::hmac_sha256(serverKey, _auth_message);
                     // Encode the computed server signature in Base64
-                    std::string computedServerSignatureBase64 = qb::crypto::base64_encode(
-                        computedServerSignature.data(), computedServerSignature.size());
+                    std::string computedServerSignatureBase64 =
+                        qb::crypto::base64_encode(computedServerSignature.data(), computedServerSignature.size());
                     // Compare the computed server signature with the received one
                     if (computedServerSignatureBase64 != receivedServerSignatureBase64) {
-                        throw std::runtime_error(
-                            "server signature does not match. Authentication failed");
+                        throw std::runtime_error("server signature does not match. Authentication failed");
                     }
                     LOG_INFO("[pgsql] SCRAM-SHA-256 Authentication successful: server "
                              "signature verified");
                     break;
                 } catch (std::exception &ex) {
-                    LOG_CRIT(
-                        "[pgsql] SCRAM-SHA-256 Failed verifying server signature: " << ex.what());
+                    LOG_CRIT("[pgsql] SCRAM-SHA-256 Failed verifying server signature: " << ex.what());
                     connect_handshake_failed_ = true;
                     is_connected_             = false;
                     try_resume_connect_wait();
                 }
             } break;
             default: {
-                LOG_CRIT("[pgsql] Unsupported authentication scheme " << auth_state
-                                                                      << "requested by server");
+                LOG_CRIT("[pgsql] Unsupported authentication scheme " << auth_state << "requested by server");
                 throw std::runtime_error("[pgsql] fatal error: check logs");
             }
         }
@@ -1411,8 +1375,7 @@ public:
         } else if (inbound_notify_handler_) {
             inbound_notify_handler_(std::move(n));
         } else {
-            LOG_INFO("[pgsql] NOTIFY pid=" << n.server_backend_pid << " channel=" << n.channel
-                                           << " payload=" << n.payload);
+            LOG_INFO("[pgsql] NOTIFY pid=" << n.server_backend_pid << " channel=" << n.channel << " payload=" << n.payload);
         }
     }
 
@@ -1526,9 +1489,7 @@ public:
      */
     void
     on_unhandled_message(message &msg) {
-        LOG_WARN("[pgsql] Unhandled backend message tag " << (char) msg.tag() << " (length "
-                                                          << msg.length()
-                                                          << ") — check protocol coverage");
+        LOG_WARN("[pgsql] Unhandled backend message tag " << (char) msg.tag() << " (length " << msg.length() << ") — check protocol coverage");
     }
 
     /**
@@ -1536,31 +1497,31 @@ public:
      *
      * Maps PostgreSQL protocol message tags to their handler methods.
      */
-    inline static const qb::unordered_flat_map<int,
-                                               void (Database<QB_IO_, NotifyDerived>::*)(message &)>
-        routes_ = {{authentication_tag, &Database::on_authentication},
-                   {command_complete_tag, &Database::on_command_complete},
-                   {backend_key_data_tag, &Database::on_backend_key_data},
-                   {error_response_tag, &Database::on_error_response},
-                   {parameter_status_tag, &Database::on_parameter_status},
-                   {notice_response_tag, &Database::on_notice_response},
-                   {notification_resp_tag, &Database::on_notification_response},
-                   {ready_for_query_tag, &Database::on_ready_for_query},
-                   {row_description_tag, &Database::on_row_description},
-                   {data_row_tag, &Database::on_data_row},
-                   {parse_complete_tag, &Database::on_parse_complete},
-                   {parameter_description_tag, &Database::on_parameter_description},
-                   {bind_complete_tag, &Database::on_bind_complete},
-                   {no_data_tag, &Database::on_no_data},
-                   {portal_suspended_tag, &Database::on_portal_suspended},
-                   {empty_query_response_tag, &Database::on_empty_query_response},
-                   {copy_in_response_tag, &Database::on_copy_in_response},
-                   {copy_out_response_tag, &Database::on_copy_out_response},
-                   {copy_both_response_tag, &Database::on_copy_both_response},
-                   {copy_data_tag, &Database::on_copy_data},
-                   {copy_done_tag, &Database::on_copy_done},
-                   {close_complete_tag, &Database::on_close_complete},
-                   {function_call_resp_tag, &Database::on_function_call_response}};
+    inline static const qb::unordered_flat_map<int, void (Database<QB_IO_, NotifyDerived>::*)(message &)> routes_ = {
+        {authentication_tag, &Database::on_authentication},
+        {command_complete_tag, &Database::on_command_complete},
+        {backend_key_data_tag, &Database::on_backend_key_data},
+        {error_response_tag, &Database::on_error_response},
+        {parameter_status_tag, &Database::on_parameter_status},
+        {notice_response_tag, &Database::on_notice_response},
+        {notification_resp_tag, &Database::on_notification_response},
+        {ready_for_query_tag, &Database::on_ready_for_query},
+        {row_description_tag, &Database::on_row_description},
+        {data_row_tag, &Database::on_data_row},
+        {parse_complete_tag, &Database::on_parse_complete},
+        {parameter_description_tag, &Database::on_parameter_description},
+        {bind_complete_tag, &Database::on_bind_complete},
+        {no_data_tag, &Database::on_no_data},
+        {portal_suspended_tag, &Database::on_portal_suspended},
+        {empty_query_response_tag, &Database::on_empty_query_response},
+        {copy_in_response_tag, &Database::on_copy_in_response},
+        {copy_out_response_tag, &Database::on_copy_out_response},
+        {copy_both_response_tag, &Database::on_copy_both_response},
+        {copy_data_tag, &Database::on_copy_data},
+        {copy_done_tag, &Database::on_copy_done},
+        {close_complete_tag, &Database::on_close_complete},
+        {function_call_resp_tag, &Database::on_function_call_response}
+    };
 
 public:
     /**
@@ -1605,8 +1566,7 @@ public:
         qb::duration                     timeout{};
         std::shared_ptr<bool>            valid{std::make_shared<bool>(true)};
 
-        explicit connect_awaiter(Database<QB_IO_, NotifyDerived> &d,
-                                 qb::duration t = qb::duration::zero()) noexcept
+        explicit connect_awaiter(Database<QB_IO_, NotifyDerived> &d, qb::duration t = qb::duration::zero()) noexcept
             : db(d)
             , timeout(t) {}
 
@@ -1755,10 +1715,7 @@ private:
 
         // Enable TCP keepalive (Winsock: option value is const char*)
         int optval = 1;
-        if (setsockopt(sock_fd, SOL_SOCKET, SO_KEEPALIVE,
-                       reinterpret_cast<const char *>(&optval),
-                       static_cast<int>(sizeof(optval)))
-            < 0) {
+        if (setsockopt(sock_fd, SOL_SOCKET, SO_KEEPALIVE, reinterpret_cast<const char *>(&optval), static_cast<int>(sizeof(optval))) < 0) {
             LOG_WARN("[pgsql] Failed to enable TCP keepalive");
             return;
         }
@@ -1766,30 +1723,23 @@ private:
 #ifdef TCP_KEEPIDLE
         // Seconds idle before probing (Linux)
         optval = conn_opts_.keepalive_idle;
-        setsockopt(sock_fd, IPPROTO_TCP, TCP_KEEPIDLE,
-                   reinterpret_cast<const char *>(&optval),
-                   static_cast<int>(sizeof(optval)));
+        setsockopt(sock_fd, IPPROTO_TCP, TCP_KEEPIDLE, reinterpret_cast<const char *>(&optval), static_cast<int>(sizeof(optval)));
 #endif
 
 #ifdef TCP_KEEPINTVL
         // Seconds between probes (Linux)
         optval = conn_opts_.keepalive_interval;
-        setsockopt(sock_fd, IPPROTO_TCP, TCP_KEEPINTVL,
-                   reinterpret_cast<const char *>(&optval),
-                   static_cast<int>(sizeof(optval)));
+        setsockopt(sock_fd, IPPROTO_TCP, TCP_KEEPINTVL, reinterpret_cast<const char *>(&optval), static_cast<int>(sizeof(optval)));
 #endif
 
 #ifdef TCP_KEEPCNT
         // Number of probes (Linux)
         optval = conn_opts_.keepalive_probes;
-        setsockopt(sock_fd, IPPROTO_TCP, TCP_KEEPCNT,
-                   reinterpret_cast<const char *>(&optval),
-                   static_cast<int>(sizeof(optval)));
+        setsockopt(sock_fd, IPPROTO_TCP, TCP_KEEPCNT, reinterpret_cast<const char *>(&optval), static_cast<int>(sizeof(optval)));
 #endif
 
-        LOG_INFO("[pgsql] TCP keepalive enabled: idle="
-                 << conn_opts_.keepalive_idle << "s, interval=" << conn_opts_.keepalive_interval
-                 << "s, probes=" << conn_opts_.keepalive_probes);
+        LOG_INFO("[pgsql] TCP keepalive enabled: idle=" << conn_opts_.keepalive_idle << "s, interval=" << conn_opts_.keepalive_interval
+                                                        << "s, probes=" << conn_opts_.keepalive_probes);
     }
 
 public:
@@ -1887,9 +1837,7 @@ public:
      */
     void
     disconnect() {
-        static_cast<qb::io::async::tcp::client<Database<QB_IO_, NotifyDerived>, QB_IO_, void> &>(
-            *this)
-            .disconnect();
+        static_cast<qb::io::async::tcp::client<Database<QB_IO_, NotifyDerived>, QB_IO_, void> &>(*this).disconnect();
         // Same rationale as `Redis::await()` / `Transaction::await()`: may run from a
         // coroutine or nested I/O path where `async::run()` would throw.
         qb::io::async::listener::current.run(EVRUN_NOWAIT);
@@ -1935,8 +1883,7 @@ public:
     notify_co_consumer()
         : base_type() {}
 
-    explicit notify_co_consumer(std::string const &opts,
-                                std::size_t        notify_capacity = default_notify_channel_capacity)
+    explicit notify_co_consumer(std::string const &opts, std::size_t notify_capacity = default_notify_channel_capacity)
         : base_type(opts)
         , notify_channel_(notify_capacity) {}
 

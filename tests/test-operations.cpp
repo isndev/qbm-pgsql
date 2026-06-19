@@ -29,7 +29,7 @@
  * @see qb::pg::detail::Transaction
  *
  * @author qb - C++ Actor Framework
- * @copyright Copyright (c) 2011-2025 qb - isndev (cpp.actor)
+ * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -96,16 +96,15 @@ protected:
  */
 TEST_F(PostgreSQLOperationsTest, SimpleQueryExecution) {
     bool success = false;
-    auto status =
-        db_->execute(
-               "SELECT 1",
-               [&success](Transaction &tr, results result) {
-                   ASSERT_EQ(result.size(), 1);
-                   ASSERT_EQ(result[0][0].as<int>(), 1);
-                   success = true;
-               },
-               [](error::db_error error) { ASSERT_TRUE(false) << "Query failed: " << error.code; })
-            .await();
+    auto status  = db_->execute(
+                          "SELECT 1",
+                          [&success](Transaction &tr, results result) {
+                             ASSERT_EQ(result.size(), 1);
+                             ASSERT_EQ(result[0][0].as<int>(), 1);
+                             success = true;
+                          },
+                          [](error::db_error error) { ASSERT_TRUE(false) << "Query failed: " << error.code; })
+                       .await();
     ASSERT_TRUE(success);
 }
 
@@ -126,20 +125,17 @@ TEST_F(PostgreSQLOperationsTest, SimpleQueryExecution_Coroutine) {
  * with proper parameter binding and result handling.
  */
 TEST_F(PostgreSQLOperationsTest, PreparedStatement) {
-    ASSERT_TRUE(db_->prepare("test_prepare", "SELECT $1::int", type_oid_sequence{}, discard_prepare,
-                             discard_error)
-                    .await());
+    ASSERT_TRUE(db_->prepare("test_prepare", "SELECT $1::int", type_oid_sequence{}, discard_prepare, discard_error).await());
     bool success = false;
-    auto status =
-        db_->execute(
-               "test_prepare", {42},
-               [&success](Transaction &tr, results result) {
-                   ASSERT_EQ(result.size(), 1);
-                   ASSERT_EQ(result[0][0].as<int>(), 42);
-                   success = true;
-               },
-               [](error::db_error error) { ASSERT_TRUE(false) << "Execute failed: " << error.code; })
-            .await();
+    auto status  = db_->execute(
+                          "test_prepare", {42},
+                          [&success](Transaction &tr, results result) {
+                             ASSERT_EQ(result.size(), 1);
+                             ASSERT_EQ(result[0][0].as<int>(), 42);
+                             success = true;
+                          },
+                          [](error::db_error error) { ASSERT_TRUE(false) << "Execute failed: " << error.code; })
+                       .await();
     ASSERT_TRUE(status);
     ASSERT_TRUE(success);
 }
@@ -152,16 +148,14 @@ TEST_F(PostgreSQLOperationsTest, PreparedStatement) {
  */
 TEST_F(PostgreSQLOperationsTest, ErrorHandling) {
     bool error_caught = false;
-    auto status       = db_->execute(
-                         "SELECT * FROM nonexistent_table",
-                         [](Transaction &tr, results result) {
-                             ASSERT_TRUE(false) << "Query should have failed";
-                         },
-                         [&error_caught](error::db_error error) {
-                             ASSERT_FALSE(error.code.empty());
-                             error_caught = true;
-                         })
-                      .await();
+    auto status =
+        db_->execute(
+               "SELECT * FROM nonexistent_table", [](Transaction &tr, results result) { ASSERT_TRUE(false) << "Query should have failed"; },
+               [&error_caught](error::db_error error) {
+                   ASSERT_FALSE(error.code.empty());
+                   error_caught = true;
+               })
+            .await();
     ASSERT_TRUE(error_caught);
 }
 
@@ -184,7 +178,7 @@ TEST_F(PostgreSQLOperationsTest, ErrorHandling_Coroutine) {
 TEST_F(PostgreSQLOperationsTest, Transaction) {
     bool success = false;
     auto status  = db_->begin(
-                         [&success](Transaction &t) {
+                          [&success](Transaction &t) {
                              t.execute(
                                  "SELECT 1",
                                  [&success](Transaction &tr, results result) {
@@ -192,14 +186,10 @@ TEST_F(PostgreSQLOperationsTest, Transaction) {
                                      ASSERT_EQ(result[0][0].as<int>(), 1);
                                      success = true;
                                  },
-                                 [](error::db_error error) {
-                                     ASSERT_TRUE(false) << "Query failed: " << error.code;
-                                 });
-                         },
-                         [](error::db_error error) {
-                             ASSERT_TRUE(false) << "Transaction failed: " << error.code;
-                         })
-                      .await();
+                                 [](error::db_error error) { ASSERT_TRUE(false) << "Query failed: " << error.code; });
+                          },
+                          [](error::db_error error) { ASSERT_TRUE(false) << "Transaction failed: " << error.code; })
+                       .await();
     ASSERT_TRUE(success);
 }
 
@@ -212,7 +202,7 @@ TEST_F(PostgreSQLOperationsTest, Transaction) {
 TEST_F(PostgreSQLOperationsTest, Savepoint) {
     bool success = false;
     auto status  = db_->begin(
-                         [&success](Transaction &t) {
+                          [&success](Transaction &t) {
                              t.savepoint(
                                  "test_savepoint",
                                  [&success](Transaction &tr) {
@@ -223,18 +213,12 @@ TEST_F(PostgreSQLOperationsTest, Savepoint) {
                                              ASSERT_EQ(result[0][0].as<int>(), 1);
                                              success = true;
                                          },
-                                         [](error::db_error error) {
-                                             ASSERT_TRUE(false) << "Query failed: " << error.code;
-                                         });
+                                         [](error::db_error error) { ASSERT_TRUE(false) << "Query failed: " << error.code; });
                                  },
-                                 [](error::db_error error) {
-                                     ASSERT_TRUE(false) << "Savepoint failed: " << error.code;
-                                 });
-                         },
-                         [](error::db_error error) {
-                             ASSERT_TRUE(false) << "Transaction failed: " << error.code;
-                         })
-                      .await();
+                                 [](error::db_error error) { ASSERT_TRUE(false) << "Savepoint failed: " << error.code; });
+                          },
+                          [](error::db_error error) { ASSERT_TRUE(false) << "Transaction failed: " << error.code; })
+                       .await();
     ASSERT_TRUE(success);
 }
 
@@ -247,7 +231,7 @@ TEST_F(PostgreSQLOperationsTest, Savepoint) {
 TEST_F(PostgreSQLOperationsTest, ChainingOperations) {
     bool success = false;
     auto status  = db_->begin(
-                         [&success](Transaction &t) {
+                          [&success](Transaction &t) {
                              t.execute(
                                  "SELECT 1",
                                  [&success](Transaction &tr, results result) {
@@ -267,23 +251,14 @@ TEST_F(PostgreSQLOperationsTest, ChainingOperations) {
                                                      ASSERT_EQ(result[0][0].as<int>(), 3);
                                                      success = true;
                                                  },
-                                                 [](error::db_error error) {
-                                                     ASSERT_TRUE(false)
-                                                         << "Query 3 failed: " << error.code;
-                                                 });
+                                                 [](error::db_error error) { ASSERT_TRUE(false) << "Query 3 failed: " << error.code; });
                                          },
-                                         [](error::db_error error) {
-                                             ASSERT_TRUE(false) << "Query 2 failed: " << error.code;
-                                         });
+                                         [](error::db_error error) { ASSERT_TRUE(false) << "Query 2 failed: " << error.code; });
                                  },
-                                 [](error::db_error error) {
-                                     ASSERT_TRUE(false) << "Query 1 failed: " << error.code;
-                                 });
-                         },
-                         [](error::db_error error) {
-                             ASSERT_TRUE(false) << "Transaction failed: " << error.code;
-                         })
-                      .await();
+                                 [](error::db_error error) { ASSERT_TRUE(false) << "Query 1 failed: " << error.code; });
+                          },
+                          [](error::db_error error) { ASSERT_TRUE(false) << "Transaction failed: " << error.code; })
+                       .await();
     ASSERT_TRUE(success);
 }
 
@@ -294,8 +269,8 @@ TEST_F(PostgreSQLOperationsTest, ChainingOperations_Coroutine) {
         auto a = co_await db_->query("SELECT 1");
         auto b = co_await db_->query("SELECT 2");
         auto c = co_await db_->query("SELECT 3");
-        ok     = a.ok() && b.ok() && c.ok() && a.result()[0][0].as<int>() == 1 &&
-             b.result()[0][0].as<int>() == 2 && c.result()[0][0].as<int>() == 3;
+        ok =
+            a.ok() && b.ok() && c.ok() && a.result()[0][0].as<int>() == 1 && b.result()[0][0].as<int>() == 2 && c.result()[0][0].as<int>() == 3;
     }());
     ASSERT_TRUE(ok);
 }

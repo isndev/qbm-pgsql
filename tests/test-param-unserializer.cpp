@@ -18,7 +18,7 @@
  * @see qb::pg::detail::ParamUnserializer
  *
  * @author qb - C++ Actor Framework
- * @copyright Copyright (c) 2011-2025 qb - isndev (cpp.actor)
+ * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -154,8 +154,7 @@ protected:
      * @return Field description object with the specified parameters
      */
     field_description
-    createFieldDescription(oid                  type_oid,
-                           protocol_data_format format = protocol_data_format::Binary) {
+    createFieldDescription(oid type_oid, protocol_data_format format = protocol_data_format::Binary) {
         field_description fd;
         fd.name             = "test_field";
         fd.table_oid        = 0;
@@ -512,11 +511,9 @@ TEST_F(ParamUnserializerTest, BufferTooSmall) {
  */
 TEST_F(ParamUnserializerTest, MalformedData) {
     // Create a buffer with random data
-    std::vector<qb::pg::byte> randomBuffer = {
-        static_cast<qb::pg::byte>(0xAA), static_cast<qb::pg::byte>(0xBB),
-        static_cast<qb::pg::byte>(0xCC), static_cast<qb::pg::byte>(0xDD),
-        static_cast<qb::pg::byte>(0xEE), static_cast<qb::pg::byte>(0xFF),
-        static_cast<qb::pg::byte>(0x11), static_cast<qb::pg::byte>(0x22)};
+    std::vector<qb::pg::byte> randomBuffer = {static_cast<qb::pg::byte>(0xAA), static_cast<qb::pg::byte>(0xBB), static_cast<qb::pg::byte>(0xCC),
+                                              static_cast<qb::pg::byte>(0xDD), static_cast<qb::pg::byte>(0xEE), static_cast<qb::pg::byte>(0xFF),
+                                              static_cast<qb::pg::byte>(0x11), static_cast<qb::pg::byte>(0x22)};
 
     // The numeric types should be able to deserialize any sequence of bytes
     // even if the result doesn't make semantic sense
@@ -588,8 +585,7 @@ TEST_F(ParamUnserializerTest, ProtocolDataFormatIntegration) {
 
     // In a real scenario, the code calling ParamUnserializer would extract
     // the message length and pass only the data to the deserializer
-    std::vector<qb::pg::byte> dataBuffer(binaryFormatBuffer.begin() + sizeof(integer),
-                                         binaryFormatBuffer.end());
+    std::vector<qb::pg::byte> dataBuffer(binaryFormatBuffer.begin() + sizeof(integer), binaryFormatBuffer.end());
     std::string               binaryResult = unserializer->read_string(dataBuffer);
     ASSERT_EQ(binaryResult, testValue);
 
@@ -649,8 +645,7 @@ TEST_F(ParamUnserializerTest, RealWorldPgIntegration) {
         std::vector<qb::pg::byte> binary_format_buffer;
         bool                      is_numeric;
 
-        TestCase(const std::string &desc, const std::string &text_value,
-                 const std::vector<qb::pg::byte> &binary_value, bool numeric = false)
+        TestCase(const std::string &desc, const std::string &text_value, const std::vector<qb::pg::byte> &binary_value, bool numeric = false)
             : description(desc)
             , is_numeric(numeric) {
             // For TEXT format, use the string directly
@@ -667,8 +662,7 @@ TEST_F(ParamUnserializerTest, RealWorldPgIntegration) {
     // 1. Simple string
     {
         std::string value = "Simple text";
-        test_cases.emplace_back("Simple text string", value,
-                                std::vector<qb::pg::byte>(value.begin(), value.end()));
+        test_cases.emplace_back("Simple text string", value, std::vector<qb::pg::byte>(value.begin(), value.end()));
     }
 
     // 2. Empty string
@@ -680,15 +674,13 @@ TEST_F(ParamUnserializerTest, RealWorldPgIntegration) {
     // 3. String with special characters
     {
         std::string value = "Special chars: \n\r\t\b\f\\\"\'";
-        test_cases.emplace_back("String with special chars", value,
-                                std::vector<qb::pg::byte>(value.begin(), value.end()));
+        test_cases.emplace_back("String with special chars", value, std::vector<qb::pg::byte>(value.begin(), value.end()));
     }
 
     // 4. String with Unicode characters
     {
         std::string value = "Unicode: 你好, Привет, こんにちは, مرحبا";
-        test_cases.emplace_back("String with Unicode", value,
-                                std::vector<qb::pg::byte>(value.begin(), value.end()));
+        test_cases.emplace_back("String with Unicode", value, std::vector<qb::pg::byte>(value.begin(), value.end()));
     }
 
     // 5. Random binary data (simulating an image or BYTEA)
@@ -723,8 +715,7 @@ TEST_F(ParamUnserializerTest, RealWorldPgIntegration) {
             // Verify that deserialization preserves the data
             ASSERT_EQ(textResult.size(), test.text_format_buffer.size());
             for (size_t i = 0; i < test.text_format_buffer.size() && i < textResult.size(); i++) {
-                ASSERT_EQ(static_cast<unsigned char>(textResult[i]),
-                          static_cast<unsigned char>(test.text_format_buffer[i]));
+                ASSERT_EQ(static_cast<unsigned char>(textResult[i]), static_cast<unsigned char>(test.text_format_buffer[i]));
             }
         } catch (const std::exception &e) {
             std::cout << "  ERROR: " << e.what() << std::endl;
@@ -741,10 +732,8 @@ TEST_F(ParamUnserializerTest, RealWorldPgIntegration) {
 
             // Verify that deserialization preserves the data
             ASSERT_EQ(binaryResult.size(), test.binary_format_buffer.size());
-            for (size_t i = 0; i < test.binary_format_buffer.size() && i < binaryResult.size();
-                 i++) {
-                ASSERT_EQ(static_cast<unsigned char>(binaryResult[i]),
-                          static_cast<unsigned char>(test.binary_format_buffer[i]));
+            for (size_t i = 0; i < test.binary_format_buffer.size() && i < binaryResult.size(); i++) {
+                ASSERT_EQ(static_cast<unsigned char>(binaryResult[i]), static_cast<unsigned char>(test.binary_format_buffer[i]));
             }
         } catch (const std::exception &e) {
             // For binary data, it's normal to have an error if trying to interpret
@@ -772,8 +761,7 @@ TEST_F(ParamUnserializerTest, PartialDataRecovery) {
 
     // Truncate at different positions
     for (size_t trunc_pos = 5; trunc_pos < original.size(); trunc_pos += 5) {
-        std::vector<qb::pg::byte> truncated_buffer(full_buffer.begin(),
-                                                   full_buffer.begin() + trunc_pos);
+        std::vector<qb::pg::byte> truncated_buffer(full_buffer.begin(), full_buffer.begin() + trunc_pos);
         std::string               recovered = unserializer->read_string(truncated_buffer);
 
         // Verify that we correctly recover the non-truncated part
@@ -785,8 +773,7 @@ TEST_F(ParamUnserializerTest, PartialDataRecovery) {
     auto            int_buffer = createBinaryBuffer(test_int);
 
     for (size_t trunc_pos = 1; trunc_pos < sizeof(qb::pg::integer); ++trunc_pos) {
-        std::vector<qb::pg::byte> truncated_buffer(int_buffer.begin(),
-                                                   int_buffer.begin() + trunc_pos);
+        std::vector<qb::pg::byte> truncated_buffer(int_buffer.begin(), int_buffer.begin() + trunc_pos);
         ASSERT_THROW(unserializer->read_integer(truncated_buffer), std::runtime_error);
     }
 }
@@ -1151,11 +1138,9 @@ TEST_F(ParamUnserializerTest, CompleteSequenceSimulation) {
  */
 TEST_F(ParamUnserializerTest, CorruptedBufferHandling) {
     // Create a buffer with some arbitrary binary data
-    std::vector<qb::pg::byte> buffer = {
-        static_cast<qb::pg::byte>(0x45), static_cast<qb::pg::byte>(0x72),
-        static_cast<qb::pg::byte>(0x72), static_cast<qb::pg::byte>(0x6F),
-        static_cast<qb::pg::byte>(0x72), static_cast<qb::pg::byte>(0x00),
-        static_cast<qb::pg::byte>(0xFF), static_cast<qb::pg::byte>(0xFF)};
+    std::vector<qb::pg::byte> buffer = {static_cast<qb::pg::byte>(0x45), static_cast<qb::pg::byte>(0x72), static_cast<qb::pg::byte>(0x72),
+                                        static_cast<qb::pg::byte>(0x6F), static_cast<qb::pg::byte>(0x72), static_cast<qb::pg::byte>(0x00),
+                                        static_cast<qb::pg::byte>(0xFF), static_cast<qb::pg::byte>(0xFF)};
 
     // Test string deserialization (should always work)
     std::string result = unserializer->read_string(buffer);
@@ -1174,8 +1159,8 @@ TEST_F(ParamUnserializerTest, CorruptedBufferHandling) {
 
     // Try a completely invalid buffer for float/double
     std::vector<qb::pg::byte> invalidBuffer = {
-        static_cast<qb::pg::byte>(0xFF), static_cast<qb::pg::byte>(0xFF),
-        static_cast<qb::pg::byte>(0xFF), static_cast<qb::pg::byte>(0xFF)};
+        static_cast<qb::pg::byte>(0xFF), static_cast<qb::pg::byte>(0xFF), static_cast<qb::pg::byte>(0xFF), static_cast<qb::pg::byte>(0xFF)
+    };
 
     // Deserializing should not crash or throw (but value may be nonsensical)
     ASSERT_NO_THROW(unserializer->read_float(invalidBuffer));
@@ -1321,23 +1306,25 @@ TEST_F(ParamUnserializerTest, CompleteFormatCycle) {
  */
 TEST_F(ParamUnserializerTest, UUIDBinaryFormat) {
     // In PostgreSQL, UUID is stored as 16 bytes in binary format
-    std::vector<qb::pg::byte> uuid_buffer = {// Example UUID: 550e8400-e29b-41d4-a716-446655440000
-                                             0x55,
-                                             0x0e,
-                                             static_cast<qb::pg::byte>(0x84),
-                                             0x00,
-                                             static_cast<qb::pg::byte>(0xe2),
-                                             static_cast<qb::pg::byte>(0x9b),
-                                             0x41,
-                                             static_cast<qb::pg::byte>(0xd4),
-                                             static_cast<qb::pg::byte>(0xa7),
-                                             0x16,
-                                             0x44,
-                                             0x66,
-                                             0x55,
-                                             0x44,
-                                             0x00,
-                                             0x00};
+    std::vector<qb::pg::byte> uuid_buffer = {
+        // Example UUID: 550e8400-e29b-41d4-a716-446655440000
+        0x55,
+        0x0e,
+        static_cast<qb::pg::byte>(0x84),
+        0x00,
+        static_cast<qb::pg::byte>(0xe2),
+        static_cast<qb::pg::byte>(0x9b),
+        0x41,
+        static_cast<qb::pg::byte>(0xd4),
+        static_cast<qb::pg::byte>(0xa7),
+        0x16,
+        0x44,
+        0x66,
+        0x55,
+        0x44,
+        0x00,
+        0x00
+    };
 
     // Since our deserializer doesn't have a specific read_uuid method,
     // we read it as a string and then format it
@@ -1472,12 +1459,14 @@ TEST_F(ParamUnserializerTest, TimestampTextFormat) {
  */
 TEST_F(ParamUnserializerTest, JSONBinaryFormat) {
     // Create a JSONB object
-    qb::jsonb test_json = {{"id", 12345},
-                           {"name", "Test JSON"},
-                           {"active", true},
-                           {"tags", {"database", "postgres", "json"}},
-                           {"metrics", {{"queries", 1000}, {"errors", 5}, {"success_rate", 99.5}}},
-                           {"nullable", nullptr}};
+    qb::jsonb test_json = {
+        {"id", 12345},
+        {"name", "Test JSON"},
+        {"active", true},
+        {"tags", {"database", "postgres", "json"}},
+        {"metrics", {{"queries", 1000}, {"errors", 5}, {"success_rate", 99.5}}},
+        {"nullable", nullptr}
+    };
 
     // Get JSON string representation
     std::string json_str = test_json.dump();
@@ -1568,13 +1557,14 @@ TEST_F(ParamUnserializerTest, JSONBinaryFormat) {
  */
 TEST_F(ParamUnserializerTest, JSONTextFormat) {
     // Test cases with different JSON structures
-    std::vector<std::string> json_test_cases = {R"({"id": 123, "name": "test"})",
-                                                R"(["apple", "banana", "cherry"])",
-                                                R"(42)",
-                                                R"("simple string")",
-                                                R"(true)",
-                                                R"(null)",
-                                                R"({
+    std::vector<std::string> json_test_cases = {
+        R"({"id": 123, "name": "test"})",
+        R"(["apple", "banana", "cherry"])",
+        R"(42)",
+        R"("simple string")",
+        R"(true)",
+        R"(null)",
+        R"({
             "complex": {
                 "nested": {
                     "array": [1, 2, 3],
@@ -1582,7 +1572,8 @@ TEST_F(ParamUnserializerTest, JSONTextFormat) {
                 },
                 "types": [true, null, 42, "string"]
             }
-        })"};
+        })"
+    };
 
     for (const auto &test_case : json_test_cases) {
         try {
@@ -1600,8 +1591,7 @@ TEST_F(ParamUnserializerTest, JSONTextFormat) {
 
             std::cout << "Successfully parsed JSON: " << result.dump(2) << std::endl;
         } catch (const std::exception &e) {
-            FAIL() << "Exception during JSON text deserialization for case '" << test_case
-                   << "': " << e.what();
+            FAIL() << "Exception during JSON text deserialization for case '" << test_case << "': " << e.what();
         }
     }
 

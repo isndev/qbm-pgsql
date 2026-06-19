@@ -16,7 +16,7 @@
  * @see https://www.postgresql.org/docs/current/protocol-message-formats.html
  *
  * @author qb - C++ Actor Framework
- * @copyright Copyright (c) 2011-2025 qb - isndev (cpp.actor)
+ * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -495,12 +495,12 @@ private:
  * @see https://www.postgresql.org/docs/current/protocol-error-fields.html
  */
 struct notice_message {
-    std::string severity; /**< Error severity (S): ERROR, FATAL, PANIC, WARNING, NOTICE, etc. */
-    std::string sqlstate; /**< SQL state code (C): SQLSTATE code */
-    std::string message;  /**< Primary error message (M) */
-    std::string detail;   /**< Detailed error message (D) */
-    std::string hint;     /**< Suggestion for resolving the problem (H) */
-    std::string position; /**< Error position in original query (P) */
+    std::string severity;          /**< Error severity (S): ERROR, FATAL, PANIC, WARNING, NOTICE, etc. */
+    std::string sqlstate;          /**< SQL state code (C): SQLSTATE code */
+    std::string message;           /**< Primary error message (M) */
+    std::string detail;            /**< Detailed error message (D) */
+    std::string hint;              /**< Suggestion for resolving the problem (H) */
+    std::string position;          /**< Error position in original query (P) */
     std::string internal_position; /**< Error position in internal query (p) */
     std::string internal_query;    /**< Text of internal query (q) */
     std::string where;             /**< Context of error occurrence (W) */

@@ -7,7 +7,7 @@
  * helps prevent compilation issues with template specializations.
  *
  * @author qb - C++ Actor Framework
- * @copyright Copyright (c) 2011-2025 qb - isndev (cpp.actor)
+ * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -45,8 +45,7 @@ struct ParamSerializer::param_serializer_traits<bool> {
 
 // Specialization for integral types (excluding bool)
 template <typename T>
-struct ParamSerializer::param_serializer_traits<
-    T, std::enable_if_t<std::is_integral_v<T> && !std::is_same_v<T, bool>, void>> {
+struct ParamSerializer::param_serializer_traits<T, std::enable_if_t<std::is_integral_v<T> && !std::is_same_v<T, bool>, void>> {
     static void
     add_param(ParamSerializer &serializer, const T &param) {
         if constexpr (sizeof(T) <= 2) {
@@ -61,8 +60,7 @@ struct ParamSerializer::param_serializer_traits<
 
 // Specialization for floating-point types
 template <typename T>
-struct ParamSerializer::param_serializer_traits<
-    T, std::enable_if_t<std::is_floating_point_v<T>, void>> {
+struct ParamSerializer::param_serializer_traits<T, std::enable_if_t<std::is_floating_point_v<T>, void>> {
     static void
     add_param(ParamSerializer &serializer, const T &param) {
         if constexpr (sizeof(T) <= 4) {
@@ -151,10 +149,10 @@ struct ParamSerializer::param_serializer_traits<std::optional<T>> {
 // Specialization for vector types (excluding string, char and unsigned char vectors)
 template <typename T>
 struct ParamSerializer::param_serializer_traits<
-    std::vector<T>, std::enable_if_t<!std::is_same_v<std::vector<T>, std::vector<std::string>> &&
-                                         !std::is_same_v<std::vector<T>, std::vector<char>> &&
-                                         !std::is_same_v<std::vector<T>, std::vector<unsigned char>>,
-                                     void>> {
+    std::vector<T>,
+    std::enable_if_t<!std::is_same_v<std::vector<T>, std::vector<std::string>> && !std::is_same_v<std::vector<T>, std::vector<char>>
+                         && !std::is_same_v<std::vector<T>, std::vector<unsigned char>>,
+                     void>> {
     static void
     add_param(ParamSerializer &serializer, const std::vector<T> &param) {
         serializer.add_vector(param);
