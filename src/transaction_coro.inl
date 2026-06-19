@@ -56,7 +56,7 @@ pg_fail_void(error::db_error err) {
     }};
 }
 
-/** Simple query that returns no meaningful rowset: completion → PgReply<void>. */
+/** Simple query that returns no meaningful rowset: completion → Reply<void>. */
 [[nodiscard]] inline pg_reply_awaiter<void>
 pg_execute_void_sql(Transaction *self, std::string sql) {
     return pg_reply_awaiter<void>{
