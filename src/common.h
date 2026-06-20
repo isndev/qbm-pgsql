@@ -39,7 +39,7 @@
 #include <memory>
 #include <optional>
 #include <qb/system/container/unordered_map.h>
-#include <qb/system/timestamp.h>
+#include <qb/system/time.h>
 #include <qb/uuid.h>
 #include <string>
 #include <string_view>
