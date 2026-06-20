@@ -36,7 +36,7 @@
 
 #include <optional>
 #include <qb/json.h>
-#include <qb/system/timestamp.h>
+#include <qb/system/time.h>
 #include <qb/uuid.h>
 #include <string>
 #include <string_view>

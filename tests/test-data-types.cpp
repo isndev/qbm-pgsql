@@ -1610,6 +1610,39 @@ TEST(TimeTzTypeFullTest, BinaryConversion) {
     std::cout << "TIMETZ type (pgtimetz) test passed" << std::endl;
 }
 
+/**
+ * @brief Pre-1970 (negative Unix epoch) DATE/TIMESTAMP round-trips.
+ *
+ * Regression for a Windows-only divergence: the CRT gmtime_s / _mkgmtime reject
+ * negative time_t, so any date/timestamp before 1970-01-01 used to fall back to
+ * "2000-01-01" (DATE) or throw (TIMESTAMP) on Windows while working on POSIX.
+ * The converters now use pure-integer UTC arithmetic, identical on all platforms.
+ */
+TEST(EdgeCasesTest, PreUnixEpochDatesAndTimestamps) {
+    using namespace qb::pg::detail;
+
+    // DATE: civil round-trip across the 1970 boundary, far past and BCE.
+    for (const char *s : {"1969-12-31", "1900-01-01", "1858-11-17", "0001-01-01", "2000-01-01", "1970-01-01"}) {
+        pgdate d = pgdate::from_string(s);
+        EXPECT_EQ(d.to_string(), s) << "DATE round-trip failed for " << s;
+    }
+
+    // TIMESTAMP: pre-1970 text must parse (no throw) and round-trip exactly.
+    const std::string ts_in = "1969-07-20 20:17:40.000000";
+    qb::wall_time     ts;
+    ASSERT_NO_THROW(ts = TypeConverter<qb::wall_time>::from_text(ts_in));
+    const std::string ts_out = TypeConverter<qb::wall_time>::to_text(ts);
+    EXPECT_NE(ts_out.find("1969-07-20 20:17:40"), std::string::npos) << "got: " << ts_out;
+
+    // A sub-second pre-1970 instant must borrow a second, not truncate toward zero.
+    const std::string ts2_in  = "1955-11-05 06:15:00.500000";
+    qb::wall_time     ts2      = TypeConverter<qb::wall_time>::from_text(ts2_in);
+    const std::string ts2_out = TypeConverter<qb::wall_time>::to_text(ts2);
+    EXPECT_NE(ts2_out.find("1955-11-05 06:15:00.5"), std::string::npos) << "got: " << ts2_out;
+
+    std::cout << "Pre-Unix-epoch date/timestamp test passed" << std::endl;
+}
+
 int
 main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);

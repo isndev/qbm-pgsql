@@ -52,6 +52,7 @@
 #include <optional>
 #include <qb/io.h>
 #include <qb/system/endian.h>
+#include <qb/system/time.h> // qb::safe_gmtime / safe_timegm / civil date helpers
 #include <regex>
 #include <sstream>
 #include <stdexcept>
@@ -81,20 +82,33 @@ namespace qb::pg::detail {
  */
 [[nodiscard]] inline bool
 safe_gmtime(std::time_t t, std::tm &out) noexcept {
-#if defined(_WIN32)
-    return ::gmtime_s(&out, &t) == 0;
-#else
-    return ::gmtime_r(&t, &out) != nullptr;
-#endif
+    // Portable, thread-safe UTC breakdown using pure integer arithmetic
+    // (Howard Hinnant's civil-from-days algorithm). We deliberately do NOT
+    // delegate to the platform gmtime_s / gmtime_r: the Windows CRT gmtime_s
+    // rejects any negative time_t, so every instant before 1970-01-01 would
+    // fail there (while POSIX gmtime_r accepts it) — a cross-platform
+    // divergence for PostgreSQL TIMESTAMP/DATE values before the Unix epoch.
+    // UTC has no timezone/DST state, so the integer computation is exact.
+    return qb::safe_gmtime(t, out); // canonical impl in <qb/system/time.h>
 }
 
 [[nodiscard]] inline bool
 safe_localtime(std::time_t t, std::tm &out) noexcept {
-#if defined(_WIN32)
-    return ::localtime_s(&out, &t) == 0;
-#else
-    return ::localtime_r(&t, &out) != nullptr;
-#endif
+    return qb::safe_localtime(t, out); // canonical impl in <qb/system/time.h>
+}
+
+/**
+ * @brief Portable UTC `std::tm` -> `time_t` (inverse of @ref safe_gmtime).
+ *
+ * Pure integer arithmetic (Howard Hinnant's days_from_civil). Used instead of
+ * `_mkgmtime` / `timegm`: the Windows CRT `_mkgmtime` returns -1 for any instant
+ * before 1970-01-01, so PostgreSQL TIMESTAMP values before the Unix epoch would
+ * fail to parse on Windows while working on POSIX. UTC has no DST/timezone
+ * state, so the computation is exact and cannot fail for in-range input.
+ */
+[[nodiscard]] inline std::time_t
+safe_timegm(const std::tm &in) noexcept {
+    return qb::safe_timegm(in); // canonical impl in <qb/system/time.h>
 }
 
 /**
@@ -582,12 +596,9 @@ public:
                 tm.tm_sec   = second;      // Seconds (0-61)
                 tm.tm_isdst = 0;           // UTC-native: no DST
 
-                // Convert the broken-down UTC time to an epoch (UTC-native).
-#ifdef _WIN32
-                std::time_t unix_timestamp = _mkgmtime(&tm);
-#else
-                std::time_t unix_timestamp = timegm(&tm);
-#endif
+                // Convert the broken-down UTC time to an epoch (UTC-native, portable:
+                // handles instants before 1970 that the Windows CRT _mkgmtime rejects).
+                std::time_t unix_timestamp = safe_timegm(tm);
 
                 // Create timestamp from seconds and microseconds
                 return qb::wall_from_unix_seconds(unix_timestamp) + std::chrono::microseconds(microsecond);
@@ -942,16 +953,10 @@ struct TypeConverter<qb::wall_time> {
         tm.tm_min  = min;
         tm.tm_sec  = sec;
 
-        // Convert the broken-down UTC time to an epoch (UTC-native).
+        // Convert the broken-down UTC time to an epoch (UTC-native, portable:
+        // handles pre-1970 instants that the Windows CRT _mkgmtime rejects).
         tm.tm_isdst = 0;
-#ifdef _WIN32
-        std::time_t time_secs = _mkgmtime(&tm);
-#else
-        std::time_t time_secs = timegm(&tm);
-#endif
-        if (time_secs == -1) {
-            throw std::runtime_error("Invalid timestamp conversion");
-        }
+        std::time_t time_secs = safe_timegm(tm);
 
         return qb::wall_from_unix_seconds(time_secs) + std::chrono::microseconds(usec);
     }
@@ -1525,20 +1530,19 @@ struct pgdate {
         return static_cast<time_t>(days_since_pg_epoch + DAYS_1970_TO_2000) * 86400;
     }
 
-    // Simple to_string (YYYY-MM-DD format) - UTC
+    // Simple to_string (YYYY-MM-DD format) - UTC. Pure integer civil conversion
+    // (qb::detail::civil_from_days) — exact for all dates incl. pre-1970, which
+    // the C library gmtime_s rejects on Windows.
     std::string
     to_string() const {
-        time_t  unix_time = to_unix_time();
-        std::tm tm_data{};
-        if (!safe_gmtime(unix_time, tm_data))
-            return "2000-01-01";
-
-        char buf[11]; // YYYY-MM-DD\0
-        std::snprintf(buf, sizeof(buf), "%04d-%02d-%02d", tm_data.tm_year + 1900, tm_data.tm_mon + 1, tm_data.tm_mday);
+        constexpr int32_t DAYS_1970_TO_2000 = 10957;
+        const auto        c = qb::detail::civil_from_days(static_cast<int64_t>(days_since_pg_epoch) + DAYS_1970_TO_2000);
+        char              buf[16]; // room for negative/large years
+        std::snprintf(buf, sizeof(buf), "%04lld-%02u-%02u", static_cast<long long>(c.year), c.month, c.day);
         return std::string(buf);
     }
 
-    // Parse from string (YYYY-MM-DD) - UTC
+    // Parse from string (YYYY-MM-DD) - UTC.
     static pgdate
     from_string(const std::string &str) {
         if (str.size() < 10)
@@ -1547,19 +1551,7 @@ struct pgdate {
         if (std::sscanf(str.c_str(), "%d-%d-%d", &year, &month, &day) != 3) {
             return pgdate(0);
         }
-
-        // Calculate days since Unix epoch using known algorithm (days from 1970-01-01)
-        // Zeller's congruence or simple day count
-        auto days_from_civil = [](int y, int m, int d) -> int64_t {
-            y -= m <= 2;
-            const int64_t  era = (y >= 0 ? y : y - 399) / 400;
-            const unsigned yoe = static_cast<unsigned>(y - era * 400);
-            const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
-            const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-            return era * 146097 + static_cast<int64_t>(doe) - 719468; // days since 1970-01-01
-        };
-
-        int64_t days_since_1970 = days_from_civil(year, month, day);
+        const int64_t days_since_1970 = qb::detail::days_from_civil(year, static_cast<unsigned>(month), static_cast<unsigned>(day));
         return from_unix_time(days_since_1970 * 86400);
     }
 
