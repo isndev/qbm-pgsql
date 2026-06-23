@@ -4,6 +4,7 @@
  */
 #pragma once
 
+#include <type_traits>
 #include <utility>
 
 #include "./error.h"
@@ -62,6 +63,83 @@ struct Reply {
     error() const noexcept {
         return _err;
     }
+
+    // --- std::expected-style ergonomics (additive; the .ok()/.result()/.error()
+    // API above is unchanged). Value access is non-throwing — check ok() first. ---
+
+    [[nodiscard]] bool
+    has_value() const noexcept {
+        return _ok;
+    }
+    [[nodiscard]] T &operator*() & noexcept {
+        return _value;
+    }
+    [[nodiscard]] T const &operator*() const & noexcept {
+        return _value;
+    }
+    [[nodiscard]] T &&operator*() && noexcept {
+        return std::move(_value);
+    }
+    [[nodiscard]] T *operator->() noexcept {
+        return &_value;
+    }
+    [[nodiscard]] T const *operator->() const noexcept {
+        return &_value;
+    }
+
+    /// The value if ok, else @p fallback.
+    template <typename U>
+    [[nodiscard]] T
+    value_or(U &&fallback) const & {
+        return _ok ? _value : static_cast<T>(std::forward<U>(fallback));
+    }
+    template <typename U>
+    [[nodiscard]] T
+    value_or(U &&fallback) && {
+        return _ok ? std::move(_value) : static_cast<T>(std::forward<U>(fallback));
+    }
+
+    /// Monadic bind: @p f takes the value and returns a `Reply<U>`; on error the
+    /// error is propagated as `Reply<U>::failure`.
+    template <typename F>
+    [[nodiscard]] auto
+    and_then(F &&f) const & {
+        using R = std::invoke_result_t<F, T const &>;
+        return _ok ? std::forward<F>(f)(_value) : R::failure(_err);
+    }
+    template <typename F>
+    [[nodiscard]] auto
+    and_then(F &&f) && {
+        using R = std::invoke_result_t<F, T &&>;
+        return _ok ? std::forward<F>(f)(std::move(_value)) : R::failure(std::move(_err));
+    }
+
+    /// Functor map: @p f takes the value and returns a plain `U`; the result is
+    /// wrapped as `Reply<U>::success`, errors propagate as `Reply<U>::failure`.
+    template <typename F>
+    [[nodiscard]] auto
+    transform(F &&f) const & {
+        using U = std::remove_cvref_t<std::invoke_result_t<F, T const &>>;
+        return _ok ? Reply<U>::success(std::forward<F>(f)(_value)) : Reply<U>::failure(_err);
+    }
+    template <typename F>
+    [[nodiscard]] auto
+    transform(F &&f) && {
+        using U = std::remove_cvref_t<std::invoke_result_t<F, T &&>>;
+        return _ok ? Reply<U>::success(std::forward<F>(f)(std::move(_value))) : Reply<U>::failure(std::move(_err));
+    }
+
+    /// Recover from error: @p f takes the db_error and returns a `Reply<T>`.
+    template <typename F>
+    [[nodiscard]] Reply
+    or_else(F &&f) const & {
+        return _ok ? *this : std::forward<F>(f)(_err);
+    }
+    template <typename F>
+    [[nodiscard]] Reply
+    or_else(F &&f) && {
+        return _ok ? std::move(*this) : std::forward<F>(f)(std::move(_err));
+    }
 };
 
 /**
@@ -100,6 +178,24 @@ struct Reply<void> {
     [[nodiscard]] error::db_error const &
     error() const noexcept {
         return _err;
+    }
+
+    [[nodiscard]] bool
+    has_value() const noexcept {
+        return _ok;
+    }
+    /// Monadic bind: @p f takes no argument and returns a `Reply<U>`.
+    template <typename F>
+    [[nodiscard]] auto
+    and_then(F &&f) const {
+        using R = std::invoke_result_t<F>;
+        return _ok ? std::forward<F>(f)() : R::failure(_err);
+    }
+    /// Recover from error: @p f takes the db_error and returns a `Reply<void>`.
+    template <typename F>
+    [[nodiscard]] Reply
+    or_else(F &&f) const {
+        return _ok ? *this : std::forward<F>(f)(_err);
     }
 };
 

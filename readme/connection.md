@@ -42,10 +42,10 @@ The implementation type is `qb::pg::detail::Database<QB_IO_, NotifyDerived>`. Yo
 | `qb::pg::tcp::database` | `qb::io::transport::tcp` (cleartext) | always |
 | `qb::pg::tcp::ssl::database` | `qb::io::transport::stcp` (TLS) | only when `QB_HAS_SSL` is defined |
 
-<!-- src: qbm/pgsql/pgsql.h:2090,2116 -->
+<!-- src: qbm/pgsql/pgsql.h:2484,2510 -->
 
 The transport is a **compile-time** choice baked into the alias. The connection string scheme (`tcp`, `ssl`, `socket`) does **not** switch it: a `tcp://…` string on a `tcp::ssl::database` still negotiates TLS, and an `ssl://…` string on a `tcp::database` does **not**. Pick the alias for the security you want; the scheme only feeds host/port resolution.
-<!-- src: qbm/pgsql/pgsql.h:700-773 -->
+<!-- src: qbm/pgsql/pgsql.h:696-744 -->
 
 There are also `notify_cb_consumer` / `notify_co_consumer` aliases for dedicated LISTEN/NOTIFY clients; see [queries.md](./queries.md).
 
@@ -62,7 +62,7 @@ Every connection is configured through `qb::pg::connection_options`, defined in 
 | `user` | `std::string` | role used for authentication and the startup message |
 | `password` | `std::string` | secret for cleartext / MD5 / SCRAM auth |
 | `connect_timeout` | `qb::duration` | handshake deadline; **default 10 s** |
-| `tls_verify_peer` | `bool` | verify the server certificate on TLS connections; **default `false`** |
+| `ssl_verify` | `ssl_verify_mode` | TLS certificate verification level: `none` (encrypt only, **default**) or `full` (verify chain + host); see below |
 | `keepalive_interval` | `int` | seconds between TCP keepalive probes; **0 = disabled (default)** |
 | `keepalive_probes` | `int` | unanswered probes before the socket is considered dead; default 3 |
 | `keepalive_idle` | `int` | idle seconds before the first probe; default 60 |
@@ -70,9 +70,15 @@ Every connection is configured through `qb::pg::connection_options`, defined in 
 <!-- src: qbm/pgsql/src/common.h:149-174 -->
 
 `connect_timeout` is a `qb::duration` (the framework's `std::chrono`-based duration). A non-positive value falls back to the 10 s default. Internally the deadline is converted to libev seconds via `qb::detail::to_ev_seconds`; you never deal with that conversion.
-<!-- src: qbm/pgsql/pgsql.h:616-621 -->
+<!-- src: qbm/pgsql/pgsql.h:711-714 -->
 
-> The connection string carries `user`, `password`, `database`, and the `host:port`. The remaining fields (`connect_timeout`, `tls_verify_peer`, keepalive) are **not** expressed in the string — set them on the struct, or use the dedicated methods (`connect(qb::duration)`, `enable_keepalive(...)`) and the `tls_verify_peer` field before connecting. There is no libpq-style `sslmode` parsing.
+> The connection string carries `user`, `password`, `database`, and the `host:port`. The remaining fields (`connect_timeout`, `ssl_verify`, keepalive) are **not** expressed in the string — set them on a `connection_options` struct and pass it to the `connect(connection_options)` overload, or use the dedicated methods (`connect(qb::duration)`, `enable_keepalive(...)`). For TLS verification:
+>
+> ```cpp
+> auto opts = qb::pg::connection_options::parse("tcp://user:secret@db:5432[app]");
+> opts.ssl_verify = qb::pg::ssl_verify_mode::full;   // verify chain + hostname
+> co_await db.connect(opts);
+> ```
 
 ### Connection string and user-defined literals
 
@@ -119,7 +125,7 @@ qb::pg::tcp::database db("tcp://user:secret@localhost:5432[mydb]");  // stores o
 // ... later, on the I/O thread:
 co_await db.connect();                          // uses the stored options
 ```
-<!-- src: qbm/pgsql/pgsql.h:1585-1587 -->
+<!-- src: qbm/pgsql/pgsql.h:1687-1689 -->
 
 The `connect()` overloads, all returning `connect_awaiter`:
 
@@ -130,7 +136,7 @@ The `connect()` overloads, all returning `connect_awaiter`:
 | `connect(std::string const& dsn)` | re-parse `dsn` into the stored options, then connect |
 | `connect(std::string const& dsn, transport_io_type&& raw_io)` | adopt an already-connected socket (e.g. from a pool), then run the handshake |
 
-<!-- src: qbm/pgsql/pgsql.h:1642-1666 -->
+<!-- src: qbm/pgsql/pgsql.h:1743-1782 -->
 
 There is **no** callback overload for `connect` (unlike `execute` / `prepare`). Use one of:
 
@@ -147,14 +153,14 @@ qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
 <!-- src: qbm/pgsql/tests/test-connection.cpp:105-111 -->
 
 The awaiter's `await_ready()` returns `true` if the object is already connected (so re-awaiting a live client is a no-op), and `await_resume()` returns `is_connected_` — i.e. the `co_await` / `run_sync` result is `true` only when the handshake reached `ReadyForQuery`.
-<!-- src: qbm/pgsql/pgsql.h:1623-1636 -->
+<!-- src: qbm/pgsql/pgsql.h:1724-1737 -->
 
 ---
 
 ## Startup and authentication
 
 After the TCP socket is connected, the client switches to the PostgreSQL protocol, starts its read/write watchers, and sends the **startup message**: protocol version 3.0 plus null-terminated `user` and `database` name/value pairs (and any client options).
-<!-- src: qbm/pgsql/pgsql.h:645-649,790-806 -->
+<!-- src: qbm/pgsql/pgsql.h:759-763,824-852 -->
 
 The server then drives one of the supported authentication exchanges, handled in `on_authentication`:
 
@@ -163,13 +169,16 @@ The server then drives one of the supported authentication exchanges, handled in
 | `Authentication OK` (0) | mark connected, apply keepalive settings, resume the awaiter |
 | Cleartext (3) | send the password in a `PasswordMessage` |
 | MD5 (5) | send `md5` + salted `md5(md5(password+user)+salt)` |
-| SCRAM-SHA-256 (10 / 11 / 12) | client nonce → PBKDF2 salted password → client proof, then verify the server signature |
+| SCRAM-SHA-256(-PLUS) (10 / 11 / 12) | negotiate channel binding → client nonce → **verify the server nonce extends it** → PBKDF2 salted password → client proof, then verify the server signature |
 | anything else | reaches the `default:` branch and throws |
 
-<!-- src: qbm/pgsql/pgsql.h:978-1029 -->
+<!-- src: qbm/pgsql/pgsql.h (on_authentication) -->
 
-SCRAM-SHA-256 is the modern PostgreSQL default and is fully implemented (including server-signature verification). GSS/SSPI/Kerberos and other schemes are **not** implemented: they hit the `default:` throw. That throw is contained at the `noexcept` `onMessage` boundary, which drops the connection and resumes the pending `connect` awaiter with an error — it does **not** call `std::terminate`. The same containment applies to a malformed SCRAM server message. You therefore see an unsupported or hostile auth method as a failed connect, not a descriptive auth-method error.
-<!-- src: qbm/pgsql/pgsql.h:448-472,1140 -->
+SCRAM-SHA-256 is the modern PostgreSQL default and is fully implemented, with **both** mutual-authentication checks RFC 5802 requires: (1) the server's combined nonce must begin with the exact client nonce and extend it (rejected before any proof is derived — guards against a man-in-the-middle or replay that does not faithfully continue our exchange), and (2) the server signature in the final message is recomputed and compared. GSS/SSPI/Kerberos and other schemes are **not** implemented: they hit the `default:` throw. That throw is contained at the `noexcept` `onMessage` boundary, which drops the connection and resumes the pending `connect` awaiter with an error — it does **not** call `std::terminate`. The same containment applies to a malformed SCRAM server message (including a mismatched nonce). You therefore see an unsupported or hostile auth method as a failed connect, not a descriptive auth-method error.
+
+**Channel binding (SCRAM-SHA-256-PLUS).** Over TLS, the client parses the mechanisms the server offers and, when it sees `SCRAM-SHA-256-PLUS`, negotiates **`tls-server-end-point` channel binding** (RFC 5929): a hash of the server certificate is mixed into the SCRAM proof, binding the authentication to this exact TLS channel. An active man-in-the-middle holding valid credentials cannot relay it onto another channel — the bound proof would not verify. The gs2 cbind-flag follows RFC 5802: `p=tls-server-end-point` when bound; `y` over TLS when the server did *not* advertise `-PLUS` (so the server can detect a downgrade that stripped it); `n` on a cleartext link. Negotiation is automatic; check the result with `db.used_channel_binding()`.
+<!-- src: qbm/pgsql/pgsql.h (on_authentication, used_channel_binding); qb/source/io/src/tcp/ssl/socket.cpp (tls_server_end_point) -->
+<!-- src: qbm/pgsql/pgsql.h:1064-1084,1139-1147 -->
 
 ---
 
@@ -178,14 +187,17 @@ SCRAM-SHA-256 is the modern PostgreSQL default and is fully implemented (includi
 TLS is **not** a pgsql-specific build option. It follows the framework-wide `QB_HAS_SSL`, which is auto-detected from OpenSSL. When OpenSSL is present, `QB_HAS_SSL` is defined and the `qb::pg::tcp::ssl::database` alias exists; when it is absent, the build is cleartext TCP only and that alias does not compile.
 <!-- src: qbm/pgsql/CMakeLists.txt:26-29 -->
 
-The TLS handshake is PostgreSQL's in-band negotiation, not a separate port or scheme:
+TLS is PostgreSQL's in-band negotiation (STARTTLS-style), not a separate port or scheme. The whole exchange is **fully asynchronous** — driven by the event loop, never blocking it:
 
-1. The client connects the plain TCP socket.
+1. The client connects the plain TCP socket (async).
 2. It sends the 8-byte **SSLRequest** packet (length 8, request code `80877103` / `0x04D2162F`).
 3. The server replies with one byte: `S` (proceed with TLS) or `N` (decline).
-4. On `S`, the client performs the TLS handshake on the same fd and continues the PostgreSQL startup over the encrypted channel. On `N`, it continues in cleartext.
+4. On `S`, the client drives the TLS handshake on the same fd (event-loop pumped) and continues the PostgreSQL startup over the encrypted channel.
 
-<!-- src: qbm/pgsql/pgsql.h:670-773 -->
+This runs through qb-io's generic opportunistic-TLS primitive, `qb::io::async::tcp::starttls_connect<Socket, Negotiator>()` — a first-class connector capability that any STARTTLS protocol can reuse (the pgsql side provides `qb::pg::detail::postgres_ssl_negotiator`). There is **no** blocking `send`/`recv`/`SSL_connect` on the connect path.
+<!-- src: qbm/pgsql/pgsql.h (start_connect_from_awaiter, postgres_ssl_negotiator); qb/include/qb/io/async/tcp/connector.h (starttls_connect) -->
+
+> **A secure database requires TLS.** If the server declines SSL (`N`), the connect **fails** — `qb::pg::tcp::ssl::database` is encrypt-or-nothing (libpq `sslmode=require` semantics). For cleartext, use the plain `qb::pg::tcp::database`, which never sends an SSLRequest. (This replaces an earlier `N` "fallback" that produced an unusable handle-less `ssl::socket`.)
 
 ```cpp
 #ifdef QB_HAS_SSL
@@ -197,8 +209,8 @@ bool ok = qb::io::async::run_sync(db.connect("tcp://user:secret@db.internal:5432
 ```
 <!-- src: qbm/pgsql/tests/test-connection-ssl.cpp:84,108 -->
 
-> **Server-certificate verification is OFF by default.** `tls_verify_peer` defaults to `false`, which preserves this client's historical behavior and matches libpq's `prefer` / `require` semantics: the link is encrypted but the server's certificate chain and hostname are **not** validated. Set `tls_verify_peer = true` on the options before connecting to enable qb-io's chain + hostname verification. There is no `verify-ca` / `verify-full` `sslmode` modeling yet.
-<!-- src: qbm/pgsql/src/common.h:160-169; qbm/pgsql/pgsql.h:741-742 -->
+> **Server-certificate verification is OFF by default.** `ssl_verify` defaults to `ssl_verify_mode::none` (≈ libpq `sslmode=require`): the link is encrypted but the server's certificate chain and hostname are **not** validated. Set `ssl_verify = ssl_verify_mode::full` (≈ libpq `verify-full`) on the options before connecting to enable qb-io's chain + hostname verification — checked during the handshake, before any data flows, so a verification failure aborts the connect. libpq's intermediate `verify-ca` (chain without hostname) is intentionally not offered: it accepts a valid certificate issued for a *different* host, leaving an active-MITM window. `disable`/`prefer` map to the transport choice — `tcp::database` never sends an SSLRequest; `tcp::ssl::database` requires TLS.
+<!-- src: qbm/pgsql/src/common.h:160-169 -->
 
 ---
 
@@ -207,25 +219,66 @@ bool ok = qb::io::async::run_sync(db.connect("tcp://user:secret@db.internal:5432
 ### Health check and keepalive
 
 `is_connection_alive()` returns `false` if the client is not connected, otherwise inspects the socket's `SO_ERROR`. It performs **no** wire round-trip, so a half-open or silently dropped connection can read as alive until a keepalive probe or the next query fails.
-<!-- src: qbm/pgsql/pgsql.h:1710-1733 -->
+<!-- src: qbm/pgsql/pgsql.h:1826-1849 -->
 
 TCP keepalive is configured through `connection_options` or `enable_keepalive(int interval, int idle = 60, int probes = 3)`. Settings are applied to the socket **after** the connection is established (on `Authentication OK`); calling `enable_keepalive` before connecting only stores them. An `interval` of 0 leaves keepalive disabled.
-<!-- src: qbm/pgsql/pgsql.h:1681-1700,1739-1793 -->
+<!-- src: qbm/pgsql/pgsql.h:1807-1816,2140-2184 -->
 
 ```cpp
 qb::pg::tcp::database db;
 db.enable_keepalive(/*interval=*/10, /*idle=*/60, /*probes=*/3);  // stored now, applied on connect
 co_await db.connect("tcp://user:secret@localhost:5432[mydb]");
 ```
-<!-- src: qbm/pgsql/pgsql.h:1691-1700 -->
+<!-- src: qbm/pgsql/pgsql.h:1807-1816 -->
+
+### Connection introspection
+
+Once connected, three read-only accessors expose what the server reported during the handshake. They are local lookups — no wire round-trip — and map onto the corresponding libpq calls:
+
+| Accessor | Returns | libpq equivalent |
+|:---------|:--------|:-----------------|
+| `parameter_status(std::string_view key)` | `std::optional<std::string_view>` — the value of a server `ParameterStatus` report (e.g. `"server_version"`, `"server_encoding"`, `"client_encoding"`, `"TimeZone"`, `"standard_conforming_strings"`, `"application_name"`), or `std::nullopt` if the server never sent that key | `PQparameterStatus` |
+| `server_version()` | `int` — the server version as a libpq-style integer: `16.2 → 160002`, `9.6.24 → 90624`; `0` if `server_version` is unknown | `PQserverVersion` |
+| `backend_pid()` | `int` — the backend process id captured from `BackendKeyData` at connect time (the same PID `cancel()` targets), or `0` if not connected | `PQbackendPID` |
+
+```cpp
+co_await db.connect("tcp://user:secret@localhost:5432[mydb]");
+if (db.server_version() < 140000)
+    log_warn("server is older than PostgreSQL 14");
+if (auto tz = db.parameter_status("TimeZone"))
+    log_info("server TimeZone = " + std::string(*tz));
+int pid = db.backend_pid();  // 0 until connected
+```
+
+The returned `std::string_view` from `parameter_status` is valid only while this connection is alive.
+<!-- src: qbm/pgsql/pgsql.h:1883-1889,1895-1898,1904-1918 -->
+
+### Cancelling a running query
+
+`cancel()` aborts the query currently executing on the connection. Because the link is a single serial stream busy with the in-flight statement, the cancel travels **out of band**: it opens a short-lived second connection and sends a PostgreSQL `CancelRequest` built from the backend PID + secret captured at connect time (`BackendKeyData`). The server aborts the running statement, which surfaces to the awaiting caller as an ordinary `db_error` with `sqlstate::query_canceled` (57014) — the connection itself stays usable.
+
+This mirrors libpq's `PQcancel`: it is **synchronous and best-effort** (the request is a 16-byte packet, no reply). It returns `true` if the request was sent, `false` if the client never finished a handshake (no key yet) or the out-of-band socket failed — a `false` does not prove the query survived. Call it from another execution context than the parked `co_await` — a timer, a signal handler, or a separate actor:
+
+```cpp
+// Abort a query that runs too long, from a one-shot timer.
+qb::io::async::callback([&db] { db.cancel(); }, std::chrono::seconds(2));
+auto r = co_await db.query("SELECT slow_report()");
+if (!r.ok() && r.error().sqlstate == qb::pg::sqlstate::query_canceled)
+    handle_timeout();
+```
+<!-- src: qbm/pgsql/pgsql.h:2096-2134 -->
+
+> **`cancel()` is SYNCHRONOUS / BLOCKING — it is *not* non-blocking like the rest of the client.** Unlike every other operation (which is event-loop-driven and `co_await`-only), `cancel()` opens its out-of-band socket and sends the `CancelRequest` with a **blocking** connect + send. It briefly **parks the calling thread**, so if you fire it from a one-shot timer ON the I/O loop (the usual pattern above), it stalls that loop for the duration. The blocking connect is **capped at ≤ 2 s** (it targets the same already-reachable endpoint as the live link, so it is normally sub-millisecond; the cap only bounds the pathological unreachable case). To keep the worst case short, set a small `connect_timeout` on the connection (the cap is `min(connect_timeout, 2 s)`), or run `cancel()` off the I/O thread.
+
+> The cancel connection is **plaintext** even when the main link is SSL. A server that mandates SSL on every connection (`hostssl`-only) will reject it; SSL-tunnelled cancellation is a future enhancement, tracked with `sslmode`/`verify-full`. For a server-side guard that needs no client action, set a `statement_timeout` (or the client `set_timeout`, see [transaction.md](./transaction.md)).
 
 ### Disconnect and reconnect
 
 `disconnect()` tears down the session and runs the event loop once (`EVRUN_NOWAIT`) so the close I/O is observed; it is safe to call from a coroutine or nested I/O path where `async::run()` would throw.
-<!-- src: qbm/pgsql/pgsql.h:1888-1896 -->
+<!-- src: qbm/pgsql/pgsql.h:2285-2291 -->
 
 To reuse the **same** object for a new connection, call `prepare_reconnect()` after `disconnect()` and before the next `connect()`. It closes the underlying fd, resets the I/O buffers and `qb::io::async::io` disposed state, and clears the handshake/connected flags. Do **not** call it while SQL is still queued on this object — drain or fail the queue first.
-<!-- src: qbm/pgsql/pgsql.h:1851-1879 -->
+<!-- src: qbm/pgsql/pgsql.h:2255-2276 -->
 
 ```cpp
 ASSERT_TRUE(qb::io::async::run_sync(db.connect(dsn)));
@@ -240,10 +293,10 @@ For a fresh connection you do not need `prepare_reconnect()` — a newly constru
 ### Fail-all-on-disconnect
 
 A connection is a **single serial stream**: queries queue behind one another. When the link drops, the disconnect handler does more than fail the one in-flight query — it calls `fail_all_pending(...)` on the root transaction, which drains **every** queued query and pending sub-transaction so their callers' awaiters resume with the error instead of hanging forever. `fail_all_pending` swaps the queues out before draining, so an error callback that enqueues new work does not re-enter the traversal.
-<!-- src: qbm/pgsql/pgsql.h:1822-1849; qbm/pgsql/src/transaction.h:211 -->
+<!-- src: qbm/pgsql/pgsql.h:2213-2244; qbm/pgsql/src/transaction.h:211 -->
 
 This also covers a malformed wire message and an unsupported/hostile auth method: both mark the protocol invalid (`not_ok()`), which disposes the I/O layer and fires `event::disconnected`, whose handler fails pending work and resumes a pending `connect` awaiter with an error.
-<!-- src: qbm/pgsql/pgsql.h:396-411,448-472 -->
+<!-- src: qbm/pgsql/pgsql.h:397-405,443-465 -->
 
 ---
 
@@ -251,7 +304,7 @@ This also covers a malformed wire message and an unsupported/hostile auth method
 
 - **No blocking `connect()`.** `connect()` returns an awaiter; nothing happens until you `co_await` it or pass it to `run_sync`. A discarded `db.connect(...)` does **not** connect.
 - **Scheme does not pick TLS.** Security is the alias (`tcp::database` vs `tcp::ssl::database`), a compile-time choice. The `tcp` / `ssl` / `socket` scheme in the string only feeds host resolution.
-- **TLS does not verify by default.** `tls_verify_peer` is `false`. For untrusted networks, set it to `true` before connecting. Encryption without verification does not protect against an active man-in-the-middle.
+- **TLS does not verify by default.** `ssl_verify` is `ssl_verify_mode::none`. For untrusted networks, set it to `ssl_verify_mode::full` (via the `connect(connection_options)` overload) before connecting. Encryption without verification does not protect against an active man-in-the-middle.
 - **Database name uses square brackets.** `…:5432[mydb]`, not `…/mydb`. This is the module's parser convention.
 - **Reuse needs `prepare_reconnect()`.** After `disconnect()`, you must call `prepare_reconnect()` before connecting the *same* object again. Skipping it leaves the I/O layer disposed and the next handshake will not start.
 - **`is_connection_alive()` is local-only.** It reads `SO_ERROR`, not the wire. Use keepalive or treat a query failure as the real liveness signal.

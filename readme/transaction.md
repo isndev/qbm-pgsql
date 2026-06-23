@@ -69,6 +69,8 @@ Coroutine overloads return `pg_reply_awaiter<T>`; awaiting one yields `qb::pg::R
 
 Coroutine results are delivered through `resultset::deep_snapshot()`, so a `Reply<resultset>` owns a deep copy that stays valid after the transaction's transient buffers are reused.
 
+> **Awaiter vs `task`.** The single-op entry points (`execute`, `query(sql)`, `prepare`, `begin`/`commit`/`rollback`, savepoints, `notify`/`listen`) return `pg_reply_awaiter<T>`. The helpers that chain multiple awaits internally — `copy_out`, `copy_in`, `query_stream`, and the inline `query(sql, args...)` — return `qb::io::async::task<Reply<T>>` instead. Both are `co_await`-only and yield the same `Reply<T>`, so this distinction does not change how you call them.
+
 ---
 
 ## The callback transaction block: `begin` / `End`
@@ -187,6 +189,8 @@ charge(qb::pg::tcp::database& db) {
 
 A `with_transaction(db, mode, body)` overload opens the block with a non-default `transaction_mode`. Inside the body, `tr.query("…")` is a convenience alias for `tr.execute("…")` so `with_transaction` bodies read naturally.
 
+To put a statement timeout on a `with_transaction` block, call `db.set_timeout(...)` **before** the `with_transaction(...)` call — it arms the `BEGIN` that the scope opens (see [Statement timeout](#statement-timeout)); it has no effect on autocommit statements run outside a block.
+
 > **Nesting.** Do not issue a second `BEGIN` on the same connection inside an open block — PostgreSQL does not support nested transaction blocks. Use savepoints for nested units of work.
 
 ---
@@ -265,7 +269,7 @@ A read-only PostgreSQL transaction still permits writes to temporary tables; "re
 
 ## Statement timeout
 
-<!-- src: src/transaction.h:560-588, src/transaction_coro.inl:22-31, src/queries.h:455-484 -->
+<!-- src: src/transaction.h:594-608, src/transaction_coro.inl:22-31, src/queries.h:455-484 -->
 
 `set_timeout(qb::duration)` arms a PostgreSQL `statement_timeout` for the **next** `BEGIN` on this connection. The following `begin()` (callback *or* coroutine) appends `; SET LOCAL statement_timeout = N` to the same simple-query round-trip as `BEGIN`, so the limit is **transaction-scoped** and is cleared automatically at `COMMIT`/`ROLLBACK`.
 
@@ -273,6 +277,8 @@ A read-only PostgreSQL transaction still permits writes to temporary tables; "re
 db.set_timeout(std::chrono::seconds{5}); // applies to the next begin()
 auto b = co_await db.begin();            // BEGIN ; SET LOCAL statement_timeout = 5000
 ```
+
+> **Arm it before the block.** `set_timeout` must be called **before** `begin()` / `with_transaction(...)` — it only colours the *next* `BEGIN`. It has **no effect on autocommit statements** (an `execute`/`query` issued without an open block); for those, send `SET statement_timeout` as raw SQL yourself.
 
 Key facts to get right:
 
@@ -342,7 +348,7 @@ The consumer's queue defaults to 8192 messages. On overflow the newest message i
 - **Callback completion needs a running loop.** A fluent `db.begin(...)` enqueues work and returns immediately; if nothing turns the qb-io loop, the block never runs. Inside an actor the `VirtualCore` drives it; in a standalone test, drain with `await()` or `qb::io::async::run_sync(...)`.
 - **No `commit(cb, err)`.** The callback path commits/rolls back through the implicit `End` command; only the coroutine path has explicit `commit()`/`rollback()`.
 - **A failed transaction must be rolled back.** PostgreSQL parks a session in the "failed transaction" state (`ReadyForQuery` `'E'`) after an in-block error; the client does **not** auto-`ROLLBACK`. Issue `ROLLBACK` (or let `End`/`with_transaction` do it) before sending new commands.
-- **A lost connection fails every pending query automatically.** You do **not** write a disconnect handler. The built-in `Database::on(qb::io::async::event::disconnected)` handler calls `fail_all_pending(...)` on the root transaction (`qbm/pgsql/pgsql.h:1823,1837`), which drains every queued query and pending sub-transaction so suspended `co_await` awaiters resume with `client_error("database disconnected")` instead of hanging forever. See [connection.md](./connection.md) (Fail-all-on-disconnect).
+- **A lost connection fails every pending query automatically.** You do **not** write a disconnect handler. The built-in `Database::on(qb::io::async::event::disconnected)` handler calls `fail_all_pending(...)` on the root transaction (`qbm/pgsql/pgsql.h:2232`), which drains every queued query and pending sub-transaction so suspended `co_await` awaiters resume with `client_error("database disconnected")` instead of hanging forever. See [connection.md](./connection.md) (Fail-all-on-disconnect).
 - **Statement timeout below 1 ms vanishes.** A sub-millisecond `set_timeout` truncates to 0 and emits no `SET LOCAL`. Use whole-millisecond durations.
 - **Savepoint names are validated only on the coroutine path.** Callback `savepoint` does not pre-validate the name; an illegal identifier surfaces as a server error from PostgreSQL instead of a client-side `client_error`.
 - **Coroutine results are snapshots.** `Reply<resultset>` owns a `deep_snapshot()`; do not assume it aliases the transaction's live buffers, and conversely do not hold a `resultset&` from a callback past the callback's return.

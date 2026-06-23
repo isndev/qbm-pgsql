@@ -422,6 +422,211 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, IntegerType_CoroutineSelect) {
 }
 
 /**
+ * @brief DATE / TIME / NUMERIC / INT[] binary round-trip through the extended
+ *        protocol (binary params in, binary results out).
+ *
+ * Regression for three fixes that previously forced example4 to use ::text casts:
+ *   - DATE/TIME from_binary off-by-4 length-prefix bug (DATE read as
+ *     2000-01-01, TIME as 00:00:00),
+ *   - the binary NUMERIC encoder/decoder (params were sent as text but labelled
+ *     binary; results were mis-read as text),
+ *   - the std::vector<T> binary array decoder (did not exist).
+ *
+ * A prepared SELECT is used on purpose so the result columns come back in binary
+ * format (the simple-query path returns text and would bypass these decoders).
+ */
+TEST_F(PostgreSQLDataTypesIntegrationTest, DateTimeNumericArray_BinaryRoundTrip) {
+    ASSERT_TRUE(db_->execute("CREATE TEMP TABLE dtna_test "
+                             "(d DATE, t TIME WITHOUT TIME ZONE, n NUMERIC(20,6), a INT[])",
+                             discard_query, discard_error)
+                    .await());
+
+    ASSERT_TRUE(db_->prepare("dtna_ins", "INSERT INTO dtna_test (d, t, n, a) VALUES ($1, $2, $3, $4)",
+                             {oid::date, oid::time, oid::numeric, oid::int4_array}, discard_prepare, discard_error)
+                    .await());
+    ASSERT_TRUE(db_->prepare("dtna_sel", "SELECT d, t, n, a FROM dtna_test", {}, discard_prepare, discard_error).await());
+
+    const qb::date         d = qb::date::parse("2024-03-15").value();
+    const qb::time_of_day  t = qb::time_of_day::from_hms(14, 30, 45, 123456);
+    const numeric          n("1234567.891011");
+    const std::vector<int> a{10, 20, 30, 40};
+
+    bool inserted = false;
+    ASSERT_TRUE(db_->execute(
+                       "dtna_ins", QueryParams(d, t, n, a), [&](Transaction &, results) { inserted = true; },
+                       [](error::db_error e) { FAIL() << "insert failed: " << e.what(); })
+                    .await());
+    ASSERT_TRUE(inserted);
+
+    bool selected = false;
+    ASSERT_TRUE(db_->execute(
+                       "dtna_sel", QueryParams(),
+                       [&](Transaction &, results result) {
+                           ASSERT_EQ(result.size(), 1u);
+                           const auto &row = result[0];
+                           EXPECT_EQ(row[0].as<qb::date>().to_string(), "2024-03-15");
+                           EXPECT_EQ(row[1].as<qb::time_of_day>().to_string(), "14:30:45.123456");
+                           EXPECT_EQ(row[2].as<numeric>().str(), "1234567.891011");
+                           EXPECT_EQ(row[3].as<std::vector<int>>(), (std::vector<int>{10, 20, 30, 40}));
+                           selected = true;
+                       },
+                       [](error::db_error e) { FAIL() << "select failed: " << e.what(); })
+                    .await());
+    ASSERT_TRUE(selected);
+
+    db_->execute("DROP TABLE IF EXISTS dtna_test", discard_query, discard_error).await();
+}
+
+/**
+ * @brief INTERVAL / TIMETZ / bigint[] / float8[] / bool[] binary round-trip.
+ *
+ * Regression for: INTERVAL from_binary dropping the days/months fields (decoded
+ * via a literal carrying both, asserted against EXTRACT(EPOCH)); the TIMETZ sign
+ * inversion (PG wire zone is west-positive); and the non-int4/text array element
+ * decoders. A prepared SELECT forces binary result format.
+ */
+TEST_F(PostgreSQLDataTypesIntegrationTest, IntervalTimetzArrays_BinaryRoundTrip) {
+    ASSERT_TRUE(db_->execute("CREATE TEMP TABLE ita_test AS SELECT "
+                             "interval '1 month 2 days 03:04:05' AS iv, "
+                             "timetz '14:30:45+02:00' AS tz, "
+                             "ARRAY[10,20,30]::bigint[] AS ba, "
+                             "ARRAY[1.5,2.5]::float8[] AS fa, "
+                             "ARRAY[true,false,true]::bool[] AS bo",
+                             discard_query, discard_error)
+                    .await());
+    ASSERT_TRUE(db_->prepare("ita_sel", "SELECT iv, tz, ba, fa, bo FROM ita_test", {}, discard_prepare, discard_error).await());
+
+    bool ok = false;
+    ASSERT_TRUE(db_->execute(
+                       "ita_sel", QueryParams(),
+                       [&](Transaction &, results r) {
+                           ASSERT_EQ(r.size(), 1u);
+                           const auto &row = r[0];
+                           EXPECT_EQ(row[0].as<std::chrono::seconds>().count(), 2775845); // EXTRACT(EPOCH)
+                           EXPECT_EQ(row[1].as<qb::time_of_day_tz>().to_string(), "14:30:45+02:00");
+                           EXPECT_EQ(row[2].as<std::vector<bigint>>(), (std::vector<bigint>{10, 20, 30}));
+                           EXPECT_EQ(row[3].as<std::vector<double>>(), (std::vector<double>{1.5, 2.5}));
+                           EXPECT_EQ(row[4].as<std::vector<bool>>(), (std::vector<bool>{true, false, true}));
+                           ok = true;
+                       },
+                       [](error::db_error e) { FAIL() << "select failed: " << e.what(); })
+                    .await());
+    ASSERT_TRUE(ok);
+
+    db_->execute("DROP TABLE IF EXISTS ita_test", discard_query, discard_error).await();
+}
+
+/**
+ * @brief Network/bit types read as std::string (they now route as text since the
+ *        module has no binary decoder for them), and bytea round-trips through a
+ *        std::vector<std::byte> parameter + binary result.
+ */
+TEST_F(PostgreSQLDataTypesIntegrationTest, NetworkBitTypes_AndStdByteBytea) {
+    ASSERT_TRUE(db_->execute("CREATE TEMP TABLE nbt_test AS SELECT "
+                             "inet '192.168.1.10' AS a, cidr '10.0.0.0/8' AS c, "
+                             "macaddr '08:00:2b:01:02:03' AS m, bit '101' AS b, varbit '1101' AS v, "
+                             "point '(1,2)' AS p, int4range(1,10) AS r, pg_lsn '0/16B3748' AS l",
+                             discard_query, discard_error)
+                    .await());
+    ASSERT_TRUE(db_->prepare("nbt_sel", "SELECT a, c, m, b, v, p, r, l FROM nbt_test", {}, discard_prepare, discard_error).await());
+
+    bool ok1 = false;
+    ASSERT_TRUE(db_->execute(
+                       "nbt_sel", QueryParams(),
+                       [&](Transaction &, results r) {
+                           ASSERT_EQ(r.size(), 1u);
+                           const auto &row = r[0];
+                           EXPECT_EQ(row[0].as<std::string>(), "192.168.1.10");
+                           EXPECT_EQ(row[1].as<std::string>(), "10.0.0.0/8");
+                           EXPECT_EQ(row[2].as<std::string>(), "08:00:2b:01:02:03");
+                           EXPECT_EQ(row[3].as<std::string>(), "101");
+                           EXPECT_EQ(row[4].as<std::string>(), "1101");
+                           EXPECT_EQ(row[5].as<std::string>(), "(1,2)");
+                           EXPECT_EQ(row[6].as<std::string>(), "[1,10)");
+                           EXPECT_EQ(row[7].as<std::string>(), "0/16B3748");
+                           ok1 = true;
+                       },
+                       [](error::db_error e) { FAIL() << "select failed: " << e.what(); })
+                    .await());
+    ASSERT_TRUE(ok1);
+    db_->execute("DROP TABLE IF EXISTS nbt_test", discard_query, discard_error).await();
+
+    // bytea via std::vector<std::byte>: parameter insert (binary) + binary read.
+    ASSERT_TRUE(db_->execute("CREATE TEMP TABLE bb_test (d BYTEA)", discard_query, discard_error).await());
+    ASSERT_TRUE(db_->prepare("bb_ins", "INSERT INTO bb_test (d) VALUES ($1)", {oid::bytea}, discard_prepare, discard_error).await());
+    ASSERT_TRUE(db_->prepare("bb_sel", "SELECT d FROM bb_test", {}, discard_prepare, discard_error).await());
+
+    const std::vector<std::byte> payload{std::byte{0xDE}, std::byte{0xAD}, std::byte{0x00}, std::byte{0xBE}, std::byte{0xEF}};
+    ASSERT_TRUE(db_->execute(
+                       "bb_ins", QueryParams(payload), [](Transaction &, results) {},
+                       [](error::db_error e) { FAIL() << "insert failed: " << e.what(); })
+                    .await());
+
+    bool ok2 = false;
+    ASSERT_TRUE(db_->execute(
+                       "bb_sel", QueryParams(),
+                       [&](Transaction &, results r) {
+                           ASSERT_EQ(r.size(), 1u);
+                           EXPECT_EQ(r[0][0].as<std::vector<std::byte>>(), payload);
+                           ok2 = true;
+                       },
+                       [](error::db_error e) { FAIL() << "select failed: " << e.what(); })
+                    .await());
+    ASSERT_TRUE(ok2);
+    db_->execute("DROP TABLE IF EXISTS bb_test", discard_query, discard_error).await();
+}
+
+/**
+ * @brief DATE/TIME/TIMETZ/INTERVAL round-trip through the qb core civil vocabulary
+ *        (qb::date / qb::time_of_day / qb::time_of_day_tz / qb::calendar_interval):
+ *        bind qb-type params (binary) and read them back (binary), against real PG.
+ *        Proves the encoder too — notably the TIMETZ sign and the lossless INTERVAL
+ *        (months/days preserved, which the std::chrono::duration mapping cannot do).
+ */
+TEST_F(PostgreSQLDataTypesIntegrationTest, QbCivilTypes_BinaryRoundTrip) {
+    ASSERT_TRUE(db_->execute("CREATE TEMP TABLE qct_test (d DATE, t TIME, z TIMETZ, iv INTERVAL)",
+                             discard_query, discard_error)
+                    .await());
+    ASSERT_TRUE(db_->prepare("qct_ins", "INSERT INTO qct_test (d, t, z, iv) VALUES ($1, $2, $3, $4)",
+                             {oid::date, oid::time, oid::timetz, oid::interval}, discard_prepare, discard_error)
+                    .await());
+    ASSERT_TRUE(db_->prepare("qct_sel", "SELECT d, t, z, iv FROM qct_test", {}, discard_prepare, discard_error).await());
+
+    const qb::date              d  = qb::date::from_ymd(2024, 3, 15);
+    const qb::time_of_day       t  = qb::time_of_day::from_hms(14, 30, 45, 123456);
+    const qb::time_of_day_tz    z  = qb::time_of_day_tz::from_hms_offset(14, 30, 45, 0, 7200);
+    const qb::calendar_interval iv{1, 2, std::chrono::microseconds{11045000000LL}};
+
+    bool inserted = false;
+    ASSERT_TRUE(db_->execute(
+                       "qct_ins", QueryParams(d, t, z, iv), [&](Transaction &, results) { inserted = true; },
+                       [](error::db_error e) { FAIL() << "insert failed: " << e.what(); })
+                    .await());
+    ASSERT_TRUE(inserted);
+
+    bool ok = false;
+    ASSERT_TRUE(db_->execute(
+                       "qct_sel", QueryParams(),
+                       [&](Transaction &, results r) {
+                           ASSERT_EQ(r.size(), 1u);
+                           const auto &row = r[0];
+                           EXPECT_EQ(row[0].as<qb::date>().to_string(), "2024-03-15");
+                           EXPECT_EQ(row[1].as<qb::time_of_day>().to_string(), "14:30:45.123456");
+                           EXPECT_EQ(row[2].as<qb::time_of_day_tz>().to_string(), "14:30:45+02:00");
+                           const auto got = row[3].as<qb::calendar_interval>();
+                           EXPECT_EQ(got.months, 1);
+                           EXPECT_EQ(got.days, 2);
+                           EXPECT_EQ(got.micros.count(), 11045000000LL);
+                           ok = true;
+                       },
+                       [](error::db_error e) { FAIL() << "select failed: " << e.what(); })
+                    .await());
+    ASSERT_TRUE(ok);
+
+    db_->execute("DROP TABLE IF EXISTS qct_test", discard_query, discard_error).await();
+}
+
+/**
  * @brief Integration test for BIGINT type
  */
 TEST_F(PostgreSQLDataTypesIntegrationTest, BigintType) {
@@ -1849,186 +2054,6 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, JSONResultSetConversion) {
 
     ASSERT_TRUE(status);
     ASSERT_TRUE(success);
-}
-
-/**
- * @brief Integration test for NUMERIC/DECIMAL type (NATIVE)
- *
- * Tests exact precision decimal with real PostgreSQL NUMERIC column.
- */
-TEST_F(PostgreSQLDataTypesIntegrationTest, NumericTypeNative) {
-    using namespace qb::pg::detail;
-
-    // Use text_val column to store NUMERIC as text (preserves precision)
-    // Test 1: Simple financial value
-    numeric price("999.99");
-    bool    insert_success = false;
-
-    auto status = db_->execute(
-                         "insert_text", QueryParams(std::string("NUMERIC:") + price.str()),
-                         [&insert_success](Transaction &tr, results result) {
-                             ASSERT_EQ(result.size(), 1);
-                             insert_success = true;
-                         },
-                         [](error::db_error error) { std::cout << "NUMERIC error: " << error.what() << std::endl; })
-                      .await();
-
-    ASSERT_TRUE(status) << "Failed to execute NUMERIC insert";
-    ASSERT_TRUE(insert_success) << "NUMERIC insert did not return result";
-
-    std::cout << "NUMERIC native - Price inserted: " << price.str() << std::endl;
-
-    // Test 2: High precision value
-    numeric high_precision("123456789.0123456789");
-    ASSERT_TRUE(db_->execute("insert_text", QueryParams(std::string("NUMERIC:") + high_precision.str()), discard_query, discard_error).await())
-        << "Failed to insert high precision NUMERIC";
-    std::cout << "NUMERIC High Precision inserted: " << high_precision.str() << std::endl;
-
-    std::cout << "NUMERIC native integration test PASSED" << std::endl;
-}
-
-/**
- * @brief Integration test for DATE type (NATIVE)
- *
- * Tests date handling with real PostgreSQL DATE column.
- */
-TEST_F(PostgreSQLDataTypesIntegrationTest, DateTypeNative) {
-    using namespace qb::pg::detail;
-
-    // Use insert_text for DATE storage as text
-    // Test 1: Standard date
-    bool insert_success = false;
-    auto status         = db_->execute(
-                                 "insert_text", QueryParams(std::string("DATE:2024-12-25")),
-                                 [&insert_success](Transaction &tr, results result) {
-                             ASSERT_EQ(result.size(), 1);
-                             insert_success = true;
-                                 },
-                                 [](error::db_error error) { std::cout << "DATE error: " << error.what() << std::endl; })
-                              .await();
-
-    ASSERT_TRUE(status) << "Failed to execute DATE insert";
-    ASSERT_TRUE(insert_success) << "DATE insert did not return result";
-
-    std::cout << "DATE Native - Created: 2024-12-25" << std::endl;
-
-    // Second date
-    ASSERT_TRUE(db_->execute("insert_text", QueryParams(std::string("DATE:2024-12-26")), discard_query, discard_error).await())
-        << "Failed to insert second DATE";
-    std::cout << "DATE Native - Updated: 2024-12-26" << std::endl;
-
-    // Test 2: Another date
-    ASSERT_TRUE(db_->execute("insert_text", QueryParams(std::string("DATE:2024-06-15")), discard_query, discard_error).await())
-        << "Failed to insert third DATE";
-
-    std::cout << "DATE native integration test PASSED" << std::endl;
-}
-
-/**
- * @brief Integration test for TIME type
- *
- * Tests time handling with real PostgreSQL TIME column.
- */
-TEST_F(PostgreSQLDataTypesIntegrationTest, TimeType) {
-    using namespace qb::pg::detail;
-
-    // Prepare statements for TIME and TIMETZ using text column for storage
-    ASSERT_TRUE(db_->prepare("insert_time_text", "INSERT INTO data_types_test (text_val) VALUES ($1) RETURNING id", {oid::text},
-                             discard_prepare, discard_error)
-                    .await());
-
-    // Test 1: TIME using pgtime structure (store text representation)
-    pgtime      start_time     = pgtime::from_hmsu(14, 30, 45);
-    std::string start_time_str = std::string("TIME:") + start_time.to_string();
-
-    bool insert_success = false;
-    auto status         = db_->execute(
-                                 "insert_time_text", QueryParams(start_time_str),
-                                 [&insert_success](Transaction &tr, results result) {
-                             ASSERT_EQ(result.size(), 1);
-                             insert_success = true;
-                                 },
-                                 [](error::db_error error) { std::cout << "TIME error: " << error.what() << std::endl; })
-                              .await();
-
-    ASSERT_TRUE(status) << "Failed to insert TIME";
-    ASSERT_TRUE(insert_success) << "TIME insert did not return result";
-
-    std::cout << "TIME - Start inserted: " << start_time.to_string() << std::endl;
-
-    // Test 2: TIMETZ using pgtimetz structure
-    pgtimetz    end_time     = pgtimetz::from_hmsu_tz(18, 0, 0, 0, 7200); // +02:00
-    std::string end_time_str = std::string("TIMETZ:") + end_time.to_string();
-
-    ASSERT_TRUE(db_->execute("insert_time_text", QueryParams(end_time_str), discard_query, discard_error).await()) << "Failed to insert TIMETZ";
-
-    std::cout << "TIMETZ - End inserted: " << end_time.to_string() << std::endl;
-
-    // Test 3: Binary format verification (serialization round-trip)
-    std::vector<byte> time_buffer;
-    TypeConverter<pgtime>::to_binary(start_time, time_buffer);
-    EXPECT_EQ(time_buffer.size(), 12); // 4 + 8 bytes
-
-    pgtime time_roundtrip = TypeConverter<pgtime>::from_binary(time_buffer);
-    EXPECT_EQ(time_roundtrip, start_time);
-
-    std::vector<byte> timetz_buffer;
-    TypeConverter<pgtimetz>::to_binary(end_time, timetz_buffer);
-    EXPECT_EQ(timetz_buffer.size(), 16); // 4 + 8 + 4 bytes
-
-    pgtimetz timetz_roundtrip = TypeConverter<pgtimetz>::from_binary(timetz_buffer);
-    EXPECT_EQ(timetz_roundtrip, end_time);
-
-    std::cout << "TIME/TIMETZ binary round-trip verified" << std::endl;
-
-    // Verify OIDs
-    EXPECT_EQ(TypeConverter<pgtime>::get_oid(), 1083);
-    EXPECT_EQ(TypeConverter<pgtimetz>::get_oid(), 1266);
-
-    std::cout << "TIME/TIMETZ integration test PASSED" << std::endl;
-}
-
-/**
- * @brief Integration test for INET and CIDR types
- *
- * Tests network address handling.
- */
-TEST_F(PostgreSQLDataTypesIntegrationTest, NetworkAddressTypes) {
-    using namespace qb::pg::detail;
-
-    // Use text_val column for network address storage
-    // Test IPv4
-    bool insert_success = false;
-    auto status         = db_->execute(
-                                 "insert_text", QueryParams(std::string("INET:192.168.1.100")),
-                                 [&insert_success](Transaction &tr, results result) {
-                             ASSERT_EQ(result.size(), 1);
-                             insert_success = true;
-                                 },
-                                 [](error::db_error error) { std::cout << "INET error: " << error.what() << std::endl; })
-                              .await();
-
-    ASSERT_TRUE(status) << "Failed to insert INET";
-    ASSERT_TRUE(insert_success) << "INET insert did not return result";
-
-    std::cout << "INET - IPv4 inserted" << std::endl;
-
-    // Test CIDR
-    ASSERT_TRUE(db_->execute("insert_text", QueryParams(std::string("CIDR:192.168.0.0/16")), discard_query, discard_error).await())
-        << "Failed to insert CIDR";
-    std::cout << "CIDR - Network inserted" << std::endl;
-
-    // Test IPv6
-    ASSERT_TRUE(db_->execute("insert_text", QueryParams(std::string("INET6:::1")), discard_query, discard_error).await())
-        << "Failed to insert IPv6";
-    std::cout << "IPv6 - Loopback inserted" << std::endl;
-
-    // Test MACADDR
-    ASSERT_TRUE(db_->execute("insert_text", QueryParams(std::string("MAC:00:1a:2b:3c:4d:5e")), discard_query, discard_error).await())
-        << "Failed to insert MACADDR";
-    std::cout << "MACADDR - Address inserted" << std::endl;
-
-    std::cout << "INET/CIDR/MACADDR integration test PASSED" << std::endl;
 }
 
 /**

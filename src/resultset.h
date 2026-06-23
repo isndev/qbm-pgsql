@@ -44,8 +44,13 @@
 #include <istream>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <qb/json.h>
+#include <ranges>
+#include <span>
+#include <string_view>
 #include <tuple>
+#include <vector>
 #include "./common.h"
 #include "./data_iterator.h"
 #include "./error.h"
@@ -58,7 +63,13 @@ namespace pg {
 
 namespace detail {
 class result_impl;
-}
+
+/// Trait: is T a std::tuple specialization? (used to constrain row::as<Tuple>())
+template <typename>
+struct is_tuple : std::false_type {};
+template <typename... Ts>
+struct is_tuple<std::tuple<Ts...>> : std::true_type {};
+} // namespace detail
 
 /**
  * Result set.
@@ -197,6 +208,58 @@ public:
      * @return @c row object
      */
     reference at(size_type index) const;
+    //@}
+
+    //@{
+    /** @name Typed row mapping */
+    /**
+     * @brief The first row decoded as a std::tuple<Ts...>, or std::nullopt if the
+     *        result set is empty.
+     *
+     * @code
+     *   if (auto r = res.one<int, std::string>()) { auto [id, name] = *r; ... }
+     * @endcode
+     */
+    template <typename... Ts>
+    [[nodiscard]] std::optional<std::tuple<Ts...>>
+    one() const {
+        if (empty())
+            return std::nullopt;
+        return (*this)[0].template as<std::tuple<Ts...>>();
+    }
+
+    /**
+     * @brief Every row decoded as a std::tuple<Ts...> (eager). Enables typed
+     *        structured-binding iteration:
+     *
+     * @code
+     *   for (auto [id, name] : res.all<int, std::string>()) { ... }
+     * @endcode
+     */
+    template <typename... Ts>
+    [[nodiscard]] std::vector<std::tuple<Ts...>>
+    all() const {
+        std::vector<std::tuple<Ts...>> out;
+        out.reserve(static_cast<std::size_t>(size()));
+        for (const auto &r : *this)
+            out.push_back(r.template as<std::tuple<Ts...>>());
+        return out;
+    }
+
+    /**
+     * @brief A lazy view of the rows as std::tuple<Ts...> (no intermediate copy of
+     *        the whole set). Borrows this result set, so it must outlive the view.
+     *
+     * @code
+     *   for (auto [id, name] : res.rows<int, std::string>()) { ... }
+     * @endcode
+     */
+    template <typename... Ts>
+    [[nodiscard]] auto
+    rows() const {
+        return std::ranges::subrange(begin(), end())
+               | std::views::transform([](const auto &r) { return r.template as<std::tuple<Ts...>>(); });
+    }
     //@}
 
     //@{
@@ -351,6 +414,27 @@ public:
         void to(::std::initializer_list<::std::string> const &names, T &...val) const;
 
         /**
+         * @brief Read the whole row as a typed std::tuple, enabling structured bindings.
+         *
+         * @code
+         *   auto [id, name] = row.as<std::tuple<int, std::string>>();
+         * @endcode
+         *
+         * Each element is decoded with `field::as<T>()` (so a NULL in a non-nullable
+         * column throws; use std::optional<T> in the tuple to read nullable columns).
+         * For a single column use `row[i].as<T>()`.
+         */
+        template <typename Tuple>
+        [[nodiscard]] Tuple
+        as() const {
+            static_assert(detail::is_tuple<Tuple>::value,
+                          "row::as<T>() expects a std::tuple<...>; use row[i].as<T>() for one column");
+            Tuple t{};
+            to(t);
+            return t;
+        }
+
+        /**
          * Get the index of field with name.
          * Shortcut to the resultset's method
          * @param name the field name
@@ -407,6 +491,40 @@ public:
         bool is_null() const; /**< @brief Is field value null */
 
         bool empty() const; /**< @brief Is field value empty (not null) */
+
+        /**
+         * @brief Zero-copy view of the raw field value bytes on the wire.
+         *
+         * The bytes are the field's representation in its current format
+         * (`description().format_code`): the text encoding for a text column, the
+         * binary encoding for a binary column. The view points into the result
+         * set's row storage, so it stays valid only while THIS result set is
+         * alive. Empty for a NULL or empty field. Use this (or @ref text()) to
+         * read a field without the copy `as<T>()` makes.
+         */
+        [[nodiscard]] std::span<const std::byte>
+        view() const {
+            const field_buffer buffer = input_buffer();
+            const auto         sz     = static_cast<std::size_t>(buffer.end() - buffer.begin());
+            if (sz == 0)
+                return {};
+            return std::span<const std::byte>(reinterpret_cast<const std::byte *>(&*buffer.begin()), sz);
+        }
+
+        /**
+         * @brief Zero-copy std::string_view of the field bytes — no allocation,
+         *        valid only while this result set is alive. For a text-format
+         *        column this is the value; prefer it over `as<std::string>()` to
+         *        read a text column without copying.
+         */
+        [[nodiscard]] std::string_view
+        text() const {
+            const field_buffer buffer = input_buffer();
+            const auto         sz     = static_cast<std::size_t>(buffer.end() - buffer.begin());
+            if (sz == 0)
+                return {};
+            return std::string_view(reinterpret_cast<const char *>(&*buffer.begin()), sz);
+        }
 
         /**
          * Parse the value buffer to the type specified by value passed as
@@ -470,21 +588,29 @@ public:
                 }
             }
 
-            // 2. Retrieve the data and format
+            // 2. Retrieve the data and format. The converters and the text reader
+            //    take std::span<const byte>, so view the row storage in place — no
+            //    copy (the old buffer.to_vector() allocated + copied every field).
+            //    The span stays valid for the duration of this call (the result set
+            //    outlives it); input_iterator_buffer is contiguous.
             field_buffer buffer    = input_buffer();
             bool         is_binary = (description().format_code == pg::protocol_data_format::Binary);
-            // NOTE: buffer.to_vector() creates a copy - potential optimization area
-            // For now keeping as-is since from_binary/from_text expect vectors
-            auto data_vector = buffer.to_vector();
+            const auto   sz        = static_cast<std::size_t>(buffer.end() - buffer.begin());
+            const std::span<const byte> data =
+                sz == 0 ? std::span<const byte>{} : std::span<const byte>(reinterpret_cast<const byte *>(&*buffer.begin()), sz);
 
             // 3. Use the TypeConverter to convert according to format
             if (is_binary) {
-                return detail::TypeConverter<result_type>::from_binary(data_vector);
+                return detail::TypeConverter<result_type>::from_binary(data);
             } else {
-                // For text format, we first need to read the string
+                // Text format: the protocol layer already stripped the per-field
+                // length prefix, so the bytes ARE the text value — read them
+                // verbatim. (Deliberately NOT read_string(), whose binary-vs-text
+                // auto-detection by leading-NUL sniffing would mis-handle a text
+                // value that begins with a NUL; the format is known here.)
                 // QB Context: static is safe - we are always on a single VirtualCore (mono-thread)
                 static detail::ParamUnserializer unserializer;
-                std::string                      text_value = unserializer.read_string(data_vector);
+                std::string                      text_value = unserializer.read_text_string(data);
                 return detail::TypeConverter<result_type>::from_text(text_value);
             }
         }

@@ -37,81 +37,12 @@
 #include <qb/io/async.h>
 #include <qb/io/async/coroutine.h>
 #include <qb/io/async/coroutine/utils.h>
+#include <span>
 
 #include "../pgsql.h"
 
 using namespace qb::pg;
 using namespace qb::pg::detail;
-
-// Test-specific implementation of ParamUnserializer for testing
-// In a real application, this functionality would be part of the actual
-// ParamUnserializer
-class TestParamUnserializer {
-private:
-    std::vector<byte> _buffer;
-    std::vector<bool> _binary_formats;
-
-public:
-    TestParamUnserializer() = default;
-
-    // Initialize with buffer
-    void
-    init(const std::vector<byte> &buffer) {
-        _buffer = buffer;
-        _binary_formats.clear();
-    }
-
-    // Set binary format for a parameter
-    void
-    set_binary_format(int index, bool is_binary) {
-        if (_binary_formats.size() <= static_cast<size_t>(index)) {
-            _binary_formats.resize(index + 1, false);
-        }
-        _binary_formats[index] = is_binary;
-    }
-
-    // Check if a parameter is in binary format
-    bool
-    is_binary_format(int index) const {
-        return index < static_cast<int>(_binary_formats.size()) && _binary_formats[index];
-    }
-
-    // Get parameter count from buffer
-    smallint
-    param_count() const {
-        if (_buffer.size() < sizeof(smallint)) {
-            return 0;
-        }
-
-        smallint count;
-        std::memcpy(&count, _buffer.data(), sizeof(smallint));
-        return qb::endian::from_big_endian(count);
-    }
-
-    // Get parameter with type conversion
-    template <typename T>
-    T
-    get_param(int index) {
-        // For testing purposes, we just return default values
-        // In a real implementation, this would extract data from the buffer
-        if constexpr (std::is_same_v<T, int>) {
-            return 42; // Test integer value
-        } else if constexpr (std::is_same_v<T, std::string>) {
-            return "test_string"; // Test string value
-        } else if constexpr (std::is_same_v<T, qb::uuid>) {
-            return qb::uuid::from_string("123e4567-e89b-12d3-a456-426614174000").value(); // Test UUID
-        } else if constexpr (std::is_same_v<T, qb::wall_time>) {
-            return qb::wall_time{}; // Test timestamp
-        } else if constexpr (std::is_same_v<T, std::optional<int>>) {
-            return std::nullopt; // Test null value
-        } else if constexpr (std::is_same_v<T, std::optional<std::string>>) {
-            return std::nullopt; // Test null value
-        } else {
-            // Default for other types
-            return T{};
-        }
-    }
-};
 
 /**
  * @brief Test fixture for parameter parsing and serialization tests
@@ -124,13 +55,9 @@ class ParamParsingTest : public ::testing::Test {
 protected:
     /**
      * @brief Set up the test fixture before each test
-     *
-     * Creates a new TestParamUnserializer instance for parameter deserialization tests.
      */
     void
-    SetUp() override {
-        unserializer = std::make_unique<TestParamUnserializer>();
-    }
+    SetUp() override {}
 
     /**
      * @brief Clean up the test fixture after each test
@@ -138,9 +65,7 @@ protected:
      * Releases resources allocated during the test.
      */
     void
-    TearDown() override {
-        unserializer.reset();
-    }
+    TearDown() override {}
 
     /**
      * @brief Creates a hexadecimal representation of a binary buffer for debugging
@@ -273,8 +198,6 @@ protected:
 
         return buffer;
     }
-
-    std::unique_ptr<TestParamUnserializer> unserializer;
 };
 
 /**
@@ -640,18 +563,17 @@ TEST_F(ParamParsingTest, ParamUnserializerBasic) {
     auto        text_param_buffer = createPgBinaryString(text_param);
     buffer.insert(buffer.end(), text_param_buffer.begin(), text_param_buffer.end());
 
-    // Initialize the unserializer with our buffer
-    unserializer->init(buffer);
+    // Decode with the REAL span-based reader. Layout:
+    // [int16 count=2][int32 len=2]["42"][int32 len=11]["test_string"].
+    ParamUnserializer     u;
+    std::span<const byte> all{buffer.data(), buffer.size()};
+    ASSERT_EQ(u.read_smallint(all.subspan(0, sizeof(smallint))), 2);
 
-    // Check parameter count
-    ASSERT_EQ(unserializer->param_count(), 2);
-
-    // Get and verify parameters - our TestParamUnserializer will return hardcoded values
-    int int_value = unserializer->get_param<int>(0);
-    ASSERT_EQ(int_value, 42);
-
-    std::string text_value = unserializer->get_param<std::string>(1);
-    ASSERT_EQ(text_value, "test_string");
+    // read_binary_string strips the int32 length prefix and returns the value.
+    const std::size_t f1 = sizeof(smallint);
+    EXPECT_EQ(u.read_binary_string(all.subspan(f1, sizeof(integer) + 2)), "42");
+    const std::size_t f2 = f1 + sizeof(integer) + 2;
+    EXPECT_EQ(u.read_binary_string(all.subspan(f2, sizeof(integer) + 11)), "test_string");
 
     // Debugging
     printBuffer(buffer, "ParamUnserializer basic test buffer");
@@ -681,23 +603,13 @@ TEST_F(ParamParsingTest, ParamUnserializerWithNull) {
     // Second parameter: another NULL
     buffer.insert(buffer.end(), null_len_buffer.begin(), null_len_buffer.end());
 
-    // Initialize the unserializer with our buffer
-    unserializer->init(buffer);
-
-    // Check parameter count
-    ASSERT_EQ(unserializer->param_count(), 2);
-
-    // Try to get nullable parameters - our TestParamUnserializer returns predefined
-    // values
-    std::optional<int> null_int = unserializer->get_param<std::optional<int>>(0);
-    ASSERT_FALSE(null_int.has_value());
-
-    std::optional<std::string> null_string = unserializer->get_param<std::optional<std::string>>(1);
-    ASSERT_FALSE(null_string.has_value());
-
-    // Note: In our TestParamUnserializer, we don't throw exceptions for non-nullable
-    // types, so we don't test that behavior here. In a real implementation, this would
-    // throw.
+    // Decode with the REAL reader. read_binary_string returns "" when the int32
+    // length prefix is negative (PostgreSQL's NULL sentinel).
+    ParamUnserializer     u;
+    std::span<const byte> all{buffer.data(), buffer.size()};
+    ASSERT_EQ(u.read_smallint(all.subspan(0, sizeof(smallint))), 2);
+    EXPECT_TRUE(u.read_binary_string(all.subspan(sizeof(smallint), sizeof(integer))).empty());
+    EXPECT_TRUE(u.read_binary_string(all.subspan(sizeof(smallint) + sizeof(integer), sizeof(integer))).empty());
 
     // Debugging
     printBuffer(buffer, "ParamUnserializer with NULL values buffer");
@@ -725,11 +637,12 @@ TEST_F(ParamParsingTest, ParamUnserializerBinaryFormat) {
     auto              int_binary_pkg = createPgBinaryString(std::string(int_binary.begin(), int_binary.end()));
     buffer.insert(buffer.end(), int_binary_pkg.begin(), int_binary_pkg.end());
 
-    // Second parameter: float (3.14159) in binary format (4 bytes)
-    float             float_value = 3.14159f;
-    std::vector<byte> float_binary(4);
-    std::memcpy(float_binary.data(), &float_value, 4);
-    auto float_binary_pkg = createPgBinaryString(std::string(float_binary.begin(), float_binary.end()));
+    // Second parameter: float (3.14159) in binary format (4 bytes, big-endian)
+    float    float_value = 3.14159f;
+    uint32_t float_bits  = 0;
+    std::memcpy(&float_bits, &float_value, sizeof(float));
+    std::vector<byte> float_binary     = createBinaryBuffer(float_bits); // BE wire bytes
+    auto              float_binary_pkg = createPgBinaryString(std::string(float_binary.begin(), float_binary.end()));
     buffer.insert(buffer.end(), float_binary_pkg.begin(), float_binary_pkg.end());
 
     // Third parameter: bytea data
@@ -737,21 +650,28 @@ TEST_F(ParamParsingTest, ParamUnserializerBinaryFormat) {
     auto              bytea_pkg  = createPgBinaryString(std::string(bytea_data.begin(), bytea_data.end()));
     buffer.insert(buffer.end(), bytea_pkg.begin(), bytea_pkg.end());
 
-    // Initialize the unserializer with our buffer and set binary format for the
-    // parameters
-    unserializer->init(buffer);
-    unserializer->set_binary_format(0, true); // integer in binary
-    unserializer->set_binary_format(1, true); // float in binary
-    unserializer->set_binary_format(2, true); // bytea in binary
+    // Decode with the REAL span-based reader. Each field is [int32 len][value];
+    // read_binary_string strips the prefix, then the scalar reader decodes the value.
+    ParamUnserializer     u;
+    std::span<const byte> all{buffer.data(), buffer.size()};
+    ASSERT_EQ(u.read_smallint(all.subspan(0, sizeof(smallint))), 3);
 
-    // Check parameter count
-    ASSERT_EQ(unserializer->param_count(), 3);
-
-    // Get and verify parameters - in our TestParamUnserializer, these return hardcoded
-    // values
-    ASSERT_TRUE(unserializer->is_binary_format(0));
-    ASSERT_TRUE(unserializer->is_binary_format(1));
-    ASSERT_TRUE(unserializer->is_binary_format(2));
+    std::size_t off = sizeof(smallint);
+    // int32(42): [len=4][4 BE bytes]
+    std::string ival = u.read_binary_string(all.subspan(off, sizeof(integer) + 4));
+    ASSERT_EQ(ival.size(), 4u);
+    EXPECT_EQ(u.read_integer(std::span<const byte>(reinterpret_cast<const byte *>(ival.data()), ival.size())), 42);
+    off += sizeof(integer) + 4;
+    // float(3.14159): [len=4][4 BE bytes]
+    std::string fval = u.read_binary_string(all.subspan(off, sizeof(integer) + 4));
+    ASSERT_EQ(fval.size(), 4u);
+    EXPECT_NEAR(u.read_float(std::span<const byte>(reinterpret_cast<const byte *>(fval.data()), fval.size())), 3.14159f, 1e-5f);
+    off += sizeof(integer) + 4;
+    // bytea: [len=5][5 raw bytes]
+    std::string bval = u.read_binary_string(all.subspan(off, sizeof(integer) + 5));
+    ASSERT_EQ(bval.size(), 5u);
+    EXPECT_EQ(static_cast<unsigned char>(bval[0]), 0x01u);
+    EXPECT_EQ(static_cast<unsigned char>(bval[4]), 0x05u);
 
     // Debugging
     printBuffer(buffer, "ParamUnserializer binary format test buffer");
@@ -782,16 +702,6 @@ TEST_F(ParamParsingTest, UUIDParams) {
 
     // Debugging
     printBuffer(buffer, "QueryParams with UUID parameter");
-
-    // Initialize our test unserializer with the buffer
-    unserializer->init(buffer);
-
-    // Get and verify the UUID parameter
-    qb::uuid extracted_uuid = unserializer->get_param<qb::uuid>(0);
-
-    // Since our test implementation returns a fixed UUID regardless of input,
-    // we don't compare with the original, but verify it's not empty
-    ASSERT_FALSE(extracted_uuid.is_nil());
 }
 
 /**
@@ -819,15 +729,6 @@ TEST_F(ParamParsingTest, TimestampParams) {
 
     // Debugging
     printBuffer(buffer, "QueryParams with Timestamp parameter");
-
-    // Initialize our test unserializer with the buffer
-    unserializer->init(buffer);
-
-    // Get the Timestamp parameter
-    // qb::wall_time extracted_timestamp = unserializer->get_param<qb::wall_time>(0);
-
-    // Since our test implementation always returns the same timestamp value,
-    // we don't need to compare with the original
 }
 
 /**
@@ -858,14 +759,6 @@ TEST_F(ParamParsingTest, QueryParamsWithUnicodeStrings) {
 
     // Debugging
     printBuffer(params.get(), "QueryParams with Unicode strings");
-
-    // Initialize our test unserializer with the buffer
-    unserializer->init(params.get());
-
-    // Our test unserializer always returns the same value regardless of input
-    // so we're just testing that it doesn't crash with Unicode
-    std::string result = unserializer->get_param<std::string>(0);
-    ASSERT_EQ(result, "test_string");
 }
 
 /**
@@ -936,14 +829,6 @@ TEST_F(ParamParsingTest, QueryParamsWithJSON) {
 
     // Debugging
     printBuffer(params.get(), "QueryParams with JSON");
-
-    // Initialize our test unserializer with the buffer
-    unserializer->init(params.get());
-
-    // Get the string parameter
-    std::string extracted_json = unserializer->get_param<std::string>(0);
-    ASSERT_EQ(extracted_json,
-              "test_string"); // Our test implementation returns a fixed value
 }
 
 /**
@@ -970,13 +855,6 @@ TEST_F(ParamParsingTest, QueryParamsWithHighPrecisionDecimals) {
 
     // Debugging
     printBuffer(params.get(), "QueryParams with high precision decimals");
-
-    // Initialize our test unserializer with the buffer
-    unserializer->init(params.get());
-
-    // Our test implementation returns fixed values
-    std::string extracted_pi = unserializer->get_param<std::string>(0);
-    ASSERT_EQ(extracted_pi, "test_string");
 }
 
 /**
@@ -1003,53 +881,6 @@ TEST_F(ParamParsingTest, QueryParamsWithArrays) {
 
     // Debugging
     printBuffer(params.get(), "QueryParams with arrays");
-
-    // Initialize our test unserializer with the buffer
-    unserializer->init(params.get());
-
-    // Get the array parameters - our test implementation returns fixed values
-    std::string extracted_array = unserializer->get_param<std::string>(0);
-    ASSERT_EQ(extracted_array, "test_string");
-}
-
-/**
- * @brief Tests backwards compatibility with legacy parameter handling
- *
- * Verifies that the parameter handling still works correctly with
- * legacy code and maintains backward compatibility.
- */
-TEST_F(ParamParsingTest, BackwardsCompatibility) {
-    // Directly create binary format parameters to simulate legacy code
-    std::vector<byte> buffer;
-
-    // Parameter count (1)
-    smallint param_count        = 1;
-    auto     param_count_buffer = createBinaryBuffer(param_count);
-    buffer.insert(buffer.end(), param_count_buffer.begin(), param_count_buffer.end());
-
-    // One integer parameter in binary format with length=4
-    integer param_len        = 4;
-    auto    param_len_buffer = createBinaryBuffer(param_len);
-    buffer.insert(buffer.end(), param_len_buffer.begin(), param_len_buffer.end());
-
-    // The integer value (42) in binary network byte order
-    integer value        = 42;
-    auto    value_buffer = createBinaryBuffer(value);
-    buffer.insert(buffer.end(), value_buffer.begin(), value_buffer.end());
-
-    // Initialize our test unserializer with the manually created buffer
-    unserializer->init(buffer);
-    unserializer->set_binary_format(0, true);
-
-    // Check parameter count
-    ASSERT_EQ(unserializer->param_count(), 1);
-
-    // Get the parameter - our test implementation returns a fixed value
-    int extracted_value = unserializer->get_param<int>(0);
-    ASSERT_EQ(extracted_value, 42);
-
-    // Debugging
-    printBuffer(buffer, "Backwards compatibility test buffer");
 }
 
 /**
@@ -1097,14 +928,14 @@ TEST_F(ParamParsingTest, QueryParamsWithDate) {
     using namespace qb::pg::detail;
 
     // Create date values
-    pgdate today = pgdate::from_string("2024-12-25");
-    pgdate epoch = pgdate(0); // 2000-01-01
+    qb::date today = qb::date::parse("2024-12-25").value();
+    qb::date epoch = qb::date::from_ymd(2000, 1, 1); // PostgreSQL DATE epoch
 
     // Test text conversion
-    std::string today_text = TypeConverter<pgdate>::to_text(today);
+    std::string today_text = TypeConverter<qb::date>::to_text(today);
     EXPECT_EQ(today_text, "2024-12-25");
 
-    std::string epoch_text = TypeConverter<pgdate>::to_text(epoch);
+    std::string epoch_text = TypeConverter<qb::date>::to_text(epoch);
     EXPECT_EQ(epoch_text, "2000-01-01");
 
     // Create QueryParams with dates
@@ -1166,13 +997,13 @@ TEST_F(ParamParsingTest, QueryParamsWithMixedComplexTypes) {
     // Create various parameter values
     int32_t     id = 12345;
     numeric     price("999.99");
-    pgdate      date   = pgdate::from_string("2024-12-25");
+    qb::date    date   = qb::date::parse("2024-12-25").value();
     std::string name   = "Test Product";
     bool        active = true;
 
     // Convert to text for QueryParams
     std::string price_text = TypeConverter<numeric>::to_text(price);
-    std::string date_text  = TypeConverter<pgdate>::to_text(date);
+    std::string date_text  = TypeConverter<qb::date>::to_text(date);
 
     // Create QueryParams with mixed types
     QueryParams params(id, price_text, date_text, name, active);
@@ -1293,8 +1124,8 @@ TEST_F(ParamParsingTest, QueryParamsEdgeCases) {
     QueryParams params4(old_date, future_date);
     ASSERT_EQ(params4.param_count(), 2);
 
-    pgdate old    = pgdate::from_string(old_date);
-    pgdate future = pgdate::from_string(future_date);
+    qb::date old    = qb::date::parse(old_date).value();
+    qb::date future = qb::date::parse(future_date).value();
     EXPECT_EQ(old.to_string(), "1900-01-01");
     EXPECT_EQ(future.to_string(), "2099-12-31");
 

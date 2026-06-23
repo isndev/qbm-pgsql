@@ -23,6 +23,7 @@
 
 #include <cstring>
 #include <iostream>
+#include <span>
 #include <qb/system/endian.h>
 #include <stdexcept>
 
@@ -41,7 +42,7 @@ namespace qb::pg::detail {
  * @throws std::runtime_error If the buffer is too small to contain a smallint
  */
 smallint
-ParamUnserializer::read_smallint(const std::vector<byte> &buffer) {
+ParamUnserializer::read_smallint(std::span<const byte> buffer) {
     // Verify minimum buffer size for a smallint
     if (buffer.size() < sizeof(smallint)) {
         throw std::runtime_error("Buffer too small for smallint");
@@ -68,7 +69,7 @@ ParamUnserializer::read_smallint(const std::vector<byte> &buffer) {
  * @throws std::runtime_error If the buffer is too small to contain an integer
  */
 integer
-ParamUnserializer::read_integer(const std::vector<byte> &buffer) {
+ParamUnserializer::read_integer(std::span<const byte> buffer) {
     // Verify minimum buffer size for an integer
     if (buffer.size() < sizeof(integer)) {
         throw std::runtime_error("Buffer too small for integer");
@@ -95,7 +96,7 @@ ParamUnserializer::read_integer(const std::vector<byte> &buffer) {
  * @throws std::runtime_error If the buffer is too small to contain a bigint
  */
 bigint
-ParamUnserializer::read_bigint(const std::vector<byte> &buffer) {
+ParamUnserializer::read_bigint(std::span<const byte> buffer) {
     // Verify minimum buffer size for a bigint
     if (buffer.size() < sizeof(bigint)) {
         throw std::runtime_error("Buffer too small for bigint");
@@ -120,7 +121,7 @@ ParamUnserializer::read_bigint(const std::vector<byte> &buffer) {
  * @throws std::runtime_error If the buffer is too small to contain a float
  */
 float
-ParamUnserializer::read_float(const std::vector<byte> &buffer) {
+ParamUnserializer::read_float(std::span<const byte> buffer) {
     // Verify minimum buffer size for a float
     if (buffer.size() < sizeof(float)) {
         throw std::runtime_error("Buffer too small for float");
@@ -151,7 +152,7 @@ ParamUnserializer::read_float(const std::vector<byte> &buffer) {
  * @throws std::runtime_error If the buffer is too small to contain a double
  */
 double
-ParamUnserializer::read_double(const std::vector<byte> &buffer) {
+ParamUnserializer::read_double(std::span<const byte> buffer) {
     // Verify minimum buffer size for a double
     if (buffer.size() < sizeof(double)) {
         throw std::runtime_error("Buffer too small for double");
@@ -182,7 +183,7 @@ ParamUnserializer::read_double(const std::vector<byte> &buffer) {
  * @return std::string The extracted string value
  */
 std::string
-ParamUnserializer::read_string(const std::vector<byte> &buffer) {
+ParamUnserializer::read_string(std::span<const byte> buffer) {
     // An empty buffer corresponds to an empty string
     if (buffer.empty()) {
         return "";
@@ -214,7 +215,7 @@ ParamUnserializer::read_string(const std::vector<byte> &buffer) {
  * @return std::string The extracted string value
  */
 std::string
-ParamUnserializer::read_text_string(const std::vector<byte> &buffer) {
+ParamUnserializer::read_text_string(std::span<const byte> buffer) {
     // In TEXT format, we simply take the content as is
     return std::string(reinterpret_cast<const char *>(buffer.data()), buffer.size());
 }
@@ -230,14 +231,14 @@ ParamUnserializer::read_text_string(const std::vector<byte> &buffer) {
  * @throws std::runtime_error If the buffer is too small or the length is invalid
  */
 std::string
-ParamUnserializer::read_binary_string(const std::vector<byte> &buffer) {
+ParamUnserializer::read_binary_string(std::span<const byte> buffer) {
     // Binary format has a 4-byte length prefix
     if (buffer.size() < 4) {
         throw std::runtime_error("Buffer too small for binary string");
     }
 
     // Read the length (first 4 bytes)
-    integer length = read_integer(std::vector<byte>(buffer.begin(), buffer.begin() + 4));
+    integer length = read_integer(buffer.subspan(0, 4));
 
     // Verify the length is consistent
     if (length < 0) {
@@ -264,7 +265,7 @@ ParamUnserializer::read_binary_string(const std::vector<byte> &buffer) {
  * @throws std::runtime_error If the format is invalid for a boolean
  */
 bool
-ParamUnserializer::read_bool(const std::vector<byte> &buffer) {
+ParamUnserializer::read_bool(std::span<const byte> buffer) {
     // Empty buffer check
     if (buffer.empty()) {
         throw std::runtime_error("Empty buffer for boolean value");
@@ -274,7 +275,7 @@ ParamUnserializer::read_bool(const std::vector<byte> &buffer) {
     // Buffer format: [length (4 bytes)][value (1 byte)]
     if (buffer.size() >= 5) {
         // Check if this is a binary format with length prefix
-        integer length = read_integer(std::vector<byte>(buffer.begin(), buffer.begin() + 4));
+        integer length = read_integer(buffer.subspan(0, 4));
 
         if (length == 1) {
             // This is the formal binary format with length=1
@@ -292,83 +293,6 @@ ParamUnserializer::read_bool(const std::vector<byte> &buffer) {
 
     // Raw binary format (single byte) - last resort
     return buffer[0] != 0;
-}
-
-/**
- * @brief Reads binary data (bytea) from a binary buffer
- *
- * Handles both binary format (with 4-byte length prefix) and
- * text format (hex string representation). In text format,
- * supports the PostgreSQL '\x' prefix for hex strings.
- *
- * @param buffer The binary buffer containing the bytea data
- * @return std::vector<byte> The extracted binary data
- * @throws std::runtime_error If the buffer is too small or the format is invalid
- */
-std::vector<byte>
-ParamUnserializer::read_bytea(const std::vector<byte> &buffer) {
-    // Automatic format detection
-    if (buffer.size() >= 4 && (buffer[0] == 0 || buffer[1] == 0)) {
-        // Binary format with length prefix
-        if (buffer.size() < 4) {
-            throw std::runtime_error("Buffer too small for binary bytea");
-        }
-
-        // Read the length
-        integer length = read_integer(std::vector<byte>(buffer.begin(), buffer.begin() + 4));
-
-        // Verify the length
-        if (length < 0) {
-            // NULL
-            return {};
-        }
-
-        if (static_cast<size_t>(length) + 4 > buffer.size()) {
-            throw std::runtime_error("Bytea length exceeds buffer size");
-        }
-
-        // Extract the data
-        return std::vector<byte>(buffer.begin() + 4, buffer.begin() + 4 + length);
-    } else {
-        // Text format (hex representation)
-        std::string       hex_string = read_text_string(buffer);
-        std::vector<byte> result;
-
-        // Skip the "\x" prefix if present
-        size_t start_pos = 0;
-        if (hex_string.size() >= 2 && hex_string.substr(0, 2) == "\\x") {
-            start_pos = 2;
-        }
-
-        // Convert each pair of hex bytes
-        for (size_t i = start_pos; i < hex_string.size(); i += 2) {
-            if (i + 1 >= hex_string.size()) {
-                break;
-            }
-
-            byte value = 0;
-            for (int j = 0; j < 2; ++j) {
-                char c = hex_string[i + j];
-                byte nibble;
-
-                if (c >= '0' && c <= '9') {
-                    nibble = c - '0';
-                } else if (c >= 'a' && c <= 'f') {
-                    nibble = c - 'a' + 10;
-                } else if (c >= 'A' && c <= 'F') {
-                    nibble = c - 'A' + 10;
-                } else {
-                    throw std::runtime_error("Invalid hex character in bytea");
-                }
-
-                value = (value << 4) | nibble;
-            }
-
-            result.push_back(value);
-        }
-
-        return result;
-    }
 }
 
 } // namespace qb::pg::detail

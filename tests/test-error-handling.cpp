@@ -180,6 +180,41 @@ TEST_F(PostgreSQLErrorHandlingTest, TableNotFound_Coroutine) {
     EXPECT_TRUE(saw_fail);
 }
 
+// Exercises the documented typed error API: db_error::sqlstate (the sqlstate::code
+// enum produced by sqlstates code_to_state). The other error tests only check a
+// message substring OR the 5-char string; this asserts the enum directly across
+// several SQLSTATE classes. Each statement auto-commits, so a failure rolls back
+// its own implicit transaction and the next statement starts clean.
+TEST_F(PostgreSQLErrorHandlingTest, SqlStateEnumMapping) {
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        (void) co_await db_->query("CREATE TEMP TABLE sse_parent (id INT PRIMARY KEY)");
+        (void) co_await db_->query("CREATE TEMP TABLE sse (id INT UNIQUE NOT NULL, pid INT REFERENCES sse_parent(id))");
+        (void) co_await db_->query("INSERT INTO sse_parent (id) VALUES (1)");
+        (void) co_await db_->query("INSERT INTO sse (id, pid) VALUES (10, 1)");
+
+        auto uv = co_await db_->query("INSERT INTO sse (id, pid) VALUES (10, 1)"); // duplicate id
+        EXPECT_FALSE(uv.ok());
+        EXPECT_EQ(uv.error().sqlstate, sqlstate::unique_violation);
+        EXPECT_EQ(uv.error().code, "23505");
+
+        auto nn = co_await db_->query("INSERT INTO sse (id, pid) VALUES (NULL, 1)");
+        EXPECT_EQ(nn.error().sqlstate, sqlstate::not_null_violation);
+
+        auto fk = co_await db_->query("INSERT INTO sse (id, pid) VALUES (11, 999)"); // no such parent
+        EXPECT_EQ(fk.error().sqlstate, sqlstate::foreign_key_violation);
+
+        auto ut = co_await db_->query("SELECT * FROM sse_no_such_table");
+        EXPECT_EQ(ut.error().sqlstate, sqlstate::undefined_table);
+
+        auto se = co_await db_->query("INVALID SQL");
+        EXPECT_EQ(se.error().sqlstate, sqlstate::syntax_error);
+
+        auto dz = co_await db_->query("SELECT 1 / 0");
+        EXPECT_EQ(dz.error().sqlstate, sqlstate::division_by_zero);
+        co_return;
+    }());
+}
+
 // Test handling of queries with non-existent columns
 TEST_F(PostgreSQLErrorHandlingTest, ColumnNotFound) {
     bool error_caught = false;

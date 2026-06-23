@@ -15,8 +15,8 @@ The serialization machinery (`TypeConverter`, `ParamSerializer`, `FieldHandler`)
 ## Concepts
 
 - **OID.** A PostgreSQL type identifier from the `pg_type` catalog (e.g. `23` = `int4`, `1184` = `timestamptz`). `qbm-pgsql` models the common ones as `enum class qb::pg::oid` ([`src/pg_types.h`](../src/pg_types.h)).
-- **`type_oid_sequence`.** `using type_oid_sequence = std::vector<oid>` ([`src/common.h`](../src/common.h)). You pass one to `prepare()` to declare each parameter's type. <!-- src: src/common.h:497 -->
-- **`params`.** `using params = detail::QueryParams` ([`pgsql.h`](../pgsql.h)). A heterogeneous container of bind values serialized to PostgreSQL **binary** wire form. <!-- src: pgsql.h:2047 -->
+- **`type_oid_sequence`.** `using type_oid_sequence = std::vector<oid>` ([`src/common.h`](../src/common.h)). You pass one to `prepare()` to declare each parameter's type. <!-- src: src/common.h:521 -->
+- **`params`.** `using params = detail::QueryParams` ([`pgsql.h`](../pgsql.h)). A heterogeneous container of bind values serialized to PostgreSQL **binary** wire form. <!-- src: pgsql.h:2441 -->
 - **`type_mapping<T>`.** Compile-time C++-type → OID lookup ([`src/type_mapping.h`](../src/type_mapping.h)). Drives `get_type_oid<T>()` and `fill_types<T...>()`. Unmapped types resolve to OID `705` (unknown), never an error.
 - **`TypeConverter<T>`.** The encode/decode engine ([`src/type_converter.h`](../src/type_converter.h)): `to_binary` / `to_text` (send) and `from_binary` / `from_text` (receive). Unsupported types fail to compile via `static_assert`.
 
@@ -96,7 +96,7 @@ Integers and floats round-trip in fixed-width binary. `int4` decode also accepts
 ### JSON and JSONB
 
 - **`qb::json` → `json` (114).** Sent and received as JSON text with a length prefix.
-- **`qb::jsonb` → `jsonb` (3802).** Sent in PostgreSQL's `jsonb_recv` binary form (a version byte `1` followed by UTF-8 JSON). Unlike string-like types, **`jsonb` stays binary on the result wire** — it is not in the text-preferring set. <!-- src: src/type_converter.h:1011-1024, 1161-1170; src/common.h:391-398 -->
+- **`qb::jsonb` → `jsonb` (3802).** Sent in PostgreSQL's `jsonb_recv` binary form (a version byte `1` followed by UTF-8 JSON). Unlike string-like types, **`jsonb` stays binary on the result wire** — it is not in the text-preferring set. <!-- src: src/type_converter.h:1011-1024, 1161-1170; src/common.h:421 (jsonb binary case) -->
 
 ```cpp
 #include <pgsql/pgsql.h>
@@ -117,7 +117,37 @@ qb::uuid id = result[0][0].as<qb::uuid>(); // src: tests/test-data-types-integra
 
 ### Arrays
 
-PostgreSQL array types (`int4[]`, `text[]`, …) are **not** auto-mapped — there is no `type_mapping` or `TypeConverter` specialization for `std::vector<T>` as an array (the only vector specializations are `bytea`). Bind array values by passing a literal array string and a `text`/array OID, and read them back with `as<std::string>()` (the array text form, e.g. `{1,2,3}`), parsing in your domain layer. Do not expect a `std::vector<int>` parameter to become an `int4[]`.
+A 1-D `std::vector<T>` **does** round-trip as a PostgreSQL array. On the send side, `param_serializer`'s `add_vector` serializes the vector in PostgreSQL's binary array wire form and declares the matching array OID; on the receive side, `field.as<std::vector<T>>()` decodes it via `decode_pg_array` (the `QB_PG_DEFINE_ARRAY_CONVERTER` specializations). <!-- src: src/param_serializer.h:738-777; src/type_converter.h:2098-2136 -->
+
+```cpp
+#include <pgsql/pgsql.h>
+using namespace qb::pg;
+
+// Bind an int4[] and read it back.
+auto ex  = co_await db.execute("ins_tags", params{std::vector<int32_t>{1, 2, 3}});
+std::vector<int32_t> tags = row[0].as<std::vector<int32_t>>();
+```
+
+Supported element types and their array OIDs:
+
+| Element `T` | PostgreSQL array | Array OID |
+|:------------|:-----------------|:---------:|
+| `bool` | `boolean[]` | 1000 |
+| `int16_t` / `smallint` | `int2[]` | 1005 |
+| `int32_t` / `integer` | `int4[]` | 1007 |
+| `int64_t` / `bigint` | `int8[]` | 1016 |
+| `float` | `float4[]` | 1021 |
+| `double` | `float8[]` | 1022 |
+| `std::string` | `text[]` | 1009 |
+
+Limits:
+
+- **1-D only.** A `decode_pg_array` flattens any multi-dimensional array row-major into a single `std::vector<T>`, but the send path declares a 1-D array.
+- **Only the element types above.** A vector of any other element type falls back to the `anyarray` OID (2277) on send and has no `as<std::vector<T>>()` decoder.
+- **`std::vector<char>` / `std::vector<unsigned char>` / `std::vector<std::byte>` stay on the `bytea` path**, not the array path (see [Text and binary blobs](#text-and-binary-blobs)).
+- **A SQL NULL element decodes to a default-constructed `T`** — the vector cannot represent SQL `NULL` for an element. <!-- src: src/type_converter.h:2003-2044 -->
+
+To declare an array parameter type explicitly in `prepare`, pass the array OID (the `oid` enum carries `*_array` members, e.g. `oid::int4_array`).
 
 ---
 
@@ -170,7 +200,7 @@ If you omit a type (`type_oid_sequence{}` or fewer entries than parameters), the
 ## Binary versus text on the wire
 
 - **Parameters:** always binary (format code 1, applied uniformly). <!-- src: factbook line 296 -->
-- **Result columns:** chosen per column by `type_oid_prefers_binary_result_format(oid)` ([`src/common.h`](../src/common.h)). After `Bind`, the client patches each `RowDescription` column's `format_code` to match what it requested, via `sync_field_format_codes_with_extended_query_bind` (because `Describe('S')` always reports `0`). <!-- src: src/common.h:382-429 -->
+- **Result columns:** chosen per column by `type_oid_prefers_binary_result_format(oid)` ([`src/common.h`](../src/common.h)). After `Bind`, the client patches each `RowDescription` column's `format_code` to match what it requested, via `sync_field_format_codes_with_extended_query_bind` (because `Describe('S')` always reports `0`). <!-- src: src/common.h:407-453 -->
   - **Text on the wire** (format code 0): `text`, `varchar`, `bpchar`, `unknown`, `xml`, `cstring`, `json`, `tsvector`, `tsquery`, `gtsvector`, `name`, the `reg*` catalog types, and `money` (`cash`). These decode through the text path so they match `std::string` consumption.
   - **Binary on the wire** (format code 1): everything else — integers, floats, `bool`, `bytea`, `timestamp`/`timestamptz`, `uuid`, and `jsonb`.
 
@@ -184,17 +214,18 @@ If an extension OID (for example `citext`) is misclassified, cast it to `text` i
 
 `src/type_converter.h` defines working `TypeConverter` specializations for several PostgreSQL types that **have no `type_mapping<T>` entry**. Their `TypeConverter::get_oid()` returns the right OID, so decoding with `as<T>()` works, but `get_type_oid<T>()` / `fill_types<T...>()` resolve them to `705` (unknown). When you bind these, **declare the OID explicitly** in `prepare`'s `type_oid_sequence`:
 
-| C++ type (`qb::pg::detail`) | PostgreSQL | OID | Notes |
-|:----------------------------|:-----------|:---:|:------|
-| `numeric` | `numeric` / `decimal` | 1700 | Wraps an exact decimal **string**; sent and received as text to preserve arbitrary precision. `numeric::operator+` is a placeholder that concatenates `"(a+b)"` — it does **not** compute a sum. |
-| `pgdate` | `date` | 1082 | Days since 2000-01-01. |
-| `pgtime` | `time` | 1083 | Microseconds since midnight. |
-| `pgtimetz` | `timetz` | 1266 | Microseconds since midnight plus a tz offset (seconds). |
-| `std::chrono::duration<Rep, Period>` | `interval` | 1186 | Only the microseconds component round-trips; `days` and `months` are hard-coded `0` on send and ignored on receive — lossy for real intervals carrying days/months. |
+| C++ type | PostgreSQL | OID | Notes |
+|:---------|:-----------|:---:|:------|
+| `qb::date` | `date` | 1082 | **Recommended.** Calendar date (civil, no time/zone) from `qb/system/time.h`, built on `std::chrono::sys_days`. |
+| `qb::time_of_day` | `time` | 1083 | **Recommended.** Microseconds since midnight (civil time of day). |
+| `qb::time_of_day_tz` | `timetz` | 1266 | **Recommended.** Time of day plus a fixed UTC offset (east-positive; the converter handles PostgreSQL's west-positive wire sign). |
+| `qb::calendar_interval` | `interval` | 1186 | **Recommended.** Lossless `{months, days, micros}`; round-trips real intervals carrying days/months. |
+| `qb::pg::detail::numeric` | `numeric` / `decimal` | 1700 | Wraps an exact decimal **string**; the binary digit-array codec preserves arbitrary precision. Not an arithmetic type (value-equality only). |
+| `std::chrono::duration<Rep, Period>` | `interval` | 1186 | Convenience "total span" mapping. **Lossy**: on receive, months/days are folded into the span (per `EXTRACT(EPOCH)`); on send only the microseconds component is written. Use `qb::calendar_interval` for fidelity. |
 
-<!-- src: src/type_converter.h:1298-1868 -->
+<!-- src: src/type_converter.h (qb::date/time_of_day/time_of_day_tz/calendar_interval specializations) -->
 
-These live in `qb::pg::detail`, not the public `qb::pg` surface. For exact decimals, most teams skip the marker type and bind a decimal **string** with the `numeric` OID, then read the column with `field.as<std::string>()`:
+The `qb::*` civil types are public (`qb` namespace, `qb/system/time.h`). For exact decimals, most teams skip the marker type and bind a decimal **string** with the `numeric` OID, then read the column with `field.as<std::string>()`:
 
 ```cpp
 #include <pgsql/pgsql.h>
@@ -209,7 +240,7 @@ auto ex = co_await db.execute("ins_amt", params{std::string{"1234.5600"}});
 std::string amount = row[0].as<std::string>();
 ```
 
-> **One footgun to know.** Among `from_binary` specializations the length-prefix assumption differs: `wall_time` / `uuid` / `bool` expect the 4-byte wire length prefix **already stripped** (the protocol layer does this before `TypeConverter` is called), whereas `pgdate` / `pgtime` / `pgtimetz` read at `buffer.data() + 4` (assuming the prefix is still present). On the normal `as<T>()` path the framework feeds each converter the buffer it expects, so this only bites if you call `TypeConverter<...>::from_binary` directly on a hand-built buffer. <!-- src: factbook lines 322,327 -->
+> **Contract reminder.** `from_binary` receives the field **value bytes only** — the per-field 4-byte length prefix is stripped by the protocol layer before `TypeConverter` is called. `to_binary` writes the prefixed form `[int32 length][value]` (the Bind/param framing). Every converter accepts the value-only form and, defensively, also the prefixed form, so `to_binary`→`from_binary` round-trips on a hand-built buffer. (A temporal decoder that reads at `buffer.data()+4` instead of `buffer.data()` mis-decodes the unprefixed wire value — the classic off-by-4; the `date`/`time`/`timetz`/`interval` converters are regression-tested against PostgreSQL `*_send()` ground truth to prevent it.)
 
 ---
 
@@ -237,9 +268,9 @@ The handler walks columns by index, converting each per its declared type. <!-- 
 ## Pitfalls
 
 - **Do not reach for retired timestamp types.** `qb::Timestamp` / `qb::UtcTimestamp` / `qb::LocalTimestamp` and `to_timestamp(...)` no longer exist. Every timestamp is `qb::wall_time`.
-- **`numeric`/`pgdate`/`pgtime`/`pgtimetz`/`duration` bind to OID `705` if auto-deduced.** Pass the explicit OID in `prepare`'s `type_oid_sequence`, or the server will receive an `unknown`-typed parameter.
-- **Arrays are not auto-mapped.** A `std::vector<int>` parameter does not become `int4[]`; bind/read array text and parse it yourself.
-- **`std::chrono::duration` → `interval` is lossy.** Only microseconds survive; days and months are dropped.
+- **Types without a `type_mapping<T>` entry bind to OID `705` if auto-deduced.** This includes `numeric`, the `qb::*` civil types, and the legacy `pg*` markers — their `TypeConverter::get_oid()` returns the right OID for decoding, but pass the explicit OID in `prepare`'s `type_oid_sequence` so the server does not receive an `unknown`-typed parameter.
+- **`std::chrono::duration` → `interval` is lossy** (months/days collapse into a total span). Use `qb::calendar_interval` to round-trip an interval's months/days/micros exactly.
+- **Arrays do round-trip.** A `std::vector<T>` parameter is sent as the matching PG array and `field.as<std::vector<T>>()` decodes one (1-D, element types `bool`/`int2`/`int4`/`int8`/`float4`/`float8`/`text`); NULL elements decode to a default-constructed element.
 - **`numeric::operator+` does not add.** It string-concatenates; never use it as arithmetic.
 - **`bool` / `int4` binary widths are flexible on decode.** `int4` accepts `int2`/`int8` fields (handy for `COUNT(*)`), but an out-of-range `int8` throws.
 - **Out-of-range timestamp text formatting throws.** Formatting a `wall_time` outside `gmtime`'s range raises `error::client_error("timestamp out of range for text conversion")`. <!-- src: src/type_converter.h:320-321 -->

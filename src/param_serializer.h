@@ -387,7 +387,8 @@ public:
                 return;
             }
             // Special cases for byte arrays - keep existing behavior
-            else if constexpr (std::is_same_v<value_type, std::vector<char>> || std::is_same_v<value_type, std::vector<unsigned char>>) {
+            else if constexpr (std::is_same_v<value_type, std::vector<char>> || std::is_same_v<value_type, std::vector<unsigned char>>
+                               || std::is_same_v<value_type, std::vector<std::byte>>) {
                 if (!param.empty()) {
                     add_byte_array(reinterpret_cast<const byte *>(param.data()), param.size());
                 } else {
@@ -403,29 +404,32 @@ public:
         }
 
         // Special case: null value (nullptr)
-        if constexpr (std::is_same_v<value_type, std::nullptr_t>) {
+        else if constexpr (std::is_same_v<value_type, std::nullptr_t>) {
             add_null();
-            return;
         }
 
-        // Standard case: use TypeConverter
-        // 1. Add the OID type
-        param_types_.push_back(TypeConverter<value_type>::get_oid());
+        // Standard scalar case: serialize via TypeConverter. Guarded as the final
+        // `else` so it is NOT instantiated for vector/nullptr types — otherwise
+        // TypeConverter<std::vector<T>>::to_binary would be ODR-used here (and now
+        // hard-error via the loud static_assert) even though the vector branch above
+        // handles arrays through add_vector / add_byte_array.
+        else {
+            // 1. Add the OID type
+            param_types_.push_back(TypeConverter<value_type>::get_oid());
 
-        // 2. Check if it's an optional NULL value
-        if constexpr (ParamUnserializer::is_optional<value_type>::value) {
-            if (!param.has_value()) {
-                write_null();
-                return;
+            // 2. Optional NULL value -> -1 length sentinel, no payload
+            if constexpr (ParamUnserializer::is_optional<value_type>::value) {
+                if (!param.has_value()) {
+                    write_null();
+                    return;
+                }
             }
+
+            // 3. Serialize to binary and append to the parameter buffer
+            std::vector<byte> buffer;
+            TypeConverter<value_type>::to_binary(param, buffer);
+            params_buffer_.insert(params_buffer_.end(), buffer.begin(), buffer.end());
         }
-
-        // 3. Serialize to binary
-        std::vector<byte> buffer;
-        TypeConverter<value_type>::to_binary(param, buffer);
-
-        // 4. Add the result to the parameter buffer
-        params_buffer_.insert(params_buffer_.end(), buffer.begin(), buffer.end());
     }
 
     /**

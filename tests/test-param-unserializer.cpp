@@ -1648,28 +1648,29 @@ TEST_F(ParamUnserializerTest, DateDeserialization) {
     using namespace qb::pg::detail;
 
     // Test 1: Serialize and deserialize a date
-    pgdate            original = pgdate::from_string("2024-06-15");
+    qb::date          original = qb::date::parse("2024-06-15").value();
     std::vector<byte> buffer;
-    TypeConverter<pgdate>::to_binary(original, buffer);
+    TypeConverter<qb::date>::to_binary(original, buffer);
 
-    pgdate result = TypeConverter<pgdate>::from_binary(buffer);
+    qb::date result = TypeConverter<qb::date>::from_binary(buffer);
     EXPECT_EQ(result, original);
     EXPECT_EQ(result.to_string(), "2024-06-15");
 
     // Test 2: Text format
     std::string text_date = "2000-01-01";
-    pgdate      result2   = TypeConverter<pgdate>::from_text(text_date);
+    qb::date    result2   = TypeConverter<qb::date>::from_text(text_date);
     EXPECT_EQ(result2.to_string(), text_date);
 
-    // Test 3: Epoch date (PostgreSQL epoch: 2000-01-01 = day 0)
-    pgdate epoch(0); // Day 0 = 2000-01-01
-    EXPECT_EQ(epoch.to_string(), "2000-01-01");
+    // Test 3: Unix epoch date (qb::date counts days since 1970-01-01 = day 0)
+    qb::date epoch = qb::date::from_days_since_epoch(0);
+    EXPECT_EQ(epoch.to_string(), "1970-01-01");
 
-    // Test 4: Date before epoch (negative days)
-    pgdate before_epoch(-365); // ~1999-01-01
+    // Test 4: Date before the Unix epoch (negative days) survives a binary round-trip
+    qb::date before_epoch = qb::date::from_days_since_epoch(-365); // 1969-01-01
+    EXPECT_EQ(before_epoch.to_string(), "1969-01-01");
     buffer.clear();
-    TypeConverter<pgdate>::to_binary(before_epoch, buffer);
-    pgdate result4 = TypeConverter<pgdate>::from_binary(buffer);
+    TypeConverter<qb::date>::to_binary(before_epoch, buffer);
+    qb::date result4 = TypeConverter<qb::date>::from_binary(buffer);
     EXPECT_EQ(result4, before_epoch);
 
     std::cout << "DATE deserialization test passed" << std::endl;
@@ -1733,10 +1734,10 @@ TEST_F(ParamUnserializerTest, MixedComplexTypesRoundTrip) {
     EXPECT_EQ(n1.str(), n2.str());
 
     // DATE - full round-trip works
-    pgdate d1 = pgdate::from_string("2024-12-25");
+    qb::date d1 = qb::date::parse("2024-12-25").value();
     buffer.clear();
-    TypeConverter<pgdate>::to_binary(d1, buffer);
-    pgdate d2 = TypeConverter<pgdate>::from_binary(buffer);
+    TypeConverter<qb::date>::to_binary(d1, buffer);
+    qb::date d2 = TypeConverter<qb::date>::from_binary(buffer);
     EXPECT_EQ(d1, d2);
 
     // INTERVAL - binary round-trip has limitations, test serialization only
