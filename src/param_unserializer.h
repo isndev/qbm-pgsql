@@ -25,6 +25,7 @@
 #pragma once
 
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -80,7 +81,7 @@ public:
      * @param buffer The buffer containing binary data
      * @return smallint The extracted 2-byte integer value
      */
-    smallint read_smallint(const std::vector<byte> &buffer);
+    smallint read_smallint(std::span<const byte> buffer);
 
     /**
      * @brief Read a 4-byte integer from a binary buffer
@@ -91,7 +92,7 @@ public:
      * @param buffer The buffer containing binary data
      * @return integer The extracted 4-byte integer value
      */
-    integer read_integer(const std::vector<byte> &buffer);
+    integer read_integer(std::span<const byte> buffer);
 
     /**
      * @brief Read an 8-byte integer from a binary buffer
@@ -102,7 +103,7 @@ public:
      * @param buffer The buffer containing binary data
      * @return bigint The extracted 8-byte integer value
      */
-    bigint read_bigint(const std::vector<byte> &buffer);
+    bigint read_bigint(std::span<const byte> buffer);
 
     /**
      * @brief Read a single-precision floating point value from a binary buffer
@@ -113,7 +114,7 @@ public:
      * @param buffer The buffer containing binary data
      * @return float The extracted single-precision floating point value
      */
-    float read_float(const std::vector<byte> &buffer);
+    float read_float(std::span<const byte> buffer);
 
     /**
      * @brief Read a double-precision floating point value from a binary buffer
@@ -124,7 +125,7 @@ public:
      * @param buffer The buffer containing binary data
      * @return double The extracted double-precision floating point value
      */
-    double read_double(const std::vector<byte> &buffer);
+    double read_double(std::span<const byte> buffer);
 
     /**
      * @brief Read a string from a binary buffer
@@ -135,7 +136,7 @@ public:
      * @param buffer The buffer containing string data
      * @return std::string The extracted string value
      */
-    std::string read_string(const std::vector<byte> &buffer);
+    std::string read_string(std::span<const byte> buffer);
 
     /**
      * @brief Read a string in text format from a binary buffer
@@ -146,7 +147,7 @@ public:
      * @param buffer The buffer containing text-formatted string data
      * @return std::string The extracted string value
      */
-    std::string read_text_string(const std::vector<byte> &buffer);
+    std::string read_text_string(std::span<const byte> buffer);
 
     /**
      * @brief Read a string in binary format from a binary buffer
@@ -157,7 +158,7 @@ public:
      * @param buffer The buffer containing binary-formatted string data
      * @return std::string The extracted string value
      */
-    std::string read_binary_string(const std::vector<byte> &buffer);
+    std::string read_binary_string(std::span<const byte> buffer);
 
     /**
      * @brief Read a boolean value from a binary buffer
@@ -168,18 +169,7 @@ public:
      * @param buffer The buffer containing boolean data
      * @return bool The extracted boolean value
      */
-    bool read_bool(const std::vector<byte> &buffer);
-
-    /**
-     * @brief Read binary data (bytea) from a binary buffer
-     *
-     * Extracts a bytea value from the provided binary buffer.
-     * This handles PostgreSQL's binary format for bytea data.
-     *
-     * @param buffer The buffer containing bytea data
-     * @return std::vector<byte> The extracted binary data
-     */
-    std::vector<byte> read_bytea(const std::vector<byte> &buffer);
+    bool read_bool(std::span<const byte> buffer);
 };
 
 } // namespace qb::pg::detail

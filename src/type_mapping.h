@@ -148,6 +148,24 @@ struct type_mapping<qb::wall_time> {
     static constexpr integer type_oid = 1184;
 }; // timestamptz
 
+// Civil calendar / time-of-day types (qb/system/time.h).
+template <>
+struct type_mapping<qb::date> {
+    static constexpr integer type_oid = 1082;
+}; // date
+template <>
+struct type_mapping<qb::time_of_day> {
+    static constexpr integer type_oid = 1083;
+}; // time
+template <>
+struct type_mapping<qb::time_of_day_tz> {
+    static constexpr integer type_oid = 1266;
+}; // timetz
+template <>
+struct type_mapping<qb::calendar_interval> {
+    static constexpr integer type_oid = 1186;
+}; // interval
+
 // Optional types (use the underlying type's OID)
 template <typename T>
 struct type_mapping<std::optional<T>> {

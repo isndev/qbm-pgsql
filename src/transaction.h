@@ -357,6 +357,38 @@ public:
     }
 
     /**
+     * @brief Inline parameterized query (coroutine): bind args and run in one call.
+     *
+     * @code
+     *   auto r = co_await db.query("SELECT name FROM users WHERE id = $1", id);
+     *   if (r) for (auto [name] : r.result().all<std::string>()) { ... }
+     * @endcode
+     *
+     * Runs through the UNNAMED prepared statement (`""`), so it does not pollute the
+     * prepared-statement cache and keeps full per-column binary result decoding.
+     * Parameter OIDs are deduced from the C++ argument types (via `QueryParams`).
+     * Cost is two server round-trips (Parse+Describe, then Bind+Execute) — identical
+     * to a manual `prepare`+`execute`, but a single call. For a hot, repeated query,
+     * prefer a named `prepare` (one round-trip after the first).
+     *
+     * Constrained to at least one bound argument so it never shadows `query(sql)`.
+     */
+    template <typename First, typename... Rest>
+    [[nodiscard]] qb::io::async::task<qb::pg::Reply<resultset>>
+    query(std::string sql, First &&first, Rest &&...rest) {
+        QueryParams       qp(std::forward<First>(first), std::forward<Rest>(rest)...);
+        type_oid_sequence oids;
+        oids.reserve(qp.param_types().size());
+        for (integer o : qp.param_types())
+            oids.push_back(static_cast<oid>(o));
+
+        auto prepared = co_await prepare(std::string_view{}, std::string_view{sql}, std::move(oids));
+        if (!prepared)
+            co_return qb::pg::Reply<resultset>::failure(prepared.error());
+        co_return co_await execute(std::string_view{}, std::move(qp));
+    }
+
+    /**
      * @brief Sends NOTIFY (publisher side; use a normal `database` connection).
      *
      * Builds safe `NOTIFY "channel" [, 'payload']` SQL. Empty @p payload omits the payload

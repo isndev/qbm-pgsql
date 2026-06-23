@@ -222,6 +222,41 @@ TEST_F(PostgreSQLConnectionTest, ConnectionPool_Coroutine) {
     ASSERT_TRUE(all_ok);
 }
 
+// ssl_verify_mode actually gates the handshake. The default (none) encrypts without
+// verifying — it connects. verify-full validates the chain against the system trust
+// store + the hostname; the test server's self-signed certificate is NOT trusted, so
+// verify-full MUST reject it before any data flows (proves verification is enforced,
+// not cosmetic). Set the field via the connection_options overload of connect().
+TEST_F(PostgreSQLConnectionTest, SslVerifyFullRejectsUntrustedCert) {
+    // Precondition: TLS is actually available (default no-verify mode connects).
+    {
+        auto probe = std::make_unique<qb::pg::tcp::ssl::database>();
+        if (!qb::io::async::run_sync(probe->connect(qb::pg::test::dsn_ssl_string()))) {
+            GTEST_SKIP() << "SSL not available with default DSN; skipping verify-full test.";
+            return;
+        }
+        probe->disconnect();
+    }
+
+    auto opts       = qb::pg::connection_options::parse(qb::pg::test::dsn_ssl_string());
+    opts.ssl_verify = qb::pg::ssl_verify_mode::full;
+
+    auto db = std::make_unique<qb::pg::tcp::ssl::database>();
+    EXPECT_FALSE(qb::io::async::run_sync(db->connect(opts)))
+        << "verify-full accepted an untrusted self-signed certificate (MITM hole)";
+}
+
+// Over TLS, SCRAM must negotiate SCRAM-SHA-256-PLUS with tls-server-end-point channel
+// binding (PostgreSQL offers `-PLUS` on SSL connections). This binds the SCRAM proof to
+// the server certificate — a wrong binding would make the server reject the proof, so a
+// successful connect with used_channel_binding() == true proves the binding is correct.
+// (Requires a scram-sha-256 server; a `trust` server skips SCRAM and this would not apply.)
+TEST_F(PostgreSQLConnectionTest, ScramChannelBindingNegotiatedOverTls) {
+    QB_PG_ASSERT_SSL_CONNECTED(*db_);
+    EXPECT_TRUE(db_->used_channel_binding())
+        << "SCRAM-SHA-256-PLUS (tls-server-end-point) channel binding was not negotiated over TLS";
+}
+
 int
 main(int argc, char **argv) {
     qb::io::async::init();

@@ -234,6 +234,14 @@ message::discard_remaining() noexcept {
     curr_ = payload.end();
 }
 
+std::string_view
+message::remaining() const noexcept {
+    const auto end = payload.cend();
+    if (curr_ == end)
+        return {};
+    return std::string_view(&*curr_, static_cast<std::size_t>(end - curr_));
+}
+
 /**
  * @brief Read a byte from the message buffer
  *

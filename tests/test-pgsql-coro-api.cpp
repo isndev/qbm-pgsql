@@ -98,6 +98,110 @@ TEST_F(PgsqlCoroApiTest, CoroQueryAndExecute) {
     ASSERT_TRUE(ok);
 }
 
+// Typed row mapping: row.as<std::tuple<...>>(), resultset::one<Ts...>() and all<Ts...>(),
+// plus structured-binding iteration.
+TEST_F(PgsqlCoroApiTest, TypedRowMappingTupleOneAll) {
+    bool ok = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        auto ins = co_await db_->execute(std::string("INSERT INTO ") + std::string(kCoroApiTable) + " (v) VALUES ('x'),('y'),('z')");
+        if (!ins)
+            co_return;
+        auto sel = co_await db_->query(std::string("SELECT id, v FROM ") + std::string(kCoroApiTable) + " ORDER BY id");
+        if (!sel.ok())
+            co_return;
+        const auto &res = sel.result();
+
+        // row.as<tuple>() + structured binding
+        auto [id0, v0] = res[0].as<std::tuple<int, std::string>>();
+        // one<Ts...>() -> optional<tuple>
+        auto first = res.one<int, std::string>();
+        // all<Ts...>() -> vector<tuple>, iterated with structured bindings
+        auto        rows = res.all<int, std::string>();
+        std::string concat;
+        for (auto [id, v] : rows) {
+            (void) id;
+            concat += v;
+        }
+        // lazy rows<Ts...>() view (no eager copy)
+        std::string concat2;
+        for (auto [id, v] : res.rows<int, std::string>()) {
+            (void) id;
+            concat2 += v;
+        }
+
+        ok = res.size() == 3 && v0 == "x" && first.has_value() && std::get<1>(*first) == "x" && std::get<0>(*first) == id0 && rows.size() == 3
+             && std::get<1>(rows[2]) == "z" && concat == "xyz" && concat2 == "xyz";
+        co_return;
+    }());
+    ASSERT_TRUE(ok);
+}
+
+// Validates the UNNAMED prepared statement ("") round-trip and that it is reusable
+// (replaced, not stuck) — the foundation for an inline one-shot parameterized query.
+TEST_F(PgsqlCoroApiTest, UnnamedPrepareExecuteIsReusable) {
+    bool ok = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        auto p = co_await db_->prepare("", "SELECT $1::int + $2::int AS s", type_oid_sequence{oid::int4, oid::int4});
+        if (!p)
+            co_return;
+        auto r = co_await db_->execute("", QueryParams(2, 3));
+        if (!(r.ok() && r.result().size() == 1 && r.result()[0][0].as<int>() == 5))
+            co_return;
+        // Re-use the unnamed slot for a different statement.
+        auto p2 = co_await db_->prepare("", "SELECT $1::text AS t", type_oid_sequence{oid::text});
+        if (!p2)
+            co_return;
+        auto r2 = co_await db_->execute("", QueryParams(std::string("hi")));
+        ok      = r2.ok() && r2.result().size() == 1 && r2.result()[0][0].as<std::string>() == "hi";
+        co_return;
+    }());
+    ASSERT_TRUE(ok);
+}
+
+// Inline one-shot parameterized query: db.query(sql, args...) with deduced OIDs,
+// run repeatedly (unnamed-statement reuse), results read via typed all<>.
+TEST_F(PgsqlCoroApiTest, InlineParameterizedQuery) {
+    bool ok = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        // Integer params, deduced OIDs.
+        auto sum = co_await db_->query(std::string("SELECT $1::int + $2::int"), 2, 3);
+        if (!(sum.ok() && sum.result().size() == 1 && sum.result()[0][0].as<int>() == 5))
+            co_return;
+
+        // Text param filter, run twice for two different values (unnamed reuse).
+        auto ins = co_await db_->execute(std::string("INSERT INTO ") + std::string(kCoroApiTable) + " (v) VALUES ('alpha'),('beta')");
+        if (!ins)
+            co_return;
+        auto a  = co_await db_->query(std::string("SELECT id, v FROM ") + std::string(kCoroApiTable) + " WHERE v = $1", std::string("alpha"));
+        auto b  = co_await db_->query(std::string("SELECT id, v FROM ") + std::string(kCoroApiTable) + " WHERE v = $1", std::string("beta"));
+        auto ra = a.result().all<int, std::string>();
+        auto rb = b.result().all<int, std::string>();
+        ok = a.ok() && b.ok() && ra.size() == 1 && std::get<1>(ra[0]) == "alpha" && rb.size() == 1 && std::get<1>(rb[0]) == "beta";
+        co_return;
+    }());
+    ASSERT_TRUE(ok);
+}
+
+// Zero-copy field access: field::text() (string_view) and view() (span<const byte>)
+// point into the result set's storage (no allocation) and match as<std::string>().
+TEST_F(PgsqlCoroApiTest, ZeroCopyFieldViewAndText) {
+    bool ok = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        auto ins = co_await db_->execute(std::string("INSERT INTO ") + std::string(kCoroApiTable) + " (v) VALUES ('hello')");
+        if (!ins)
+            co_return;
+        auto sel = co_await db_->query(std::string("SELECT v FROM ") + std::string(kCoroApiTable) + " WHERE v = 'hello'");
+        if (!sel.ok() || sel.result().size() != 1)
+            co_return;
+        const auto      &res = sel.result();
+        std::string_view tv  = res[0][0].text();  // zero-copy view into res storage
+        auto             sp  = res[0][0].view();   // zero-copy bytes
+        ok = tv == "hello" && sp.size() == 5 && res[0][0].as<std::string>() == std::string(tv);
+        co_return;
+    }());
+    ASSERT_TRUE(ok);
+}
+
 TEST_F(PgsqlCoroApiTest, CoroBeginCommit) {
     bool ok = false;
     qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
@@ -554,6 +658,382 @@ TEST_F(PgsqlCoroApiTest, CoroExecuteAfterErrorRequiresRollback_Manual) {
         ok        = good.ok();
     }());
     ASSERT_TRUE(ok);
+}
+
+// Out-of-band query cancellation: db_->cancel() opens a SEPARATE connection and sends
+// a CancelRequest built from the captured BackendKeyData, aborting the in-flight query.
+// The awaiting caller observes SQLSTATE 57014 / sqlstate::query_canceled, and the
+// connection stays usable afterwards.
+TEST_F(PgsqlCoroApiTest, CancelInFlightQuery) {
+    bool        failed          = false;
+    bool        is_cancel_state = false;
+    std::string code;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        // Fire the cancel ~200ms into a 5s sleep — the query awaiter is parked by then.
+        qb::io::async::callback([this]() { (void) db_->cancel(); }, std::chrono::milliseconds(200));
+        auto r = co_await db_->query("SELECT pg_sleep(5)");
+        failed = !r.ok();
+        if (!r.ok()) {
+            code            = r.error().code;
+            is_cancel_state = (r.error().sqlstate == sqlstate::query_canceled);
+        }
+        co_return;
+    }());
+    EXPECT_TRUE(failed) << "pg_sleep(5) should have been canceled, not completed";
+    EXPECT_EQ(code, "57014");
+    EXPECT_TRUE(is_cancel_state);
+
+    // A cancel aborts only the running query; the connection survives.
+    bool ok_after = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        auto r   = co_await db_->query("SELECT 1 AS one");
+        ok_after = r.ok();
+        co_return;
+    }());
+    EXPECT_TRUE(ok_after) << "connection must remain usable after a cancel";
+}
+
+// cancel() on a connection that never completed a handshake has no BackendKeyData,
+// so it must report failure (false) without touching the network.
+TEST(PgsqlCancel, ReturnsFalseWhenNotConnected) {
+    qb::pg::tcp::database db;
+    EXPECT_FALSE(db.cancel());
+}
+
+// SCRAM-SHA-256 server-nonce validation (RFC 5802 §5.1). Pure logic, no DB: the
+// handshake must reject a server/MITM whose combined nonce does not faithfully
+// extend the client nonce, before any proof is derived.
+TEST(ScramNonce, ServerMustExtendClientNonce) {
+    // Server echoes the client nonce and appends its own -> accepted.
+    EXPECT_TRUE(scram_server_nonce_extends_client("clientNONCE", "clientNONCEserverPART"));
+    const std::string c = "0123456789abcdef0123456789abcdef"; // realistic 32-char client nonce
+    EXPECT_TRUE(scram_server_nonce_extends_client(c, c + "SRV-side-nonce"));
+    // Rejections:
+    EXPECT_FALSE(scram_server_nonce_extends_client(c, c));                  // server contributed nothing
+    EXPECT_FALSE(scram_server_nonce_extends_client(c, "0123456789abcdef")); // server nonce shorter
+    EXPECT_FALSE(scram_server_nonce_extends_client(c, "X" + c + "more"));   // client nonce not a prefix
+    EXPECT_FALSE(scram_server_nonce_extends_client("", "anything"));        // empty client nonce
+    EXPECT_FALSE(scram_server_nonce_extends_client(c, ""));                 // empty server nonce
+    // A single tampered character inside the echoed prefix is rejected.
+    std::string tampered = c + "tail";
+    tampered[5]          = (tampered[5] == 'a') ? 'b' : 'a';
+    EXPECT_FALSE(scram_server_nonce_extends_client(c, tampered));
+}
+
+// SCRAM saslname escaping (RFC 5802): '=' -> '=3D' (first), ',' -> '=2C'. The inserted
+// '=3D' must NOT be re-escaped.
+TEST(ScramEscape, EscapesCommaAndEquals) {
+    EXPECT_EQ(scram_escape_saslname("alice"), "alice");
+    EXPECT_EQ(scram_escape_saslname("a,b"), "a=2Cb");
+    EXPECT_EQ(scram_escape_saslname("a=b"), "a=3Db");
+    EXPECT_EQ(scram_escape_saslname("a=,b"), "a=3D=2Cb"); // '=' escaped before ',', no double-escape
+    EXPECT_EQ(scram_escape_saslname(""), "");
+}
+
+// COPY ... TO STDOUT streams each row to the sink as it arrives (no result-set
+// buffering). Verifies both the default text format and CSV.
+TEST_F(PgsqlCoroApiTest, CopyOutStreamsToSink) {
+    std::string text_out, csv_out;
+    bool        ok_text = false, ok_csv = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        (void) co_await db_->query("CREATE TEMP TABLE copyt (id int, v text)");
+        (void) co_await db_->query("INSERT INTO copyt VALUES (1,'alpha'),(2,'beta'),(3,'gamma')");
+
+        auto rt = co_await db_->copy_out("COPY copyt TO STDOUT",
+                                         [&](std::string_view chunk) { text_out.append(chunk); });
+        ok_text = rt.ok();
+
+        auto rc = co_await db_->copy_out("COPY copyt TO STDOUT (FORMAT csv)",
+                                         [&](std::string_view chunk) { csv_out.append(chunk); });
+        ok_csv = rc.ok();
+        co_return;
+    }());
+    EXPECT_TRUE(ok_text);
+    EXPECT_EQ(text_out, "1\talpha\n2\tbeta\n3\tgamma\n"); // text: tab-separated, newline-terminated
+    EXPECT_TRUE(ok_csv);
+    EXPECT_EQ(csv_out, "1,alpha\n2,beta\n3,gamma\n"); // CSV: comma-separated
+}
+
+// COPY ... FROM STDIN bulk-loads client data. Round-trips it back out to prove the
+// loaded bytes match (one-shot convenience overload).
+TEST_F(PgsqlCoroApiTest, CopyInRoundTrip) {
+    const std::string payload = "1\tx\n2\ty\n3\tz\n";
+    std::string       out;
+    bool              ok_in = false, ok_out = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        (void) co_await db_->query("CREATE TEMP TABLE cprt (id int, v text)");
+        auto ri = co_await db_->copy_in("COPY cprt FROM STDIN", payload);
+        ok_in   = ri.ok();
+        auto ro = co_await db_->copy_out("COPY cprt TO STDOUT", [&](std::string_view c) { out.append(c); });
+        ok_out  = ro.ok();
+        co_return;
+    }());
+    EXPECT_TRUE(ok_in);
+    EXPECT_TRUE(ok_out);
+    EXPECT_EQ(out, payload); // copy_out reproduces exactly what copy_in loaded
+}
+
+// COPY ... FROM STDIN driven by a streaming source (one row per source() call).
+TEST_F(PgsqlCoroApiTest, CopyInStreamingSource) {
+    int  loaded = 0;
+    bool ok_in  = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        (void) co_await db_->query("CREATE TEMP TABLE cins (id int)");
+        int next = 0;
+        auto ri  = co_await db_->copy_in("COPY cins FROM STDIN", [&next]() -> std::optional<std::string> {
+            if (next >= 1000)
+                return std::nullopt;
+            return std::to_string(next++) + "\n";
+        });
+        ok_in    = ri.ok();
+        auto sel = co_await db_->query("SELECT count(*)::int FROM cins");
+        if (sel.ok() && sel.result().size() == 1)
+            loaded = sel.result()[0][0].as<int>();
+        co_return;
+    }());
+    EXPECT_TRUE(ok_in);
+    EXPECT_EQ(loaded, 1000); // all 1000 streamed rows landed
+}
+
+// A failing COPY must resolve the awaiter with an error (never hang) and leave the
+// connection usable — both the server-side error (bad table) and a throwing source.
+TEST_F(PgsqlCoroApiTest, CopyErrorsResolveAndConnectionSurvives) {
+    bool out_failed = false, in_failed = false, survived = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        auto ro    = co_await db_->copy_out("COPY qb_no_such_copy_table TO STDOUT", [](std::string_view) {});
+        out_failed = !ro.ok();
+
+        (void) co_await db_->query("CREATE TEMP TABLE cerr (id int)");
+        auto ri   = co_await db_->copy_in("COPY cerr FROM STDIN", []() -> std::optional<std::string> {
+            throw std::runtime_error("source boom");
+        });
+        in_failed = !ri.ok();
+
+        auto ok = co_await db_->query("SELECT 1 AS one");
+        survived = ok.ok() && ok.result().size() == 1 && ok.result()[0][0].as<int>() == 1;
+        co_return;
+    }());
+    EXPECT_TRUE(out_failed) << "COPY OUT on a missing table should resolve with an error";
+    EXPECT_TRUE(in_failed) << "COPY IN with a throwing source should resolve with an error";
+    EXPECT_TRUE(survived) << "the connection must stay usable after a failed COPY";
+}
+
+// query_stream fetches a large result in batches via a server-side cursor (constant
+// memory). batch_size 137 does not divide 5000, exercising the short last batch.
+TEST_F(PgsqlCoroApiTest, QueryStreamLargeResult) {
+    std::uint64_t count = 0, sum = 0;
+    bool          ok = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        auto r = co_await db_->query_stream("SELECT g FROM generate_series(1, 5000) g", 137,
+                                            [&](auto row) { ++count; sum += static_cast<std::uint64_t>(row[0].template as<int>()); });
+        ok     = r.ok();
+        co_return;
+    }());
+    EXPECT_TRUE(ok);
+    EXPECT_EQ(count, 5000u);
+    EXPECT_EQ(sum, 5000ull * 5001 / 2); // 1+2+…+5000
+}
+
+// Inside an existing transaction, query_stream must NOT commit/rollback it: the cursor
+// is declared in the caller's transaction and only closed; the caller's commit still works.
+TEST_F(PgsqlCoroApiTest, QueryStreamInsideTransaction) {
+    std::uint64_t count = 0;
+    bool          ok = false, committed = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        (void) co_await db_->begin();
+        auto r    = co_await db_->query_stream("SELECT g FROM generate_series(1, 100) g", 10, [&](auto) { ++count; });
+        ok        = r.ok();
+        auto c    = co_await db_->commit();
+        committed = c.ok();
+        co_return;
+    }());
+    EXPECT_TRUE(ok);
+    EXPECT_EQ(count, 100u);
+    EXPECT_TRUE(committed);
+}
+
+// A failing stream resolves with an error and leaves the connection usable.
+TEST_F(PgsqlCoroApiTest, QueryStreamErrorResolvesAndSurvives) {
+    bool failed = false, survived = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        auto r   = co_await db_->query_stream("SELECT * FROM qb_no_such_stream_table", 10, [](auto) {});
+        failed   = !r.ok();
+        auto ok  = co_await db_->query("SELECT 1");
+        survived = ok.ok();
+        co_return;
+    }());
+    EXPECT_TRUE(failed);
+    EXPECT_TRUE(survived);
+}
+
+// An exception from on_row is rethrown (after closing the cursor + rolling back the
+// self-opened transaction), and the connection stays usable.
+TEST_F(PgsqlCoroApiTest, QueryStreamOnRowThrowRethrowsAndSurvives) {
+    bool threw = false, survived = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        try {
+            (void) co_await db_->query_stream("SELECT g FROM generate_series(1, 100) g", 10,
+                                              [](auto) { throw std::runtime_error("row boom"); });
+        } catch (const std::exception &) {
+            threw = true;
+        }
+        auto ok  = co_await db_->query("SELECT 1");
+        survived = ok.ok();
+        co_return;
+    }());
+    EXPECT_TRUE(threw);
+    EXPECT_TRUE(survived);
+}
+
+// in_transaction() reflects the real ReadyForQuery status across idle / in-block /
+// failed-block / rolled-back states.
+TEST_F(PgsqlCoroApiTest, InTransactionTracksState) {
+    bool after_select = true, after_begin = false, after_commit = true, in_failed = false, after_rollback = true;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        (void) co_await db_->query("SELECT 1");
+        after_select = db_->in_transaction(); // idle -> false
+        (void) co_await db_->begin();
+        after_begin = db_->in_transaction(); // T -> true
+        (void) co_await db_->commit();
+        after_commit = db_->in_transaction(); // idle -> false
+        (void) co_await db_->begin();
+        (void) co_await db_->query("SELECT * FROM qb_no_such_intxn_table"); // errors -> failed block (E)
+        in_failed = db_->in_transaction();                                  // E -> true
+        (void) co_await db_->rollback();
+        after_rollback = db_->in_transaction(); // idle -> false
+        co_return;
+    }());
+    EXPECT_FALSE(after_select);
+    EXPECT_TRUE(after_begin);
+    EXPECT_FALSE(after_commit);
+    EXPECT_TRUE(in_failed);
+    EXPECT_FALSE(after_rollback);
+}
+
+// query_stream edge cases: empty result, an exact-divisor batch (extra empty FETCH to
+// detect exhaustion), and a single row.
+TEST_F(PgsqlCoroApiTest, QueryStreamEdgeCases) {
+    std::uint64_t empty_n = 999, exact_n = 0, single_n = 0;
+    bool          ok_empty = false, ok_exact = false, ok_single = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        empty_n  = 0;
+        auto re  = co_await db_->query_stream("SELECT g FROM generate_series(1, 0) g", 10, [&](auto) { ++empty_n; });
+        ok_empty = re.ok();
+        auto rx  = co_await db_->query_stream("SELECT g FROM generate_series(1, 100) g", 50, [&](auto) { ++exact_n; });
+        ok_exact = rx.ok();
+        auto rs  = co_await db_->query_stream("SELECT 42", 10, [&](auto) { ++single_n; });
+        ok_single = rs.ok();
+        co_return;
+    }());
+    EXPECT_TRUE(ok_empty);
+    EXPECT_EQ(empty_n, 0u);
+    EXPECT_TRUE(ok_exact);
+    EXPECT_EQ(exact_n, 100u);
+    EXPECT_TRUE(ok_single);
+    EXPECT_EQ(single_n, 1u);
+}
+
+// COPY in/out in BINARY format (distinct wire framing: signature header + per-row field
+// framing + trailer). Round-trips the opaque binary stream out then back in.
+TEST_F(PgsqlCoroApiTest, CopyBinaryRoundTrip) {
+    std::string bin;
+    int         count = 0;
+    bool        ok_out = false, ok_in = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        (void) co_await db_->query("CREATE TEMP TABLE cbin (id int, v text)");
+        (void) co_await db_->query("INSERT INTO cbin VALUES (1,'a'),(2,'b'),(3,'c')");
+        auto ro = co_await db_->copy_out("COPY cbin TO STDOUT (FORMAT binary)", [&](std::string_view c) { bin.append(c); });
+        ok_out  = ro.ok();
+        (void) co_await db_->query("CREATE TEMP TABLE cbin2 (id int, v text)");
+        auto ri = co_await db_->copy_in("COPY cbin2 FROM STDIN (FORMAT binary)", bin);
+        ok_in   = ri.ok();
+        auto sel = co_await db_->query("SELECT count(*)::int FROM cbin2");
+        if (sel.ok() && sel.result().size() == 1)
+            count = sel.result()[0][0].as<int>();
+        co_return;
+    }());
+    EXPECT_TRUE(ok_out);
+    EXPECT_FALSE(bin.empty()); // binary stream carries the PGCOPY signature + rows
+    EXPECT_TRUE(ok_in);
+    EXPECT_EQ(count, 3); // all 3 rows round-tripped through the binary stream
+}
+
+// COPY FROM STDIN issued via a plain query() (no copy_in() source) must fail cleanly
+// (the client sends CopyFail) and leave the connection usable.
+TEST_F(PgsqlCoroApiTest, CopyFromStdinWithoutSourceFails) {
+    bool failed = false, survived = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        (void) co_await db_->query("CREATE TEMP TABLE cnosrc (id int)");
+        auto r   = co_await db_->query("COPY cnosrc FROM STDIN");
+        failed   = !r.ok();
+        auto ok  = co_await db_->query("SELECT 1");
+        survived = ok.ok();
+        co_return;
+    }());
+    EXPECT_TRUE(failed) << "COPY FROM STDIN without a source should fail";
+    EXPECT_TRUE(survived) << "connection must survive a sourceless COPY FROM STDIN";
+}
+
+// Regression (fix): as<std::optional<int>> over the BINARY result path must decode a
+// genuine int4 of -1 (0xFFFFFFFF) as -1, not std::nullopt; a real NULL -> nullopt.
+TEST_F(PgsqlCoroApiTest, OptionalMinusOneAndNullViaBinary) {
+    std::optional<int> neg, nul;
+    bool               ok = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        // Inline query() runs through the unnamed prepared stmt -> int4 results come back
+        // in BINARY, exercising TypeConverter<optional<int>>::from_binary.
+        auto r = co_await db_->query("SELECT $1::int AS a, NULL::int AS b", -1);
+        ok     = r.ok();
+        if (r.ok() && r.result().size() == 1) {
+            neg = r.result()[0][0].as<std::optional<int>>();
+            nul = r.result()[0][1].as<std::optional<int>>();
+        }
+        co_return;
+    }());
+    EXPECT_TRUE(ok);
+    ASSERT_TRUE(neg.has_value());
+    EXPECT_EQ(*neg, -1); // genuine -1, not the old spurious nullopt
+    EXPECT_FALSE(nul.has_value());
+}
+
+// Regression (fix): the timestamptz TEXT decoder must apply the printed UTC offset. The
+// same instant rendered in two session time zones must decode to the same wall_time.
+TEST_F(PgsqlCoroApiTest, TimestamptzTextOffsetApplied) {
+    bool          ok = false, equal = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        (void) co_await db_->query("SET TIME ZONE 'Asia/Kolkata'"); // UTC+5:30, no DST
+        auto a = co_await db_->query("SELECT '2024-06-01 12:00:00+00'::timestamptz"); // text -> +05:30
+        (void) co_await db_->query("SET TIME ZONE 'UTC'");
+        auto b = co_await db_->query("SELECT '2024-06-01 12:00:00+00'::timestamptz"); // text -> +00
+        ok     = a.ok() && b.ok() && a.result().size() == 1 && b.result().size() == 1;
+        if (ok)
+            equal = (a.result()[0][0].as<qb::wall_time>() == b.result()[0][0].as<qb::wall_time>());
+        co_return;
+    }());
+    EXPECT_TRUE(ok);
+    EXPECT_TRUE(equal) << "timestamptz text offset not applied (same instant decoded differently)";
+}
+
+// COPY IN where the client completes (CopyData + CopyDone) but the server REJECTS the
+// data (invalid for the column): the awaiter resolves with an error, connection survives.
+TEST_F(PgsqlCoroApiTest, CopyInServerRejectsData) {
+    bool failed = false, survived = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        (void) co_await db_->query("CREATE TEMP TABLE crej (id int)");
+        auto r   = co_await db_->copy_in("COPY crej FROM STDIN", std::string("not_an_int\n"));
+        failed   = !r.ok();
+        auto ok  = co_await db_->query("SELECT 1");
+        survived = ok.ok();
+        co_return;
+    }());
+    EXPECT_TRUE(failed) << "server should reject non-integer COPY data";
+    EXPECT_TRUE(survived);
+}
+
+// used_channel_binding() must be FALSE on a plaintext connection (gs2 'n,,'), not just
+// asserted true over TLS — pins the negative direction so an always-true regression fails.
+TEST_F(PgsqlCoroApiTest, ChannelBindingFalseOnPlaintext) {
+    EXPECT_FALSE(db_->used_channel_binding());
 }
 
 int

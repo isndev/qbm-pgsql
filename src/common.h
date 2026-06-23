@@ -140,6 +140,27 @@ struct dbalias : std::string {
 };
 
 /**
+ * @brief TLS certificate verification level for `ssl://` (secure) connections.
+ *
+ * The secure database always encrypts (it sends the PostgreSQL SSLRequest and
+ * requires TLS); this selects how strictly the server certificate is checked,
+ * mirroring the strict end of libpq's `sslmode`:
+ *   - `none` ≈ libpq `require` — encrypt, do NOT verify the certificate;
+ *   - `full` ≈ libpq `verify-full` — verify the chain against the system trust
+ *     store AND that the certificate matches the connection host.
+ *
+ * libpq's intermediate `verify-ca` (verify the chain but NOT the host) is
+ * intentionally omitted: a valid certificate issued for a *different* host still
+ * passes it, leaving an active-MITM window — use `full`. libpq's
+ * `disable`/`allow`/`prefer` are expressed by the transport choice itself
+ * (`tcp::database` never sends an SSLRequest; `tcp::ssl::database` requires TLS).
+ */
+enum class ssl_verify_mode {
+    none, ///< Encrypt only; do not verify the server certificate (default).
+    full, ///< Verify the certificate chain and that it matches the host.
+};
+
+/**
  * @brief PostgreSQL connection options
  *
  * This structure contains all the parameters needed to establish a connection
@@ -158,15 +179,13 @@ struct connection_options {
     qb::duration connect_timeout{std::chrono::seconds(10)}; /**< Connection timeout (default: 10s). */
 
     /**
-     * @brief Verify the server TLS certificate on `ssl://` connections.
-     * @details Defaults to `false` to preserve this client's historical
-     *          behavior (it has never verified) and to match libpq's common
-     *          `sslmode=prefer`/`require` semantics (encrypt without verifying).
-     *          Set to `true` to enable qb-io's chain + hostname verification.
-     * @note This client does not yet parse a libpq-style `sslmode`; full
-     *       `verify-ca` / `verify-full` modeling is a future enhancement.
+     * @brief TLS certificate verification level for `ssl://` connections.
+     * @details Defaults to `ssl_verify_mode::none` (encrypt without verifying),
+     *          preserving this client's historical behavior. Set to
+     *          `ssl_verify_mode::full` to require qb-io's chain + hostname
+     *          verification before any data is exchanged. See @ref ssl_verify_mode.
      */
-    bool tls_verify_peer{false};
+    ssl_verify_mode ssl_verify{ssl_verify_mode::none};
 
     // P1-1: Connection health check / keepalive settings
     int keepalive_interval{0}; /**< TCP keepalive interval in seconds (0 = disabled) */
@@ -372,46 +391,54 @@ struct field_description {
 using row_description_type = std::vector<field_description>;
 
 /**
- * @brief True if we request PostgreSQL binary transfer for this column in Bind.
+ * @brief True if we request PostgreSQL BINARY transfer for this column in Bind.
  *
  * Describe('S') leaves format_code 0; we choose per-column result formats in Bind.
- * String-like types use text on the wire so DataRow matches our text decoders; scalars
- * use binary for efficiency.
+ *
+ * OPT-IN whitelist: binary is requested ONLY for the OIDs this module has a verified
+ * binary decoder for; everything else falls through to TEXT and is read via the text
+ * decoders (e.g. std::string). This is deliberately the inverse of a denylist: an
+ * unknown or not-yet-decodable type degrades to its readable text form instead of
+ * letting raw binary bytes reach the std::string decoder and produce garbage. To add
+ * binary support for a new type: implement its TypeConverter::from_binary, then add
+ * its OID here.
  */
 [[nodiscard]] inline bool
 type_oid_prefers_binary_result_format(oid const t) noexcept {
     switch (static_cast<int>(t)) {
-        case static_cast<int>(oid::text):
-        case static_cast<int>(oid::varchar):
-        case static_cast<int>(oid::bpchar):
-        case static_cast<int>(oid::unknown):
-        case static_cast<int>(oid::xml):
-        case static_cast<int>(oid::cstring):
-        case static_cast<int>(oid::json):
-        case static_cast<int>(oid::tsvector):
-        case static_cast<int>(oid::tsquery):
-        case static_cast<int>(oid::gtsvector):
-        case static_cast<int>(oid::name):
-            // String-like / text-on-wire: same rationale as text/varchar (see readme/types.md).
-            // jsonb stays binary (efficient structured binary on the wire).
-            return false;
-        case static_cast<int>(oid::regproc):
-        case static_cast<int>(oid::regprocedure):
-        case static_cast<int>(oid::regoper):
-        case static_cast<int>(oid::regoperator):
-        case static_cast<int>(oid::regclass):
-        case static_cast<int>(oid::regtype):
-        case static_cast<int>(oid::regrole):
-        case static_cast<int>(oid::regconfig):
-        case static_cast<int>(oid::regdictionary):
-            // Catalog / reg* types: binary is often an OID or internal form; text matches
-            // human-readable names and std::string consumption.
-            return false;
-        case static_cast<int>(oid::cash):
-            // money: locale-dependent text is safer than assuming binary cash layout everywhere.
-            return false;
-        default:
+        // Integers / floats / bool
+        case static_cast<int>(oid::boolean):
+        case static_cast<int>(oid::int2):
+        case static_cast<int>(oid::int4):
+        case static_cast<int>(oid::int8):
+        case static_cast<int>(oid::float4):
+        case static_cast<int>(oid::float8):
+        // Exact numeric (binary digit-array codec)
+        case static_cast<int>(oid::numeric):
+        // Binary blob / uuid / structured binary json
+        case static_cast<int>(oid::bytea):
+        case static_cast<int>(oid::uuid):
+        case static_cast<int>(oid::jsonb):
+        // Temporal (binary decoders for all of these)
+        case static_cast<int>(oid::timestamp):
+        case static_cast<int>(oid::timestamptz):
+        case static_cast<int>(oid::date):
+        case static_cast<int>(oid::time):
+        case static_cast<int>(oid::timetz):
+        case static_cast<int>(oid::interval):
+        // 1-D arrays with a std::vector<T> decoder (bool/int2/int4/int8/float4/float8/text)
+        case static_cast<int>(oid::boolean_array):
+        case static_cast<int>(oid::int2_array):
+        case static_cast<int>(oid::int4_array):
+        case static_cast<int>(oid::int8_array):
+        case static_cast<int>(oid::float4_array):
+        case static_cast<int>(oid::float8_array):
+        case static_cast<int>(oid::text_array):
             return true;
+        default:
+            // text/varchar/bpchar/name/json/xml, network/bit/geometric/range/reg*/money,
+            // and every other OID: request text and read as the text representation.
+            return false;
     }
 }
 

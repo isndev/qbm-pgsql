@@ -1754,33 +1754,33 @@ TEST_F(ParamSerializerTest, DateSerialization) {
     using namespace qb::pg::detail;
 
     // Test 1: Simple date
-    pgdate            d1 = pgdate::from_string("2024-03-15");
+    qb::date          d1 = qb::date::parse("2024-03-15").value();
     std::vector<byte> buffer;
-    TypeConverter<pgdate>::to_binary(d1, buffer);
+    TypeConverter<qb::date>::to_binary(d1, buffer);
 
     // Verify OID is correct (1082)
-    EXPECT_EQ(TypeConverter<pgdate>::get_oid(), 1082);
+    EXPECT_EQ(TypeConverter<qb::date>::get_oid(), 1082);
 
     // Verify buffer size (4 bytes length + 4 bytes data)
     EXPECT_EQ(buffer.size(), 8);
 
     // Test 2: Round-trip
-    pgdate d2 = TypeConverter<pgdate>::from_binary(buffer);
+    qb::date d2 = TypeConverter<qb::date>::from_binary(buffer);
     EXPECT_EQ(d2, d1);
     EXPECT_EQ(d2.to_string(), "2024-03-15");
 
     // Test 3: Date before 2000 (negative days)
-    pgdate d3 = pgdate::from_string("1990-01-01");
+    qb::date d3 = qb::date::parse("1990-01-01").value();
     buffer.clear();
-    TypeConverter<pgdate>::to_binary(d3, buffer);
-    pgdate d4 = TypeConverter<pgdate>::from_binary(buffer);
+    TypeConverter<qb::date>::to_binary(d3, buffer);
+    qb::date d4 = TypeConverter<qb::date>::from_binary(buffer);
     EXPECT_EQ(d4.to_string(), "1990-01-01");
 
     // Test 4: Text format
-    std::string text = TypeConverter<pgdate>::to_text(d1);
+    std::string text = TypeConverter<qb::date>::to_text(d1);
     EXPECT_EQ(text, "2024-03-15");
 
-    pgdate d5 = TypeConverter<pgdate>::from_text("2000-01-01");
+    qb::date d5 = TypeConverter<qb::date>::from_text("2000-01-01");
     EXPECT_EQ(d5.to_string(), "2000-01-01");
 
     std::cout << "DATE serialization test passed" << std::endl;
@@ -1844,8 +1844,8 @@ TEST_F(ParamSerializerTest, MixedComplexTypes) {
     ParamSerializer serializer;
 
     // Add various parameter types
-    numeric price("999.99");
-    pgdate  date = pgdate::from_string("2024-12-25");
+    numeric  price("999.99");
+    qb::date date = qb::date::parse("2024-12-25").value();
 
     // Serialize numeric (as text for precision)
     std::vector<byte> numeric_buffer;
@@ -1853,7 +1853,7 @@ TEST_F(ParamSerializerTest, MixedComplexTypes) {
 
     // Serialize date
     std::vector<byte> date_buffer;
-    TypeConverter<pgdate>::to_binary(date, date_buffer);
+    TypeConverter<qb::date>::to_binary(date, date_buffer);
 
     // Verify all buffers are valid
     EXPECT_GT(numeric_buffer.size(), 0);
@@ -1950,15 +1950,15 @@ TEST_F(ParamSerializerTest, EdgeCasesSerialization) {
     EXPECT_GT(buffer.size(), 0);
 
     // Test 4: Far past date
-    pgdate old = pgdate::from_string("1900-01-01");
+    qb::date old = qb::date::parse("1900-01-01").value();
     buffer.clear();
-    TypeConverter<pgdate>::to_binary(old, buffer);
+    TypeConverter<qb::date>::to_binary(old, buffer);
     EXPECT_EQ(buffer.size(), 8);
 
     // Test 5: Far future date
-    pgdate future = pgdate::from_string("2099-12-31");
+    qb::date future = qb::date::parse("2099-12-31").value();
     buffer.clear();
-    TypeConverter<pgdate>::to_binary(future, buffer);
+    TypeConverter<qb::date>::to_binary(future, buffer);
     EXPECT_EQ(buffer.size(), 8);
 
     std::cout << "Edge cases serialization test passed" << std::endl;

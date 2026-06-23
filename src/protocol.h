@@ -37,6 +37,7 @@
 #include <iterator>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 #include "common.h"
 
@@ -257,6 +258,14 @@ public:
     void discard_remaining() noexcept;
 
     /**
+     * @brief View the unread payload bytes without consuming them.
+     * @return A string_view over the bytes from the current read position to the end of
+     *         the message body; empty when fully read. Valid while this message is alive.
+     *         Used for opaque payloads such as COPY data (`CopyData`).
+     */
+    std::string_view remaining() const noexcept;
+
+    /**
      * Read a byte from the message buffer
      * @param c the char
      * @return true if the operation was successful
@@ -342,9 +351,10 @@ public:
     void write(std::string const &);
 
     /**
-     * Write a string view to the message buffer.
-     * Includes terminating '\0'
-     * @param s the string
+     * Write a string view to the message buffer as RAW bytes (no terminating '\0',
+     * unlike write(std::string const&)). Use for length-prefixed or opaque payloads
+     * such as SASL data and COPY `CopyData`.
+     * @param s the bytes to append
      */
     void write_sv(std::string_view const &);
 

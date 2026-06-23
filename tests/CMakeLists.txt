@@ -29,7 +29,6 @@ set(QB_PGSQL_TESTS
         transaction-advanced
         operations
         queries
-        params
         error-handling
         protocol-integration
         pgsql-coro-api

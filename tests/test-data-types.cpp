@@ -1373,11 +1373,11 @@ TEST(NumericTypeTest, NumericPrecision) {
     numeric n3 = TypeConverter<numeric>::from_text("999.999999999999999");
     EXPECT_EQ(n3.str(), "999.999999999999999");
 
-    // Test 6: Financial calculation example
+    // Test 6: numeric is value-equality on its canonical text form (it is NOT an
+    // arithmetic type — the old string-concat operator+ was removed).
     numeric price("199.99");
-    numeric quantity("3");
-    numeric total = price + quantity; // Note: simple concatenation for demo
-    EXPECT_FALSE(total.str().empty());
+    EXPECT_EQ(price, numeric("199.99"));
+    EXPECT_FALSE(price == numeric("200.00"));
 
     std::cout << "NUMERIC type test passed (financial precision)" << std::endl;
 }
@@ -1385,39 +1385,38 @@ TEST(NumericTypeTest, NumericPrecision) {
 /**
  * @brief Test PostgreSQL DATE type (P1)
  *
- * Verifies date handling with PostgreSQL epoch (2000-01-01).
+ * Verifies date handling with the qb civil-date vocabulary (qb::date).
  */
 TEST(DateTypeTest, DateConversions) {
     using namespace qb::pg::detail;
 
     // Test 1: OID should be 1082 (DATE)
-    EXPECT_EQ(TypeConverter<pgdate>::get_oid(), 1082);
+    EXPECT_EQ(TypeConverter<qb::date>::get_oid(), 1082);
 
     // Test 2: Create date from string
-    pgdate d1 = pgdate::from_string("2024-03-15");
+    qb::date d1 = qb::date::parse("2024-03-15").value();
     EXPECT_EQ(d1.to_string(), "2024-03-15");
 
-    // Test 3: Create date from Unix time
-    time_t now = std::time(nullptr);
-    pgdate d2  = pgdate::from_unix_time(now);
+    // Test 3: Create date from a wall instant
+    qb::date d2 = qb::date::from_wall_time(qb::wall_now());
     EXPECT_FALSE(d2.to_string().empty());
 
     // Test 4: Serialize to binary
     std::vector<byte> buffer;
-    TypeConverter<pgdate>::to_binary(d1, buffer);
+    TypeConverter<qb::date>::to_binary(d1, buffer);
     EXPECT_EQ(buffer.size(), 8); // 4 bytes length + 4 bytes data
 
     // Test 5: Round-trip binary
-    pgdate d3 = TypeConverter<pgdate>::from_binary(buffer);
+    qb::date d3 = TypeConverter<qb::date>::from_binary(buffer);
     EXPECT_EQ(d3, d1);
 
     // Test 6: Round-trip text
-    pgdate d4 = TypeConverter<pgdate>::from_text("2000-01-01");
+    qb::date d4 = TypeConverter<qb::date>::from_text("2000-01-01");
     EXPECT_EQ(d4.to_string(), "2000-01-01");
 
     // Test 7: Date comparison
-    pgdate early = pgdate::from_string("2020-01-01");
-    pgdate late  = pgdate::from_string("2024-01-01");
+    qb::date early = qb::date::parse("2020-01-01").value();
+    qb::date late  = qb::date::parse("2024-01-01").value();
     EXPECT_TRUE(early < late);
 
     std::cout << "DATE type test passed" << std::endl;
@@ -1444,6 +1443,375 @@ TEST(TimeTypeTest, StringHandling) {
     EXPECT_EQ(timetz_str.length(), 14);
 
     std::cout << "TIME/TIMETZ (string handling) test passed" << std::endl;
+}
+
+/**
+ * @brief Regression: DATE/TIME/TIMETZ from_binary must decode the unprefixed
+ *        wire field, not read 4 bytes past it.
+ *
+ * The protocol layer (message::read in protocol.cpp) hands the converters the
+ * field VALUE only — the 4-byte per-field length prefix is already stripped.
+ * The DATE/TIME/TIMETZ decoders used to unconditionally read from
+ * buffer.data()+4, i.e. they assumed a prefix that is no longer there, so they
+ * decoded 4 bytes too far and returned the PostgreSQL epoch base (DATE =>
+ * 2000-01-01, TIME => 00:00:00). The to_binary round-trip test masked this
+ * because to_binary writes the prefix, making the buffer accidentally line up.
+ *
+ * Here we reproduce the real wire buffer by serializing with to_binary and
+ * dropping the length prefix it writes, then assert the value survives. The
+ * legacy prefixed shape must keep decoding identically.
+ */
+TEST(DateTimeWireFormatTest, UnprefixedFieldDecode) {
+    using namespace qb::pg::detail;
+
+    // to_binary emits [4-byte length prefix][value]; the wire field is value-only.
+    auto strip_prefix = [](std::vector<byte> b) {
+        b.erase(b.begin(), b.begin() + sizeof(integer));
+        return b;
+    };
+
+    // DATE: 4-byte value.
+    {
+        qb::date          d_in = qb::date::parse("2024-03-15").value();
+        std::vector<byte> prefixed;
+        TypeConverter<qb::date>::to_binary(d_in, prefixed);
+        ASSERT_EQ(prefixed.size(), 8u); // 4 prefix + 4 value
+        std::vector<byte> wire = strip_prefix(prefixed);
+        ASSERT_EQ(wire.size(), 4u);     // value only — what the protocol hands us
+        qb::date d_wire = TypeConverter<qb::date>::from_binary(wire);
+        EXPECT_EQ(d_wire, d_in);
+        EXPECT_EQ(d_wire.to_string(), "2024-03-15"); // not the 2000-01-01 epoch base
+        // Legacy prefixed shape still decodes to the same value.
+        EXPECT_EQ(TypeConverter<qb::date>::from_binary(prefixed), d_in);
+    }
+
+    // TIME: 8-byte value.
+    {
+        qb::time_of_day   t_in = qb::time_of_day::from_hms(14, 30, 45, 123456);
+        std::vector<byte> prefixed;
+        TypeConverter<qb::time_of_day>::to_binary(t_in, prefixed);
+        ASSERT_EQ(prefixed.size(), 12u); // 4 prefix + 8 value
+        std::vector<byte> wire = strip_prefix(prefixed);
+        ASSERT_EQ(wire.size(), 8u);
+        qb::time_of_day t_wire = TypeConverter<qb::time_of_day>::from_binary(wire);
+        EXPECT_EQ(t_wire, t_in);
+        EXPECT_EQ(t_wire.to_string(), "14:30:45.123456"); // not 00:00:00
+        EXPECT_EQ(TypeConverter<qb::time_of_day>::from_binary(prefixed), t_in);
+    }
+
+    // TIMETZ: 12-byte value (8-byte micros + 4-byte tz offset).
+    {
+        qb::time_of_day_tz z_in = qb::time_of_day_tz::from_hms_offset(14, 30, 45, 0, 7200);
+        std::vector<byte>  prefixed;
+        TypeConverter<qb::time_of_day_tz>::to_binary(z_in, prefixed);
+        ASSERT_EQ(prefixed.size(), 16u); // 4 prefix + 12 value
+        std::vector<byte> wire = strip_prefix(prefixed);
+        ASSERT_EQ(wire.size(), 12u);
+        qb::time_of_day_tz z_wire = TypeConverter<qb::time_of_day_tz>::from_binary(wire);
+        EXPECT_EQ(z_wire, z_in);
+        EXPECT_EQ(TypeConverter<qb::time_of_day_tz>::from_binary(prefixed), z_in);
+    }
+
+    std::cout << "DATE/TIME/TIMETZ wire-format decode test passed" << std::endl;
+}
+
+// Decode a hex string into a byte buffer (test helper).
+static std::vector<qb::pg::byte>
+hex_to_bytes(const std::string &h) {
+    auto nib = [](char c) { return c <= '9' ? c - '0' : (c | 32) - 'a' + 10; };
+    std::vector<qb::pg::byte> b;
+    for (size_t i = 0; i + 1 < h.size(); i += 2)
+        b.push_back(static_cast<qb::pg::byte>((nib(h[i]) << 4) | nib(h[i + 1])));
+    return b;
+}
+
+/**
+ * @brief Regression: binary NUMERIC decode against PostgreSQL ground truth.
+ *
+ * Buffers below are the exact bytes from PostgreSQL `numeric_send()` (value only,
+ * no per-field length prefix — the shape the protocol layer hands to from_binary).
+ * Wire layout: int16 ndigits, int16 weight, uint16 sign, uint16 dscale, then
+ * base-10000 digits. The previous decoder mis-read these as length-prefixed text.
+ */
+TEST(NumericBinaryTest, DecodeAgainstPostgresGroundTruth) {
+    using namespace qb::pg::detail;
+    struct C { const char *hex; const char *expect; };
+    const C cases[] = {
+        {"000200000000000404d2162e", "1234.5678"},
+        {"0002000040000001000c1388", "-12.5"},
+        {"00010001000000000064", "1000000"},
+        {"0000000000000000", "0"},
+        {"000600020000000a000109291a85007b11d722c4", "123456789.0123456789"},
+        {"0001ffff000000011388", "0.5"},
+        {"0001ffff0000000203e8", "0.10"},        // trailing-zero / dscale preserved
+        {"00010000000000020064", "100.00"},      // dscale preserved
+        {"000500000000000f03e7270f270f270f2706", "999.999999999999999"},
+    };
+    for (const auto &c : cases) {
+        numeric got = TypeConverter<numeric>::from_binary(hex_to_bytes(c.hex));
+        EXPECT_EQ(got.str(), c.expect) << "hex=" << c.hex;
+    }
+
+    // Round-trip: to_binary (real PG binary, length-prefixed) -> from_binary.
+    for (const char *v : {"0", "1", "-1", "12345.678", "-999.99",
+                          "123456789.0123456789", "0.0001", "1000000"}) {
+        std::vector<qb::pg::byte> buf;
+        TypeConverter<numeric>::to_binary(numeric(v), buf);
+        EXPECT_EQ(TypeConverter<numeric>::from_binary(buf).str(), v) << "value=" << v;
+    }
+    std::cout << "NUMERIC binary decode test passed" << std::endl;
+}
+
+/**
+ * @brief Regression: binary ARRAY decode against PostgreSQL ground truth.
+ *
+ * Buffers are the exact bytes from PostgreSQL `array_send()` (value only). Layout:
+ * int32 ndim, int32 has-null, int32 element OID, per-dim {int32 size, int32 lb},
+ * then per element {int32 length (-1=NULL), value}. Previously there was no
+ * std::vector<T> decoder at all (example4 fell back to ::text).
+ */
+TEST(ArrayBinaryTest, DecodeAgainstPostgresGroundTruth) {
+    using namespace qb::pg::detail;
+
+    // int4[] {10,20,30,40}
+    auto ints = TypeConverter<std::vector<integer>>::from_binary(hex_to_bytes(
+        "0000000100000000000000170000000400000001"
+        "000000040000000a0000000400000014000000040000001e0000000400000028"));
+    EXPECT_EQ(ints, (std::vector<integer>{10, 20, 30, 40}));
+
+    // text[] {apple,banana}
+    auto txt = TypeConverter<std::vector<std::string>>::from_binary(hex_to_bytes(
+        "0000000100000000000000190000000200000001000000056170706c650000000662616e616e61"));
+    EXPECT_EQ(txt, (std::vector<std::string>{"apple", "banana"}));
+
+    // int4[] {1,NULL,3} -> NULL decodes to default-constructed 0
+    auto withnull = TypeConverter<std::vector<integer>>::from_binary(hex_to_bytes(
+        "00000001000000010000001700000003000000010000000400000001ffffffff0000000400000003"));
+    EXPECT_EQ(withnull, (std::vector<integer>{1, 0, 3}));
+
+    // empty int4[]
+    auto empty = TypeConverter<std::vector<integer>>::from_binary(hex_to_bytes(
+        "000000000000000000000017"));
+    EXPECT_TRUE(empty.empty());
+
+    // Round-trip through encode (mirrors ParamSerializer::add_vector) + decode.
+    std::vector<qb::pg::byte> buf;
+    TypeConverter<std::vector<integer>>::to_binary(std::vector<integer>{7, -3, 100000}, buf);
+    // strip the 4-byte length prefix that to_binary writes
+    std::vector<qb::pg::byte> body(buf.begin() + 4, buf.end());
+    EXPECT_EQ(TypeConverter<std::vector<integer>>::from_binary(body),
+              (std::vector<integer>{7, -3, 100000}));
+
+    std::cout << "ARRAY binary decode test passed" << std::endl;
+}
+
+/**
+ * @brief Regression: binary array decode for the non-int4/text element types,
+ *        against PostgreSQL `array_send()` ground truth.
+ */
+TEST(ArrayBinaryTest, ScalarElementTypesAgainstPostgresGroundTruth) {
+    using namespace qb::pg::detail;
+
+    EXPECT_EQ(TypeConverter<std::vector<bigint>>::from_binary(hex_to_bytes(
+                  "00000001000000000000001400000003000000010000000800000000000000010000"
+                  "00080000000000000002000000080000000000000003")),
+              (std::vector<bigint>{1, 2, 3}));
+
+    EXPECT_EQ(TypeConverter<std::vector<smallint>>::from_binary(hex_to_bytes(
+                  "0000000100000000000000150000000200000001000000020007000000020008")),
+              (std::vector<smallint>{7, 8}));
+
+    EXPECT_EQ(TypeConverter<std::vector<double>>::from_binary(hex_to_bytes(
+                  "0000000100000000000002bd0000000200000001000000083ff80000000000000000"
+                  "00084004000000000000")),
+              (std::vector<double>{1.5, 2.5}));
+
+    EXPECT_EQ(TypeConverter<std::vector<float>>::from_binary(hex_to_bytes(
+                  "0000000100000000000002bc0000000200000001000000043fc0000000000004c0200000")),
+              (std::vector<float>{1.5f, -2.5f}));
+
+    EXPECT_EQ(TypeConverter<std::vector<bool>>::from_binary(hex_to_bytes(
+                  "0000000100000000000000100000000300000001000000010100000001000000000101")),
+              (std::vector<bool>{true, false, true}));
+
+    std::cout << "ARRAY scalar element decode test passed" << std::endl;
+}
+
+/**
+ * @brief Regression: binary INTERVAL decode must fold days and months, not drop
+ *        them. Buffers are PostgreSQL `interval_send()` bytes; expected seconds
+ *        equal EXTRACT(EPOCH) (24h day, 30-day residual month, 365.25-day year).
+ */
+TEST(IntervalBinaryTest, DecodeAgainstPostgresGroundTruth) {
+    using namespace qb::pg::detail;
+    using secs = std::chrono::seconds;
+    struct C { const char *hex; long long expect; };
+    const C cases[] = {
+        {"00000000000000000000000100000000", 86400},   // 1 day
+        {"00000000000000000000000000000001", 2592000}, // 1 month (30 days)
+        {"0000000218711a000000000000000000", 9000},    // 2h30m (pure time)
+        {"00000002925553400000000200000001", 2775845}, // 1 mon 2 days 03:04:05
+        {"0000000000000000ffffffff00000000", -86400},  // -1 day
+        {"0000000000000000000000000000000c", 31557600},// 12 months = 1 year (365.25d)
+    };
+    for (const auto &c : cases) {
+        auto d = TypeConverter<secs>::from_binary(hex_to_bytes(c.hex));
+        EXPECT_EQ(d.count(), c.expect) << "hex=" << c.hex;
+    }
+    // Pure-time duration round-trips (to_binary sets days=months=0).
+    std::vector<qb::pg::byte> buf;
+    TypeConverter<secs>::to_binary(secs{90061}, buf);
+    std::vector<qb::pg::byte> body(buf.begin() + 4, buf.end());
+    EXPECT_EQ(TypeConverter<secs>::from_binary(body).count(), 90061);
+    std::cout << "INTERVAL binary decode test passed" << std::endl;
+}
+
+/**
+ * @brief Regression: binary TIMESTAMP decode value against PostgreSQL ground
+ *        truth (the prior tests only checked the int64 read and an over-read
+ *        guard, never the decoded instant).
+ */
+TEST(WallTimeBinaryTest, DecodeAgainstPostgresGroundTruth) {
+    using namespace qb::pg::detail;
+    // timestamptz '2024-03-15 14:30:45.123456+00' = 763828245123456 us since
+    // 2000-01-01 = 1710513045123456 us since the Unix epoch.
+    auto t = TypeConverter<qb::wall_time>::from_binary(hex_to_bytes("0002b6b29f385180"));
+    EXPECT_EQ(qb::unix_micros(t), 1710513045123456LL);
+}
+
+/**
+ * @brief Regression: std::optional decode — the 4-byte all-ones NULL sentinel
+ *        yields nullopt, a real value decodes the contained type.
+ */
+// optional<T> from_binary receives the field VALUE bytes; SQL NULL is decided upstream
+// by field::as -> is_null(), so the converter ALWAYS has a value and must decode it —
+// including a genuine int4 of -1 (0xFFFFFFFF), which the old NULL-sentinel sniffing
+// wrongly turned into std::nullopt (data corruption). NULL itself is covered live in
+// the integration suite (a real NULL column read as std::optional<int>).
+TEST(OptionalBinaryTest, ValueDecodeIncludingMinusOne) {
+    using namespace qb::pg::detail;
+    // 0xFFFFFFFF is int4 -1 — a real value at this layer, NOT a SQL NULL.
+    std::vector<qb::pg::byte> minus_one(4, static_cast<qb::pg::byte>(0xFF));
+    auto                      neg = TypeConverter<std::optional<integer>>::from_binary(minus_one);
+    ASSERT_TRUE(neg.has_value());
+    EXPECT_EQ(*neg, -1);
+
+    auto v = TypeConverter<std::optional<integer>>::from_binary(hex_to_bytes("0000002a"));
+    ASSERT_TRUE(v.has_value());
+    EXPECT_EQ(*v, 42);
+}
+
+/**
+ * @brief Regression: TIMETZ binary decode + sign convention against PostgreSQL.
+ *
+ * PostgreSQL's wire zone is seconds WEST of UTC (+02:00 => -7200); qb::time_of_day_tz
+ * uses an east-positive offset (+02:00 => +7200). The decoder must negate so the
+ * rendered offset is not inverted. Buffers are real PostgreSQL `timetz_send()`.
+ */
+TEST(TimeTzBinaryTest, DecodeAgainstPostgresGroundTruth) {
+    using namespace qb::pg::detail;
+    auto z = TypeConverter<qb::time_of_day_tz>::from_binary(hex_to_bytes("0000000c2a0b6f40ffffe3e0"));
+    EXPECT_EQ(z.tod.since_midnight().count(), 52245000000LL); // 14:30:45
+    EXPECT_EQ(z.offset.count(), 7200);                        // +02:00, east-positive
+    EXPECT_EQ(z.to_string(), "14:30:45+02:00");
+
+    auto z2 = TypeConverter<qb::time_of_day_tz>::from_binary(hex_to_bytes("00000006b49d200000004650"));
+    EXPECT_EQ(z2.offset.count(), -18000); // -05:00
+    EXPECT_EQ(z2.to_string(), "08:00:00-05:00");
+}
+
+/**
+ * @brief Regression: bytea via std::vector<std::byte>. Previously this hit the
+ *        generic unsupported-type fallback and returned an empty vector for any
+ *        non-empty bytea (the EmptyBytea integration test only checked size 0).
+ */
+TEST(ByteaStdByteTest, RoundTrip) {
+    using namespace qb::pg::detail;
+    const std::vector<std::byte> in{std::byte{0xDE}, std::byte{0xAD}, std::byte{0x00}, std::byte{0xBE}, std::byte{0xEF}};
+
+    // Result value carries no length prefix.
+    std::vector<qb::pg::byte> wire(in.size());
+    for (size_t i = 0; i < in.size(); ++i)
+        wire[i] = static_cast<qb::pg::byte>(in[i]);
+    EXPECT_EQ(TypeConverter<std::vector<std::byte>>::from_binary(wire), in);
+
+    // to_binary writes [int32 length][raw]; strip the prefix and decode back.
+    std::vector<qb::pg::byte> buf;
+    TypeConverter<std::vector<std::byte>>::to_binary(in, buf);
+    ASSERT_GE(buf.size(), 4u);
+    std::vector<qb::pg::byte> body(buf.begin() + 4, buf.end());
+    EXPECT_EQ(TypeConverter<std::vector<std::byte>>::from_binary(body), in);
+}
+
+/**
+ * @brief DATE/TIME/TIMETZ/INTERVAL decoded into the qb core civil vocabulary
+ *        (qb::date / qb::time_of_day / qb::time_of_day_tz / qb::calendar_interval),
+ *        against PostgreSQL *_send() ground truth, plus to_binary->from_binary
+ *        round-trips.
+ */
+TEST(QbCivilTypesBinaryTest, DecodeAgainstPostgresGroundTruth) {
+    using namespace qb::pg::detail;
+
+    auto d = TypeConverter<qb::date>::from_binary(hex_to_bytes("00002288")); // 8840 days since 2000
+    EXPECT_EQ(d.to_string(), "2024-03-15");
+    EXPECT_EQ(d.days_since_epoch(), 19797);
+
+    auto t = TypeConverter<qb::time_of_day>::from_binary(hex_to_bytes("0000000c2a0d5180"));
+    EXPECT_EQ(t.to_string(), "14:30:45.123456");
+
+    auto z = TypeConverter<qb::time_of_day_tz>::from_binary(hex_to_bytes("0000000c2a0b6f40ffffe3e0"));
+    EXPECT_EQ(z.to_string(), "14:30:45+02:00"); // wire zone west-positive -> east-positive
+    EXPECT_EQ(z.offset.count(), 7200);
+
+    auto iv = TypeConverter<qb::calendar_interval>::from_binary(hex_to_bytes("00000002925553400000000200000001"));
+    EXPECT_EQ(iv.months, 1);
+    EXPECT_EQ(iv.days, 2);
+    EXPECT_EQ(iv.micros.count(), 11045000000LL);
+    EXPECT_EQ(iv.to_micros().count(), 2775845000000LL); // == PG EXTRACT(EPOCH) * 1e6
+
+    // to_binary (length-prefixed) -> from_binary round-trips.
+    auto rt = [](auto v) {
+        using T = decltype(v);
+        std::vector<qb::pg::byte> b;
+        TypeConverter<T>::to_binary(v, b);
+        return TypeConverter<T>::from_binary(b);
+    };
+    EXPECT_EQ(rt(qb::date::from_ymd(1999, 12, 31)), qb::date::from_ymd(1999, 12, 31));
+    EXPECT_EQ(rt(qb::time_of_day::from_hms(23, 59, 59, 999999)), qb::time_of_day::from_hms(23, 59, 59, 999999));
+    EXPECT_EQ(rt(qb::time_of_day_tz::from_hms_offset(8, 0, 0, 0, -18000)), qb::time_of_day_tz::from_hms_offset(8, 0, 0, 0, -18000));
+    EXPECT_EQ(rt(qb::calendar_interval(13, 5, std::chrono::microseconds{123456})), qb::calendar_interval(13, 5, std::chrono::microseconds{123456}));
+}
+
+/**
+ * @brief std::expected-style monadic combinators on Reply<T> / Reply<void>.
+ */
+TEST(ReplyMonadicTest, TransformAndThenOrElseValueOr) {
+    using qb::pg::Reply;
+    using qb::pg::error::db_error;
+
+    const auto ok = Reply<int>::success(21);
+    EXPECT_TRUE(ok.has_value());
+    EXPECT_EQ(*ok, 21);
+    EXPECT_EQ(ok.value_or(99), 21);
+    EXPECT_EQ(ok.transform([](int x) { return x * 2; }).result(), 42);            // int -> int
+    EXPECT_EQ(ok.transform([](int x) { return std::to_string(x); }).result(), "21"); // int -> string
+    auto chained = ok.and_then([](int x) { return Reply<std::string>::success("v" + std::to_string(x)); });
+    EXPECT_TRUE(chained.ok());
+    EXPECT_EQ(chained.result(), "v21");
+
+    const auto bad = Reply<int>::failure(db_error{"boom"});
+    EXPECT_FALSE(bad.has_value());
+    EXPECT_EQ(bad.value_or(7), 7);
+    EXPECT_FALSE(bad.transform([](int x) { return x * 2; }).ok());                // f not called, error propagates
+    EXPECT_FALSE(bad.and_then([](int) { return Reply<int>::success(1); }).ok());
+    auto recovered = bad.or_else([](db_error const &) { return Reply<int>::success(123); });
+    EXPECT_TRUE(recovered.ok());
+    EXPECT_EQ(recovered.result(), 123);
+
+    // Reply<void>
+    EXPECT_TRUE(Reply<void>::success().and_then([] { return Reply<int>::success(5); }).ok());
+    EXPECT_FALSE(Reply<void>::failure(db_error{"x"}).and_then([] { return Reply<int>::success(5); }).ok());
+    EXPECT_TRUE(Reply<void>::failure(db_error{"x"}).or_else([](db_error const &) { return Reply<void>::success(); }).ok());
 }
 
 /**
@@ -1507,18 +1875,18 @@ TEST(EdgeCasesTest, ExtremeValues) {
     EXPECT_EQ(zero.str(), "0");
 
     // Test 5: Date far in past
-    pgdate old = pgdate::from_string("1900-01-01");
+    qb::date old = qb::date::parse("1900-01-01").value();
     EXPECT_EQ(old.to_string(), "1900-01-01");
 
     // Test 6: Date far in future
-    pgdate future = pgdate::from_string("2099-12-31");
+    qb::date future = qb::date::parse("2099-12-31").value();
     EXPECT_EQ(future.to_string(), "2099-12-31");
 
     std::cout << "Edge cases test passed" << std::endl;
 }
 
 /**
- * @brief Test TIME type (pgtime)
+ * @brief Test TIME type (qb::time_of_day)
  *
  * Tests PostgreSQL TIME type handling.
  */
@@ -1526,20 +1894,20 @@ TEST(TimeTypeFullTest, BinaryConversion) {
     using namespace qb::pg::detail;
 
     // Test 1: Create time from components
-    pgtime t1 = pgtime::from_hmsu(14, 30, 45, 123456);
-    EXPECT_EQ(t1.microseconds, (14 * 3600 + 30 * 60 + 45) * 1000000LL + 123456);
+    qb::time_of_day t1 = qb::time_of_day::from_hms(14, 30, 45, 123456);
+    EXPECT_EQ(t1.since_midnight().count(), (14 * 3600 + 30 * 60 + 45) * 1000000LL + 123456);
 
     // Test 2: String conversion
     std::string time_str = t1.to_string();
     EXPECT_TRUE(time_str.find("14:30:45") != std::string::npos);
 
     // Test 3: Parse from string
-    pgtime t2 = pgtime::from_string("12:00:00");
-    EXPECT_EQ(t2.microseconds, 12 * 3600 * 1000000LL);
+    qb::time_of_day t2 = qb::time_of_day::parse("12:00:00").value();
+    EXPECT_EQ(t2.since_midnight().count(), 12 * 3600 * 1000000LL);
 
     // Test 4: Binary serialization
     std::vector<byte> buffer;
-    TypeConverter<pgtime>::to_binary(t1, buffer);
+    TypeConverter<qb::time_of_day>::to_binary(t1, buffer);
     EXPECT_EQ(buffer.size(), 12); // 4 (length) + 8 (microseconds)
 
     // Check length prefix
@@ -1548,22 +1916,22 @@ TEST(TimeTypeFullTest, BinaryConversion) {
     EXPECT_EQ(ntohl(len), 8);
 
     // Test 5: Binary deserialization
-    pgtime t3 = TypeConverter<pgtime>::from_binary(buffer);
-    EXPECT_EQ(t3.microseconds, t1.microseconds);
+    qb::time_of_day t3 = TypeConverter<qb::time_of_day>::from_binary(buffer);
+    EXPECT_EQ(t3.since_midnight().count(), t1.since_midnight().count());
 
     // Test 6: Text round-trip
-    std::string text = TypeConverter<pgtime>::to_text(t1);
-    pgtime      t4   = TypeConverter<pgtime>::from_text(text);
+    std::string     text = TypeConverter<qb::time_of_day>::to_text(t1);
+    qb::time_of_day t4   = TypeConverter<qb::time_of_day>::from_text(text);
     EXPECT_EQ(t4, t1);
 
     // Test 7: OID check
-    EXPECT_EQ(TypeConverter<pgtime>::get_oid(), 1083);
+    EXPECT_EQ(TypeConverter<qb::time_of_day>::get_oid(), 1083);
 
-    std::cout << "TIME type (pgtime) test passed" << std::endl;
+    std::cout << "TIME type (qb::time_of_day) test passed" << std::endl;
 }
 
 /**
- * @brief Test TIMETZ type (pgtimetz)
+ * @brief Test TIMETZ type (qb::time_of_day_tz)
  *
  * Tests PostgreSQL TIMETZ type handling.
  */
@@ -1571,43 +1939,44 @@ TEST(TimeTzTypeFullTest, BinaryConversion) {
     using namespace qb::pg::detail;
 
     // Test 1: Create timetz with offset
-    pgtimetz tt1 = pgtimetz::from_hmsu_tz(18, 0, 0, 0, 7200); // +02:00
-    EXPECT_EQ(tt1.microseconds, 18 * 3600 * 1000000LL);
-    EXPECT_EQ(tt1.tz_offset, 7200);
+    qb::time_of_day_tz tt1 = qb::time_of_day_tz::from_hms_offset(18, 0, 0, 0, 7200); // +02:00
+    EXPECT_EQ(tt1.tod.since_midnight().count(), 18 * 3600 * 1000000LL);
+    EXPECT_EQ(tt1.offset.count(), 7200);
 
     // Test 2: String conversion
     std::string timetz_str = tt1.to_string();
     EXPECT_TRUE(timetz_str.find("18:00:00") != std::string::npos);
     EXPECT_TRUE(timetz_str.find("+02:00") != std::string::npos);
 
-    // Test 3: Parse from string with timezone
-    pgtimetz tt2 = pgtimetz::from_string("14:30:45+05:30");
-    EXPECT_EQ(tt2.microseconds, (14 * 3600 + 30 * 60 + 45) * 1000000LL);
-    EXPECT_EQ(tt2.tz_offset, (5 * 3600) + (30 * 60));
+    // Test 3: Positive timezone offset (east of UTC)
+    qb::time_of_day_tz tt2 = qb::time_of_day_tz::from_hms_offset(14, 30, 45, 0, (5 * 3600) + (30 * 60));
+    EXPECT_EQ(tt2.tod.since_midnight().count(), (14 * 3600 + 30 * 60 + 45) * 1000000LL);
+    EXPECT_EQ(tt2.offset.count(), (5 * 3600) + (30 * 60));
+    EXPECT_EQ(tt2.to_string(), "14:30:45+05:30");
 
-    // Test 4: Negative timezone
-    pgtimetz tt3 = pgtimetz::from_string("08:00:00-08:00");
-    EXPECT_EQ(tt3.tz_offset, -8 * 3600);
+    // Test 4: Negative timezone (west of UTC)
+    qb::time_of_day_tz tt3 = qb::time_of_day_tz::from_hms_offset(8, 0, 0, 0, -8 * 3600);
+    EXPECT_EQ(tt3.offset.count(), -8 * 3600);
+    EXPECT_EQ(tt3.to_string(), "08:00:00-08:00");
 
     // Test 5: Binary serialization
     std::vector<byte> buffer;
-    TypeConverter<pgtimetz>::to_binary(tt1, buffer);
+    TypeConverter<qb::time_of_day_tz>::to_binary(tt1, buffer);
     EXPECT_EQ(buffer.size(), 16); // 4 (length) + 8 (time) + 4 (tz)
 
     // Test 6: Binary deserialization
-    pgtimetz tt4 = TypeConverter<pgtimetz>::from_binary(buffer);
-    EXPECT_EQ(tt4.microseconds, tt1.microseconds);
-    EXPECT_EQ(tt4.tz_offset, tt1.tz_offset);
+    qb::time_of_day_tz tt4 = TypeConverter<qb::time_of_day_tz>::from_binary(buffer);
+    EXPECT_EQ(tt4.tod.since_midnight().count(), tt1.tod.since_midnight().count());
+    EXPECT_EQ(tt4.offset.count(), tt1.offset.count());
 
-    // Test 7: Text round-trip
-    std::string text = TypeConverter<pgtimetz>::to_text(tt1);
-    pgtimetz    tt5  = TypeConverter<pgtimetz>::from_text(text);
-    EXPECT_EQ(tt5, tt1);
+    // Test 7: Text serialization (to_text renders the east-positive offset)
+    std::string text = TypeConverter<qb::time_of_day_tz>::to_text(tt1);
+    EXPECT_EQ(text, "18:00:00+02:00");
 
     // Test 8: OID check
-    EXPECT_EQ(TypeConverter<pgtimetz>::get_oid(), 1266);
+    EXPECT_EQ(TypeConverter<qb::time_of_day_tz>::get_oid(), 1266);
 
-    std::cout << "TIMETZ type (pgtimetz) test passed" << std::endl;
+    std::cout << "TIMETZ type (qb::time_of_day_tz) test passed" << std::endl;
 }
 
 /**
@@ -1623,7 +1992,7 @@ TEST(EdgeCasesTest, PreUnixEpochDatesAndTimestamps) {
 
     // DATE: civil round-trip across the 1970 boundary, far past and BCE.
     for (const char *s : {"1969-12-31", "1900-01-01", "1858-11-17", "0001-01-01", "2000-01-01", "1970-01-01"}) {
-        pgdate d = pgdate::from_string(s);
+        qb::date d = qb::date::parse(s).value();
         EXPECT_EQ(d.to_string(), s) << "DATE round-trip failed for " << s;
     }
 
@@ -1641,6 +2010,35 @@ TEST(EdgeCasesTest, PreUnixEpochDatesAndTimestamps) {
     EXPECT_NE(ts2_out.find("1955-11-05 06:15:00.5"), std::string::npos) << "got: " << ts2_out;
 
     std::cout << "Pre-Unix-epoch date/timestamp test passed" << std::endl;
+}
+
+// Text-format decode for the civil/byte types. A simple (text-protocol) query
+// returns these columns as text, so from_text must decode correctly — not return a
+// silent default. TIMETZ parses; bytea round-trips PostgreSQL hex; INTERVAL text is
+// unsupported and must fail loudly rather than yield a zero interval.
+TEST(CivilTypeTextDecodeTest, FromTextBehaviors) {
+    using namespace qb::pg::detail;
+
+    // TIMETZ text "HH:MM:SS[.ffffff]±HH[:MM]" -> qb::time_of_day_tz, round-trips via to_text.
+    auto z = TypeConverter<qb::time_of_day_tz>::from_text("14:30:45.123456+02:00");
+    EXPECT_EQ(z.tod.to_string(), "14:30:45.123456");
+    EXPECT_EQ(z.offset.count(), 7200);
+    EXPECT_EQ(TypeConverter<qb::time_of_day_tz>::to_text(z), "14:30:45.123456+02:00");
+
+    // Negative offset written without minutes on the wire ("-05").
+    auto z2 = TypeConverter<qb::time_of_day_tz>::from_text("08:00:00-05");
+    EXPECT_EQ(z2.offset.count(), -5 * 3600);
+    EXPECT_EQ(z2.tod.to_string(), "08:00:00");
+
+    // bytea std::vector<std::byte> text: "\xDEADBEEF" <-> raw bytes, round-trip both ways.
+    std::vector<std::byte> raw{std::byte{0xDE}, std::byte{0xAD}, std::byte{0xBE}, std::byte{0xEF}};
+    const std::string      hex = TypeConverter<std::vector<std::byte>>::to_text(raw);
+    EXPECT_EQ(hex, "\\xdeadbeef");
+    EXPECT_EQ(TypeConverter<std::vector<std::byte>>::from_text(hex), raw);
+    EXPECT_EQ(TypeConverter<std::vector<std::byte>>::from_text("deadbeef"), raw); // no "\x" prefix
+
+    // INTERVAL text decode is unsupported -> loud throw, never a silent zero interval.
+    EXPECT_THROW(TypeConverter<qb::calendar_interval>::from_text("1 mon 2 days 03:04:05"), std::runtime_error);
 }
 
 int

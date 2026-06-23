@@ -111,6 +111,7 @@
 #include <qb/io/tcp/ssl/socket.h>
 #endif
 #include <qb/system/allocator/pipe.h>
+#include <qb/system/cpu.h> // qb::scope_guard
 
 // P1-1: Socket includes for keepalive support
 #ifdef _WIN32
@@ -498,6 +499,109 @@ using namespace qb::io;
 using namespace qb::pg;
 
 /**
+ * @brief Validate the SCRAM server nonce against the client nonce (RFC 5802 §5.1).
+ *
+ * In SCRAM-SHA-256 the server echoes the client's nonce and appends its own, so the
+ * combined nonce in the server-first message MUST begin with the exact nonce the
+ * client sent AND be strictly longer (the server has to contribute entropy). A
+ * server — or a man-in-the-middle — that fails this is not replaying our own first
+ * message faithfully, so the exchange must be aborted before deriving any proof.
+ *
+ * @param client_nonce The nonce this client generated and sent (`r=` in client-first).
+ * @param server_nonce The combined nonce returned by the server (`r=` in server-first).
+ * @return true iff server_nonce starts with client_nonce and is longer.
+ */
+[[nodiscard]] inline bool
+scram_server_nonce_extends_client(std::string_view client_nonce, std::string_view server_nonce) noexcept {
+    return !client_nonce.empty() && server_nonce.size() > client_nonce.size() && server_nonce.starts_with(client_nonce);
+}
+
+/**
+ * @brief Escape a SCRAM `saslname` (RFC 5802): `=` -> `=3D`, `,` -> `=2C`.
+ *
+ * The `n=<username>` field in the SCRAM client-first message uses the `saslname`
+ * production, where `,` and `=` must be percent-style escaped (and `=3D` must be
+ * applied before `=2C` so the inserted `=` is not re-escaped). PostgreSQL ignores
+ * the SCRAM `n=` (it authenticates the startup-packet user), but a role name
+ * containing a comma/equals would otherwise emit a malformed client-first message
+ * that a strict RFC-5802 parser (proxy/pooler/non-PG server) rejects.
+ */
+[[nodiscard]] inline std::string
+scram_escape_saslname(std::string_view name) {
+    std::string out;
+    out.reserve(name.size());
+    for (char c : name) {
+        if (c == '=')
+            out += "=3D"; // must precede the ',' substitution
+        else if (c == ',')
+            out += "=2C";
+        else
+            out += c;
+    }
+    return out;
+}
+
+/**
+ * @brief Opportunistic-TLS (STARTTLS) negotiator for the PostgreSQL protocol.
+ *
+ * Plugs into `qb::io::async::tcp::starttls_connect`. After the cleartext TCP connect,
+ * it sends the 8-byte **SSLRequest** packet (int32 length = 8, int32 request code =
+ * 80877103 / `0x04D2162F`, big-endian) and reads the single-byte server reply:
+ *   - `'S'` → upgrade: the connector then performs the TLS handshake asynchronously.
+ *   - anything else (`'N'`, EOF, error) → fail: a secure database **requires** TLS
+ *     (use the plain `tcp::database` for cleartext). This drops the old, broken `'N'`
+ *     fallback that produced an unusable handle-less `ssl::socket`.
+ *
+ * All I/O is non-blocking; the connector drives the readiness events.
+ */
+struct postgres_ssl_negotiator {
+    static constexpr bool enabled = true;
+
+    static std::array<std::uint8_t, 8>
+    make_request() noexcept {
+        std::array<std::uint8_t, 8> r{};
+        const std::uint32_t         len  = htonl(8u);
+        const std::uint32_t         code = htonl(0x04D2162Fu); // 80877103
+        std::memcpy(r.data(), &len, 4);
+        std::memcpy(r.data() + 4, &code, 4);
+        return r;
+    }
+
+    std::array<std::uint8_t, 8> request_{make_request()};
+    std::size_t                 written_{0};
+    std::uint8_t                verdict_{0};
+    bool                        got_verdict_{false};
+
+    qb::io::async::tcp::starttls_action
+    advance(qb::io::tcp::socket &sock, int /*revents*/) noexcept {
+        using action = qb::io::async::tcp::starttls_action;
+        // Phase 1: write the full SSLRequest (cleartext).
+        while (written_ < request_.size()) {
+            const int n = sock.write(request_.data() + written_, request_.size() - written_);
+            if (n > 0) {
+                written_ += static_cast<std::size_t>(n);
+                continue;
+            }
+            if (n < 0 && qb::io::socket::not_send_error(qb::io::socket::get_last_errno()))
+                return action::want_write;
+            return action::fail;
+        }
+        // Phase 2: read the single-byte verdict.
+        if (!got_verdict_) {
+            const int n = sock.read(&verdict_, 1);
+            if (n == 1)
+                got_verdict_ = true;
+            else if (n < 0 && qb::io::socket::not_recv_error(qb::io::socket::get_last_errno()))
+                return action::want_read;
+            else
+                return action::fail; // EOF or hard error before the verdict
+        }
+        // Phase 3: decide. 'S' => TLS; everything else => require-TLS failure.
+        return verdict_ == 'S' ? action::upgrade : action::fail;
+    }
+};
+
+/**
  * @brief PostgreSQL database client implementation
  *
  * Core implementation of the PostgreSQL client that handles connection
@@ -612,14 +716,34 @@ private:
         const qb::io::uri connect_uri{conn_opts_.schema + "://" + conn_opts_.uri};
         auto              awaiter_valid = connect_suspend_valid_;
 
-        qb::io::async::tcp::connect<qb::io::tcp::socket>(
-            connect_uri,
-            [this, timer_gen, t_out, awaiter_valid](qb::io::tcp::socket &&raw_io) {
-                if (awaiter_valid && !*awaiter_valid)
-                    return;
-                on_async_tcp_connected(std::move(raw_io), timer_gen, t_out);
-            },
-            qb::detail::from_ev_seconds(t_out));
+        using transport_sock = std::remove_cvref_t<typename QB_IO_::transport_io_type>;
+        auto cb              = [this, timer_gen, t_out, awaiter_valid](transport_sock &&sock) {
+            if (awaiter_valid && !*awaiter_valid)
+                return;
+            on_transport_ready(std::move(sock), timer_gen, t_out);
+        };
+
+        if constexpr (transport_sock::is_secure()) {
+#ifdef QB_HAS_SSL
+            // PostgreSQL negotiates TLS in-band (the cleartext SSLRequest packet) BEFORE
+            // the handshake. Drive the whole connect → SSLRequest → TLS handshake through
+            // the connector's STARTTLS path so it runs fully asynchronously on the event
+            // loop (no blocking send/recv/handshake). A server that declines SSL fails the
+            // connect — a secure database requires TLS; use the plain tcp::database for
+            // cleartext.
+            // ssl_verify_mode::full -> verify the chain + host (the connector passes the
+            // remote host to ssl::socket::init_client); ::none -> encrypt only (set_insecure).
+            const bool verify = (conn_opts_.ssl_verify == qb::pg::ssl_verify_mode::full);
+            qb::io::async::tcp::starttls_connect<transport_sock, postgres_ssl_negotiator>(
+                connect_uri, std::move(cb), qb::detail::from_ev_seconds(t_out), verify);
+#else
+            connect_handshake_failed_ = true;
+            _error                    = error::connection_error{"ssl transport requires QB_HAS_SSL"};
+            try_resume_connect_wait();
+#endif
+        } else {
+            qb::io::async::tcp::connect<transport_sock>(connect_uri, std::move(cb), qb::detail::from_ev_seconds(t_out));
+        }
     }
 
     /**
@@ -656,106 +780,31 @@ private:
     }
 
     /**
-     * @brief Completes transport setup after async TCP connect (PostgreSQL-compatible).
+     * @brief Installs the ready transport and starts the PostgreSQL session.
      *
-     * **Plain TCP (`transport::tcp`):** moves the connected `tcp::socket` into `transport()`.
+     * The connector delivers a fully-established socket: for a **secure** database it
+     * has already run the cleartext SSLRequest negotiation AND the TLS handshake
+     * asynchronously (via `starttls_connect` + `postgres_ssl_negotiator`); for a
+     * **plain** database it is the connected cleartext TCP socket. Either way this
+     * switches to the PostgreSQL protocol and sends the startup message — there is no
+     * blocking send/recv/handshake on the event loop anymore.
      *
-     * **TLS client (`transport::stcp`):** sends the PostgreSQL SSLRequest packet (8 bytes: length 8,
-     * request code 80877103 / `0x04D2162F` big-endian per protocol docs). On `S`, performs TLS
-     * on the same fd; on `N`, keeps cleartext on an `ssl::socket` without an `SSL` object
-     * (read/write delegate to `tcp::socket`).
-     *
-     * Then calls `attach_pg_protocol_and_handshake_timer`.
-     *
-     * @param raw_io Connected cleartext TCP socket from `async::tcp::connect`
-     * @param timer_gen Passed through to the handshake timer
-     * @param t_out Used for TLS `connect(uri, timeout)` when the server accepts SSL
+     * @param sock Ready transport socket; empty/closed if the connect or TLS handshake failed.
+     * @param timer_gen Generation counter passed through to the handshake timer.
+     * @param t_out Authentication / ReadyForQuery timeout in seconds.
      */
+    template <typename Sock_>
     void
-    on_async_tcp_connected(qb::io::tcp::socket &&raw_io, std::uint64_t timer_gen, double t_out) {
-        if (!raw_io.is_open()) {
+    on_transport_ready(Sock_ &&sock, std::uint64_t timer_gen, double t_out) {
+        if (!sock.is_open()) {
             connect_handshake_failed_ = true;
-            _error                    = error::connection_error{"tcp connect failed"};
+            _error                    = error::connection_error{"connection / TLS handshake failed"};
             try_resume_connect_wait();
             return;
         }
-
         if (this->protocol())
             this->clear_protocols();
-
-        using transport_sock = std::remove_cvref_t<typename QB_IO_::transport_io_type>;
-
-        if constexpr (transport_sock::is_secure()) {
-#ifdef QB_HAS_SSL
-            uint32_t               len  = htonl(8);
-            uint32_t               code = htonl(0x04D2162F);
-            std::array<uint8_t, 8> ssl_request{};
-            std::memcpy(ssl_request.data(), &len, 4);
-            std::memcpy(ssl_request.data() + 4, &code, 4);
-
-            const auto tcp_connect_timeout = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::duration<double>(t_out));
-
-            if (qb::io::socket::send_n(raw_io.native_handle(), reinterpret_cast<const char *>(ssl_request.data()),
-                                       static_cast<int>(ssl_request.size()), tcp_connect_timeout)
-                != static_cast<int>(ssl_request.size())) {
-                LOG_CRIT("[pgsql] Failed to send SSL request");
-                connect_handshake_failed_ = true;
-                _error                    = error::connection_error{"ssl request send failed"};
-                try_resume_connect_wait();
-                return;
-            }
-
-            uint8_t response = 0;
-            if (qb::io::socket::recv_n(raw_io.native_handle(), reinterpret_cast<char *>(&response), 1, tcp_connect_timeout) != 1) {
-                LOG_CRIT("[pgsql] Failed to receive SSL response");
-                connect_handshake_failed_ = true;
-                _error                    = error::connection_error{"ssl response recv failed"};
-                try_resume_connect_wait();
-                return;
-            }
-
-            const qb::io::uri upgrade_uri{conn_opts_.schema + "://" + conn_opts_.uri};
-
-            if (response == 'S') {
-                LOG_INFO("[pgsql] Server supports SSL");
-                qb::io::tcp::ssl::socket ssl_sock(nullptr, raw_io);
-                ssl_sock.init(nullptr);
-                // Preserve historical behavior (and libpq prefer/require semantics):
-                // do not verify the server certificate unless explicitly requested.
-                if (!conn_opts_.tls_verify_peer)
-                    ssl_sock.set_insecure();
-                if (ssl_sock.connect(upgrade_uri, tcp_connect_timeout) != 0) {
-                    LOG_CRIT("[pgsql] Failed to connect to SSL server");
-                    connect_handshake_failed_ = true;
-                    _error                    = error::connection_error{"tls handshake / connect failed"};
-                    try_resume_connect_wait();
-                    return;
-                }
-                this->transport() = std::move(ssl_sock);
-            } else if (response == 'N') {
-                LOG_INFO("[pgsql] Server declined SSL; continuing with cleartext protocol");
-                qb::io::tcp::ssl::socket ssl_sock(nullptr, raw_io);
-                this->transport() = std::move(ssl_sock);
-            } else {
-                LOG_CRIT("[pgsql] Invalid SSL response byte from server");
-                connect_handshake_failed_ = true;
-                _error                    = error::connection_error{"invalid SSLRequest response from server"};
-                try_resume_connect_wait();
-                return;
-            }
-#else
-            (void) raw_io;
-            (void) timer_gen;
-            (void) t_out;
-            connect_handshake_failed_ = true;
-            _error                    = error::connection_error{"ssl transport requires QB_HAS_SSL"};
-            try_resume_connect_wait();
-            return;
-#endif
-        } else {
-            this->transport() = std::move(raw_io);
-        }
-
+        this->transport() = std::forward<Sock_>(sock);
         attach_pg_protocol_and_handshake_timer(timer_gen, t_out);
     }
 
@@ -939,6 +988,11 @@ private:
     std::string          _nonce;         ///< Client nonce for SCRAM authentication
     std::vector<uint8_t> _password_salt; ///< Salted password for SCRAM authentication
     std::string          _auth_message;  ///< Authentication message for SCRAM protocol
+    std::string          _gs2_header;    ///< SCRAM gs2-header chosen at SASL init (`n,,` / `y,,` / `p=tls-server-end-point,,`)
+    std::vector<unsigned char> _channel_binding; ///< SCRAM-SHA-256-PLUS channel-binding data (tls-server-end-point); empty when unbound
+    std::function<void(std::string_view)> _copy_out_sink; ///< Active `COPY … TO STDOUT` chunk sink (set for the duration of copy_out); empty otherwise
+    std::function<std::optional<std::string>()> _copy_in_source; ///< Active `COPY … FROM STDIN` chunk source (returns next chunk, nullopt = done); empty otherwise
+    char _txn_status{'I'}; ///< Last ReadyForQuery transaction status: 'I' idle, 'T' in a block, 'E' failed block
 
 public:
     /**
@@ -997,13 +1051,45 @@ public:
             } break;
             case SCRAM_SHA256: {
                 LOG_INFO("[pgsql] SCRAM-SHA-256 authentication requested");
+
+                // AuthenticationSASL body: the NUL-terminated mechanism names the
+                // server offers, ended by an empty string.
+                bool        offers_plus = false;
+                std::string mech;
+                while (msg.read(mech) && !mech.empty()) {
+                    if (mech == "SCRAM-SHA-256-PLUS")
+                        offers_plus = true;
+                }
+
+                // Negotiate channel binding (RFC 5802 §6 gs2-cbind-flag / RFC 5929):
+                //   - cleartext link            -> "n,," (binding not applicable)
+                //   - TLS + server offers -PLUS -> "p=tls-server-end-point,," + bind data
+                //   - TLS + server lacks -PLUS  -> "y,," (we support it; the server then
+                //                                  detects a MITM that stripped -PLUS)
+                using transport_sock         = std::remove_cvref_t<typename QB_IO_::transport_io_type>;
+                std::string selected_mechanism = "SCRAM-SHA-256";
+                _channel_binding.clear();
+                if constexpr (transport_sock::is_secure()) {
+                    if (offers_plus) {
+                        _channel_binding = this->transport().tls_server_end_point();
+                    }
+                    if (!_channel_binding.empty()) {
+                        selected_mechanism = "SCRAM-SHA-256-PLUS";
+                        _gs2_header         = "p=tls-server-end-point,,";
+                    } else {
+                        _gs2_header = "y,,";
+                    }
+                } else {
+                    _gs2_header = "n,,";
+                }
+
                 message pm(password_message_tag);
-                // Set new nonce
-                _nonce          = qb::crypto::generate_random_string(32, qb::crypto::range_hex_lower);
-                const auto data = "n,,n=" + conn_opts_.user + ",r=" + _nonce;
-                // Add mechanism
-                pm.write("SCRAM-SHA-256");
-                // Add sasl data
+                // SECURITY: the SCRAM client nonce is an anti-replay/freshness value and
+                // MUST come from a CSPRNG (OpenSSL RAND_bytes), not the non-cryptographic
+                // mt19937 behind generate_random_string.
+                _nonce          = qb::crypto::generate_secure_random_string(32, qb::crypto::range_hex_lower);
+                const auto data = _gs2_header + "n=" + scram_escape_saslname(conn_opts_.user) + ",r=" + _nonce;
+                pm.write(selected_mechanism);
                 pm.write(static_cast<qb::pg::integer>(data.size()));
                 pm.write_sv(data);
                 *this << pm;
@@ -1020,6 +1106,14 @@ public:
                 const std::string password    = conn_opts_.password;
                 const std::string serverNonce = std::move(params["r"]); // Combined nonce (client + server)
                 const std::string salt_base64 = std::move(params["s"]); // Salt (base64)
+
+                // SECURITY (RFC 5802 §5.1): the server's combined nonce must begin with
+                // the exact client nonce we sent and extend it. Reject otherwise — a
+                // mismatched nonce means the peer is not faithfully continuing OUR
+                // exchange (MITM / replay / buggy server). Check before deriving any proof.
+                if (!scram_server_nonce_extends_client(clientNonce, serverNonce)) {
+                    throw error::connection_error("SCRAM: server nonce does not extend the client nonce");
+                }
 
                 // Validate and parse iteration count safely
                 // SECURITY FIX: Added validation and error handling to prevent
@@ -1038,10 +1132,19 @@ public:
                     throw error::connection_error(std::string("Invalid SCRAM iteration count: ") + e.what());
                 }
 
-                // Client-first-message-bare
-                std::string client_first_message_bare          = "n=" + username + ",r=" + clientNonce;
+                // Client-first-message-bare — MUST match the bytes sent in the SASL
+                // client-first (same saslname escaping of the username).
+                std::string client_first_message_bare          = "n=" + scram_escape_saslname(username) + ",r=" + clientNonce;
                 std::string server_first_message               = "r=" + serverNonce + ",s=" + salt_base64 + ",i=" + std::to_string(iteration);
-                std::string client_final_message_without_proof = "c=biws,r=" + serverNonce; // "biws" is the base64 encoding of "n,,"
+                // c = base64( gs2-header-bytes || channel-binding-data ). Unbound -> the
+                // data is empty so this is base64("n,,")="biws" or base64("y,,"); with
+                // tls-server-end-point the server-certificate hash is appended (binds the
+                // SCRAM proof to this exact TLS channel).
+                std::string cbind_input = _gs2_header;
+                cbind_input.append(reinterpret_cast<const char *>(_channel_binding.data()), _channel_binding.size());
+                const std::string channel_binding_b64 =
+                    qb::crypto::base64_encode(reinterpret_cast<const unsigned char *>(cbind_input.data()), cbind_input.size());
+                std::string client_final_message_without_proof = "c=" + channel_binding_b64 + ",r=" + serverNonce;
                 _auth_message = client_first_message_bare + "," + server_first_message + "," + client_final_message_without_proof;
                 // Compute SaltedPassword using PBKDF2-HMAC-SHA256
                 std::vector<unsigned char> salt = qb::crypto::base64_decode(salt_base64);
@@ -1062,7 +1165,7 @@ public:
                 // Encode clientProof in base64
                 std::string clientProofBase64 = qb::crypto::base64_encode(clientProof.data(), clientProof.size());
                 // Construction of final message to send
-                std::string client_final_message = "c=biws,r=" + serverNonce + ",p=" + clientProofBase64;
+                std::string client_final_message = client_final_message_without_proof + ",p=" + clientProofBase64;
 
                 message pm(password_message_tag);
                 pm.write_sv(client_final_message);
@@ -1201,6 +1304,8 @@ public:
         char stat(0);
         msg.read(stat);
         // I = idle, T = in transaction block, E = failed transaction (must ROLLBACK)
+        if (stat == 'I' || stat == 'T' || stat == 'E')
+            _txn_status = stat;
         if (stat == 'E') {
             LOG_WARN("[pgsql] ReadyForQuery: backend session is in failed transaction "
                      "(SQLSTATE implicit); issue ROLLBACK before new commands");
@@ -1338,17 +1443,18 @@ public:
      */
 
     /**
-     * @brief Abort COPY FROM (client → server) and return to normal query protocol
+     * @brief Abort a COPY FROM STDIN (client → server) with a CopyFail.
      *
-     * After CopyInResponse the server waits for CopyData / CopyDone / CopyFail.
-     * We do not implement COPY IN; CopyFail + Sync recovers per PostgreSQL docs.
+     * COPY is issued over the SIMPLE query protocol (a 'Q' message), which has NO Sync
+     * framing: the server replies to a CopyFail with ErrorResponse + a single
+     * ReadyForQuery. Send ONLY CopyFail — appending a Sync (extended-protocol recovery)
+     * would make the backend emit a SECOND ReadyForQuery and desynchronize the command
+     * queue (premature completion / double-dispatch of any queued command).
      */
     void
-    send_copy_fail_and_sync() {
+    send_copy_fail() {
         message fail(copy_fail_tag);
-        fail.write(std::string("qbm-pgsql: COPY FROM STDIN is not supported by this client"));
-        message sync(sync_tag);
-        fail.pack(sync);
+        fail.write(std::string("qbm-pgsql: COPY FROM STDIN aborted by client"));
         *this << fail;
     }
 
@@ -1388,25 +1494,54 @@ public:
         smallint ncols{};
         if (!msg.read(overall) || !msg.read(ncols)) {
             LOG_WARN("[pgsql] Malformed CopyInResponse");
-            send_copy_fail_and_sync();
+            send_copy_fail();
             return;
         }
         if (ncols < 0 || ncols > 4096) {
             LOG_WARN("[pgsql] CopyInResponse invalid column count " << ncols);
             on_error_query(error::client_error{"Malformed CopyInResponse from server"});
-            send_copy_fail_and_sync();
+            send_copy_fail();
             return;
         }
         for (int i = 0; i < ncols; ++i) {
             smallint fmt{};
             if (!msg.read(fmt)) {
-                send_copy_fail_and_sync();
+                send_copy_fail();
                 return;
             }
         }
-        LOG_WARN("[pgsql] COPY FROM STDIN not supported; sending CopyFail+Sync");
-        on_error_query(error::client_error{"COPY FROM STDIN is not supported by this client"});
-        send_copy_fail_and_sync();
+        if (!_copy_in_source) {
+            LOG_WARN("[pgsql] CopyInResponse with no copy_in() source registered; failing the COPY");
+            on_error_query(error::client_error{"COPY FROM STDIN requires copy_in() with a data source"});
+            send_copy_fail();
+            return;
+        }
+        // Stream the client-provided data: each source() chunk becomes a CopyData
+        // message (raw bytes), then CopyDone. The server replies CommandComplete +
+        // ReadyForQuery, which resolves the copy_in() awaiter. A throwing source aborts
+        // the COPY cleanly with CopyFail rather than corrupting the protocol stream.
+        try {
+            // CopyData may split at ANY byte boundary, so cap each message body well
+            // under the int32 wire length field: a single >2 GiB chunk would otherwise
+            // wrap message::length() and desynchronize the stream.
+            static constexpr std::size_t kMaxCopyDataBody = 1u << 30; // 1 GiB
+            while (std::optional<std::string> chunk = _copy_in_source()) {
+                std::string_view rest{*chunk};
+                while (!rest.empty()) { // empty chunk -> skipped; large chunk -> split
+                    const std::size_t take = std::min(rest.size(), kMaxCopyDataBody);
+                    message           d(copy_data_tag);
+                    d.write_sv(rest.substr(0, take));
+                    *this << d;
+                    rest.remove_prefix(take);
+                }
+            }
+        } catch (...) {
+            LOG_WARN("[pgsql] copy_in source threw; aborting the COPY with CopyFail");
+            send_copy_fail();
+            return;
+        }
+        message done(copy_done_tag);
+        *this << done;
     }
 
     /**
@@ -1450,7 +1585,13 @@ public:
      */
     void
     on_copy_data(message &msg) {
-        // High volume: avoid logging each chunk; advance read cursor for consistency
+        // During a COPY ... TO STDOUT, hand the opaque payload (one row, or a chunk in
+        // binary format) to the active sink without copying. No sink -> drop the chunk.
+        if (_copy_out_sink) {
+            const std::string_view chunk = msg.remaining();
+            if (!chunk.empty())
+                _copy_out_sink(chunk);
+        }
         msg.discard_remaining();
     }
 
@@ -1617,6 +1758,21 @@ public:
         return connect();
     }
 
+    /**
+     * @brief Connect with a fully-specified options struct.
+     *
+     * The connection string carries only `user`/`password`/`host:port`/`database`; use
+     * this overload to also set the fields that are NOT expressible in the string —
+     * notably `ssl_verify` (TLS verification level), `connect_timeout`, and the keepalive
+     * settings. Typical: `auto o = connection_options::parse(dsn); o.ssl_verify =
+     * ssl_verify_mode::full; co_await db.connect(o);`.
+     */
+    [[nodiscard]] connect_awaiter
+    connect(connection_options opts) {
+        conn_opts_ = std::move(opts);
+        return connect();
+    }
+
     /** @brief Use an existing transport channel (e.g. pool) then handshake. */
     [[nodiscard]] connect_awaiter
     connect(std::string const &conn_opts, typename QB_IO_::transport_io_type &&raw_io) {
@@ -1690,6 +1846,291 @@ public:
         }
 
         return error_code == 0;
+    }
+
+    /**
+     * @brief Whether the SCRAM authentication was bound to the TLS channel.
+     * @return true if the handshake negotiated **SCRAM-SHA-256-PLUS** with
+     *         `tls-server-end-point` channel binding (only possible over TLS, when the
+     *         server offers the `-PLUS` mechanism); false for plain SCRAM-SHA-256,
+     *         cleartext/MD5 auth, or a `trust` connection.
+     * @details Channel binding ties the SCRAM proof to this specific TLS certificate,
+     *          so even an active man-in-the-middle holding valid credentials cannot
+     *          relay the authentication onto a different channel.
+     */
+    [[nodiscard]] bool
+    used_channel_binding() const noexcept {
+        return _gs2_header.rfind("p=", 0) == 0;
+    }
+
+    /**
+     * @brief Whether the backend session is currently inside a transaction block.
+     * @return true if the last ReadyForQuery reported `T` (in a block) or `E` (failed
+     *         block); false when idle (`I`). Reflects real server state.
+     */
+    [[nodiscard]] bool
+    in_transaction() const noexcept {
+        return _txn_status == 'T' || _txn_status == 'E';
+    }
+
+    /**
+     * @brief Value of a server `ParameterStatus` report (libpq `PQparameterStatus`).
+     * @param key e.g. "server_version", "server_encoding", "client_encoding", "TimeZone",
+     *        "integer_datetimes", "standard_conforming_strings", "application_name".
+     * @return The reported value, or std::nullopt if the server never sent that key.
+     *         The view is valid while this connection is alive.
+     */
+    [[nodiscard]] std::optional<std::string_view>
+    parameter_status(std::string_view key) const {
+        const auto it = client_opts_.find(std::string(key));
+        if (it == client_opts_.end())
+            return std::nullopt;
+        return std::string_view{it->second};
+    }
+
+    /**
+     * @brief Backend process id captured at connect (BackendKeyData); libpq `PQbackendPID`.
+     * @return The server-side backend PID, or 0 if not connected.
+     */
+    [[nodiscard]] int
+    backend_pid() const noexcept {
+        return static_cast<int>(serverPid_);
+    }
+
+    /**
+     * @brief Server version as a libpq-style integer (`PQserverVersion`): 16.2 -> 160002,
+     *        9.6.24 -> 90624. Returns 0 if the `server_version` parameter is unknown.
+     */
+    [[nodiscard]] int
+    server_version() const {
+        const auto it = client_opts_.find("server_version");
+        if (it == client_opts_.end())
+            return 0;
+        int       major = 0, minor = 0, patch = 0;
+        const int n = std::sscanf(it->second.c_str(), "%d.%d.%d", &major, &minor, &patch);
+        if (n >= 2 && major >= 10)
+            return major * 10000 + minor; // modern scheme: major.minor
+        if (n >= 3)
+            return major * 10000 + minor * 100 + patch; // legacy (< 10): major.minor.patch
+        if (n >= 1)
+            return major * 10000;
+        return 0;
+    }
+
+    /**
+     * @brief Stream the result of a `COPY … TO STDOUT` to a sink (coroutine).
+     *
+     * Runs @p sql (which must be a `COPY <table-or-query> TO STDOUT [...]`) and delivers
+     * each `CopyData` payload to @p sink **as it arrives** — the rows are never buffered
+     * in a result set, so arbitrarily large exports stream in constant memory. The
+     * payload bytes are the COPY wire bytes in the requested format (text/CSV: one row
+     * per chunk ending in `\n`; binary: opaque framed chunks). The `string_view` is valid
+     * only for the duration of the call; copy what you need.
+     *
+     * @param sql  A `COPY … TO STDOUT` statement.
+     * @param sink Invoked once per `CopyData` chunk.
+     * @return `Reply<resultset>` — `ok()` on success (the result set is empty; the data
+     *         went to @p sink), or the server error.
+     *
+     * @code
+     * std::string out;
+     * co_await db.copy_out("COPY users TO STDOUT (FORMAT csv)",
+     *                      [&](std::string_view chunk){ out.append(chunk); });
+     * @endcode
+     */
+    [[nodiscard]] qb::io::async::task<qb::pg::Reply<resultset>>
+    copy_out(std::string sql, std::function<void(std::string_view)> sink) {
+        _copy_out_sink = std::move(sink);
+        // RAII clear: also runs if the awaiting coroutine frame is destroyed mid-await
+        // (cancellation / task drop), so the connection never keeps a stale sink whose
+        // captures point at the torn-down frame.
+        auto guard = qb::scope_guard([this] { _copy_out_sink = nullptr; });
+        co_return co_await this->execute(std::string_view{sql});
+    }
+
+    /**
+     * @brief Bulk-load via `COPY … FROM STDIN` from a streaming source (coroutine).
+     *
+     * Runs @p sql (a `COPY <table> FROM STDIN [...]`) and feeds the server the bytes
+     * produced by @p source: it is called repeatedly and each returned chunk is sent as
+     * a `CopyData` message until it returns `std::nullopt`, then `CopyDone` ends the load.
+     * The chunk bytes must be in the COPY wire format the statement selects (text/CSV:
+     * complete rows ending in `\n`; binary: the framed binary stream). A chunk does not
+     * have to align to row boundaries for text/CSV — the server reassembles the stream.
+     * If @p source throws, the COPY is aborted with `CopyFail` and the reply is an error.
+     *
+     * @return `Reply<resultset>` — `ok()` on success (`COPY n` rows loaded), else the error.
+     *
+     * @code
+     * co_await db.copy_in("COPY t (id, v) FROM STDIN",
+     *     [&]() -> std::optional<std::string> { return next_line(); });   // nullopt to finish
+     * @endcode
+     */
+    [[nodiscard]] qb::io::async::task<qb::pg::Reply<resultset>>
+    copy_in(std::string sql, std::function<std::optional<std::string>()> source) {
+        _copy_in_source = std::move(source);
+        auto guard      = qb::scope_guard([this] { _copy_in_source = nullptr; }); // see copy_out
+        co_return co_await this->execute(std::string_view{sql});
+    }
+
+    /** @brief `COPY … FROM STDIN` convenience: send the whole payload in one shot. */
+    [[nodiscard]] qb::io::async::task<qb::pg::Reply<resultset>>
+    copy_in(std::string sql, std::string data) {
+        co_return co_await copy_in(std::move(sql), [d = std::move(data), sent = false]() mutable -> std::optional<std::string> {
+            if (sent)
+                return std::nullopt;
+            sent = true;
+            return std::move(d);
+        });
+    }
+
+    /**
+     * @brief Stream a large query result row-by-row via a server-side cursor (coroutine).
+     *
+     * Runs @p sql through a server-side `CURSOR`, fetching @p batch_size rows per round
+     * trip and invoking @p on_row for each row **as the batches arrive** — only one batch
+     * is ever held in memory, so an arbitrarily large result set is processed in constant
+     * memory (a plain `query()` buffers the whole result set).
+     *
+     * Cursors require a transaction: when the connection is idle this opens its own
+     * (`BEGIN` … `COMMIT`, or `ROLLBACK` on failure); when it is already inside a
+     * transaction the cursor is declared there and only the cursor is closed. If @p on_row
+     * throws, the cursor is closed (and a self-opened transaction rolled back) and the
+     * exception is rethrown.
+     *
+     * @param sql        The query to stream (a `SELECT`, typically).
+     * @param batch_size Rows per `FETCH` (clamped to ≥ 1).
+     * @param on_row     Invoked per row with a `row` view valid only during the call.
+     * @return `Reply<void>` — `ok()` once the whole result streamed, else the server error.
+     *
+     * @code
+     * std::uint64_t n = 0;
+     * co_await db.query_stream("SELECT * FROM huge", 1000, [&](auto row){ ++n; });
+     * @endcode
+     */
+    template <typename RowFn>
+    [[nodiscard]] qb::io::async::task<qb::pg::Reply<void>>
+    query_stream(std::string sql, std::size_t batch_size, RowFn on_row) {
+        if (batch_size == 0)
+            batch_size = 1;
+        const bool        owns_txn    = !in_transaction();
+        const std::string declare_sql = "DECLARE qb_stream_cursor CURSOR FOR " + sql;
+        const std::string fetch_sql   = "FETCH " + std::to_string(batch_size) + " FROM qb_stream_cursor";
+        const std::string close_sql   = "CLOSE qb_stream_cursor";
+
+        if (owns_txn) {
+            auto b = co_await this->begin();
+            if (!b.ok())
+                co_return qb::pg::Reply<void>::failure(b.error());
+        }
+        auto declared = co_await this->execute(std::string_view{declare_sql});
+        if (!declared.ok()) {
+            if (owns_txn)
+                (void) co_await this->rollback();
+            co_return qb::pg::Reply<void>::failure(declared.error());
+        }
+
+        bool                    failed = false;
+        qb::pg::error::db_error err{"unknown error"};
+        std::exception_ptr      user_exc;
+        for (;;) {
+            auto batch = co_await this->execute(std::string_view{fetch_sql});
+            if (!batch.ok()) {
+                err    = batch.error();
+                failed = true;
+                break;
+            }
+            const auto       &rs = batch.result();
+            const std::size_t  n  = rs.size();
+            try {
+                for (const auto &r : rs)
+                    on_row(r);
+            } catch (...) {
+                user_exc = std::current_exception();
+                failed   = true;
+            }
+            if (user_exc || n < batch_size)
+                break; // user threw, or short batch -> cursor exhausted
+        }
+
+        (void) co_await this->execute(std::string_view{close_sql}); // best-effort
+        if (owns_txn) {
+            if (failed) {
+                (void) co_await this->rollback();
+            } else {
+                auto c = co_await this->commit();
+                if (!c.ok()) {
+                    failed = true;
+                    err    = c.error();
+                }
+            }
+        }
+
+        if (user_exc)
+            std::rethrow_exception(user_exc);
+        if (failed)
+            co_return qb::pg::Reply<void>::failure(err);
+        co_return qb::pg::Reply<void>::success();
+    }
+
+    /**
+     * @brief Request cancellation of the query currently running on this connection.
+     *
+     * Sends a PostgreSQL CancelRequest out-of-band on a short-lived SEPARATE
+     * connection, using the backend process id + secret key captured at connect time
+     * (BackendKeyData). The server aborts the in-flight query on the main connection,
+     * which surfaces to the awaiting caller as an error with SQLSTATE 57014
+     * (`sqlstate::query_canceled`). Mirrors libpq's `PQcancel`: a synchronous,
+     * best-effort control op (the request packet is 16 bytes, no reply).
+     *
+     * @return true if the CancelRequest was delivered; false if no backend key is
+     *         known yet (never connected) or the out-of-band socket failed. A false
+     *         return only means the request could not be sent — not that the query
+     *         survived.
+     *
+     * @note The cancel connection is plaintext even when the main connection is SSL
+     *       (the request carries no secret beyond the per-connection cancel key). A
+     *       server that mandates SSL on every connection will reject it; SSL-tunneled
+     *       cancellation is a future enhancement (tracked with sslmode/verify-full).
+     */
+    bool
+    cancel() {
+        if (serverPid_ == 0)
+            return false; // never received BackendKeyData -> nothing to cancel
+
+        // CancelRequest, 16 bytes, all big-endian:
+        //   int32 length = 16
+        //   int32 request code = 80877102 (0x04D2162E)
+        //   int32 backend process id
+        //   int32 backend secret key
+        std::array<std::uint8_t, 16> pkt{};
+        const std::uint32_t          len  = htonl(16u);
+        const std::uint32_t          code = htonl(80877102u);
+        const std::uint32_t          pid  = htonl(static_cast<std::uint32_t>(serverPid_));
+        const std::uint32_t          key  = htonl(static_cast<std::uint32_t>(serverSecret_));
+        std::memcpy(pkt.data() + 0, &len, 4);
+        std::memcpy(pkt.data() + 4, &code, 4);
+        std::memcpy(pkt.data() + 8, &pid, 4);
+        std::memcpy(pkt.data() + 12, &key, 4);
+
+        // cancel() is synchronous (like libpq's PQcancel) and is typically fired from a
+        // timer ON the event loop, so the blocking connect+send must NOT stall the loop
+        // for the full connect_timeout. Cap it tightly (≤ 2s): the cancel targets the
+        // SAME already-reachable endpoint as the live connection, so the handshake is
+        // normally sub-millisecond; the cap only bounds the pathological unreachable case.
+        const qb::duration cfg = conn_opts_.connect_timeout > qb::duration::zero()
+                                     ? conn_opts_.connect_timeout
+                                     : std::chrono::duration_cast<qb::duration>(std::chrono::seconds(10));
+        const qb::duration t_out = std::min(cfg, std::chrono::duration_cast<qb::duration>(std::chrono::seconds(2)));
+
+        // Plain TCP / unix socket to the same endpoint (scheme resolved by tcp::socket;
+        // an ssl:// endpoint connects plaintext here — the TLS layer is skipped).
+        qb::io::tcp::socket sock;
+        if (sock.connect(qb::io::uri{conn_opts_.schema + "://" + conn_opts_.uri}, t_out) != 0)
+            return false;
+        const int n = qb::io::socket::send_n(sock.native_handle(), pkt.data(), static_cast<int>(pkt.size()), t_out);
+        sock.disconnect();
+        return n == static_cast<int>(pkt.size());
     }
 
 private:
@@ -1780,6 +2221,10 @@ public:
             is_connected_ = false;
             on_error_query(error::client_error("database disconnected"));
         }
+        // The backend cancel key is per-connection; drop it so a post-disconnect
+        // cancel() can't address a recycled PID on the server.
+        serverPid_    = 0;
+        serverSecret_ = 0;
         // on_error_query() only fails the single in-flight query. Fail every
         // query still queued behind it (pipelined / multi-statement / pending
         // sub-transactions) so their callers' coroutine awaiters resume with the
@@ -1822,6 +2267,8 @@ public:
         connect_coroutine_pending_ = false;
         connect_suspend_handle_    = {};
         connect_suspend_valid_.reset();
+        serverPid_                 = 0;
+        serverSecret_              = 0;
         _error           = error::db_error{"unknown error"};
         _current_command = root_transaction();
         _current_query   = nullptr;

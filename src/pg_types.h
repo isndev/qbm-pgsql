@@ -215,11 +215,14 @@ enum class oid : int {
     macaddr          = 829,  /**< MAC address */
     inet             = 869,  /**< IPv4 or IPv6 address */
     cidr             = 650,  /**< IPv4 or IPv6 network */
+    boolean_array    = 1000, /**< Array of boolean */
     int2_array       = 1005, /**< Array of int2 */
     int4_array       = 1007, /**< Array of int4 */
     text_array       = 1009, /**< Array of text */
+    int8_array       = 1016, /**< Array of int8 */
     oid_array        = 1028, /**< Array of OIDs */
     float4_array     = 1021, /**< Array of float4 */
+    float8_array     = 1022, /**< Array of float8 */
     acl_item         = 1033, /**< Access control list item */
     cstring_array    = 1263, /**< Array of C strings */
     bpchar           = 1042, /**< Blank-padded string (char(n)) */

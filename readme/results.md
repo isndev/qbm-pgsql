@@ -10,7 +10,7 @@ How to read rows and columns from `qb::pg::results` — the container a query ha
 
 ## Summary
 
-A query returns a `qb::pg::results` object. `results` is the public type alias for `qb::pg::detail::resultset` (`pgsql.h:2039`) — that is the only public spelling. The class itself only exists as `qb::pg::detail::resultset` (used internally, e.g. in `pg_reply_awaiter<resultset>`); there is no public `qb::pg::resultset`. You reach a result set through three paths:
+A query returns a `qb::pg::results` object. `results` is the public type alias for `qb::pg::detail::resultset` (`pgsql.h:2433`) — that is the only public spelling. The class itself only exists as `qb::pg::detail::resultset` (used internally, e.g. in `pg_reply_awaiter<resultset>`); there is no public `qb::pg::resultset`. You reach a result set through three paths:
 
 - **Callback** — the success callback's second parameter, `(qb::pg::transaction&, qb::pg::results)`.
 - **Coroutine** — `co_await tr.execute(...)` yields a `Reply<resultset>`; on success `reply.result()` is the result set.
@@ -31,10 +31,10 @@ You include nothing extra: `#include <pgsql/pgsql.h>` pulls `resultset.h` throug
 - An **owning** result set holds a real allocation and keeps its rows alive. The default constructor, `deep_snapshot()`, and the coroutine path all produce owning result sets.
 - A **borrowing** result set wraps a caller-owned `result_impl` with a no-op deleter (`resultset.cpp:215-220`). It observes the live row buffer but neither frees nor extends it. The result set handed to a synchronous success callback is borrowing.
 
-This matters when you hand rows off past the synchronous callback's return: call `deep_snapshot()` to take an owning copy first (`resultset.h:157`).
+This matters when you hand rows off past the synchronous callback's return: call `deep_snapshot()` to take an owning copy first (`resultset.h:170`).
 
 ```cpp
-<!-- src: qbm/pgsql/src/resultset.h:157 -->
+<!-- src: qbm/pgsql/src/resultset.h:170 -->
 qb::pg::results owned = borrowed.deep_snapshot();   // safe to keep after the callback returns
 ```
 
@@ -42,7 +42,7 @@ The coroutine path does this for you: a successful `co_await` delivers `rs.deep_
 
 ### `operator bool` reflects rows, not DML success
 
-`results::operator bool` and `operator!` report only whether the set is non-empty (`resultset.h:217-235`). A `SELECT 1` is truthy; an `INSERT`/`UPDATE`/`DELETE` without `RETURNING` is falsy even when it changed rows. To detect a DML effect, use `rows_affected()` (`resultset.h:247`), which returns the count parsed from the `CommandComplete` tag (`5` from `INSERT 0 5`).
+`results::operator bool` and `operator!` report only whether the set is non-empty (`resultset.h:278-296`). A `SELECT 1` is truthy; an `INSERT`/`UPDATE`/`DELETE` without `RETURNING` is falsy even when it changed rows. To detect a DML effect, use `rows_affected()` (`resultset.h:308`), which returns the count parsed from the `CommandComplete` tag (`5` from `INSERT 0 5`).
 
 ### Binary vs text decoding is per column
 
@@ -95,10 +95,10 @@ The `result` here is borrowing. If you need the rows after this lambda returns, 
 
 ### From `await()` (blocking)
 
-For a blocking drain, pass the discard sentinels and call `await()`. The returned `status` is convertible to `bool`; `status.results()` returns the result set for that drain (`transaction.h:680`).
+For a blocking drain, pass the discard sentinels and call `await()`. The returned `status` is convertible to `bool`; `status.results()` returns the result set for that drain (`transaction.h:702`).
 
 ```cpp
-<!-- src: qbm/pgsql/src/transaction.h:680 -->
+<!-- src: qbm/pgsql/src/transaction.h:702 -->
 #include <pgsql/pgsql.h>
 
 auto st = db.execute("SELECT 1 AS x", qb::pg::discard_query, qb::pg::discard_error).await();
@@ -108,7 +108,7 @@ if (st) {
 }
 ```
 
-`status::operator bool` is truthy only when the batch drained with no failed sub-result and `_error.sqlstate == sqlstate::unknown_code` (the success sentinel) — always test it before calling `results()` (`transaction.h:670-690`).
+`status::operator bool` is truthy only when the batch drained with no failed sub-result and `_error.sqlstate == sqlstate::unknown_code` (the success sentinel) — always test it before calling `results()` (`transaction.h:691-704`).
 
 ---
 
@@ -176,6 +176,29 @@ row.to({"id", "name", "active"}, id, name, active);
 
 The named form requires at least as many names as targets, or it throws `error::db_error` with message `"Not enough names in row data extraction"` (`resultset.inl:152`). Each target decodes through the same path as `field::as<T>()`, so a NULL into a non-`std::optional` target throws `value_is_null` (see below).
 
+### Typed tuples & structured bindings
+
+For a value-returning, structured-binding-friendly form, decode a row (or a whole result) as a `std::tuple`:
+
+```cpp
+// One row -> a typed tuple (structured binding on the std::tuple).
+auto [id, name] = row.as<std::tuple<int, std::string>>();
+
+// First row of a result, or std::nullopt if empty.
+if (auto r = res.one<int, std::string>())
+    auto [id, name] = *r;
+
+// Every row, eager, ready for structured-binding iteration.
+for (auto [id, name] : res.all<int, std::string>())
+    std::cout << id << ' ' << name << '\n';
+
+// Lazy view (no intermediate vector) — borrows the result set.
+for (auto [id, name] : res.rows<int, std::string>())
+    std::cout << id << ' ' << name << '\n';
+```
+
+`row::as<Tuple>()` requires a `std::tuple<...>` (a `static_assert` rejects scalars — use `row[i].as<T>()` for a single column). Each element decodes through `field::as<T>()`; use `std::optional<T>` in the tuple to read a nullable column. `res.one<Ts...>()` returns `std::optional<std::tuple<Ts...>>`; `res.all<Ts...>()` returns `std::vector<std::tuple<Ts...>>`; `res.rows<Ts...>()` returns a lazy `std::ranges` view of `std::tuple<Ts...>` (valid only while the result set is alive).
+
 ---
 
 ## The `field` view
@@ -187,6 +210,8 @@ A `results::field` is a non-owning view of one cell. Its core members:
 | `as<T>()`                     | Decode the cell to `T`; throws `error::value_is_null` if NULL and `T` is not nullable. |
 | `to(T &val)`                  | Out-parameter form; for nullable `T` writes a null sentinel, otherwise throws on NULL. |
 | `to(std::optional<T> &val)`   | NULL-safe out-parameter; empty optional on NULL. |
+| `text()`                      | **Zero-copy** `std::string_view` of the field bytes (no allocation). Valid only while the result set is alive. Prefer over `as<std::string>()` to read a text column without copying. |
+| `view()`                      | **Zero-copy** `std::span<const std::byte>` of the raw field bytes on the wire (text or binary per the column's format). Valid only while the result set is alive. |
 | `is_null()`                   | `true` if the cell is SQL NULL. |
 | `empty()`                     | `true` if the cell is empty (and not null). |
 | `name()`                      | Column name (`std::string const&`). |
@@ -255,7 +280,7 @@ This is convenient for diagnostics, admin endpoints, or quick serialization. In 
 - **Views must not outlive the result set.** `row` and `field` are pointers-plus-indices into the parent `results`. Storing a `row` or `field` past the lifetime of the `results` that vended it is a use-after-free. Copy the data out, or snapshot the whole set (`resultset.h:268,381`).
 - **The callback result set is borrowing.** It does not extend the lifetime of the live row buffer. To retain rows after a synchronous success callback returns, call `deep_snapshot()` first (`resultset.cpp:215-220`).
 - **`operator[]`, `front()`, `back()` assert; they do not throw.** `results::operator[]` only asserts on an out-of-range index (UB in a release build past the end); `front()`/`back()` assert on an empty set. Use `at()` for a checked row, and guard `front()`/`back()` with `empty()` or `operator bool` (`resultset.cpp:261-281`).
-- **`operator bool` is a row-presence test, not DML success.** A successful DML statement with no returned rows is falsy. Use `rows_affected()` to detect an effect (`resultset.h:217-247`).
+- **`operator bool` is a row-presence test, not DML success.** A successful DML statement with no returned rows is falsy. Use `rows_affected()` to detect an effect (`resultset.h:278-308`).
 - **Iterators are bidirectional, not random-access.** Comparing iterators from different result sets — or, for field iterators, different rows — trips an assert (`data_iterator.h:68`, `resultset.cpp:106,173-174`).
 - **Do not share a result set across cores/threads.** Text-format `as<T>()` uses a function-local `static ParamUnserializer`; this is safe only because an actor/connection runs on a single `VirtualCore` (one thread). Sharing a `results` across cores is a data race (`resultset.h:486-489`).
 - **NULL into a non-`std::optional` target throws.** Always decode possibly-NULL columns as `std::optional<U>`, or guard with `is_null()` (`resultset.h:471`).
