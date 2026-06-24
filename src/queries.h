@@ -277,8 +277,17 @@ public:
             ParamSerializer serializer;
             serializer.serialize_params(std::forward<T>(args)...);
 
+            // GCC -O2 emits a spurious -Warray-bounds on these small-vector copies
+            // (a known GCC-14 middle-end false positive; clang/MSVC are clean).
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds"
+#endif
             _params      = serializer.params_buffer();
             _param_types = serializer.param_types();
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
         }
     }
 
