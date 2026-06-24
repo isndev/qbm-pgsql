@@ -1,8 +1,16 @@
 /**
- * @file coro_with_transaction.hpp
- * @brief Coroutine sugar: `co_await with_transaction(db, body)` — BEGIN, body, COMMIT or ROLLBACK
+ * @file with_transaction.h
+ * @brief Coroutine sugar: `co_await with_transaction(tr, body)` — BEGIN, body, COMMIT or
  *
- * Included from `pgsql.h`. Requires `<qb/io/async/coroutine.h>` usage in the translation unit.
+ *        ROLLBACK.
+ *
+ * Included from `pgsql.h`. Requires `<qb/io/async/coroutine.h>` usage in the translation
+ * unit.
+ *
+ * @author qb - C++ Actor Framework
+ * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
+ * Licensed under the Apache License, Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0)
+ * @ingroup Pgsql
  */
 #pragma once
 
@@ -21,17 +29,45 @@
 
 namespace qb::pg::detail {
 
+/**
+ * @brief Extracts the value type carried by a `qb::io::async::task<T>`.
+ *
+ * Primary template is intentionally left undefined; only the `task<T>` specialization is
+ * valid, so any non-`task` argument fails substitution.
+ *
+ * @tparam Task An instantiation of `qb::io::async::task`.
+ */
 template <typename Task>
 struct pg_task_result;
 
+/**
+ * @brief Specialization yielding the awaited value type of a `qb::io::async::task<T>`.
+ *
+ * @tparam T The value produced by the task (`type == T`).
+ */
 template <typename T>
 struct pg_task_result<qb::io::async::task<T>> {
     using type = T;
 };
 
+/**
+ * @brief Value type produced by calling @p F with a `Transaction&`.
+ *
+ * Equals `T` where `f(tr)` returns `qb::io::async::task<T>` (`void` for `task<void>`).
+ *
+ * @tparam F A callable invocable as `f(Transaction&)` returning a `qb::io::async::task`.
+ */
 template <typename F>
 using pg_with_transaction_value_t = typename pg_task_result<std::invoke_result_t<std::decay_t<F> &, Transaction &>>::type;
 
+/**
+ * @brief Constrains @p F to a transaction body usable by `with_transaction`.
+ *
+ * Satisfied when @p F is invocable as `f(Transaction&)` and the result is a
+ * `qb::io::async::task<T>` (so `pg_with_transaction_value_t<F>` is well-formed).
+ *
+ * @tparam F The candidate transaction-body callable.
+ */
 template <typename F>
 concept pg_with_transaction_fn = std::invocable<std::decay_t<F> &, Transaction &>
                                  && requires { typename pg_task_result<std::invoke_result_t<std::decay_t<F> &, Transaction &>>::type; };

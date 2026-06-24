@@ -45,6 +45,11 @@ qb_register_module(
         src/transaction.cpp
         src/field_reader_integration.cpp
         src/param_unserializer.cpp
+        src/type_converter.cpp
+        src/param_serializer.cpp
+        src/field_reader.cpp
+        src/queries.cpp
+        src/pg_notify_sql.cpp
         pgsql.cpp
         DEFINES
         QBM_PGSQL_VERSION="2.0.0"

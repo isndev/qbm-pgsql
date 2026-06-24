@@ -9,19 +9,9 @@
  *
  * @author qb - C++ Actor Framework
  * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *         http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0)
+ * @ingroup Pgsql
  */
-
 #pragma once
 
 #include <algorithm>
@@ -337,33 +327,7 @@ public:
      *
      * @param values Vector of strings
      */
-    void
-    add_string_vector(const std::vector<std::string> &values) {
-        // OPTIMIZED: Reserve space to avoid O(n²) reallocations (P0-3 fix)
-        // Estimate: average 4 bytes for length + 20 bytes per string
-        param_types_.reserve(param_types_.size() + values.size());
-        size_t estimated_bytes = values.size() * 4; // length headers
-        for (const auto &value : values) {
-            estimated_bytes += value.size();
-        }
-        params_buffer_.reserve(params_buffer_.size() + estimated_bytes);
-
-        // For each string, we add a parameter of text type
-        // to get the exact format that PostgreSQL expects for VALUES ($1),($2),...
-        for (const auto &value : values) {
-            // Add the OID type
-            param_types_.push_back(25); // text (was oid::text)
-
-            // Write the parameter length (4 bytes)
-            integer len = static_cast<integer>(value.size());
-            write_integer(params_buffer_, len);
-
-            // Write the string data without terminator
-            if (!value.empty()) {
-                params_buffer_.insert(params_buffer_.end(), value.data(), value.data() + value.size());
-            }
-        }
-    }
+    void add_string_vector(const std::vector<std::string> &values);
 
     /**
      * @brief Add a parameter based on its type
@@ -502,12 +466,7 @@ private:
      * @param buffer Target buffer
      * @param value Smallint value
      */
-    static void
-    write_smallint(std::vector<byte> &buffer, smallint value) {
-        smallint    networkValue = htons(value);
-        const byte *bytes        = reinterpret_cast<const byte *>(&networkValue);
-        buffer.insert(buffer.end(), bytes, bytes + sizeof(smallint));
-    }
+    static void write_smallint(std::vector<byte> &buffer, smallint value);
 
     /**
      * @brief Write a smallint at a specific position in buffer
@@ -516,12 +475,7 @@ private:
      * @param pos Position
      * @param value Smallint value
      */
-    static void
-    write_smallint_at(std::vector<byte> &buffer, size_t pos, smallint value) {
-        smallint    networkValue = htons(value);
-        const byte *bytes        = reinterpret_cast<const byte *>(&networkValue);
-        std::copy(bytes, bytes + sizeof(smallint), buffer.begin() + pos);
-    }
+    static void write_smallint_at(std::vector<byte> &buffer, size_t pos, smallint value);
 
     /**
      * @brief Write an integer to a buffer
@@ -529,83 +483,40 @@ private:
      * @param buffer Target buffer
      * @param value Integer value
      */
-    static void
-    write_integer(std::vector<byte> &buffer, integer value) {
-        integer     networkValue = htonl(value);
-        const byte *bytes        = reinterpret_cast<const byte *>(&networkValue);
-        buffer.insert(buffer.end(), bytes, bytes + sizeof(integer));
-    }
+    static void write_integer(std::vector<byte> &buffer, integer value);
 
     /**
      * @brief Write a null parameter
      */
-    void
-    write_null() {
-        // -1 represents NULL in PostgreSQL binary protocol
-        write_integer(params_buffer_, -1);
-    }
+    void write_null();
 
     /**
      * @brief Write a boolean parameter
      *
      * @param value Boolean value
      */
-    void
-    write_bool(bool value) {
-        // Write length (1 byte)
-        write_integer(params_buffer_, 1);
-
-        // Write value (PostgreSQL boolean is 1 byte)
-        params_buffer_.push_back(value ? 1 : 0);
-    }
+    void write_bool(bool value);
 
     /**
      * @brief Write a smallint parameter
      *
      * @param value Smallint value
      */
-    void
-    write_smallint(smallint value) {
-        // Write length (2 bytes)
-        write_integer(params_buffer_, 2);
-
-        // Write value (network byte order)
-        smallint    networkValue = htons(value);
-        const byte *bytes        = reinterpret_cast<const byte *>(&networkValue);
-        params_buffer_.insert(params_buffer_.end(), bytes, bytes + sizeof(smallint));
-    }
+    void write_smallint(smallint value);
 
     /**
      * @brief Write an integer parameter
      *
      * @param value Integer value
      */
-    void
-    write_integer(integer value) {
-        // Write length (4 bytes)
-        write_integer(params_buffer_, 4);
-
-        // Write value (network byte order)
-        integer     networkValue = htonl(value);
-        const byte *bytes        = reinterpret_cast<const byte *>(&networkValue);
-        params_buffer_.insert(params_buffer_.end(), bytes, bytes + sizeof(integer));
-    }
+    void write_integer(integer value);
 
     /**
      * @brief Write a bigint parameter
      *
      * @param value Bigint value
      */
-    void
-    write_bigint(bigint value) {
-        // Write length (8 bytes)
-        write_integer(params_buffer_, 8);
-
-        // Use endian utility for 64-bit conversion
-        bigint      networkValue = qb::endian::to_big_endian(value);
-        const byte *bytes        = reinterpret_cast<const byte *>(&networkValue);
-        params_buffer_.insert(params_buffer_.end(), bytes, bytes + sizeof(bigint));
-    }
+    void write_bigint(bigint value);
 
     /**
      * @brief Write a float parameter in big-endian IEEE 754 format
@@ -615,15 +526,7 @@ private:
      *
      * @param value Float value
      */
-    void
-    write_float(float value) {
-        write_integer(params_buffer_, 4);
-        uint32_t raw;
-        std::memcpy(&raw, &value, sizeof(float));
-        uint32_t    be    = qb::endian::to_big_endian(raw);
-        const byte *bytes = reinterpret_cast<const byte *>(&be);
-        params_buffer_.insert(params_buffer_.end(), bytes, bytes + sizeof(float));
-    }
+    void write_float(float value);
 
     /**
      * @brief Write a double parameter in big-endian IEEE 754 format
@@ -633,77 +536,28 @@ private:
      *
      * @param value Double value
      */
-    void
-    write_double(double value) {
-        write_integer(params_buffer_, 8);
-        uint64_t raw;
-        std::memcpy(&raw, &value, sizeof(double));
-        uint64_t    be    = qb::endian::to_big_endian(raw);
-        const byte *bytes = reinterpret_cast<const byte *>(&be);
-        params_buffer_.insert(params_buffer_.end(), bytes, bytes + sizeof(double));
-    }
+    void write_double(double value);
 
     /**
      * @brief Write a string parameter
      *
      * @param value String value
      */
-    void
-    write_string(const std::string &value) {
-        // PostgreSQL binary format: length (int32) + raw bytes (NO null terminators)
-
-        // 1. Write the 4-byte length
-        integer len = static_cast<integer>(value.size());
-        write_integer(params_buffer_, len);
-
-        // 2. Write the raw data WITHOUT null terminator
-        if (!value.empty()) {
-            // Use data() + size() to avoid any potential null terminators
-            params_buffer_.insert(params_buffer_.end(), value.data(), value.data() + value.size());
-        }
-    }
+    void write_string(const std::string &value);
 
     /**
      * @brief Write a string_view parameter
      *
      * @param value String view value
      */
-    void
-    write_string_view(std::string_view value) {
-        // PostgreSQL binary format: length (int32) + raw bytes (NO null terminators)
-
-        // 1. Write the 4-byte length
-        integer len = static_cast<integer>(value.size());
-        write_integer(params_buffer_, len);
-
-        // 2. Write the raw data WITHOUT null terminator
-        if (!value.empty()) {
-            // String views have no null terminators by design
-            params_buffer_.insert(params_buffer_.end(), value.data(), value.data() + value.size());
-        }
-    }
+    void write_string_view(std::string_view value);
 
     /**
      * @brief Write a C-string parameter
      *
      * @param value C-string value
      */
-    void
-    write_cstring(const char *value) {
-        // Get length WITHOUT null terminator
-        size_t len = strlen(value);
-
-        // PostgreSQL binary format: length (int32) + raw bytes (NO null terminators)
-
-        // 1. Write the 4-byte length
-        write_integer(params_buffer_, static_cast<integer>(len));
-
-        // 2. Write the raw data WITHOUT null terminator
-        if (len > 0) {
-            // Copy exactly len bytes (excluding the null terminator)
-            params_buffer_.insert(params_buffer_.end(), value, value + len);
-        }
-    }
+    void write_cstring(const char *value);
 
     /**
      * @brief Write a byte array parameter
@@ -711,14 +565,7 @@ private:
      * @param data Byte array
      * @param size Size of byte array
      */
-    void
-    write_byte_array(const byte *data, size_t size) {
-        // Write length
-        write_integer(params_buffer_, static_cast<integer>(size));
-
-        // Write byte array data
-        params_buffer_.insert(params_buffer_.end(), data, data + size);
-    }
+    void write_byte_array(const byte *data, size_t size);
 
     // Add type trait to detect std::vector
     template <typename T>

@@ -18,19 +18,9 @@
  *
  * @author qb - C++ Actor Framework
  * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *         http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0)
+ * @ingroup Pgsql
  */
-
 #pragma once
 
 #include <string>
@@ -39,8 +29,24 @@ namespace qb {
 namespace pg {
 namespace sqlstate {
 
+/**
+ * @brief Enumerated PostgreSQL SQLSTATE error codes.
+ *
+ * Each enumerator corresponds to a five-character SQLSTATE string (a two-character
+ * class code followed by a three-character subclass code) as defined by the ANSI SQL
+ * standard and the PostgreSQL error code appendix. The enumerators are grouped by
+ * SQLSTATE class; the trailing comment on each value documents the textual code it
+ * maps to.
+ *
+ * @note Some textual codes are duplicated across classes by the SQL standard
+ *       (e.g. @c 22001 vs @c 01004). Where a single enumerator is reused for such
+ *       duplicates, the redundant variants are commented out in this enumeration.
+ *
+ * @see code_to_state
+ * @see https://www.postgresql.org/docs/current/errcodes-appendix.html
+ */
 enum code {
-    unknown_code,
+    unknown_code, /**< Sentinel for an unrecognized or unmapped SQLSTATE string. */
     //@{
     /** @name Class 00 — Successful Completion */
     successful_completion, /**< 00000 */
@@ -397,6 +403,16 @@ enum code {
     index_corrupted, /**< XX002 */
 };
 
+/**
+ * @brief Convert a textual SQLSTATE code into its enumerated @ref code value.
+ *
+ * Performs a lookup of the five-character SQLSTATE string against the internal
+ * mapping table.
+ *
+ * @param val The five-character SQLSTATE string (e.g. @c "23505").
+ * @return The matching @ref code enumerator, or @ref unknown_code if @p val does
+ *         not correspond to any known SQLSTATE.
+ */
 code code_to_state(std::string const &val);
 
 } // namespace sqlstate

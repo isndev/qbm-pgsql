@@ -16,19 +16,9 @@
  *
  * @author qb - C++ Actor Framework
  * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *         http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0)
+ * @ingroup Pgsql
  */
-
 #include "./resultset.h"
 #include <algorithm>
 #include <assert.h>
@@ -159,6 +149,24 @@ resultset::field::is_null() const {
 field_buffer
 resultset::field::input_buffer() const {
     return result_->at(row_index_, field_index_);
+}
+
+std::span<const std::byte>
+resultset::field::view() const {
+    const field_buffer buffer = input_buffer();
+    const auto         sz     = static_cast<std::size_t>(buffer.end() - buffer.begin());
+    if (sz == 0)
+        return {};
+    return std::span<const std::byte>(reinterpret_cast<const std::byte *>(&*buffer.begin()), sz);
+}
+
+std::string_view
+resultset::field::text() const {
+    const field_buffer buffer = input_buffer();
+    const auto         sz     = static_cast<std::size_t>(buffer.end() - buffer.begin());
+    if (sz == 0)
+        return {};
+    return std::string_view(reinterpret_cast<const char *>(&*buffer.begin()), sz);
 }
 
 //----------------------------------------------------------------------------
