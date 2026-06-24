@@ -16,19 +16,9 @@
  *
  * @author qb - C++ Actor Framework
  * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *         http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0)
+ * @ingroup Pgsql
  */
-
 #ifndef QBM_PGSQL_NOT_QB_COMMON_H
 #define QBM_PGSQL_NOT_QB_COMMON_H
 
@@ -220,6 +210,7 @@ struct connection_options {
      *
      * @param connstr The connection string to parse
      * @return A populated connection_options structure
+     * @throws std::runtime_error If the connection string has invalid format
      * @see connstring
      */
     static connection_options parse(std::string const &connstr);
@@ -306,7 +297,19 @@ struct transaction_mode {
  * @return Reference to the output stream after writing
  */
 ::std::ostream &operator<<(::std::ostream &os, transaction_mode const &val);
-::std::string   to_string(transaction_mode const &val);
+
+/**
+ * @brief Render a transaction mode as its SQL clause string.
+ *
+ * Convenience wrapper around `operator<<`: returns the same text that the stream
+ * operator would write (e.g. " ISOLATION LEVEL serializable, READ ONLY"). Only
+ * non-default settings are emitted, so a default-constructed mode yields an empty
+ * string.
+ *
+ * @param val The transaction mode to render
+ * @return The SQL transaction-mode clause as a string
+ */
+::std::string to_string(transaction_mode const &val);
 
 /**
  * @brief Description of a field returned by the PostgreSQL backend
@@ -606,6 +609,7 @@ qb::pg::dbalias operator""_db(const char *str, size_t n);
  * @param str The connection string literal to parse
  * @param n The length of the string literal
  * @return A populated connection_options structure
+ * @throws std::runtime_error If the connection string has invalid format
  */
 qb::pg::connection_options operator""_pg(const char *str, size_t n);
 

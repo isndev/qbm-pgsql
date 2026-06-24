@@ -26,19 +26,9 @@
  *
  * @author qb - C++ Actor Framework
  * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *         http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0)
+ * @ingroup Pgsql
  */
-
 #pragma once
 
 #include <istream>
@@ -500,14 +490,7 @@ public:
          * alive. Empty for a NULL or empty field. Use this (or @ref text()) to
          * read a field without the copy `as<T>()` makes.
          */
-        [[nodiscard]] std::span<const std::byte>
-        view() const {
-            const field_buffer buffer = input_buffer();
-            const auto         sz     = static_cast<std::size_t>(buffer.end() - buffer.begin());
-            if (sz == 0)
-                return {};
-            return std::span<const std::byte>(reinterpret_cast<const std::byte *>(&*buffer.begin()), sz);
-        }
+        [[nodiscard]] std::span<const std::byte> view() const;
 
         /**
          * @brief Zero-copy std::string_view of the field bytes — no allocation,
@@ -515,14 +498,7 @@ public:
          *        column this is the value; prefer it over `as<std::string>()` to
          *        read a text column without copying.
          */
-        [[nodiscard]] std::string_view
-        text() const {
-            const field_buffer buffer = input_buffer();
-            const auto         sz     = static_cast<std::size_t>(buffer.end() - buffer.begin());
-            if (sz == 0)
-                return {};
-            return std::string_view(reinterpret_cast<const char *>(&*buffer.begin()), sz);
-        }
+        [[nodiscard]] std::string_view text() const;
 
         /**
          * Parse the value buffer to the type specified by value passed as

@@ -80,19 +80,9 @@
  *
  * @author qb - C++ Actor Framework
  * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *         http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0)
+ * @ingroup Pgsql
  */
-
 #pragma once
 
 #include <chrono>
@@ -180,105 +170,7 @@ is_control(int c) {
  * @throws std::runtime_error If parsing fails due to control characters or exceeding
  * size limits
  */
-inline qb::icase_unordered_map<std::string>
-parse_header_attributes(const char *ptr, const size_t len) {
-    qb::icase_unordered_map<std::string> dict;
-
-    enum AttributeParseState { ATTRIBUTE_PARSE_NAME, ATTRIBUTE_PARSE_VALUE, ATTRIBUTE_PARSE_IGNORE } parse_state = ATTRIBUTE_PARSE_NAME;
-
-    // misc other variables used for parsing
-    const char *const end = ptr + len;
-    std::string       attribute_name;
-    std::string       attribute_value;
-    char              value_quote_character = '\0';
-
-    // iterate through each character
-    while (ptr < end) {
-        switch (parse_state) {
-            case ATTRIBUTE_PARSE_NAME:
-                // parsing attribute name
-                if (*ptr == '=') {
-                    // end of name found (OK if empty)
-                    value_quote_character = '\0';
-                    parse_state           = ATTRIBUTE_PARSE_VALUE;
-                } else if (*ptr == ';' || *ptr == ',') {
-                    // ignore empty attribute names since this may occur naturally
-                    // when quoted values are encountered
-                    if (!attribute_name.empty()) {
-                        // value is empty (OK)
-                        dict.emplace(attribute_name, attribute_value);
-                        attribute_name.erase();
-                    }
-                } else if (*ptr != ' ') { // ignore whitespace
-                    // check if control character detected, or max sized exceeded
-                    if (is_control(*ptr) || attribute_name.size() >= ATTRIBUTE_NAME_MAX)
-                        throw std::runtime_error("ctrl in name found or max attribute name length");
-                    // character is part of the name
-                    attribute_name.push_back(*ptr);
-                }
-                break;
-
-            case ATTRIBUTE_PARSE_VALUE:
-                // parsing attribute value
-                if (value_quote_character == '\0') {
-                    // value is not (yet) quoted
-                    if (*ptr == ';' || *ptr == ',') {
-                        // end of value found (OK if empty)
-                        dict.emplace(attribute_name, attribute_value);
-                        attribute_name.erase();
-                        attribute_value.erase();
-                        parse_state = ATTRIBUTE_PARSE_NAME;
-                    } else if (*ptr == '\'' || *ptr == '"') {
-                        if (attribute_value.empty()) {
-                            // begin quoted value
-                            value_quote_character = *ptr;
-                        } else if (attribute_value.size() >= ATTRIBUTE_VALUE_MAX) {
-                            // max size exceeded
-                            throw std::runtime_error("max attribute size");
-                        } else {
-                            // assume character is part of the (unquoted) value
-                            attribute_value.push_back(*ptr);
-                        }
-                    } else if (*ptr != ' ' || !attribute_value.empty()) { // ignore leading unquoted whitespace
-                        // check if control character detected, or max sized exceeded
-                        if (is_control(*ptr) || attribute_value.size() >= ATTRIBUTE_VALUE_MAX)
-                            throw std::runtime_error("ctrl in value found or max attribute value length");
-                        // character is part of the (unquoted) value
-                        attribute_value.push_back(*ptr);
-                    }
-                } else {
-                    // value is quoted
-                    if (*ptr == value_quote_character) {
-                        // end of value found (OK if empty)
-                        dict.emplace(attribute_name, attribute_value);
-                        attribute_name.erase();
-                        attribute_value.erase();
-                        parse_state = ATTRIBUTE_PARSE_IGNORE;
-                    } else if (attribute_value.size() >= ATTRIBUTE_VALUE_MAX) {
-                        // max size exceeded
-                        throw std::runtime_error("max attribute value length");
-                    } else {
-                        // character is part of the (quoted) value
-                        attribute_value.push_back(*ptr);
-                    }
-                }
-                break;
-
-            case ATTRIBUTE_PARSE_IGNORE:
-                // ignore everything until we reach a comma "," or semicolon ";"
-                if (*ptr == ';' || *ptr == ',')
-                    parse_state = ATTRIBUTE_PARSE_NAME;
-                break;
-        }
-
-        ++ptr;
-    }
-
-    // handle last attribute in string
-    dict.emplace(attribute_name, attribute_value);
-
-    return dict;
-}
+qb::icase_unordered_map<std::string> parse_header_attributes(const char *ptr, const size_t len);
 
 namespace qb::protocol {
 
@@ -526,20 +418,7 @@ scram_server_nonce_extends_client(std::string_view client_nonce, std::string_vie
  * containing a comma/equals would otherwise emit a malformed client-first message
  * that a strict RFC-5802 parser (proxy/pooler/non-PG server) rejects.
  */
-[[nodiscard]] inline std::string
-scram_escape_saslname(std::string_view name) {
-    std::string out;
-    out.reserve(name.size());
-    for (char c : name) {
-        if (c == '=')
-            out += "=3D"; // must precede the ',' substitution
-        else if (c == ',')
-            out += "=2C";
-        else
-            out += c;
-    }
-    return out;
-}
+[[nodiscard]] std::string scram_escape_saslname(std::string_view name);
 
 /**
  * @brief Opportunistic-TLS (STARTTLS) negotiator for the PostgreSQL protocol.
@@ -557,48 +436,36 @@ scram_escape_saslname(std::string_view name) {
 struct postgres_ssl_negotiator {
     static constexpr bool enabled = true;
 
-    static std::array<std::uint8_t, 8>
-    make_request() noexcept {
-        std::array<std::uint8_t, 8> r{};
-        const std::uint32_t         len  = htonl(8u);
-        const std::uint32_t         code = htonl(0x04D2162Fu); // 80877103
-        std::memcpy(r.data(), &len, 4);
-        std::memcpy(r.data() + 4, &code, 4);
-        return r;
-    }
+    /**
+     * @brief Build the 8-byte PostgreSQL SSLRequest packet (big-endian).
+     *
+     * Layout: int32 length = 8, int32 request code = 80877103 (`0x04D2162F`).
+     *
+     * @return The serialized SSLRequest bytes ready to write on the cleartext socket.
+     */
+    static std::array<std::uint8_t, 8> make_request() noexcept;
 
     std::array<std::uint8_t, 8> request_{make_request()};
     std::size_t                 written_{0};
     std::uint8_t                verdict_{0};
     bool                        got_verdict_{false};
 
-    qb::io::async::tcp::starttls_action
-    advance(qb::io::tcp::socket &sock, int /*revents*/) noexcept {
-        using action = qb::io::async::tcp::starttls_action;
-        // Phase 1: write the full SSLRequest (cleartext).
-        while (written_ < request_.size()) {
-            const int n = sock.write(request_.data() + written_, request_.size() - written_);
-            if (n > 0) {
-                written_ += static_cast<std::size_t>(n);
-                continue;
-            }
-            if (n < 0 && qb::io::socket::not_send_error(qb::io::socket::get_last_errno()))
-                return action::want_write;
-            return action::fail;
-        }
-        // Phase 2: read the single-byte verdict.
-        if (!got_verdict_) {
-            const int n = sock.read(&verdict_, 1);
-            if (n == 1)
-                got_verdict_ = true;
-            else if (n < 0 && qb::io::socket::not_recv_error(qb::io::socket::get_last_errno()))
-                return action::want_read;
-            else
-                return action::fail; // EOF or hard error before the verdict
-        }
-        // Phase 3: decide. 'S' => TLS; everything else => require-TLS failure.
-        return verdict_ == 'S' ? action::upgrade : action::fail;
-    }
+    /**
+     * @brief Drive one step of the STARTTLS negotiation on a ready socket.
+     *
+     * Non-blocking state machine called by the connector on each readiness event:
+     *   1. write the remaining SSLRequest bytes,
+     *   2. read the single-byte server verdict,
+     *   3. decide: `'S'` -> upgrade to TLS, anything else / EOF / error -> fail
+     *      (a secure database requires TLS).
+     *
+     * @param sock The cleartext socket connected to the server (not yet upgraded).
+     * @param revents Readiness flags from the event loop (unused; the phase is tracked
+     *        internally).
+     * @return The next `starttls_action`: `want_write` / `want_read` to be polled again,
+     *         `upgrade` to start the TLS handshake, or `fail` to abort the connect.
+     */
+    qb::io::async::tcp::starttls_action advance(qb::io::tcp::socket &sock, int revents) noexcept;
 };
 
 /**

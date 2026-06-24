@@ -30,19 +30,9 @@
  *
  * @author qb - C++ Actor Framework
  * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *         http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0)
+ * @ingroup Pgsql
  */
-
 #pragma once
 
 #include <filesystem>
@@ -279,6 +269,12 @@ public:
      */
     [[nodiscard]] pg_reply_awaiter<resultset> begin();
 
+    /**
+     * @brief Begins a transaction with explicit mode (`co_await`).
+     *
+     * @param mode Transaction mode settings (isolation level, read-only, deferrable)
+     * @return Awaiter resolving to the `BEGIN` result set
+     */
     [[nodiscard]] pg_reply_awaiter<resultset> begin(transaction_mode mode);
 
     /**
@@ -310,8 +306,20 @@ public:
      */
     [[nodiscard]] pg_reply_awaiter<resultset> savepoint(std::string_view name);
 
+    /**
+     * @brief Rolls back to a named savepoint (`co_await`; `ROLLBACK TO SAVEPOINT`).
+     *
+     * @param name Name of the savepoint to roll back to
+     * @return Awaiter resolving to the command result set
+     */
     [[nodiscard]] pg_reply_awaiter<resultset> rollback_savepoint(std::string_view name);
 
+    /**
+     * @brief Releases a named savepoint (`co_await`; `RELEASE SAVEPOINT`).
+     *
+     * @param name Name of the savepoint to release
+     * @return Awaiter resolving to the command result set
+     */
     [[nodiscard]] pg_reply_awaiter<resultset> release_savepoint(std::string_view name);
 
     /**
@@ -410,19 +418,48 @@ public:
 
     /**
      * @brief LISTEN on a channel (SQL `LISTEN "name"`).
+     *
+     * @tparam CB_SUCCESS Type of success callback function
+     * @tparam CB_ERROR Type of error callback function
+     * @param channel Notification channel to subscribe to
+     * @param on_success Callback called when the LISTEN succeeds
+     * @param on_error Callback called if the LISTEN fails
+     * @return Transaction& Reference to this transaction for chaining
      */
     template <typename CB_SUCCESS, typename CB_ERROR>
     Transaction &listen(std::string_view channel, CB_SUCCESS &&on_success, CB_ERROR &&on_error);
 
+    /** @brief Coroutine LISTEN (`co_await` → `Reply<void>`; SQL `LISTEN "name"`). */
     [[nodiscard]] pg_reply_awaiter<void> listen(std::string_view channel);
 
+    /**
+     * @brief UNLISTEN on a channel (SQL `UNLISTEN "name"`).
+     *
+     * @tparam CB_SUCCESS Type of success callback function
+     * @tparam CB_ERROR Type of error callback function
+     * @param channel Notification channel to unsubscribe from
+     * @param on_success Callback called when the UNLISTEN succeeds
+     * @param on_error Callback called if the UNLISTEN fails
+     * @return Transaction& Reference to this transaction for chaining
+     */
     template <typename CB_SUCCESS, typename CB_ERROR>
     Transaction &unlisten(std::string_view channel, CB_SUCCESS &&on_success, CB_ERROR &&on_error);
 
+    /**
+     * @brief UNLISTEN on all channels (SQL `UNLISTEN *`).
+     *
+     * @tparam CB_SUCCESS Type of success callback function
+     * @tparam CB_ERROR Type of error callback function
+     * @param on_success Callback called when the UNLISTEN succeeds
+     * @param on_error Callback called if the UNLISTEN fails
+     * @return Transaction& Reference to this transaction for chaining
+     */
     template <typename CB_SUCCESS, typename CB_ERROR>
     Transaction &unlisten_all(CB_SUCCESS &&on_success, CB_ERROR &&on_error);
 
+    /** @brief Coroutine UNLISTEN (`co_await` → `Reply<void>`; SQL `UNLISTEN "name"`). */
     [[nodiscard]] pg_reply_awaiter<void> unlisten(std::string_view channel);
+    /** @brief Coroutine UNLISTEN on all channels (`co_await` → `Reply<void>`; SQL `UNLISTEN *`). */
     [[nodiscard]] pg_reply_awaiter<void> unlisten_all();
 
     /**
@@ -658,6 +695,13 @@ public:
      */
     result_impl &results();
 
+    /**
+     * @brief Outcome snapshot returned by `await()`.
+     *
+     * Bundles the result set, the error, and the post-drain command status of a
+     * fluent command batch into a copyable/movable value. Convertible to `bool`
+     * (and callable via `operator()`) to test for overall success.
+     */
     class status {
         friend class Transaction;
 
@@ -725,6 +769,15 @@ public:
 } // namespace qb::pg::detail
 
 namespace qb::pg {
+/**
+ * @brief Free-function form of `Transaction::await()`.
+ *
+ * Drains the transaction's pending work synchronously and returns its outcome
+ * snapshot. Equivalent to `t.await()`.
+ *
+ * @param t Transaction to drain
+ * @return detail::Transaction::status Outcome snapshot of the command batch
+ */
 inline detail::Transaction::status
 await(detail::Transaction &t) {
     return t.await();

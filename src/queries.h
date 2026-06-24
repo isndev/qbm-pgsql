@@ -18,19 +18,9 @@
  *
  * @author qb - C++ Actor Framework
  * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *         http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed under the Apache License, Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0)
+ * @ingroup Pgsql
  */
-
 #pragma once
 
 #include <iomanip>
@@ -102,11 +92,7 @@ public:
      * @brief Set maximum cache size (applies to future insertions)
      * @param max_size New maximum size
      */
-    void
-    set_max_size(size_t max_size) {
-        _max_size = max_size > 0 ? max_size : 100;
-        evict_if_needed(); // Evict immediately if over capacity
-    }
+    void set_max_size(size_t max_size);
 
     /**
      * @brief Get current maximum cache size
@@ -155,33 +141,7 @@ public:
      * @param query Prepared query to add
      * @return const PreparedQuery& Reference to the stored query
      */
-    const PreparedQuery &
-    push(PreparedQuery &&query) {
-        std::string key = query.name;
-
-        // Check if already exists - update it and move to front
-        auto it = _prepared_queries.find(key);
-        if (it != _prepared_queries.end()) {
-            // Move to front (most recently used)
-            _lru_list.erase(it->second.lru_iter);
-            _lru_list.push_front(key);
-            it->second.lru_iter = _lru_list.begin();
-            it->second.query    = std::move(query);
-            return it->second.query;
-        }
-
-        // Evict if at capacity
-        evict_if_needed();
-
-        // Add to front of LRU list
-        _lru_list.push_front(key);
-
-        // Store in map with LRU iterator
-        LruEntry entry{key, std::move(query), _lru_list.begin()};
-        auto     result = _prepared_queries.emplace(std::move(key), std::move(entry));
-
-        return result.first->second.query;
-    }
+    const PreparedQuery &push(PreparedQuery &&query);
 
     /**
      * @brief Retrieves a prepared query by name
@@ -192,22 +152,7 @@ public:
      * @return PreparedQuery const& Reference to the prepared query
      * @throws std::out_of_range If the query doesn't exist
      */
-    PreparedQuery const &
-    get(std::string_view name) const {
-        std::string key(name);
-        auto        it = _prepared_queries.find(key);
-        if (it == _prepared_queries.end()) {
-            throw std::out_of_range("Prepared query not found: " + key);
-        }
-
-        // Move to front (most recently used) - need to cast away const
-        auto &mutable_this = const_cast<PreparedStorage &>(*this);
-        mutable_this._lru_list.erase(it->second.lru_iter);
-        mutable_this._lru_list.push_front(key);
-        it->second.lru_iter = mutable_this._lru_list.begin();
-
-        return it->second.query;
-    }
+    PreparedQuery const &get(std::string_view name) const;
 
     /**
      * @brief Clear all prepared queries
@@ -222,16 +167,7 @@ private:
     /**
      * @brief Evict least recently used items if over capacity
      */
-    void
-    evict_if_needed() {
-        while (_prepared_queries.size() >= _max_size && !_lru_list.empty()) {
-            // Get least recently used (back of list)
-            std::string &lru_name = _lru_list.back();
-            _prepared_queries.erase(lru_name);
-            _lru_list.pop_back();
-            ++_evicted_count;
-        }
-    }
+    void evict_if_needed();
 };
 
 // Maintain backward compatibility
@@ -326,16 +262,7 @@ public:
      *
      * @return smallint The number of parameters
      */
-    smallint
-    param_count() const {
-        if (_params.size() >= sizeof(smallint)) {
-            // Extract the number of parameters from the buffer
-            smallint count;
-            std::memcpy(&count, _params.data(), sizeof(smallint));
-            return ntohs(count); // Convert from network byte order to host byte order
-        }
-        return 0;
-    }
+    smallint param_count() const;
 
     /**
      * @brief Checks if the parameter set is empty
