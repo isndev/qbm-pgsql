@@ -1009,7 +1009,7 @@ TEST_F(PostgreSQLDataTypesTest, TimestampTextFormatDeserialization) {
  */
 TEST_F(PostgreSQLDataTypesTest, HighBitValues) {
     // Create values with high bit set
-    smallint high_bit_smallint = 0x8000;               // -32768 in two's complement
+    smallint high_bit_smallint = static_cast<smallint>(0x8000); // -32768 in two's complement
     integer  high_bit_integer  = 0x80000000;           // -2147483648 in two's complement
     bigint   high_bit_bigint   = 0x8000000000000000LL; // Minimum for bigint
 
