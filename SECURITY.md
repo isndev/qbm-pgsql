@@ -1,4 +1,5 @@
 <!-- Verified-against: qbm-pgsql @ qb 2.0.0 (C++20 default, C++23 supported) -->
+
 # Security policy
 
 qbm-pgsql is a module of the qb actor framework. Vulnerability reporting and disclosure follow the

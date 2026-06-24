@@ -1010,8 +1010,8 @@ TEST_F(PostgreSQLDataTypesTest, TimestampTextFormatDeserialization) {
 TEST_F(PostgreSQLDataTypesTest, HighBitValues) {
     // Create values with high bit set
     smallint high_bit_smallint = static_cast<smallint>(0x8000); // -32768 in two's complement
-    integer  high_bit_integer  = 0x80000000;           // -2147483648 in two's complement
-    bigint   high_bit_bigint   = 0x8000000000000000LL; // Minimum for bigint
+    integer  high_bit_integer  = 0x80000000;                    // -2147483648 in two's complement
+    bigint   high_bit_bigint   = 0x8000000000000000LL;          // Minimum for bigint
 
     // Create buffers
     auto smallint_buffer = createBinaryBuffer(high_bit_smallint);
@@ -1477,7 +1477,7 @@ TEST(DateTimeWireFormatTest, UnprefixedFieldDecode) {
         TypeConverter<qb::date>::to_binary(d_in, prefixed);
         ASSERT_EQ(prefixed.size(), 8u); // 4 prefix + 4 value
         std::vector<byte> wire = strip_prefix(prefixed);
-        ASSERT_EQ(wire.size(), 4u);     // value only — what the protocol hands us
+        ASSERT_EQ(wire.size(), 4u); // value only — what the protocol hands us
         qb::date d_wire = TypeConverter<qb::date>::from_binary(wire);
         EXPECT_EQ(d_wire, d_in);
         EXPECT_EQ(d_wire.to_string(), "2024-03-15"); // not the 2000-01-01 epoch base
@@ -1518,7 +1518,9 @@ TEST(DateTimeWireFormatTest, UnprefixedFieldDecode) {
 // Decode a hex string into a byte buffer (test helper).
 static std::vector<qb::pg::byte>
 hex_to_bytes(const std::string &h) {
-    auto nib = [](char c) { return c <= '9' ? c - '0' : (c | 32) - 'a' + 10; };
+    auto nib = [](char c) {
+        return c <= '9' ? c - '0' : (c | 32) - 'a' + 10;
+    };
     std::vector<qb::pg::byte> b;
     for (size_t i = 0; i + 1 < h.size(); i += 2)
         b.push_back(static_cast<qb::pg::byte>((nib(h[i]) << 4) | nib(h[i + 1])));
@@ -1535,7 +1537,10 @@ hex_to_bytes(const std::string &h) {
  */
 TEST(NumericBinaryTest, DecodeAgainstPostgresGroundTruth) {
     using namespace qb::pg::detail;
-    struct C { const char *hex; const char *expect; };
+    struct C {
+        const char *hex;
+        const char *expect;
+    };
     const C cases[] = {
         {"000200000000000404d2162e", "1234.5678"},
         {"0002000040000001000c1388", "-12.5"},
@@ -1543,8 +1548,8 @@ TEST(NumericBinaryTest, DecodeAgainstPostgresGroundTruth) {
         {"0000000000000000", "0"},
         {"000600020000000a000109291a85007b11d722c4", "123456789.0123456789"},
         {"0001ffff000000011388", "0.5"},
-        {"0001ffff0000000203e8", "0.10"},        // trailing-zero / dscale preserved
-        {"00010000000000020064", "100.00"},      // dscale preserved
+        {"0001ffff0000000203e8", "0.10"},   // trailing-zero / dscale preserved
+        {"00010000000000020064", "100.00"}, // dscale preserved
         {"000500000000000f03e7270f270f270f2706", "999.999999999999999"},
     };
     for (const auto &c : cases) {
@@ -1553,8 +1558,7 @@ TEST(NumericBinaryTest, DecodeAgainstPostgresGroundTruth) {
     }
 
     // Round-trip: to_binary (real PG binary, length-prefixed) -> from_binary.
-    for (const char *v : {"0", "1", "-1", "12345.678", "-999.99",
-                          "123456789.0123456789", "0.0001", "1000000"}) {
+    for (const char *v : {"0", "1", "-1", "12345.678", "-999.99", "123456789.0123456789", "0.0001", "1000000"}) {
         std::vector<qb::pg::byte> buf;
         TypeConverter<numeric>::to_binary(numeric(v), buf);
         EXPECT_EQ(TypeConverter<numeric>::from_binary(buf).str(), v) << "value=" << v;
@@ -1574,24 +1578,23 @@ TEST(ArrayBinaryTest, DecodeAgainstPostgresGroundTruth) {
     using namespace qb::pg::detail;
 
     // int4[] {10,20,30,40}
-    auto ints = TypeConverter<std::vector<integer>>::from_binary(hex_to_bytes(
-        "0000000100000000000000170000000400000001"
-        "000000040000000a0000000400000014000000040000001e0000000400000028"));
+    auto ints =
+        TypeConverter<std::vector<integer>>::from_binary(hex_to_bytes("0000000100000000000000170000000400000001"
+                                                                      "000000040000000a0000000400000014000000040000001e0000000400000028"));
     EXPECT_EQ(ints, (std::vector<integer>{10, 20, 30, 40}));
 
     // text[] {apple,banana}
-    auto txt = TypeConverter<std::vector<std::string>>::from_binary(hex_to_bytes(
-        "0000000100000000000000190000000200000001000000056170706c650000000662616e616e61"));
+    auto txt = TypeConverter<std::vector<std::string>>::from_binary(
+        hex_to_bytes("0000000100000000000000190000000200000001000000056170706c650000000662616e616e61"));
     EXPECT_EQ(txt, (std::vector<std::string>{"apple", "banana"}));
 
     // int4[] {1,NULL,3} -> NULL decodes to default-constructed 0
-    auto withnull = TypeConverter<std::vector<integer>>::from_binary(hex_to_bytes(
-        "00000001000000010000001700000003000000010000000400000001ffffffff0000000400000003"));
+    auto withnull = TypeConverter<std::vector<integer>>::from_binary(
+        hex_to_bytes("00000001000000010000001700000003000000010000000400000001ffffffff0000000400000003"));
     EXPECT_EQ(withnull, (std::vector<integer>{1, 0, 3}));
 
     // empty int4[]
-    auto empty = TypeConverter<std::vector<integer>>::from_binary(hex_to_bytes(
-        "000000000000000000000017"));
+    auto empty = TypeConverter<std::vector<integer>>::from_binary(hex_to_bytes("000000000000000000000017"));
     EXPECT_TRUE(empty.empty());
 
     // Round-trip through encode (mirrors ParamSerializer::add_vector) + decode.
@@ -1599,8 +1602,7 @@ TEST(ArrayBinaryTest, DecodeAgainstPostgresGroundTruth) {
     TypeConverter<std::vector<integer>>::to_binary(std::vector<integer>{7, -3, 100000}, buf);
     // strip the 4-byte length prefix that to_binary writes
     std::vector<qb::pg::byte> body(buf.begin() + 4, buf.end());
-    EXPECT_EQ(TypeConverter<std::vector<integer>>::from_binary(body),
-              (std::vector<integer>{7, -3, 100000}));
+    EXPECT_EQ(TypeConverter<std::vector<integer>>::from_binary(body), (std::vector<integer>{7, -3, 100000}));
 
     std::cout << "ARRAY binary decode test passed" << std::endl;
 }
@@ -1612,27 +1614,27 @@ TEST(ArrayBinaryTest, DecodeAgainstPostgresGroundTruth) {
 TEST(ArrayBinaryTest, ScalarElementTypesAgainstPostgresGroundTruth) {
     using namespace qb::pg::detail;
 
-    EXPECT_EQ(TypeConverter<std::vector<bigint>>::from_binary(hex_to_bytes(
-                  "00000001000000000000001400000003000000010000000800000000000000010000"
-                  "00080000000000000002000000080000000000000003")),
-              (std::vector<bigint>{1, 2, 3}));
+    EXPECT_EQ(
+        TypeConverter<std::vector<bigint>>::from_binary(hex_to_bytes("00000001000000000000001400000003000000010000000800000000000000010000"
+                                                                     "00080000000000000002000000080000000000000003")),
+        (std::vector<bigint>{1, 2, 3}));
 
-    EXPECT_EQ(TypeConverter<std::vector<smallint>>::from_binary(hex_to_bytes(
-                  "0000000100000000000000150000000200000001000000020007000000020008")),
-              (std::vector<smallint>{7, 8}));
+    EXPECT_EQ(
+        TypeConverter<std::vector<smallint>>::from_binary(hex_to_bytes("0000000100000000000000150000000200000001000000020007000000020008")),
+        (std::vector<smallint>{7, 8}));
 
-    EXPECT_EQ(TypeConverter<std::vector<double>>::from_binary(hex_to_bytes(
-                  "0000000100000000000002bd0000000200000001000000083ff80000000000000000"
-                  "00084004000000000000")),
-              (std::vector<double>{1.5, 2.5}));
+    EXPECT_EQ(
+        TypeConverter<std::vector<double>>::from_binary(hex_to_bytes("0000000100000000000002bd0000000200000001000000083ff80000000000000000"
+                                                                     "00084004000000000000")),
+        (std::vector<double>{1.5, 2.5}));
 
-    EXPECT_EQ(TypeConverter<std::vector<float>>::from_binary(hex_to_bytes(
-                  "0000000100000000000002bc0000000200000001000000043fc0000000000004c0200000")),
+    EXPECT_EQ(TypeConverter<std::vector<float>>::from_binary(
+                  hex_to_bytes("0000000100000000000002bc0000000200000001000000043fc0000000000004c0200000")),
               (std::vector<float>{1.5f, -2.5f}));
 
-    EXPECT_EQ(TypeConverter<std::vector<bool>>::from_binary(hex_to_bytes(
-                  "0000000100000000000000100000000300000001000000010100000001000000000101")),
-              (std::vector<bool>{true, false, true}));
+    EXPECT_EQ(
+        TypeConverter<std::vector<bool>>::from_binary(hex_to_bytes("0000000100000000000000100000000300000001000000010100000001000000000101")),
+        (std::vector<bool>{true, false, true}));
 
     std::cout << "ARRAY scalar element decode test passed" << std::endl;
 }
@@ -1645,14 +1647,17 @@ TEST(ArrayBinaryTest, ScalarElementTypesAgainstPostgresGroundTruth) {
 TEST(IntervalBinaryTest, DecodeAgainstPostgresGroundTruth) {
     using namespace qb::pg::detail;
     using secs = std::chrono::seconds;
-    struct C { const char *hex; long long expect; };
+    struct C {
+        const char *hex;
+        long long   expect;
+    };
     const C cases[] = {
-        {"00000000000000000000000100000000", 86400},   // 1 day
-        {"00000000000000000000000000000001", 2592000}, // 1 month (30 days)
-        {"0000000218711a000000000000000000", 9000},    // 2h30m (pure time)
-        {"00000002925553400000000200000001", 2775845}, // 1 mon 2 days 03:04:05
-        {"0000000000000000ffffffff00000000", -86400},  // -1 day
-        {"0000000000000000000000000000000c", 31557600},// 12 months = 1 year (365.25d)
+        {"00000000000000000000000100000000", 86400},    // 1 day
+        {"00000000000000000000000000000001", 2592000},  // 1 month (30 days)
+        {"0000000218711a000000000000000000", 9000},     // 2h30m (pure time)
+        {"00000002925553400000000200000001", 2775845},  // 1 mon 2 days 03:04:05
+        {"0000000000000000ffffffff00000000", -86400},   // -1 day
+        {"0000000000000000000000000000000c", 31557600}, // 12 months = 1 year (365.25d)
     };
     for (const auto &c : cases) {
         auto d = TypeConverter<secs>::from_binary(hex_to_bytes(c.hex));
@@ -1779,7 +1784,8 @@ TEST(QbCivilTypesBinaryTest, DecodeAgainstPostgresGroundTruth) {
     EXPECT_EQ(rt(qb::date::from_ymd(1999, 12, 31)), qb::date::from_ymd(1999, 12, 31));
     EXPECT_EQ(rt(qb::time_of_day::from_hms(23, 59, 59, 999999)), qb::time_of_day::from_hms(23, 59, 59, 999999));
     EXPECT_EQ(rt(qb::time_of_day_tz::from_hms_offset(8, 0, 0, 0, -18000)), qb::time_of_day_tz::from_hms_offset(8, 0, 0, 0, -18000));
-    EXPECT_EQ(rt(qb::calendar_interval(13, 5, std::chrono::microseconds{123456})), qb::calendar_interval(13, 5, std::chrono::microseconds{123456}));
+    EXPECT_EQ(rt(qb::calendar_interval(13, 5, std::chrono::microseconds{123456})),
+              qb::calendar_interval(13, 5, std::chrono::microseconds{123456}));
 }
 
 /**
@@ -1793,7 +1799,7 @@ TEST(ReplyMonadicTest, TransformAndThenOrElseValueOr) {
     EXPECT_TRUE(ok.has_value());
     EXPECT_EQ(*ok, 21);
     EXPECT_EQ(ok.value_or(99), 21);
-    EXPECT_EQ(ok.transform([](int x) { return x * 2; }).result(), 42);            // int -> int
+    EXPECT_EQ(ok.transform([](int x) { return x * 2; }).result(), 42);               // int -> int
     EXPECT_EQ(ok.transform([](int x) { return std::to_string(x); }).result(), "21"); // int -> string
     auto chained = ok.and_then([](int x) { return Reply<std::string>::success("v" + std::to_string(x)); });
     EXPECT_TRUE(chained.ok());
@@ -1802,7 +1808,7 @@ TEST(ReplyMonadicTest, TransformAndThenOrElseValueOr) {
     const auto bad = Reply<int>::failure(db_error{"boom"});
     EXPECT_FALSE(bad.has_value());
     EXPECT_EQ(bad.value_or(7), 7);
-    EXPECT_FALSE(bad.transform([](int x) { return x * 2; }).ok());                // f not called, error propagates
+    EXPECT_FALSE(bad.transform([](int x) { return x * 2; }).ok()); // f not called, error propagates
     EXPECT_FALSE(bad.and_then([](int) { return Reply<int>::success(1); }).ok());
     auto recovered = bad.or_else([](db_error const &) { return Reply<int>::success(123); });
     EXPECT_TRUE(recovered.ok());
@@ -2005,7 +2011,7 @@ TEST(EdgeCasesTest, PreUnixEpochDatesAndTimestamps) {
 
     // A sub-second pre-1970 instant must borrow a second, not truncate toward zero.
     const std::string ts2_in  = "1955-11-05 06:15:00.500000";
-    qb::wall_time     ts2      = TypeConverter<qb::wall_time>::from_text(ts2_in);
+    qb::wall_time     ts2     = TypeConverter<qb::wall_time>::from_text(ts2_in);
     const std::string ts2_out = TypeConverter<qb::wall_time>::to_text(ts2);
     EXPECT_NE(ts2_out.find("1955-11-05 06:15:00.5"), std::string::npos) << "got: " << ts2_out;
 

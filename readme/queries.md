@@ -1,14 +1,19 @@
 # Query execution
 
-> **Audience:** Adopter · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 2.0.0 (C++20 default, C++23 supported)
+> **Audience:** Adopter · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 2.0.0 (C++20 default, C++23
+> supported)
 
-Run simple queries, extended (prepared) queries, SQL files, and `LISTEN`/`NOTIFY` against a `qb::pg::tcp::database` (or `qb::pg::tcp::ssl::database` on an OpenSSL build), using either the coroutine or the callback overload of each SQL-facing operation.
+Run simple queries, extended (prepared) queries, SQL files, and `LISTEN`/`NOTIFY` against a `qb::pg::tcp::database` (or
+`qb::pg::tcp::ssl::database` on an OpenSSL build), using either the coroutine or the callback overload of each
+SQL-facing operation.
 
-**Prerequisites:** [connection.md](./connection.md) (open a connection first) — **See also:** [transaction.md](./transaction.md), [results.md](./results.md), [types.md](./types.md), [error_handling.md](./error_handling.md)
+**Prerequisites:** [connection.md](./connection.md) (open a connection first) — **See also:
+** [transaction.md](./transaction.md), [results.md](./results.md), [types.md](./types.md), [error_handling.md](./error_handling.md)
 
 **Include:** `#include <pgsql/pgsql.h>` — public surface is in namespace `qb::pg`.
 
-`qbm-pgsql` is a compiled static library (`qbm::pgsql`); link it with `target_link_libraries(app PRIVATE qbm::pgsql)`. It is not header-only.
+`qbm-pgsql` is a compiled static library (`qbm::pgsql`); link it with `target_link_libraries(app PRIVATE qbm::pgsql)`.
+It is not header-only.
 
 ---
 
@@ -40,10 +45,10 @@ payload, possibly empty). Check **`reply.ok()`** before **`reply.result()`**.
 
 ## Protocol paths (wire)
 
-| API                                     | Typical wire path             | Notes                                                                        |
-|:----------------------------------------|:------------------------------|:-----------------------------------------------------------------------------|
-| **`execute("SELECT …")`**               | Simple query (**Q**)          | Server often returns **text** columns — [types.md](./types.md).              |
-| **`prepare` + `execute(name, params)`** | Parse / Bind / Execute / Sync | Parameters **binary**; result formats from OID heuristics.                   |
+| API                                     | Typical wire path             | Notes                                                                    |
+|:----------------------------------------|:------------------------------|:-------------------------------------------------------------------------|
+| **`execute("SELECT …")`**               | Simple query (**Q**)          | Server often returns **text** columns — [types.md](./types.md).          |
+| **`prepare` + `execute(name, params)`** | Parse / Bind / Execute / Sync | Parameters **binary**; result formats from OID heuristics.               |
 | **`LISTEN` / `NOTIFY` / `UNLISTEN`**    | Simple query                  | Payload/channel safety: [`src/pg_notify_sql.h`](../src/pg_notify_sql.h). |
 
 One connection = **one serial** stream ([`transaction.cpp`](../src/transaction.cpp) **`_queries`** queue).
@@ -81,7 +86,8 @@ db.execute("NOTIFY chan, 'x'", [](qb::pg::transaction&) {}, [](qb::pg::error::db
 ```
 
 **`query(sql)`** is the coroutine simple-query entry point — it returns the same
-**`pg_reply_awaiter<resultset>`** as **`co_await execute(sql)`** ([`transaction.h`](../src/transaction.h)). There is no callback
+**`pg_reply_awaiter<resultset>`** as **`co_await execute(sql)`** ([`transaction.h`](../src/transaction.h)). There is no
+callback
 **`query`** overload; use **`execute(sql, cb, err)`** for the callback path.
 
 **Blocking:** **`qb::io::async::run_sync(db.execute("SELECT 1"))`** — no **`.await()`** on **`pg_reply_awaiter`**.
@@ -122,7 +128,8 @@ db.execute("by_email", qb::pg::params{email},
 
 ## Inline parameterized query (coroutine)
 
-For a one-shot parameterized query, **`co_await db.query(sql, args...)`** binds the arguments and runs them in a single call — no manual `prepare` name, no `type_oid_sequence`:
+For a one-shot parameterized query, **`co_await db.query(sql, args...)`** binds the arguments and runs them in a single
+call — no manual `prepare` name, no `type_oid_sequence`:
 
 ```cpp
 auto r = co_await db.query("SELECT id, name FROM users WHERE id = $1", user_id);
@@ -131,15 +138,23 @@ if (r) for (auto [id, name] : r.result().all<int, std::string>()) { /* ... */ }
 auto sum = co_await db.query("SELECT $1::int + $2::int", 2, 3);   // -> 5
 ```
 
-Parameter OIDs are deduced from the C++ argument types. Internally it runs through the **unnamed** prepared statement (`""`), so it does **not** pollute the prepared-statement cache and keeps full per-column **binary** result decoding. Cost is two server round-trips (Parse+Describe, then Bind+Execute) — the same as a manual `prepare`+`execute`, but one call; it returns **`qb::io::async::task<Reply<resultset>>`**. The overload requires at least one bound argument, so `query(sql)` with no args still resolves to the simple-query awaiter above. For a hot, repeated query prefer a **named** `prepare` (one round-trip after the first).
+Parameter OIDs are deduced from the C++ argument types. Internally it runs through the **unnamed** prepared statement (
+`""`), so it does **not** pollute the prepared-statement cache and keeps full per-column **binary** result decoding.
+Cost is two server round-trips (Parse+Describe, then Bind+Execute) — the same as a manual `prepare`+`execute`, but one
+call; it returns **`qb::io::async::task<Reply<resultset>>`**. The overload requires at least one bound argument, so
+`query(sql)` with no args still resolves to the simple-query awaiter above. For a hot, repeated query prefer a **named**
+`prepare` (one round-trip after the first).
 
 ---
 
 ## Bulk data — `COPY` (coroutine)
 
-`COPY` is PostgreSQL's high-throughput bulk path. Rows are never buffered in a result set in either direction, but only **`copy_out`** (and **`query_stream`** below) is truly **constant-memory**. **`copy_in` is not** — it drains the whole `source` into the output pipe before yielding (see the caveat under `copy_in`).
+`COPY` is PostgreSQL's high-throughput bulk path. Rows are never buffered in a result set in either direction, but only
+**`copy_out`** (and **`query_stream`** below) is truly **constant-memory**. **`copy_in` is not** — it drains the whole
+`source` into the output pipe before yielding (see the caveat under `copy_in`).
 
-**`COPY … TO STDOUT`** → `db.copy_out(sql, sink)` delivers each `CopyData` chunk to `sink` as it arrives, in **constant memory** regardless of export size:
+**`COPY … TO STDOUT`** → `db.copy_out(sql, sink)` delivers each `CopyData` chunk to `sink` as it arrives, in **constant
+memory** regardless of export size:
 
 ```cpp
 std::ofstream f("users.csv");
@@ -147,7 +162,8 @@ auto r = co_await db.copy_out("COPY users TO STDOUT (FORMAT csv)",
                               [&](std::string_view chunk){ f.write(chunk.data(), chunk.size()); });
 ```
 
-**`COPY … FROM STDIN`** → `db.copy_in(sql, source)` pulls chunks from `source` (return `std::nullopt` to finish) and sends each as `CopyData`, then `CopyDone`. A one-shot overload takes the whole payload:
+**`COPY … FROM STDIN`** → `db.copy_in(sql, source)` pulls chunks from `source` (return `std::nullopt` to finish) and
+sends each as `CopyData`, then `CopyDone`. A one-shot overload takes the whole payload:
 
 ```cpp
 // streaming source (one row per call):
@@ -157,16 +173,29 @@ co_await db.copy_in("COPY t (id, v) FROM STDIN",
 co_await db.copy_in("COPY t FROM STDIN", std::string{"1\tx\n2\ty\n"});
 ```
 
-The chunk bytes are the COPY wire format the statement selects (text/CSV: rows ending in `\n`; binary: the framed binary stream — chunks need not align to rows). Both return `Reply<resultset>` (`ok()` on success, the row count in the `COPY n` tag; the result set is empty). A failing COPY — bad table, or a `source` that throws — resolves the awaiter with the **error** (the client sends `CopyFail`) and leaves the connection usable. A throwing `source` never corrupts the protocol stream.
+The chunk bytes are the COPY wire format the statement selects (text/CSV: rows ending in `\n`; binary: the framed binary
+stream — chunks need not align to rows). Both return `Reply<resultset>` (`ok()` on success, the row count in the
+`COPY n` tag; the result set is empty). A failing COPY — bad table, or a `source` that throws — resolves the awaiter
+with the **error** (the client sends `CopyFail`) and leaves the connection usable. A throwing `source` never corrupts
+the protocol stream.
 
-> **`copy_in` is _not_ constant-memory.** Unlike `copy_out`, it does **not** back-pressure on the socket: when the `CopyInResponse` arrives it calls `source` in a tight loop and writes every returned chunk into the output pipe **synchronously**, only sending `CopyDone` once `source` returns `std::nullopt`. The entire input is therefore staged in the connection's write buffer before the awaiter yields. That buffer has a ceiling — exceed it and the connection is force-disconnected — so size your input (or your own external batching of separate `copy_in` calls) accordingly. A `source` callback that lazily reads a row at a time bounds your *application* memory, but the bytes still pile up in the pipe; it does not make the transfer constant-memory. Only `copy_out` and `query_stream` stream in constant memory.
+> **`copy_in` is _not_ constant-memory.** Unlike `copy_out`, it does **not** back-pressure on the socket: when the
+`CopyInResponse` arrives it calls `source` in a tight loop and writes every returned chunk into the output pipe *
+*synchronously**, only sending `CopyDone` once `source` returns `std::nullopt`. The entire input is therefore staged in
+> the connection's write buffer before the awaiter yields. That buffer has a ceiling — exceed it and the connection is
+> force-disconnected — so size your input (or your own external batching of separate `copy_in` calls) accordingly. A
+`source` callback that lazily reads a row at a time bounds your *application* memory, but the bytes still pile up in the
+> pipe; it does not make the transfer constant-memory. Only `copy_out` and `query_stream` stream in constant memory.
 <!-- src: qbm/pgsql/pgsql.h (copy_out, copy_in, on_copy_data, on_copy_in_response) -->
 
 ---
 
 ## Streaming a large result — `query_stream` (coroutine)
 
-A plain `query()` buffers the **whole** result set. To process a result too large to fit in memory, **`db.query_stream(sql, batch_size, on_row)`** runs the query through a server-side `CURSOR` and invokes `on_row` for each row, fetching `batch_size` rows per round trip — only one batch is ever held, so memory is constant regardless of result size.
+A plain `query()` buffers the **whole** result set. To process a result too large to fit in memory, *
+*`db.query_stream(sql, batch_size, on_row)`** runs the query through a server-side `CURSOR` and invokes `on_row` for
+each row, fetching `batch_size` rows per round trip — only one batch is ever held, so memory is constant regardless of
+result size.
 
 ```cpp
 std::uint64_t total = 0;
@@ -174,7 +203,12 @@ co_await db.query_stream("SELECT amount FROM ledger", 1000,
                          [&](auto row){ total += row[0].template as<long>(); });
 ```
 
-Cursors need a transaction. If the connection is **idle**, `query_stream` opens its own (`BEGIN` … `COMMIT`, or `ROLLBACK` on failure); if it is **already in a transaction** (`db.in_transaction()`), the cursor is declared there and only closed — the caller's transaction is untouched. It returns `Reply<void>` (`ok()` once the whole result streamed, else the server error), and the connection stays usable after a failure. If `on_row` throws, the cursor is closed (and a self-opened transaction rolled back) and the exception is **rethrown**. The `row` passed to `on_row` is a view valid only for that call — copy out anything you keep.
+Cursors need a transaction. If the connection is **idle**, `query_stream` opens its own (`BEGIN` … `COMMIT`, or
+`ROLLBACK` on failure); if it is **already in a transaction** (`db.in_transaction()`), the cursor is declared there and
+only closed — the caller's transaction is untouched. It returns `Reply<void>` (`ok()` once the whole result streamed,
+else the server error), and the connection stays usable after a failure. If `on_row` throws, the cursor is closed (and a
+self-opened transaction rolled back) and the exception is **rethrown**. The `row` passed to `on_row` is a view valid
+only for that call — copy out anything you keep.
 <!-- src: qbm/pgsql/pgsql.h (query_stream, in_transaction) -->
 
 ---

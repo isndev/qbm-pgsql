@@ -1,17 +1,27 @@
 # Integration testing
 
-> **Audience:** Contributor · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 2.0.0 (C++20 default, C++23 supported)
+> **Audience:** Contributor · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 2.0.0 (C++20 default, C++23
+> supported)
 
-Build and run the qbm-pgsql test suite under CTest: pure-unit suites run anywhere, while the integration suites need a reachable PostgreSQL server and skip themselves cleanly when one is absent.
+Build and run the qbm-pgsql test suite under CTest: pure-unit suites run anywhere, while the integration suites need a
+reachable PostgreSQL server and skip themselves cleanly when one is absent.
 
-**Prerequisites:** [`../README.md`](../README.md) for the build matrix and `qb_load_modules` wiring; working knowledge of CTest. — **See also:** [connection.md](./connection.md) (DSN, TLS, reconnect), [transaction.md](./transaction.md), [queries.md](./queries.md) (LISTEN/NOTIFY).
+**Prerequisites:** [`../README.md`](../README.md) for the build matrix and `qb_load_modules` wiring; working knowledge
+of CTest. — **See also:** [connection.md](./connection.md) (DSN, TLS,
+reconnect), [transaction.md](./transaction.md), [queries.md](./queries.md) (LISTEN/NOTIFY).
 
 ## Summary
 
-The test tree lives in [`../tests/`](../tests/) and builds one GoogleTest executable per suite. The suites are executable specification: when this documentation and the code disagree, prefer the test and file a doc bug. Two facts govern how you run them:
+The test tree lives in [`../tests/`](../tests/) and builds one GoogleTest executable per suite. The suites are
+executable specification: when this documentation and the code disagree, prefer the test and file a doc bug. Two facts
+govern how you run them:
 
-- **Tests are opt-in at configure time.** Nothing under `tests/` is built unless `QB_BUILD_TESTS` is on. The framework option defaults to `ON` (<!-- src: qb/cmake/qbConfig.cmake:59 -->), and the qb-dev super-project forces it on (<!-- src: CMakeLists.txt:14 -->), so a default build already produces the binaries.
-- **Integration suites need a live server.** Six suites are pure unit tests with no socket. The rest connect to PostgreSQL; each gates its fixture on a successful connect and calls `GTEST_SKIP()` when the server is unreachable, so the suite passes (as skipped) rather than failing on a machine with no database.
+- **Tests are opt-in at configure time.** Nothing under `tests/` is built unless `QB_BUILD_TESTS` is on. The framework
+  option defaults to `ON` (<!-- src: qb/cmake/qbConfig.cmake:59 -->), and the qb-dev super-project forces it
+  on (<!-- src: CMakeLists.txt:14 -->), so a default build already produces the binaries.
+- **Integration suites need a live server.** Six suites are pure unit tests with no socket. The rest connect to
+  PostgreSQL; each gates its fixture on a successful connect and calls `GTEST_SKIP()` when the server is unreachable, so
+  the suite passes (as skipped) rather than failing on a machine with no database.
 
 ## Concepts
 
@@ -19,18 +29,21 @@ The test tree lives in [`../tests/`](../tests/) and builds one GoogleTest execut
 
 The split is structural, not a label — a suite is "unit" iff it never opens a connection.
 
-| Kind | Suites | Server required |
-|---|---|---|
-| Unit | `param-serializer`, `param-unserializer`, `param-parsing`, `protocol-message`, `data-types`, `params` | No |
-| Integration | `connection`, `data-types-integration`, `prepared-statements`, `transaction`, `transaction-advanced`, `operations`, `queries`, `error-handling`, `protocol-integration`, `pgsql-coro-api`, `notify`, and `connection-ssl` (TLS only) | Yes |
+| Kind        | Suites                                                                                                                                                                                                                               | Server required |
+|-------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------|
+| Unit        | `param-serializer`, `param-unserializer`, `param-parsing`, `protocol-message`, `data-types`, `params`                                                                                                                                | No              |
+| Integration | `connection`, `data-types-integration`, `prepared-statements`, `transaction`, `transaction-advanced`, `operations`, `queries`, `error-handling`, `protocol-integration`, `pgsql-coro-api`, `notify`, and `connection-ssl` (TLS only) | Yes             |
 
-The unit suites exercise wire-format encoding and decoding, parameter serialization, and protocol-message framing in isolation — they pass on any host. The integration suites drive a real wire handshake, prepared statements, transactions, type round-trips, and asynchronous NOTIFY delivery against a server.
+The unit suites exercise wire-format encoding and decoding, parameter serialization, and protocol-message framing in
+isolation — they pass on any host. The integration suites drive a real wire handshake, prepared statements,
+transactions, type round-trips, and asynchronous NOTIFY delivery against a server.
 
 <!-- src: qbm/pgsql/tests/CMakeLists.txt:18-37 -->
 
 ### How a missing server is handled
 
-Each integration fixture connects in `SetUp()` and skips when the connect fails. There is no global "is the database up?" probe; the skip is per fixture.
+Each integration fixture connects in `SetUp()` and skips when the connect fails. There is no global "is the database
+up?" probe; the skip is per fixture.
 
 ```cpp
 // src: qbm/pgsql/tests/test-transaction.cpp:74-81
@@ -44,11 +57,14 @@ void SetUp() override {
 }
 ```
 
-Because the skip lives in the fixture, every test in that suite reports as *skipped* (not failed) when the server is down. CTest still marks the suite *passed*. A green CTest run on a host with no database therefore proves only that the unit suites and the build are sound — it does not prove the integration paths.
+Because the skip lives in the fixture, every test in that suite reports as *skipped* (not failed) when the server is
+down. CTest still marks the suite *passed*. A green CTest run on a host with no database therefore proves only that the
+unit suites and the build are sound — it does not prove the integration paths.
 
 ### The resource lock
 
-The integration suites share one database at `localhost:5432`, so running them in parallel would let two jobs create and drop the same temp objects at once. The build serializes them with a CTest resource lock:
+The integration suites share one database at `localhost:5432`, so running them in parallel would let two jobs create and
+drop the same temp objects at once. The build serializes them with a CTest resource lock:
 
 ```cmake
 # src: qbm/pgsql/tests/CMakeLists.txt:48-53
@@ -56,33 +72,47 @@ set_tests_properties(${_qbm_pgsql_ctest_names}
     PROPERTIES RESOURCE_LOCK qb_pgsql_integration)
 ```
 
-`connection-ssl` joins the same lock when it is built. CTest will not run two `qb_pgsql_integration` holders concurrently, so `ctest -j` stays safe for the module. The lock does not coordinate across separate `ctest` invocations or across machines — point each runner at its own database, or run them sequentially.
+`connection-ssl` joins the same lock when it is built. CTest will not run two `qb_pgsql_integration` holders
+concurrently, so `ctest -j` stays safe for the module. The lock does not coordinate across separate `ctest` invocations
+or across machines — point each runner at its own database, or run them sequentially.
 
 ### Test names and binaries
 
-`qb_register_module_test` names each CTest entry and binary `qbm-pgsql-test-<name>` (<!-- src: qb/cmake/qbFunctions.cmake:611 -->) and places the executable in `${CMAKE_BINARY_DIR}/bin/tests` with that directory as its working directory (<!-- src: qb/cmake/qbFunctions.cmake:325-359 -->). Every test gets a 300-second CTest timeout and the `qb-tests` label (<!-- src: qb/cmake/qbFunctions.cmake:364-367 -->). Each binary links `GTest::gtest_main`, so it accepts the usual `--gtest_filter`, `--gtest_list_tests`, and `--gtest_repeat` flags.
+`qb_register_module_test` names each CTest entry and binary
+`qbm-pgsql-test-<name>` (<!-- src: qb/cmake/qbFunctions.cmake:611 -->) and places the executable in
+`${CMAKE_BINARY_DIR}/bin/tests` with that directory as its working
+directory (<!-- src: qb/cmake/qbFunctions.cmake:325-359 -->). Every test gets a 300-second CTest timeout and the
+`qb-tests` label (<!-- src: qb/cmake/qbFunctions.cmake:364-367 -->). Each binary links `GTest::gtest_main`, so it
+accepts the usual `--gtest_filter`, `--gtest_list_tests`, and `--gtest_repeat` flags.
 
-`connection-ssl` is the one conditional suite: it is commented out of the main `QB_PGSQL_TESTS` list and registered separately only when `QB_HAS_SSL` is set, because it links the `qb::pg::tcp::ssl::database` alias that exists only with OpenSSL (<!-- src: qbm/pgsql/tests/CMakeLists.txt:23,55-62 -->).
+`connection-ssl` is the one conditional suite: it is commented out of the main `QB_PGSQL_TESTS` list and registered
+separately only when `QB_HAS_SSL` is set, because it links the `qb::pg::tcp::ssl::database` alias that exists only with
+OpenSSL (<!-- src: qbm/pgsql/tests/CMakeLists.txt:23,55-62 -->).
 
 ## Configuring the server
 
-The suites read their connection strings from the environment via [`test_config.hpp`](../tests/test_config.hpp), which is the single source of truth for the defaults. Set these before running CTest to point every suite at your server.
+The suites read their connection strings from the environment via [`test_config.hpp`](../tests/test_config.hpp), which
+is the single source of truth for the defaults. Set these before running CTest to point every suite at your server.
 
-| Variable | Role | Default |
-|---|---|---|
-| `QB_PG_DSN` | Primary DSN for `qb::pg::tcp::database`. | `tcp://test:test@localhost:5432[test]` |
-| `QB_PG_SSL_DSN` | DSN for `qb::pg::tcp::ssl::database` (only read when `QB_HAS_SSL`). `tcp://` is valid — the client sends a PostgreSQL `SSLRequest` and upgrades when the server answers `S`. | same as `QB_PG_DSN` |
-| `QB_PG_INVALID_DSN` | DSN that must *fail* authentication; used by negative connection tests. | `tcp://test:__qb_invalid_password__@localhost:5432[test]` |
+| Variable            | Role                                                                                                                                                                         | Default                                                   |
+|---------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------|
+| `QB_PG_DSN`         | Primary DSN for `qb::pg::tcp::database`.                                                                                                                                     | `tcp://test:test@localhost:5432[test]`                    |
+| `QB_PG_SSL_DSN`     | DSN for `qb::pg::tcp::ssl::database` (only read when `QB_HAS_SSL`). `tcp://` is valid — the client sends a PostgreSQL `SSLRequest` and upgrades when the server answers `S`. | same as `QB_PG_DSN`                                       |
+| `QB_PG_INVALID_DSN` | DSN that must *fail* authentication; used by negative connection tests.                                                                                                      | `tcp://test:__qb_invalid_password__@localhost:5432[test]` |
 
 <!-- src: qbm/pgsql/tests/test_config.hpp:33-79 -->
 
-The default fixture is a role `test` with password `test` owning a database `test`. Create that, or override `QB_PG_DSN`, before expecting the integration suites to do anything but skip.
+The default fixture is a role `test` with password `test` owning a database `test`. Create that, or override
+`QB_PG_DSN`, before expecting the integration suites to do anything but skip.
 
-The DSN grammar (`tcp://user:password@host:port[database]`, plus the TLS alias) is documented in [connection.md](./connection.md); the test config only wraps it.
+The DSN grammar (`tcp://user:password@host:port[database]`, plus the TLS alias) is documented
+in [connection.md](./connection.md); the test config only wraps it.
 
 ### The invalid-auth case
 
-`PostgreSQLConnectionTest.ConnectInvalidCredentials` connects with `QB_PG_INVALID_DSN` and asserts the attempt is *rejected*. If your `pg_hba.conf` uses `trust` for local connections, the wrong password is accepted anyway; the test detects this and skips rather than fail, but only when you have not set `QB_PG_INVALID_DSN` yourself:
+`PostgreSQLConnectionTest.ConnectInvalidCredentials` connects with `QB_PG_INVALID_DSN` and asserts the attempt is
+*rejected*. If your `pg_hba.conf` uses `trust` for local connections, the wrong password is accepted anyway; the test
+detects this and skips rather than fail, but only when you have not set `QB_PG_INVALID_DSN` yourself:
 
 ```cpp
 // src: qbm/pgsql/tests/test-connection.cpp:121-127
@@ -94,17 +124,22 @@ if (connected && std::getenv("QB_PG_INVALID_DSN") == nullptr) {
 ASSERT_FALSE(connected);
 ```
 
-To exercise the negative path under a `trust` policy, set `QB_PG_INVALID_DSN` to an endpoint that still verifies passwords (a `md5` or `scram-sha-256` socket with a wrong password).
+To exercise the negative path under a `trust` policy, set `QB_PG_INVALID_DSN` to an endpoint that still verifies
+passwords (a `md5` or `scram-sha-256` socket with a wrong password).
 
 ### The TLS case
 
-`connection-ssl` connects over `QB_PG_SSL_DSN` and skips when TLS cannot complete, again only if you have not set the variable yourself — the gate is the `QB_PG_ASSERT_SSL_CONNECTED` test macro, not an environment variable (<!-- src: qbm/pgsql/tests/test-connection-ssl.cpp:57-66 -->). On a build without OpenSSL the suite is not compiled at all, so there is nothing to skip.
+`connection-ssl` connects over `QB_PG_SSL_DSN` and skips when TLS cannot complete, again only if you have not set the
+variable yourself — the gate is the `QB_PG_ASSERT_SSL_CONNECTED` test macro, not an environment
+variable (<!-- src: qbm/pgsql/tests/test-connection-ssl.cpp:57-66 -->). On a build without OpenSSL the suite is not
+compiled at all, so there is nothing to skip.
 
 ## Steps
 
 ### Build and run from the super-project
 
-From a configured build tree, build the module's tests and run them through CTest. The exact `bin/tests` path varies with your generator and build directory.
+From a configured build tree, build the module's tests and run them through CTest. The exact `bin/tests` path varies
+with your generator and build directory.
 
 ```bash
 # Configure once (QB_BUILD_TESTS is ON by default).
@@ -116,7 +151,8 @@ cmake --build build
 ctest --test-dir build -R '^qbm-pgsql-test-' -j --output-on-failure
 ```
 
-`-R '^qbm-pgsql-test-'` selects exactly the module's suites by their registered prefix. CTest reports each suite as passed, failed, or — when the server is absent — passed with skipped cases.
+`-R '^qbm-pgsql-test-'` selects exactly the module's suites by their registered prefix. CTest reports each suite as
+passed, failed, or — when the server is absent — passed with skipped cases.
 
 ### Run a single suite or test
 
@@ -140,30 +176,38 @@ ctest --test-dir build -R 'qbm-pgsql-test-(param-|protocol-message|data-types$|p
 
 ## What is covered
 
-Use the suites as a feature map: grep a behavior, read the matching test, then build against the pattern it demonstrates.
+Use the suites as a feature map: grep a behavior, read the matching test, then build against the pattern it
+demonstrates.
 
-| Topic | Start with |
-|---|---|
-| Connect, reconnect, DSN, invalid auth, timeout | `test-connection.cpp` |
-| TLS upgrade and SSL handshake | `test-connection-ssl.cpp` (built only with `QB_HAS_SSL`) |
-| Coroutines, `with_transaction`, savepoints, `run_sync` | `test-pgsql-coro-api.cpp` |
-| Callback `begin` / `then` / `error`, nested savepoints, `await()` | `test-transaction.cpp` |
-| Timeouts (`set_timeout`), constraints, cursors, advanced SQL | `test-transaction-advanced.cpp` |
-| LISTEN / NOTIFY, consumer, pump ordering | `test-notify.cpp` |
-| Prepared-statement LRU, eviction, large results | `test-prepared-statements.cpp` |
-| Type round-trips, including `qb::wall_time` (`timestamptz`) | `test-data-types.cpp` (unit), `test-data-types-integration.cpp` (live) |
-| COPY edges, binary columns, end-to-end protocol | `test-protocol-integration.cpp`, `test-protocol-message.cpp` |
-| Simple/prepared `execute` / `query`, parameter binding | `test-queries.cpp`, `test-operations.cpp` |
-| Parameter serialization and parsing (wire units) | `test-param-serializer.cpp`, `test-param-unserializer.cpp`, `test-param-parsing.cpp`, `test-params.cpp` |
-| `Reply<T>`, `db_error`, SQLSTATE, `value_is_null` | `test-error-handling.cpp` |
+| Topic                                                             | Start with                                                                                              |
+|-------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------|
+| Connect, reconnect, DSN, invalid auth, timeout                    | `test-connection.cpp`                                                                                   |
+| TLS upgrade and SSL handshake                                     | `test-connection-ssl.cpp` (built only with `QB_HAS_SSL`)                                                |
+| Coroutines, `with_transaction`, savepoints, `run_sync`            | `test-pgsql-coro-api.cpp`                                                                               |
+| Callback `begin` / `then` / `error`, nested savepoints, `await()` | `test-transaction.cpp`                                                                                  |
+| Timeouts (`set_timeout`), constraints, cursors, advanced SQL      | `test-transaction-advanced.cpp`                                                                         |
+| LISTEN / NOTIFY, consumer, pump ordering                          | `test-notify.cpp`                                                                                       |
+| Prepared-statement LRU, eviction, large results                   | `test-prepared-statements.cpp`                                                                          |
+| Type round-trips, including `qb::wall_time` (`timestamptz`)       | `test-data-types.cpp` (unit), `test-data-types-integration.cpp` (live)                                  |
+| COPY edges, binary columns, end-to-end protocol                   | `test-protocol-integration.cpp`, `test-protocol-message.cpp`                                            |
+| Simple/prepared `execute` / `query`, parameter binding            | `test-queries.cpp`, `test-operations.cpp`                                                               |
+| Parameter serialization and parsing (wire units)                  | `test-param-serializer.cpp`, `test-param-unserializer.cpp`, `test-param-parsing.cpp`, `test-params.cpp` |
+| `Reply<T>`, `db_error`, SQLSTATE, `value_is_null`                 | `test-error-handling.cpp`                                                                               |
 
 ## Pitfalls
 
-- **A green CTest run can mean "all skipped."** On a host without a database, every integration suite passes by skipping. Read the CTest summary for the skipped count, or run with `--output-on-failure` and look for `SKIPPED`, before claiming the integration paths are covered. Only the unit suites and the build are validated in that case.
-- **Do not run two database-backed runners against one server.** The resource lock serializes suites *within a single `ctest` invocation*, not across invocations or machines. Two `ctest` processes pointed at the same `localhost:5432` will collide on temp objects. Give each runner its own database.
-- **`trust` in `pg_hba.conf` hides the negative-auth test.** With `trust`, the wrong-password test silently skips. Set `QB_PG_INVALID_DSN` to a password-verifying endpoint to keep that assertion live.
-- **The default DSN expects a specific fixture.** Role `test` / password `test` / database `test`. If that does not exist, set `QB_PG_DSN`; otherwise the integration suites do nothing but skip.
-- **The SSL suite needs OpenSSL at build time.** Without `QB_HAS_SSL` there is no `connection-ssl` binary and no `qb::pg::tcp::ssl::database` alias to test. Configuring `QB_PG_SSL_DSN` has no effect on a cleartext build.
+- **A green CTest run can mean "all skipped."** On a host without a database, every integration suite passes by
+  skipping. Read the CTest summary for the skipped count, or run with `--output-on-failure` and look for `SKIPPED`,
+  before claiming the integration paths are covered. Only the unit suites and the build are validated in that case.
+- **Do not run two database-backed runners against one server.** The resource lock serializes suites *within a
+  single `ctest` invocation*, not across invocations or machines. Two `ctest` processes pointed at the same
+  `localhost:5432` will collide on temp objects. Give each runner its own database.
+- **`trust` in `pg_hba.conf` hides the negative-auth test.** With `trust`, the wrong-password test silently skips. Set
+  `QB_PG_INVALID_DSN` to a password-verifying endpoint to keep that assertion live.
+- **The default DSN expects a specific fixture.** Role `test` / password `test` / database `test`. If that does not
+  exist, set `QB_PG_DSN`; otherwise the integration suites do nothing but skip.
+- **The SSL suite needs OpenSSL at build time.** Without `QB_HAS_SSL` there is no `connection-ssl` binary and no
+  `qb::pg::tcp::ssl::database` alias to test. Configuring `QB_PG_SSL_DSN` has no effect on a cleartext build.
 
 ## See also
 
@@ -171,4 +215,5 @@ Use the suites as a feature map: grep a behavior, read the matching test, then b
 - [transaction.md](./transaction.md) — `begin` / `commit` / `rollback`, `set_timeout`, `with_transaction`.
 - [queries.md](./queries.md) — `execute` / `query` / `prepare`, LISTEN / NOTIFY.
 - [`../README.md`](../README.md) — module positioning, build matrix, and `qb_load_modules` wiring.
-- [`../tests/test_config.hpp`](../tests/test_config.hpp) — the authoritative DSN defaults; grep it when adding a suite or environment variable.
+- [`../tests/test_config.hpp`](../tests/test_config.hpp) — the authoritative DSN defaults; grep it when adding a suite
+  or environment variable.

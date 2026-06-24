@@ -24,8 +24,8 @@
 #include <cstring>
 #include <iostream>
 #include <span>
-#include <qb/system/endian.h>
 #include <stdexcept>
+#include <qb/system/endian.h>
 
 #include "./param_unserializer.h"
 

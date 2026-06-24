@@ -101,12 +101,12 @@
 #include <functional>
 #include <memory>
 #include <optional>
-#include <qb/io/async.h>
-#include <qb/io/async/tcp/connector.h>
-#include <qb/io/crypto.h>
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <qb/io/async.h>
+#include <qb/io/async/tcp/connector.h>
+#include <qb/io/crypto.h>
 #ifdef QB_HAS_SSL
 #include <qb/io/tcp/ssl/socket.h>
 #endif
@@ -734,8 +734,8 @@ private:
             // ssl_verify_mode::full -> verify the chain + host (the connector passes the
             // remote host to ssl::socket::init_client); ::none -> encrypt only (set_insecure).
             const bool verify = (conn_opts_.ssl_verify == qb::pg::ssl_verify_mode::full);
-            qb::io::async::tcp::starttls_connect<transport_sock, postgres_ssl_negotiator>(
-                connect_uri, std::move(cb), qb::detail::from_ev_seconds(t_out), verify);
+            qb::io::async::tcp::starttls_connect<transport_sock, postgres_ssl_negotiator>(connect_uri, std::move(cb),
+                                                                                          qb::detail::from_ev_seconds(t_out), verify);
 #else
             connect_handshake_failed_ = true;
             _error                    = error::connection_error{"ssl transport requires QB_HAS_SSL"};
@@ -985,13 +985,15 @@ private:
     }
 
 private:
-    std::string          _nonce;         ///< Client nonce for SCRAM authentication
-    std::vector<uint8_t> _password_salt; ///< Salted password for SCRAM authentication
-    std::string          _auth_message;  ///< Authentication message for SCRAM protocol
-    std::string          _gs2_header;    ///< SCRAM gs2-header chosen at SASL init (`n,,` / `y,,` / `p=tls-server-end-point,,`)
+    std::string                _nonce;           ///< Client nonce for SCRAM authentication
+    std::vector<uint8_t>       _password_salt;   ///< Salted password for SCRAM authentication
+    std::string                _auth_message;    ///< Authentication message for SCRAM protocol
+    std::string                _gs2_header;      ///< SCRAM gs2-header chosen at SASL init (`n,,` / `y,,` / `p=tls-server-end-point,,`)
     std::vector<unsigned char> _channel_binding; ///< SCRAM-SHA-256-PLUS channel-binding data (tls-server-end-point); empty when unbound
-    std::function<void(std::string_view)> _copy_out_sink; ///< Active `COPY … TO STDOUT` chunk sink (set for the duration of copy_out); empty otherwise
-    std::function<std::optional<std::string>()> _copy_in_source; ///< Active `COPY … FROM STDIN` chunk source (returns next chunk, nullopt = done); empty otherwise
+    std::function<void(std::string_view)>
+        _copy_out_sink; ///< Active `COPY … TO STDOUT` chunk sink (set for the duration of copy_out); empty otherwise
+    std::function<std::optional<std::string>()>
+         _copy_in_source;  ///< Active `COPY … FROM STDIN` chunk source (returns next chunk, nullopt = done); empty otherwise
     char _txn_status{'I'}; ///< Last ReadyForQuery transaction status: 'I' idle, 'T' in a block, 'E' failed block
 
 public:
@@ -1066,7 +1068,7 @@ public:
                 //   - TLS + server offers -PLUS -> "p=tls-server-end-point,," + bind data
                 //   - TLS + server lacks -PLUS  -> "y,," (we support it; the server then
                 //                                  detects a MITM that stripped -PLUS)
-                using transport_sock         = std::remove_cvref_t<typename QB_IO_::transport_io_type>;
+                using transport_sock           = std::remove_cvref_t<typename QB_IO_::transport_io_type>;
                 std::string selected_mechanism = "SCRAM-SHA-256";
                 _channel_binding.clear();
                 if constexpr (transport_sock::is_secure()) {
@@ -1075,7 +1077,7 @@ public:
                     }
                     if (!_channel_binding.empty()) {
                         selected_mechanism = "SCRAM-SHA-256-PLUS";
-                        _gs2_header         = "p=tls-server-end-point,,";
+                        _gs2_header        = "p=tls-server-end-point,,";
                     } else {
                         _gs2_header = "y,,";
                     }
@@ -1134,8 +1136,8 @@ public:
 
                 // Client-first-message-bare — MUST match the bytes sent in the SASL
                 // client-first (same saslname escaping of the username).
-                std::string client_first_message_bare          = "n=" + scram_escape_saslname(username) + ",r=" + clientNonce;
-                std::string server_first_message               = "r=" + serverNonce + ",s=" + salt_base64 + ",i=" + std::to_string(iteration);
+                std::string client_first_message_bare = "n=" + scram_escape_saslname(username) + ",r=" + clientNonce;
+                std::string server_first_message      = "r=" + serverNonce + ",s=" + salt_base64 + ",i=" + std::to_string(iteration);
                 // c = base64( gs2-header-bytes || channel-binding-data ). Unbound -> the
                 // data is empty so this is base64("n,,")="biws" or base64("y,,"); with
                 // tls-server-end-point the server-certificate hash is appended (binds the
@@ -2041,7 +2043,7 @@ public:
                 break;
             }
             const auto       &rs = batch.result();
-            const std::size_t  n  = rs.size();
+            const std::size_t n  = rs.size();
             try {
                 for (const auto &r : rs)
                     on_row(r);
@@ -2118,9 +2120,9 @@ public:
         // for the full connect_timeout. Cap it tightly (≤ 2s): the cancel targets the
         // SAME already-reachable endpoint as the live connection, so the handshake is
         // normally sub-millisecond; the cap only bounds the pathological unreachable case.
-        const qb::duration cfg = conn_opts_.connect_timeout > qb::duration::zero()
-                                     ? conn_opts_.connect_timeout
-                                     : std::chrono::duration_cast<qb::duration>(std::chrono::seconds(10));
+        const qb::duration cfg   = conn_opts_.connect_timeout > qb::duration::zero()
+                                       ? conn_opts_.connect_timeout
+                                       : std::chrono::duration_cast<qb::duration>(std::chrono::seconds(10));
         const qb::duration t_out = std::min(cfg, std::chrono::duration_cast<qb::duration>(std::chrono::seconds(2)));
 
         // Plain TCP / unix socket to the same endpoint (scheme resolved by tcp::socket;
@@ -2267,8 +2269,8 @@ public:
         connect_coroutine_pending_ = false;
         connect_suspend_handle_    = {};
         connect_suspend_valid_.reset();
-        serverPid_                 = 0;
-        serverSecret_              = 0;
+        serverPid_       = 0;
+        serverSecret_    = 0;
         _error           = error::db_error{"unknown error"};
         _current_command = root_transaction();
         _current_query   = nullptr;

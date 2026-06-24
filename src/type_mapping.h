@@ -35,13 +35,13 @@
 #pragma once
 
 #include <optional>
-#include <qb/json.h>
-#include <qb/system/time.h>
-#include <qb/uuid.h>
 #include <string>
 #include <string_view>
 #include <type_traits>
 #include <vector>
+#include <qb/json.h>
+#include <qb/system/time.h>
+#include <qb/uuid.h>
 
 #include "./common.h"
 #include "./pg_types.h"

@@ -51,11 +51,8 @@
 #include <list>
 #include <map>
 #include <optional>
-#include <qb/io.h>
-#include <qb/io/crypto.h> // qb::crypto::to_hex_string / hex_to_string (bytea hex codec)
-#include <qb/system/endian.h>
-#include <qb/system/time.h> // qb::safe_gmtime / safe_timegm / civil date helpers
 #include <regex>
+#include <span>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -63,8 +60,11 @@
 #include <tuple>
 #include <type_traits>
 #include <unordered_map>
-#include <span>
 #include <vector>
+#include <qb/io.h>
+#include <qb/io/crypto.h> // qb::crypto::to_hex_string / hex_to_string (bytea hex codec)
+#include <qb/system/endian.h>
+#include <qb/system/time.h> // qb::safe_gmtime / safe_timegm / civil date helpers
 
 #include "./common.h"
 #include "./param_unserializer.h"
@@ -961,7 +961,7 @@ struct TypeConverter<qb::wall_time> {
 
         // Convert the broken-down UTC time to an epoch (UTC-native, portable:
         // handles pre-1970 instants that the Windows CRT _mkgmtime rejects).
-        tm.tm_isdst = 0;
+        tm.tm_isdst           = 0;
         std::time_t time_secs = safe_timegm(tm);
 
         // Apply the trailing timestamptz offset if present (east-positive): the parsed
@@ -1373,8 +1373,7 @@ struct TypeConverter<std::chrono::duration<Rep, Period>> {
         // 30 days. (C++ truncating /,% keep the split consistent for negatives.)
         constexpr int64_t USECS_PER_DAY  = 86400LL * 1000000LL;
         constexpr int64_t USECS_PER_YEAR = 31557600LL * 1000000LL; // 365.25 * 86400 s
-        const int64_t     total_micros   = micros + static_cast<int64_t>(days) * USECS_PER_DAY
-                                     + static_cast<int64_t>(months / 12) * USECS_PER_YEAR
+        const int64_t total_micros = micros + static_cast<int64_t>(days) * USECS_PER_DAY + static_cast<int64_t>(months / 12) * USECS_PER_YEAR
                                      + static_cast<int64_t>(months % 12) * 30 * USECS_PER_DAY;
         return std::chrono::duration_cast<value_type>(std::chrono::microseconds(total_micros));
     }
@@ -1571,15 +1570,24 @@ encode_pg_numeric(const std::string &in) {
 
     // Non-finite values.
     if (in == "NaN") {
-        wr16(out, 0); wr16(out, 0); wr16(out, 0xC000); wr16(out, 0);
+        wr16(out, 0);
+        wr16(out, 0);
+        wr16(out, 0xC000);
+        wr16(out, 0);
         return out;
     }
     if (in == "Infinity" || in == "+Infinity") {
-        wr16(out, 0); wr16(out, 0); wr16(out, 0xD000); wr16(out, 0);
+        wr16(out, 0);
+        wr16(out, 0);
+        wr16(out, 0xD000);
+        wr16(out, 0);
         return out;
     }
     if (in == "-Infinity") {
-        wr16(out, 0); wr16(out, 0); wr16(out, 0xF000); wr16(out, 0);
+        wr16(out, 0);
+        wr16(out, 0);
+        wr16(out, 0xF000);
+        wr16(out, 0);
         return out;
     }
 
@@ -1837,17 +1845,19 @@ struct TypeConverter<qb::time_of_day_tz> {
         int32_t net_offset = 0;
         std::memcpy(&net_micros, buffer.data() + base, sizeof(int64_t));
         std::memcpy(&net_offset, buffer.data() + base + sizeof(int64_t), sizeof(int32_t));
-        return qb::time_of_day_tz{qb::time_of_day::from_micros(qb::endian::from_big_endian(net_micros)),
-                                  std::chrono::seconds{-static_cast<int>(qb::endian::from_big_endian(net_offset))}};
+        return qb::time_of_day_tz{
+            qb::time_of_day::from_micros(qb::endian::from_big_endian(net_micros)),
+            std::chrono::seconds{-static_cast<int>(qb::endian::from_big_endian(net_offset))}
+        };
     }
     static value_type
     from_text(const std::string &text) {
         // PostgreSQL TIMETZ text: "HH:MM:SS[.ffffff]±HH[:MM[:SS]]" (e.g.
         // "14:30:45.123456+02:00", "08:00:00-05"). Split the time from the
         // trailing signed offset (the first +/- after position 0), parse each.
-        const auto  sign_pos  = text.find_first_of("+-", 1);
-        std::string time_part = (sign_pos == std::string::npos) ? text : text.substr(0, sign_pos);
-        qb::time_of_day      tod{};
+        const auto      sign_pos  = text.find_first_of("+-", 1);
+        std::string     time_part = (sign_pos == std::string::npos) ? text : text.substr(0, sign_pos);
+        qb::time_of_day tod{};
         if (auto micros = qb::parse_time_of_day(time_part))
             tod = qb::time_of_day::from_micros(*micros);
         std::chrono::seconds offset{0};
@@ -2074,10 +2084,10 @@ encode_pg_array(const std::vector<Elem> &vec) {
         b.insert(b.end(), p, p + sizeof(be));
     };
     wr32(buf, 1);                                     // ndim (1-D)
-    wr32(buf, 0);                                      // has-null flags
-    wr32(buf, TypeConverter<Elem>::get_oid());         // element OID
-    wr32(buf, static_cast<std::int32_t>(vec.size()));  // dimension size
-    wr32(buf, 1);                                      // lower bound
+    wr32(buf, 0);                                     // has-null flags
+    wr32(buf, TypeConverter<Elem>::get_oid());        // element OID
+    wr32(buf, static_cast<std::int32_t>(vec.size())); // dimension size
+    wr32(buf, 1);                                     // lower bound
     for (const Elem &e : vec) {
         std::vector<byte> elem; // each scalar to_binary emits [int32 length][value]
         TypeConverter<Elem>::to_binary(e, elem);
@@ -2095,44 +2105,44 @@ encode_pg_array(const std::vector<Elem> &vec) {
  * because add_param ODR-uses it). Restricted to non-byte element types so
  * std::vector<byte>/std::vector<char> stay on the bytea path.
  */
-#define QB_PG_DEFINE_ARRAY_CONVERTER(ELEM, ARRAY_OID)                  \
-    template <>                                                        \
-    struct TypeConverter<std::vector<ELEM>> {                          \
-        using value_type = std::vector<ELEM>;                          \
-        static integer                                                 \
-        get_oid() {                                                    \
-            return (ARRAY_OID);                                        \
-        }                                                              \
-        static void                                                    \
-        to_binary(const value_type &vec, std::vector<byte> &buffer) {  \
-            const std::vector<byte> body = encode_pg_array<ELEM>(vec); \
+#define QB_PG_DEFINE_ARRAY_CONVERTER(ELEM, ARRAY_OID)                         \
+    template <>                                                               \
+    struct TypeConverter<std::vector<ELEM>> {                                 \
+        using value_type = std::vector<ELEM>;                                 \
+        static integer                                                        \
+        get_oid() {                                                           \
+            return (ARRAY_OID);                                               \
+        }                                                                     \
+        static void                                                           \
+        to_binary(const value_type &vec, std::vector<byte> &buffer) {         \
+            const std::vector<byte> body = encode_pg_array<ELEM>(vec);        \
             integer                 len  = static_cast<integer>(body.size()); \
-            buffer.resize(buffer.size() + sizeof(integer));            \
-            byte   *dest = &buffer[buffer.size() - sizeof(integer)];   \
-            integer nbo  = htonl(len);                                 \
-            std::memcpy(dest, &nbo, sizeof(integer));                  \
-            buffer.insert(buffer.end(), body.begin(), body.end());     \
-        }                                                              \
-        static value_type                                             \
-        from_binary(std::span<const byte> buffer) {                \
-            return decode_pg_array<ELEM>(buffer);                     \
-        }                                                              \
-        static value_type                                             \
-        from_text(const std::string &) {                              \
-            return {};                                                 \
-        }                                                              \
-        static std::string                                            \
-        to_text(const value_type &) {                                 \
-            return {};                                                 \
-        }                                                              \
+            buffer.resize(buffer.size() + sizeof(integer));                   \
+            byte   *dest = &buffer[buffer.size() - sizeof(integer)];          \
+            integer nbo  = htonl(len);                                        \
+            std::memcpy(dest, &nbo, sizeof(integer));                         \
+            buffer.insert(buffer.end(), body.begin(), body.end());            \
+        }                                                                     \
+        static value_type                                                     \
+        from_binary(std::span<const byte> buffer) {                           \
+            return decode_pg_array<ELEM>(buffer);                             \
+        }                                                                     \
+        static value_type                                                     \
+        from_text(const std::string &) {                                      \
+            return {};                                                        \
+        }                                                                     \
+        static std::string                                                    \
+        to_text(const value_type &) {                                         \
+            return {};                                                        \
+        }                                                                     \
     };
 
-QB_PG_DEFINE_ARRAY_CONVERTER(bool, 1000)     // boolean[]
-QB_PG_DEFINE_ARRAY_CONVERTER(smallint, 1005) // int2[]
-QB_PG_DEFINE_ARRAY_CONVERTER(integer, 1007)  // int4[]
-QB_PG_DEFINE_ARRAY_CONVERTER(bigint, 1016)   // int8[]
-QB_PG_DEFINE_ARRAY_CONVERTER(float, 1021)    // float4[]
-QB_PG_DEFINE_ARRAY_CONVERTER(double, 1022)   // float8[]
+QB_PG_DEFINE_ARRAY_CONVERTER(bool, 1000)        // boolean[]
+QB_PG_DEFINE_ARRAY_CONVERTER(smallint, 1005)    // int2[]
+QB_PG_DEFINE_ARRAY_CONVERTER(integer, 1007)     // int4[]
+QB_PG_DEFINE_ARRAY_CONVERTER(bigint, 1016)      // int8[]
+QB_PG_DEFINE_ARRAY_CONVERTER(float, 1021)       // float4[]
+QB_PG_DEFINE_ARRAY_CONVERTER(double, 1022)      // float8[]
 QB_PG_DEFINE_ARRAY_CONVERTER(std::string, 1009) // text[]
 
 #undef QB_PG_DEFINE_ARRAY_CONVERTER

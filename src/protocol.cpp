@@ -29,8 +29,8 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
-#include <qb/system/endian.h>
 #include <sstream>
+#include <qb/system/endian.h>
 
 #include "./protocol.h"
 #include "./protocol_io_traits.h"

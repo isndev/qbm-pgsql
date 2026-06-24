@@ -8,10 +8,10 @@
  */
 
 #include <gtest/gtest.h>
+#include <string>
 #include <qb/io/async.h>
 #include <qb/json.h>
 #include <qb/uuid.h>
-#include <string>
 
 #include "../pgsql.h"
 #include "test_config.hpp"

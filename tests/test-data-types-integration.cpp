@@ -38,10 +38,10 @@
  */
 
 #include <gtest/gtest.h>
+#include <string>
 #include <qb/io/async.h>
 #include <qb/io/async/coroutine.h>
 #include <qb/io/async/coroutine/utils.h>
-#include <string>
 #include "../pgsql.h"
 #include "../src/type_converter.h"
 #include "test_config.hpp"
@@ -584,17 +584,15 @@ TEST_F(PostgreSQLDataTypesIntegrationTest, NetworkBitTypes_AndStdByteBytea) {
  *        (months/days preserved, which the std::chrono::duration mapping cannot do).
  */
 TEST_F(PostgreSQLDataTypesIntegrationTest, QbCivilTypes_BinaryRoundTrip) {
-    ASSERT_TRUE(db_->execute("CREATE TEMP TABLE qct_test (d DATE, t TIME, z TIMETZ, iv INTERVAL)",
-                             discard_query, discard_error)
-                    .await());
+    ASSERT_TRUE(db_->execute("CREATE TEMP TABLE qct_test (d DATE, t TIME, z TIMETZ, iv INTERVAL)", discard_query, discard_error).await());
     ASSERT_TRUE(db_->prepare("qct_ins", "INSERT INTO qct_test (d, t, z, iv) VALUES ($1, $2, $3, $4)",
                              {oid::date, oid::time, oid::timetz, oid::interval}, discard_prepare, discard_error)
                     .await());
     ASSERT_TRUE(db_->prepare("qct_sel", "SELECT d, t, z, iv FROM qct_test", {}, discard_prepare, discard_error).await());
 
-    const qb::date              d  = qb::date::from_ymd(2024, 3, 15);
-    const qb::time_of_day       t  = qb::time_of_day::from_hms(14, 30, 45, 123456);
-    const qb::time_of_day_tz    z  = qb::time_of_day_tz::from_hms_offset(14, 30, 45, 0, 7200);
+    const qb::date              d = qb::date::from_ymd(2024, 3, 15);
+    const qb::time_of_day       t = qb::time_of_day::from_hms(14, 30, 45, 123456);
+    const qb::time_of_day_tz    z = qb::time_of_day_tz::from_hms_offset(14, 30, 45, 0, 7200);
     const qb::calendar_interval iv{1, 2, std::chrono::microseconds{11045000000LL}};
 
     bool inserted = false;
