@@ -14,11 +14,11 @@
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <stdexcept>
+#include <string>
 #include <qb/io/async.h>
 #include <qb/io/async/coroutine.h>
 #include <qb/io/async/coroutine/utils.h>
-#include <stdexcept>
-#include <string>
 #include "../pgsql.h"
 #include "test_config.hpp"
 
@@ -176,7 +176,7 @@ TEST_F(PgsqlCoroApiTest, InlineParameterizedQuery) {
         auto b  = co_await db_->query(std::string("SELECT id, v FROM ") + std::string(kCoroApiTable) + " WHERE v = $1", std::string("beta"));
         auto ra = a.result().all<int, std::string>();
         auto rb = b.result().all<int, std::string>();
-        ok = a.ok() && b.ok() && ra.size() == 1 && std::get<1>(ra[0]) == "alpha" && rb.size() == 1 && std::get<1>(rb[0]) == "beta";
+        ok      = a.ok() && b.ok() && ra.size() == 1 && std::get<1>(ra[0]) == "alpha" && rb.size() == 1 && std::get<1>(rb[0]) == "beta";
         co_return;
     }());
     ASSERT_TRUE(ok);
@@ -194,9 +194,9 @@ TEST_F(PgsqlCoroApiTest, ZeroCopyFieldViewAndText) {
         if (!sel.ok() || sel.result().size() != 1)
             co_return;
         const auto      &res = sel.result();
-        std::string_view tv  = res[0][0].text();  // zero-copy view into res storage
-        auto             sp  = res[0][0].view();   // zero-copy bytes
-        ok = tv == "hello" && sp.size() == 5 && res[0][0].as<std::string>() == std::string(tv);
+        std::string_view tv  = res[0][0].text(); // zero-copy view into res storage
+        auto             sp  = res[0][0].view(); // zero-copy bytes
+        ok                   = tv == "hello" && sp.size() == 5 && res[0][0].as<std::string>() == std::string(tv);
         co_return;
     }());
     ASSERT_TRUE(ok);
@@ -739,13 +739,11 @@ TEST_F(PgsqlCoroApiTest, CopyOutStreamsToSink) {
         (void) co_await db_->query("CREATE TEMP TABLE copyt (id int, v text)");
         (void) co_await db_->query("INSERT INTO copyt VALUES (1,'alpha'),(2,'beta'),(3,'gamma')");
 
-        auto rt = co_await db_->copy_out("COPY copyt TO STDOUT",
-                                         [&](std::string_view chunk) { text_out.append(chunk); });
+        auto rt = co_await db_->copy_out("COPY copyt TO STDOUT", [&](std::string_view chunk) { text_out.append(chunk); });
         ok_text = rt.ok();
 
-        auto rc = co_await db_->copy_out("COPY copyt TO STDOUT (FORMAT csv)",
-                                         [&](std::string_view chunk) { csv_out.append(chunk); });
-        ok_csv = rc.ok();
+        auto rc = co_await db_->copy_out("COPY copyt TO STDOUT (FORMAT csv)", [&](std::string_view chunk) { csv_out.append(chunk); });
+        ok_csv  = rc.ok();
         co_return;
     }());
     EXPECT_TRUE(ok_text);
@@ -779,14 +777,14 @@ TEST_F(PgsqlCoroApiTest, CopyInStreamingSource) {
     bool ok_in  = false;
     qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
         (void) co_await db_->query("CREATE TEMP TABLE cins (id int)");
-        int next = 0;
-        auto ri  = co_await db_->copy_in("COPY cins FROM STDIN", [&next]() -> std::optional<std::string> {
+        int  next = 0;
+        auto ri   = co_await db_->copy_in("COPY cins FROM STDIN", [&next]() -> std::optional<std::string> {
             if (next >= 1000)
                 return std::nullopt;
             return std::to_string(next++) + "\n";
         });
-        ok_in    = ri.ok();
-        auto sel = co_await db_->query("SELECT count(*)::int FROM cins");
+        ok_in     = ri.ok();
+        auto sel  = co_await db_->query("SELECT count(*)::int FROM cins");
         if (sel.ok() && sel.result().size() == 1)
             loaded = sel.result()[0][0].as<int>();
         co_return;
@@ -804,12 +802,11 @@ TEST_F(PgsqlCoroApiTest, CopyErrorsResolveAndConnectionSurvives) {
         out_failed = !ro.ok();
 
         (void) co_await db_->query("CREATE TEMP TABLE cerr (id int)");
-        auto ri   = co_await db_->copy_in("COPY cerr FROM STDIN", []() -> std::optional<std::string> {
-            throw std::runtime_error("source boom");
-        });
+        auto ri =
+            co_await db_->copy_in("COPY cerr FROM STDIN", []() -> std::optional<std::string> { throw std::runtime_error("source boom"); });
         in_failed = !ri.ok();
 
-        auto ok = co_await db_->query("SELECT 1 AS one");
+        auto ok  = co_await db_->query("SELECT 1 AS one");
         survived = ok.ok() && ok.result().size() == 1 && ok.result()[0][0].as<int>() == 1;
         co_return;
     }());
@@ -824,8 +821,10 @@ TEST_F(PgsqlCoroApiTest, QueryStreamLargeResult) {
     std::uint64_t count = 0, sum = 0;
     bool          ok = false;
     qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
-        auto r = co_await db_->query_stream("SELECT g FROM generate_series(1, 5000) g", 137,
-                                            [&](auto row) { ++count; sum += static_cast<std::uint64_t>(row[0].template as<int>()); });
+        auto r = co_await db_->query_stream("SELECT g FROM generate_series(1, 5000) g", 137, [&](auto row) {
+            ++count;
+            sum += static_cast<std::uint64_t>(row[0].template as<int>());
+        });
         ok     = r.ok();
         co_return;
     }());
@@ -916,12 +915,12 @@ TEST_F(PgsqlCoroApiTest, QueryStreamEdgeCases) {
     std::uint64_t empty_n = 999, exact_n = 0, single_n = 0;
     bool          ok_empty = false, ok_exact = false, ok_single = false;
     qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
-        empty_n  = 0;
-        auto re  = co_await db_->query_stream("SELECT g FROM generate_series(1, 0) g", 10, [&](auto) { ++empty_n; });
-        ok_empty = re.ok();
-        auto rx  = co_await db_->query_stream("SELECT g FROM generate_series(1, 100) g", 50, [&](auto) { ++exact_n; });
-        ok_exact = rx.ok();
-        auto rs  = co_await db_->query_stream("SELECT 42", 10, [&](auto) { ++single_n; });
+        empty_n   = 0;
+        auto re   = co_await db_->query_stream("SELECT g FROM generate_series(1, 0) g", 10, [&](auto) { ++empty_n; });
+        ok_empty  = re.ok();
+        auto rx   = co_await db_->query_stream("SELECT g FROM generate_series(1, 100) g", 50, [&](auto) { ++exact_n; });
+        ok_exact  = rx.ok();
+        auto rs   = co_await db_->query_stream("SELECT 42", 10, [&](auto) { ++single_n; });
         ok_single = rs.ok();
         co_return;
     }());
@@ -937,7 +936,7 @@ TEST_F(PgsqlCoroApiTest, QueryStreamEdgeCases) {
 // framing + trailer). Round-trips the opaque binary stream out then back in.
 TEST_F(PgsqlCoroApiTest, CopyBinaryRoundTrip) {
     std::string bin;
-    int         count = 0;
+    int         count  = 0;
     bool        ok_out = false, ok_in = false;
     qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
         (void) co_await db_->query("CREATE TEMP TABLE cbin (id int, v text)");
@@ -945,8 +944,8 @@ TEST_F(PgsqlCoroApiTest, CopyBinaryRoundTrip) {
         auto ro = co_await db_->copy_out("COPY cbin TO STDOUT (FORMAT binary)", [&](std::string_view c) { bin.append(c); });
         ok_out  = ro.ok();
         (void) co_await db_->query("CREATE TEMP TABLE cbin2 (id int, v text)");
-        auto ri = co_await db_->copy_in("COPY cbin2 FROM STDIN (FORMAT binary)", bin);
-        ok_in   = ri.ok();
+        auto ri  = co_await db_->copy_in("COPY cbin2 FROM STDIN (FORMAT binary)", bin);
+        ok_in    = ri.ok();
         auto sel = co_await db_->query("SELECT count(*)::int FROM cbin2");
         if (sel.ok() && sel.result().size() == 1)
             count = sel.result()[0][0].as<int>();
@@ -999,9 +998,9 @@ TEST_F(PgsqlCoroApiTest, OptionalMinusOneAndNullViaBinary) {
 // Regression (fix): the timestamptz TEXT decoder must apply the printed UTC offset. The
 // same instant rendered in two session time zones must decode to the same wall_time.
 TEST_F(PgsqlCoroApiTest, TimestamptzTextOffsetApplied) {
-    bool          ok = false, equal = false;
+    bool ok = false, equal = false;
     qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
-        (void) co_await db_->query("SET TIME ZONE 'Asia/Kolkata'"); // UTC+5:30, no DST
+        (void) co_await db_->query("SET TIME ZONE 'Asia/Kolkata'");                   // UTC+5:30, no DST
         auto a = co_await db_->query("SELECT '2024-06-01 12:00:00+00'::timestamptz"); // text -> +05:30
         (void) co_await db_->query("SET TIME ZONE 'UTC'");
         auto b = co_await db_->query("SELECT '2024-06-01 12:00:00+00'::timestamptz"); // text -> +00

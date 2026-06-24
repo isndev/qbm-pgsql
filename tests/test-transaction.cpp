@@ -44,10 +44,10 @@
  */
 
 #include <gtest/gtest.h>
+#include <string>
 #include <qb/io/async.h>
 #include <qb/io/async/coroutine.h>
 #include <qb/io/async/coroutine/utils.h>
-#include <string>
 #include "../pgsql.h"
 #include "test_config.hpp"
 

@@ -39,10 +39,10 @@
 #include <chrono>
 #include <future>
 #include <gtest/gtest.h>
+#include <thread>
 #include <qb/io/async.h>
 #include <qb/io/async/coroutine.h>
 #include <qb/io/async/coroutine/utils.h>
-#include <thread>
 #include "../pgsql.h"
 #include "test_config.hpp"
 

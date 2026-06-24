@@ -47,11 +47,11 @@
 
 #include <filesystem>
 #include <memory>
-#include <qb/io/async.h>
 #include <queue>
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <qb/io/async.h>
 
 #include "./pg_awaiter.h"
 #include "./queries.h"

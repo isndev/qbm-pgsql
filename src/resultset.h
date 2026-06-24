@@ -45,12 +45,12 @@
 #include <iterator>
 #include <memory>
 #include <optional>
-#include <qb/json.h>
 #include <ranges>
 #include <span>
 #include <string_view>
 #include <tuple>
 #include <vector>
+#include <qb/json.h>
 #include "./common.h"
 #include "./data_iterator.h"
 #include "./error.h"
@@ -257,8 +257,7 @@ public:
     template <typename... Ts>
     [[nodiscard]] auto
     rows() const {
-        return std::ranges::subrange(begin(), end())
-               | std::views::transform([](const auto &r) { return r.template as<std::tuple<Ts...>>(); });
+        return std::ranges::subrange(begin(), end()) | std::views::transform([](const auto &r) { return r.template as<std::tuple<Ts...>>(); });
     }
     //@}
 
@@ -427,8 +426,7 @@ public:
         template <typename Tuple>
         [[nodiscard]] Tuple
         as() const {
-            static_assert(detail::is_tuple<Tuple>::value,
-                          "row::as<T>() expects a std::tuple<...>; use row[i].as<T>() for one column");
+            static_assert(detail::is_tuple<Tuple>::value, "row::as<T>() expects a std::tuple<...>; use row[i].as<T>() for one column");
             Tuple t{};
             to(t);
             return t;
@@ -593,9 +591,9 @@ public:
             //    copy (the old buffer.to_vector() allocated + copied every field).
             //    The span stays valid for the duration of this call (the result set
             //    outlives it); input_iterator_buffer is contiguous.
-            field_buffer buffer    = input_buffer();
-            bool         is_binary = (description().format_code == pg::protocol_data_format::Binary);
-            const auto   sz        = static_cast<std::size_t>(buffer.end() - buffer.begin());
+            field_buffer                buffer    = input_buffer();
+            bool                        is_binary = (description().format_code == pg::protocol_data_format::Binary);
+            const auto                  sz        = static_cast<std::size_t>(buffer.end() - buffer.begin());
             const std::span<const byte> data =
                 sz == 0 ? std::span<const byte>{} : std::span<const byte>(reinterpret_cast<const byte *>(&*buffer.begin()), sz);
 

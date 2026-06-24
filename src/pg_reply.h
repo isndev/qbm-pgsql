@@ -71,19 +71,24 @@ struct Reply {
     has_value() const noexcept {
         return _ok;
     }
-    [[nodiscard]] T &operator*() & noexcept {
+    [[nodiscard]] T &
+    operator*() & noexcept {
         return _value;
     }
-    [[nodiscard]] T const &operator*() const & noexcept {
+    [[nodiscard]] T const &
+    operator*() const & noexcept {
         return _value;
     }
-    [[nodiscard]] T &&operator*() && noexcept {
+    [[nodiscard]] T &&
+    operator*() && noexcept {
         return std::move(_value);
     }
-    [[nodiscard]] T *operator->() noexcept {
+    [[nodiscard]] T *
+    operator->() noexcept {
         return &_value;
     }
-    [[nodiscard]] T const *operator->() const noexcept {
+    [[nodiscard]] T const *
+    operator->() const noexcept {
         return &_value;
     }
 

@@ -1,4 +1,5 @@
 <!-- Verified-against: qbm-pgsql @ qb 2.0.0 (C++20 default, C++23 supported) -->
+
 # Contributing to qbm-pgsql
 
 qbm-pgsql is a module of the qb actor framework. General contribution guidelines — branch and pull-request
@@ -37,5 +38,6 @@ Use the `qb::pg` namespace and include the module's umbrella header (the CMake l
 `qbm::pgsql`, but the C++ namespace is `qb::pg`). Express time with the
 `qb::duration` / `qb::wall_time` vocabulary: connect, statement, and transaction timeouts are
 `qb::duration`, and `timestamptz` values are `qb::wall_time`. The PostgreSQL wire epoch (microseconds since
+
 2000) is an internal encoding detail and stays native. Never use the removed `qb::Timestamp` /
-`qb::Duration` types.
+      `qb::Duration` types.

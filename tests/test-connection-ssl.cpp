@@ -242,8 +242,7 @@ TEST_F(PostgreSQLConnectionTest, SslVerifyFullRejectsUntrustedCert) {
     opts.ssl_verify = qb::pg::ssl_verify_mode::full;
 
     auto db = std::make_unique<qb::pg::tcp::ssl::database>();
-    EXPECT_FALSE(qb::io::async::run_sync(db->connect(opts)))
-        << "verify-full accepted an untrusted self-signed certificate (MITM hole)";
+    EXPECT_FALSE(qb::io::async::run_sync(db->connect(opts))) << "verify-full accepted an untrusted self-signed certificate (MITM hole)";
 }
 
 // Over TLS, SCRAM must negotiate SCRAM-SHA-256-PLUS with tls-server-end-point channel
@@ -253,8 +252,7 @@ TEST_F(PostgreSQLConnectionTest, SslVerifyFullRejectsUntrustedCert) {
 // (Requires a scram-sha-256 server; a `trust` server skips SCRAM and this would not apply.)
 TEST_F(PostgreSQLConnectionTest, ScramChannelBindingNegotiatedOverTls) {
     QB_PG_ASSERT_SSL_CONNECTED(*db_);
-    EXPECT_TRUE(db_->used_channel_binding())
-        << "SCRAM-SHA-256-PLUS (tls-server-end-point) channel binding was not negotiated over TLS";
+    EXPECT_TRUE(db_->used_channel_binding()) << "SCRAM-SHA-256-PLUS (tls-server-end-point) channel binding was not negotiated over TLS";
 }
 
 int

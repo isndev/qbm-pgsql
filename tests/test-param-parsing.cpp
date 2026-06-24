@@ -34,10 +34,10 @@
  */
 
 #include <gtest/gtest.h>
+#include <span>
 #include <qb/io/async.h>
 #include <qb/io/async/coroutine.h>
 #include <qb/io/async/coroutine/utils.h>
-#include <span>
 
 #include "../pgsql.h"
 

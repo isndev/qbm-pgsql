@@ -30,8 +30,6 @@
 #include <iomanip>
 #include <iostream>
 #include <optional>
-#include <qb/io.h>
-#include <qb/system/endian.h>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -39,6 +37,8 @@
 #include <type_traits>
 #include <variant>
 #include <vector>
+#include <qb/io.h>
+#include <qb/system/endian.h>
 
 #include "./pg_types.h"
 #include "./type_converter.h"
