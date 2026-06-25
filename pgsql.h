@@ -2252,12 +2252,16 @@ public:
 
     /**
      * @brief Await the next NOTIFY; `std::nullopt` when the channel is closed (e.g. disconnect).
+     *
+     * Implemented as a direct coroutine member (NOT an immediately-invoked lambda
+     * `[this]{...}()`): the lambda closure would be a temporary destroyed at the end
+     * of this call, leaving the coroutine frame referencing freed memory for `this`
+     * (dangling-closure UAF — ASan-blind stack corruption; crashes under some
+     * compilers' frame layouts). The consumer object owns the coroutine's `this`.
      */
-    [[nodiscard]] auto
+    [[nodiscard]] qb::io::async::task<std::optional<::qb::pg::notification>>
     receive() {
-        return [this]() -> qb::io::async::task<std::optional<::qb::pg::notification>> {
-            co_return co_await notify_channel_.recv();
-        }();
+        co_return co_await notify_channel_.recv();
     }
 
     ~notify_co_consumer() {

@@ -2047,6 +2047,357 @@ TEST(CivilTypeTextDecodeTest, FromTextBehaviors) {
     EXPECT_THROW(TypeConverter<qb::calendar_interval>::from_text("1 mon 2 days 03:04:05"), std::runtime_error);
 }
 
+// ============================================================================
+// Pure TypeConverter coverage: generic primary-template scalar paths and the
+// fully-specialized converters. No live PostgreSQL needed.
+//
+// Contract reminders (verified against type_converter.h / .cpp):
+//  - to_binary appends [int32 big-endian length][value bytes].
+//  - from_binary receives the VALUE bytes only (no length prefix); for round-trip
+//    slice off the leading 4 bytes.
+//  - byte == char; smallint=int16, integer=int32, bigint=int64.
+//  - The generic from_text smallint/integer/bigint/float/double throw
+//    qb::pg::error::client_error on garbage (a db_error / std::runtime_error
+//    subclass). The generic from_binary integer-overflow path throws plain
+//    std::runtime_error.
+// ============================================================================
+
+// 1. Generic to_text: bool ("t"/"f") and the exact integer text spellings.
+TEST(TypeConverterToTextTest, BoolAndIntegerSpellings) {
+    using namespace qb::pg::detail;
+    EXPECT_EQ(TypeConverter<bool>::to_text(true), "t");
+    EXPECT_EQ(TypeConverter<bool>::to_text(false), "f");
+
+    EXPECT_EQ(TypeConverter<smallint>::to_text(static_cast<smallint>(100)), "100");
+    EXPECT_EQ(TypeConverter<smallint>::to_text(static_cast<smallint>(-32768)), "-32768");
+    EXPECT_EQ(TypeConverter<integer>::to_text(2147483647), "2147483647");
+    EXPECT_EQ(TypeConverter<integer>::to_text(-2147483648), "-2147483648");
+    EXPECT_EQ(TypeConverter<bigint>::to_text(static_cast<bigint>(9223372036854775807LL)), "9223372036854775807");
+    EXPECT_EQ(TypeConverter<bigint>::to_text(static_cast<bigint>(-1)), "-1");
+}
+
+// 2. Generic to_text: float/double special values (exact PostgreSQL spellings).
+TEST(TypeConverterToTextTest, FloatDoubleSpecialValues) {
+    using namespace qb::pg::detail;
+    EXPECT_EQ(TypeConverter<float>::to_text(std::numeric_limits<float>::quiet_NaN()), "NaN");
+    EXPECT_EQ(TypeConverter<float>::to_text(std::numeric_limits<float>::infinity()), "Infinity");
+    EXPECT_EQ(TypeConverter<float>::to_text(-std::numeric_limits<float>::infinity()), "-Infinity");
+
+    EXPECT_EQ(TypeConverter<double>::to_text(std::numeric_limits<double>::quiet_NaN()), "NaN");
+    EXPECT_EQ(TypeConverter<double>::to_text(std::numeric_limits<double>::infinity()), "Infinity");
+    EXPECT_EQ(TypeConverter<double>::to_text(-std::numeric_limits<double>::infinity()), "-Infinity");
+
+    // Normal value: std::to_string(float/double) (locale-default "%f", 6 decimals).
+    EXPECT_EQ(TypeConverter<double>::to_text(1.5), std::to_string(1.5));
+    EXPECT_EQ(TypeConverter<float>::to_text(2.25f), std::to_string(2.25f));
+}
+
+// 3. Generic to_text: bytea hex ("\\x...") and UUID canonical form.
+TEST(TypeConverterToTextTest, ByteaHexAndUuidCanonical) {
+    using namespace qb::pg::detail;
+    // bytea == std::vector<byte> path (byte == char).
+    std::vector<byte> bytes{static_cast<byte>(0xDE), static_cast<byte>(0xAD), static_cast<byte>(0xBE), static_cast<byte>(0xEF)};
+    EXPECT_EQ(TypeConverter<std::vector<byte>>::to_text(bytes), "\\xdeadbeef");
+    EXPECT_EQ(TypeConverter<std::vector<byte>>::to_text(std::vector<byte>{}), "\\x");
+
+    // UUID canonical text (this resolves to the TypeConverter<qb::uuid> specialization).
+    const std::string canon = "550e8400-e29b-41d4-a716-446655440000";
+    qb::uuid          u     = qb::uuid::from_string(canon).value();
+    EXPECT_EQ(TypeConverter<qb::uuid>::to_text(u), canon);
+}
+
+// 4. Generic from_text<smallint>: valid, out-of-range throw, garbage throw.
+TEST(TypeConverterFromTextTest, SmallintParsing) {
+    using namespace qb::pg::detail;
+    EXPECT_EQ(TypeConverter<smallint>::from_text("100"), static_cast<smallint>(100));
+    EXPECT_EQ(TypeConverter<smallint>::from_text("-32768"), static_cast<smallint>(-32768));
+    EXPECT_EQ(TypeConverter<smallint>::from_text("32767"), static_cast<smallint>(32767));
+    // std::stoi succeeds (fits int) but the value is out of int16 range -> client_error.
+    EXPECT_THROW(TypeConverter<smallint>::from_text("40000"), error::client_error);
+    EXPECT_THROW(TypeConverter<smallint>::from_text("-40000"), error::client_error);
+    // Non-numeric -> std::stoi throws -> wrapped in client_error.
+    EXPECT_THROW(TypeConverter<smallint>::from_text("abc"), error::client_error);
+}
+
+// 5. Generic from_text: integer/bigint/float/double valid + garbage throw + float specials.
+TEST(TypeConverterFromTextTest, IntegerBigintFloatDoubleParsing) {
+    using namespace qb::pg::detail;
+    EXPECT_EQ(TypeConverter<integer>::from_text("12345"), 12345);
+    EXPECT_EQ(TypeConverter<integer>::from_text("-2147483648"), -2147483648);
+    EXPECT_THROW(TypeConverter<integer>::from_text("xyz"), error::client_error);
+
+    EXPECT_EQ(TypeConverter<bigint>::from_text("9223372036854775807"), static_cast<bigint>(9223372036854775807LL));
+    EXPECT_EQ(TypeConverter<bigint>::from_text("-100"), static_cast<bigint>(-100));
+    EXPECT_THROW(TypeConverter<bigint>::from_text("not-a-number"), error::client_error);
+
+    EXPECT_FLOAT_EQ(TypeConverter<float>::from_text("3.5"), 3.5f);
+    EXPECT_THROW(TypeConverter<float>::from_text("garbage"), error::client_error);
+    EXPECT_TRUE(std::isnan(TypeConverter<float>::from_text("NaN")));
+    EXPECT_TRUE(std::isinf(TypeConverter<float>::from_text("Infinity")));
+    EXPECT_GT(TypeConverter<float>::from_text("Infinity"), 0.0f);
+    EXPECT_TRUE(std::isinf(TypeConverter<float>::from_text("-Infinity")));
+    EXPECT_LT(TypeConverter<float>::from_text("-Infinity"), 0.0f);
+
+    EXPECT_DOUBLE_EQ(TypeConverter<double>::from_text("2.71828"), 2.71828);
+    EXPECT_THROW(TypeConverter<double>::from_text("garbage"), error::client_error);
+    EXPECT_TRUE(std::isnan(TypeConverter<double>::from_text("NaN")));
+    EXPECT_TRUE(std::isinf(TypeConverter<double>::from_text("Infinity")));
+    EXPECT_GT(TypeConverter<double>::from_text("Infinity"), 0.0);
+    EXPECT_TRUE(std::isinf(TypeConverter<double>::from_text("-Infinity")));
+    EXPECT_LT(TypeConverter<double>::from_text("-Infinity"), 0.0);
+}
+
+// 6. Generic from_text<bool>: exact accepted truthy set (t/true/1/yes/y/on),
+//    everything else (f/0/no/"" / any other token) is false.
+TEST(TypeConverterFromTextTest, BoolTruthySet) {
+    using namespace qb::pg::detail;
+    for (const char *t : {"t", "true", "1", "yes", "y", "on"})
+        EXPECT_TRUE(TypeConverter<bool>::from_text(t)) << "expected true for '" << t << "'";
+    // NOTE: only the exact 6 tokens above are truthy. "f", "0", "no", "" and any
+    // other string (including "TRUE", "True", "off") all map to false.
+    for (const char *f : {"f", "0", "no", "", "off", "TRUE", "True", "Y", "ON"})
+        EXPECT_FALSE(TypeConverter<bool>::from_text(f)) << "expected false for '" << f << "'";
+}
+
+// 7. Generic from_text<bytea>: "\\x..." hex decode and raw verbatim copy.
+TEST(TypeConverterFromTextTest, ByteaHexAndRaw) {
+    using namespace qb::pg::detail;
+    auto hex = TypeConverter<std::vector<byte>>::from_text("\\xDEADBEEF");
+    ASSERT_EQ(hex.size(), 4u);
+    EXPECT_EQ(static_cast<unsigned char>(hex[0]), 0xDE);
+    EXPECT_EQ(static_cast<unsigned char>(hex[1]), 0xAD);
+    EXPECT_EQ(static_cast<unsigned char>(hex[2]), 0xBE);
+    EXPECT_EQ(static_cast<unsigned char>(hex[3]), 0xEF);
+
+    // No "\x" marker -> copied byte-for-byte.
+    auto raw = TypeConverter<std::vector<byte>>::from_text("hello");
+    ASSERT_EQ(raw.size(), 5u);
+    EXPECT_EQ(std::string(raw.begin(), raw.end()), "hello");
+}
+
+// 8. UUID from_text on invalid input.
+//
+// NOTE / DEVIATION FROM TASK ITEM 8: the task asked to exercise the generic
+// primary template's value_or(qb::uuid{}) fallback path (type_converter.h line
+// ~556). That branch is DEAD CODE for qb::uuid because TypeConverter<qb::uuid>
+// is a full specialization (type_converter.cpp), whose from_text() THROWS
+// std::runtime_error on an invalid UUID instead of returning a default. We test
+// the actually-reachable behavior: a valid UUID parses, an invalid one throws.
+TEST(TypeConverterFromTextTest, UuidInvalidThrows) {
+    using namespace qb::pg::detail;
+    const std::string canon = "550e8400-e29b-41d4-a716-446655440000";
+    EXPECT_EQ(TypeConverter<qb::uuid>::from_text(canon), qb::uuid::from_string(canon).value());
+    EXPECT_THROW(TypeConverter<qb::uuid>::from_text("not-a-uuid"), std::runtime_error);
+    EXPECT_THROW(TypeConverter<qb::uuid>::from_text(""), std::runtime_error);
+}
+
+// 9. Timestamp from_text: micro padding (".5" -> 500000), tz offset ("+02"),
+//    malformed -> throw.
+//
+// NOTE: TypeConverter<qb::wall_time> is a full specialization (type_converter.cpp,
+// sscanf-based). The generic primary-template regex path in the header is dead for
+// wall_time; this exercises the reachable specialization.
+TEST(TypeConverterFromTextTest, TimestampMicrosAndTz) {
+    using namespace qb::pg::detail;
+    // ".5" -> one fractional digit padded to 6 -> 500000 microseconds.
+    auto t1 = TypeConverter<qb::wall_time>::from_text("2024-01-01 00:00:00.5");
+    EXPECT_EQ(qb::unix_micros(t1) % 1000000, 500000);
+
+    // "+02" trailing zone: the broken-down fields are local to +02:00, so the UTC
+    // instant is (local - 7200s). 12:00:00+02 == 10:00:00Z.
+    auto withtz = TypeConverter<qb::wall_time>::from_text("2024-01-01 12:00:00+02");
+    auto noz    = TypeConverter<qb::wall_time>::from_text("2024-01-01 12:00:00");
+    EXPECT_EQ(qb::unix_micros(noz) - qb::unix_micros(withtz), 7200LL * 1000000LL);
+
+    EXPECT_THROW(TypeConverter<qb::wall_time>::from_text("bad ts"), std::runtime_error);
+    EXPECT_THROW(TypeConverter<qb::wall_time>::from_text(""), std::runtime_error);
+}
+
+// 10. Generic from_binary<integer>: size-dispatch (2/4/8 bytes) + overflow throw.
+TEST(TypeConverterFromBinaryTest, IntegerSizeDispatch) {
+    using namespace qb::pg::detail;
+    // 2-byte BE (int2 read, widened): 0x0064 == 100.
+    EXPECT_EQ(TypeConverter<integer>::from_binary(hex_to_bytes("0064")), 100);
+    // 4-byte BE: 0x0000002a == 42.
+    EXPECT_EQ(TypeConverter<integer>::from_binary(hex_to_bytes("0000002a")), 42);
+    // 8-byte BE in int32 range: 0x000000000000002a == 42.
+    EXPECT_EQ(TypeConverter<integer>::from_binary(hex_to_bytes("000000000000002a")), 42);
+    // 8-byte BE > INT32_MAX (0x0000000080000000 == 2147483648) -> std::runtime_error.
+    EXPECT_THROW(TypeConverter<integer>::from_binary(hex_to_bytes("0000000080000000")), std::runtime_error);
+    // 8-byte BE < INT32_MIN (0xFFFFFFFF7FFFFFFF == -2147483649) -> std::runtime_error.
+    EXPECT_THROW(TypeConverter<integer>::from_binary(hex_to_bytes("ffffffff7fffffff")), std::runtime_error);
+}
+
+// 11. Generic from_binary<bool> + UUID specialization from_binary edge sizes.
+TEST(TypeConverterFromBinaryTest, BoolAndUuidEdgeSizes) {
+    using namespace qb::pg::detail;
+    EXPECT_TRUE(TypeConverter<bool>::from_binary(hex_to_bytes("01")));
+    EXPECT_FALSE(TypeConverter<bool>::from_binary(hex_to_bytes("00")));
+    // Any non-zero byte is true.
+    EXPECT_TRUE(TypeConverter<bool>::from_binary(hex_to_bytes("ff")));
+    // Empty buffer -> std::runtime_error.
+    EXPECT_THROW(TypeConverter<bool>::from_binary(std::span<const byte>{}), std::runtime_error);
+
+    // UUID 15-byte span: neither 16 nor >= 20 -> "Buffer too small for UUID" throw.
+    std::vector<byte> fifteen(15, static_cast<byte>(0x11));
+    EXPECT_THROW(TypeConverter<qb::uuid>::from_binary(fifteen), std::runtime_error);
+}
+
+// 12. TypeConverter<std::string> (NUMERIC-as-text specialization).
+TEST(TypeConverterStringTest, NumericAsTextSpecialization) {
+    using namespace qb::pg::detail;
+    EXPECT_EQ(TypeConverter<std::string>::get_oid(), static_cast<integer>(oid::text));
+
+    // to_binary writes [int32 len][bytes]; from_binary reads the prefixed form.
+    std::vector<byte> buf;
+    TypeConverter<std::string>::to_binary("12.5", buf);
+    ASSERT_EQ(buf.size(), 4u + 4u);
+    EXPECT_EQ(TypeConverter<std::string>::from_binary(buf), "12.5");
+
+    // Buffer shorter than the 4-byte header -> "".
+    EXPECT_EQ(TypeConverter<std::string>::from_binary(hex_to_bytes("0000")), "");
+    // Header length <= 0 -> "" (here len == 0).
+    EXPECT_EQ(TypeConverter<std::string>::from_binary(hex_to_bytes("00000000")), "");
+
+    // to_text / from_text are identity for the NUMERIC-as-text converter.
+    EXPECT_EQ(TypeConverter<std::string>::to_text("123.456"), "123.456");
+    EXPECT_EQ(TypeConverter<std::string>::from_text("123.456"), "123.456");
+}
+
+// 13. TypeConverter<qb::json>.
+TEST(TypeConverterJsonTest, BinaryAndTextPaths) {
+    using namespace qb::pg::detail;
+    EXPECT_EQ(TypeConverter<qb::json>::get_oid(), static_cast<integer>(oid::json));
+
+    // to_binary ([int32 len][json text]) -> from_binary round-trip.
+    qb::json          obj = qb::json::parse(R"({"a":1})");
+    std::vector<byte> buf;
+    TypeConverter<qb::json>::to_binary(obj, buf);
+    EXPECT_EQ(TypeConverter<qb::json>::from_binary(buf), obj);
+
+    // Buffer <= 4 bytes -> "buffer too small" throw.
+    EXPECT_THROW(TypeConverter<qb::json>::from_binary(hex_to_bytes("00000004")), std::runtime_error);
+
+    // Key-value pair array payload [["k","v"]] -> converted to an object {"k":"v"}.
+    {
+        const std::string payload = R"([["k","v"]])";
+        std::vector<byte> kv;
+        // 4-byte length prefix + payload bytes (the from_binary skips the first 4).
+        kv.insert(kv.end(), 4, static_cast<byte>(0));
+        kv.insert(kv.end(), payload.begin(), payload.end());
+        auto parsed = TypeConverter<qb::json>::from_binary(kv);
+        ASSERT_TRUE(parsed.is_object());
+        EXPECT_EQ(parsed["k"], "v");
+    }
+
+    // from_text: valid parses, invalid throws.
+    EXPECT_EQ(TypeConverter<qb::json>::from_text(R"({"x":true})"), qb::json::parse(R"({"x":true})"));
+    EXPECT_THROW(TypeConverter<qb::json>::from_text("{not json"), std::runtime_error);
+}
+
+// 14. TypeConverter<qb::jsonb>.
+TEST(TypeConverterJsonbTest, VarlenaBranchAndRoundTrip) {
+    using namespace qb::pg::detail;
+    EXPECT_EQ(TypeConverter<qb::jsonb>::get_oid(), static_cast<integer>(oid::jsonb));
+
+    // to_binary ([int32 len][version 1][json]) -> from_binary round-trip.
+    qb::jsonb         obj = qb::jsonb(qb::json::parse(R"({"a":1})"));
+    std::vector<byte> buf;
+    TypeConverter<qb::jsonb>::to_binary(obj, buf);
+    EXPECT_EQ(TypeConverter<qb::jsonb>::from_binary(buf), obj);
+
+    // 4-byte varlena header branch: bytes[4] == version 1, then key-value array
+    // payload [["k","v"]] -> object {"k":"v"}.
+    {
+        const std::string payload = R"([["k","v"]])";
+        std::vector<byte> wire;
+        wire.insert(wire.end(), 4, static_cast<byte>(0)); // varlena header (ignored)
+        wire.push_back(static_cast<byte>(1));             // jsonb version
+        wire.insert(wire.end(), payload.begin(), payload.end());
+        auto parsed = TypeConverter<qb::jsonb>::from_binary(wire);
+        ASSERT_TRUE(parsed.is_object());
+        EXPECT_EQ(parsed["k"], "v");
+    }
+
+    // Unversioned / unsupported leading bytes -> throw.
+    EXPECT_THROW(TypeConverter<qb::jsonb>::from_binary(hex_to_bytes("0203")), std::runtime_error);
+}
+
+// 15. NUMERIC non-finite round-trips + short-buffer decode.
+TEST(TypeConverterNumericTest, NonFiniteAndShortBuffer) {
+    using namespace qb::pg::detail;
+    for (const char *v : {"NaN", "Infinity", "-Infinity"}) {
+        std::vector<byte> buf;
+        TypeConverter<numeric>::to_binary(numeric(v), buf);
+        EXPECT_EQ(TypeConverter<numeric>::from_binary(buf).str(), v) << "value=" << v;
+    }
+    // decode_pg_numeric on a buffer shorter than the 8-byte header -> "0".
+    EXPECT_EQ(decode_pg_numeric(nullptr, 0), "0");
+    std::vector<byte> short_buf = hex_to_bytes("000200000000"); // 6 bytes (< 8)
+    EXPECT_EQ(decode_pg_numeric(short_buf.data(), short_buf.size()), "0");
+    // Via the converter (value-first, < 12 so the prefix branch is skipped).
+    EXPECT_EQ(TypeConverter<numeric>::from_binary(short_buf).str(), "0");
+}
+
+// 16. duration<seconds> from_text.
+TEST(TypeConverterDurationTest, FromTextSecondsAndGarbage) {
+    using namespace qb::pg::detail;
+    using secs = std::chrono::seconds;
+    // std::stoll reads the leading integer, ignores the trailing " seconds".
+    EXPECT_EQ(TypeConverter<secs>::from_text("90 seconds"), secs{90});
+    EXPECT_EQ(TypeConverter<secs>::from_text("-5 seconds"), secs{-5});
+    // Unparseable leading token -> caught -> value_type::zero().
+    EXPECT_EQ(TypeConverter<secs>::from_text("garbage"), secs::zero());
+    EXPECT_EQ(TypeConverter<secs>::from_text(""), secs::zero());
+    // to_text spelling.
+    EXPECT_EQ(TypeConverter<secs>::to_text(secs{90}), "90 seconds");
+}
+
+// 17. decode_pg_array guard paths (crafted buffers).
+TEST(TypeConverterArrayTest, DecodeGuardPaths) {
+    using namespace qb::pg::detail;
+    // < 12 bytes (header is ndim + flags + element OID) -> empty.
+    EXPECT_TRUE(decode_pg_array<integer>(hex_to_bytes("00000001")).empty());
+    EXPECT_TRUE(decode_pg_array<integer>(std::span<const byte>{}).empty());
+
+    // ndim == 0 -> empty (header present, zero-dimensional array).
+    EXPECT_TRUE(decode_pg_array<integer>(hex_to_bytes("000000000000000000000017")).empty());
+
+    // ndim < 0 -> empty.
+    EXPECT_TRUE(decode_pg_array<integer>(hex_to_bytes("ffffffff0000000000000017")).empty());
+
+    // Truncated element: header claims a 1-D array of size 1 but the element's
+    // length/value is missing -> decode stops, returns empty.
+    //   ndim=1, flags=0, oid=23(int4), dim_size=1, lower_bound=1, then nothing.
+    EXPECT_TRUE(decode_pg_array<integer>(hex_to_bytes("0000000100000000000000170000000100000001")).empty());
+
+    // Element length present but value truncated (claims 4 bytes, only 2 follow)
+    // -> stops before pushing -> empty.
+    //   header(12B)+dim(8B) = 20B, then elem_len=00000004, then only 0102 (2 of 4).
+    EXPECT_TRUE(decode_pg_array<integer>(hex_to_bytes("0000000100000000000000170000000100000001000000040102")).empty());
+}
+
+// 18. DATE / TIME / TIMETZ / INTERVAL from_binary on a too-short (3-byte) span:
+//     each returns a default-constructed value (no throw).
+//
+// NOTE / DEVIATION FROM TASK ITEM 18: these four specializations return a default
+// value on a malformed/short span; the std::chrono::duration INTERVAL converter
+// (a separate primary-template specialization) instead THROWS on a short span.
+// Both behaviors are asserted below to be precise about which does which.
+TEST(TypeConverterCivilTypesTest, MalformedShortSpanReturnsDefault) {
+    using namespace qb::pg::detail;
+    std::vector<byte> three(3, static_cast<byte>(0x00));
+
+    EXPECT_EQ(TypeConverter<qb::date>::from_binary(three), qb::date{});
+    EXPECT_EQ(TypeConverter<qb::time_of_day>::from_binary(three), qb::time_of_day{});
+    EXPECT_EQ(TypeConverter<qb::time_of_day_tz>::from_binary(three), qb::time_of_day_tz{});
+    EXPECT_EQ(TypeConverter<qb::calendar_interval>::from_binary(three), qb::calendar_interval{});
+
+    // Contrast: the lossy std::chrono::duration interval converter throws on a
+    // short span (neither 16 nor >= 20 bytes).
+    EXPECT_THROW(TypeConverter<std::chrono::seconds>::from_binary(three), std::runtime_error);
+}
+
 int
 main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
