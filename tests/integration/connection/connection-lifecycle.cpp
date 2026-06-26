@@ -138,6 +138,39 @@ TEST_F(ConnectionLifecycle, ReconnectAfterDisconnect) {
 }
 
 /**
+ * @brief Client-supplied startup options (set_startup_option / application_name) are sent in the
+ *        StartupMessage and applied by the server.
+ *
+ * Regression for the formerly-dead `client_opts_` path: create_startup_message iterated it but no
+ * public API ever wrote it, so only USER+DATABASE were ever sent. With the new setters, a custom
+ * application_name + a GUC (datestyle) round-trip back through `SHOW`. Options must be registered
+ * BEFORE connect() (serialized at handshake). A fresh db is used so the option set is pristine.
+ */
+TEST_F(ConnectionLifecycle, ClientStartupOptionsAreSentAndApplied) {
+    auto db = std::make_unique<qb::pg::tcp::database>();
+    db->application_name("qbm_pgsql_startup_opt_test").set_startup_option("datestyle", "ISO, MDY");
+    ASSERT_EQ(db->startup_options().at("application_name"), "qbm_pgsql_startup_opt_test");
+
+    if (!qb::pg::test::pg_try_connect(*db))
+        GTEST_SKIP() << qb::pg::test::kDaemonUnreachableSentinel;
+
+    std::string app, datestyle;
+    bool        ok = qb::io::async::run_sync([&]() -> qb::io::async::task<bool> {
+        auto a = co_await db->execute("SHOW application_name");
+        auto d = co_await db->execute("SHOW datestyle");
+        if (!a.ok() || !d.ok() || a.result().size() != 1u || d.result().size() != 1u)
+            co_return false;
+        app       = a.result()[0][0].as<std::string>();
+        datestyle = d.result()[0][0].as<std::string>();
+        co_return true;
+    }());
+
+    EXPECT_TRUE(ok) << "SHOW of the startup-set GUCs failed";
+    EXPECT_EQ(app, "qbm_pgsql_startup_opt_test") << "application_name startup option was not applied";
+    EXPECT_EQ(datestyle, "ISO, MDY") << "datestyle startup option was not applied";
+}
+
+/**
  * @brief A bare connect() after disconnect() re-handshakes on a fresh backend.
  *
  * Ground-truthed against PostgreSQL 18: `connect()` routes through the async connector, which

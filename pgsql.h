@@ -1659,6 +1659,34 @@ public:
     }
 
     /**
+     * @brief Set a client-supplied startup option sent in the StartupMessage (and re-sent on
+     *        reconnect), e.g. `application_name`, `search_path`, `client_encoding`, `datestyle`.
+     *
+     * Must be called BEFORE `connect()` — the option set is serialized at handshake time. Only
+     * GUCs settable as startup parameters are valid (server-reported read-only parameters such as
+     * `server_version` are NOT echoed back; see @ref on_parameter_status). Returns `*this` for
+     * chaining. The value is sent verbatim; the caller is responsible for a valid GUC value.
+     */
+    Database &
+    set_startup_option(std::string key, std::string value) {
+        client_opts_[std::move(key)] = std::move(value);
+        return *this;
+    }
+
+    /** @brief Convenience for `set_startup_option("application_name", name)` (shown in
+     *  `pg_stat_activity.application_name`). Call before `connect()`. */
+    Database &
+    application_name(std::string name) {
+        return set_startup_option(std::string(options::APPLICATION_NAME), std::move(name));
+    }
+
+    /** @brief The client-supplied startup options registered so far (read-only). */
+    [[nodiscard]] const client_options_type &
+    startup_options() const noexcept {
+        return client_opts_;
+    }
+
+    /**
      * @brief Register a handler for asynchronous NOTIFY (plain `database` only).
      *
      * Ignored for `notify_*_consumer` types (they use `on_notify` / `receive()`). Replaces any
