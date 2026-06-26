@@ -159,23 +159,42 @@ TEST_F(AdvancedTransactionTest, SavepointRestoration) {
     ASSERT_TRUE(ok);
 }
 
-/** @brief Several writes plus a verifying read in one callback transaction all commit. */
+/** @brief Several writes plus a verifying read in one callback transaction all commit.
+ *
+ * Seed is 3 rows (row1 counter=10, row2=20, row3=30). This inserts a 4th row and bumps
+ * row1's counter by 5, so the table holds EXACTLY 4 rows and row1's counter is EXACTLY 15.
+ * Error callbacks fail the test loudly instead of swallowing a real failure. */
 TEST_F(AdvancedTransactionTest, MultiOperationTransaction) {
-    bool ok = false;
-    auto st = db_->begin([&](Transaction &t) {
+    auto fail_on_error = [](error::db_error const &e) { ADD_FAILURE() << e.code << " " << e.what(); };
+    bool count_ok      = false;
+    bool counter_ok    = false;
+    auto st            = db_->begin([&](Transaction &t) {
                      t.execute("INSERT INTO test_advanced_transactions (value, counter) VALUES ('temp_row', 100)", discard_query,
-                               discard_error);
+                               fail_on_error);
                      t.execute("UPDATE test_advanced_transactions SET counter = counter + 5 WHERE value = 'row1'", discard_query,
-                               discard_error);
-                     t.execute("SELECT COUNT(*) FROM test_advanced_transactions", [&](Transaction &, results r) {
-                         ASSERT_EQ(r.size(), 1u);
-                         EXPECT_GE(r[0][0].as<int>(), 4);
-                         ok = true;
-                     });
+                               fail_on_error);
+                     t.execute(
+                         "SELECT COUNT(*) FROM test_advanced_transactions",
+                         [&](Transaction &, results r) {
+                             ASSERT_EQ(r.size(), 1u);
+                             EXPECT_EQ(r[0][0].as<int>(), 4);
+                             count_ok = true;
+                         },
+                         fail_on_error);
+                     // The UPDATE's effect: row1 counter went 10 -> 15.
+                     t.execute(
+                         "SELECT counter FROM test_advanced_transactions WHERE value = 'row1'",
+                         [&](Transaction &, results r) {
+                             ASSERT_EQ(r.size(), 1u);
+                             EXPECT_EQ(r[0][0].as<int>(), 15);
+                             counter_ok = true;
+                         },
+                         fail_on_error);
                  })
                   .await();
     EXPECT_TRUE(st);
-    EXPECT_TRUE(ok);
+    EXPECT_TRUE(count_ok);
+    EXPECT_TRUE(counter_ok);
 }
 
 /** @brief An invalid statement inside `begin` fails the block and fires the error callback. */
@@ -197,9 +216,10 @@ TEST_F(AdvancedTransactionTest, BasicErrorHandling) {
 /**
  * @brief Statement timeout: `pg_sleep(3)` under a 1s `statement_timeout` errors out.
  *
- * Asserts the error fires with a timeout-flavored message and that the operation returns in
- * well under the full 3s sleep, with only a lower bound (≈900ms) — the flaky `<2000ms` upper
- * bound is dropped (CI scheduling jitter made it brittle).
+ * Asserts the error fires with SQLSTATE 57014 (query_canceled — the locale-independent code
+ * PostgreSQL raises for a statement-timeout cancel) and that the operation returns in well
+ * under the full 3s sleep, with only a lower bound (≈900ms) — the flaky `<2000ms` upper bound
+ * is dropped (CI scheduling jitter made it brittle).
  */
 TEST_F(AdvancedTransactionTest, StatementTimeout) {
     bool saw_error = false;
@@ -210,7 +230,7 @@ TEST_F(AdvancedTransactionTest, StatementTimeout) {
                            "SELECT pg_sleep(3)", [](Transaction &, results) { ADD_FAILURE() << "pg_sleep should be cut off by timeout"; },
                            [&](error::db_error const &e) {
                                saw_error = true;
-                               EXPECT_NE(std::string(e.what()).find("timeout"), std::string::npos);
+                               EXPECT_EQ(e.code, "57014") << e.what(); // query_canceled (statement timeout)
                            });
                    })
                   .await();
@@ -230,7 +250,7 @@ TEST_F(AdvancedTransactionTest, StatementTimeoutViaSetTimeout) {
                           "SELECT pg_sleep(3)", [](Transaction &, results) { ADD_FAILURE() << "pg_sleep should be cut off"; },
                           [&](error::db_error const &e) {
                               saw_error = true;
-                              EXPECT_NE(std::string(e.what()).find("timeout"), std::string::npos);
+                              EXPECT_EQ(e.code, "57014") << e.what(); // query_canceled (statement timeout)
                           });
                   })
                   .await();

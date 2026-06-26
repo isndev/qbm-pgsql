@@ -56,6 +56,10 @@ hex_to_bytes(std::string_view h) {
 // Golden NUMERIC (numeric_send) — value bytes, no length prefix.
 // Layout: int16 ndigits, int16 weight, uint16 sign, uint16 dscale, base-10000 limbs.
 // sign: 0x0000 +, 0x4000 -, 0xC000 NaN, 0xD000 +Inf, 0xF000 -Inf.
+// NOTE on dscale for non-finite: PostgreSQL's numeric_send emits dscale=0x0020 for
+// ±Infinity (NaN keeps dscale=0x0000), confirmed on PG 18.4 — the dscale is
+// vestigial and the decoder ignores it for non-finite values. These golden bytes
+// are the canonical server output (d0000020 / f0000020 / c0000000).
 // ===========================================================================
 namespace gt::numeric {
 
@@ -78,10 +82,12 @@ inline constexpr Case finite[] = {
 };
 
 /// Special sign-word NUMERIC values (header only, ndigits == 0).
+/// EXACT numeric_send output captured from PG 18.4: ±Infinity carry dscale=0x0020,
+/// NaN carries dscale=0x0000. The decoder ignores dscale for non-finite values.
 inline constexpr Case specials[] = {
     {"00000000c0000000", "NaN"},
-    {"00000000d0000000", "Infinity"},
-    {"00000000f0000000", "-Infinity"},
+    {"00000000d0000020", "Infinity"},
+    {"00000000f0000020", "-Infinity"},
 };
 
 } // namespace gt::numeric

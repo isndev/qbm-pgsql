@@ -355,8 +355,9 @@ TEST_F(DataTypesRoundTrip, Timestamp_FixedInstant_SecondTolerance) {
                           ASSERT_EQ(r.size(), 1u);
                           EXPECT_EQ(r.field(0).format_code, protocol_data_format::Binary);
                           const auto got = r[0][0].as<qb::wall_time>();
-                          // Pinned UTC session + UTC instant => exact to the microsecond,
-                          // assert within 1s to absorb only the wall<->micro rounding.
+                          // Two-part check: the instant is within a 1s band of the expected
+                          // value (whole-second agreement), and the sub-second component is
+                          // exact (789000 us preserved) via the separate %1000000 assertion.
                           const long long got_us = static_cast<long long>(qb::unix_micros(got));
                           EXPECT_LE(std::llabs(got_us - kFixedUtcMicros), 1000000LL);
                           EXPECT_EQ(qb::unix_micros(got) % 1000000, 789000u);
