@@ -30,7 +30,7 @@
 #include <gtest/gtest.h>
 #include <qb/io/async.h>
 #include "../../pgsql.h"
-#include "../test_config.hpp"
+#include "test_config.hpp"
 
 namespace qb::pg::test {
 
