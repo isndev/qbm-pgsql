@@ -505,7 +505,8 @@ public:
 
 private:
     connection_options   conn_opts_;            ///< Database connection options
-    client_options_type  client_opts_;          ///< Client options
+    client_options_type  client_opts_;          ///< Client-supplied startup options (sent in the StartupMessage)
+    client_options_type  server_params_;        ///< Server-reported ParameterStatus cache (NOT echoed back at connect)
     integer              serverPid_{};          ///< Server process ID
     integer              serverSecret_{};       ///< Server secret for protocol operations
     PreparedQueryStorage storage_;              ///< Storage for prepared statements
@@ -1146,7 +1147,14 @@ public:
 
         LOG_DEBUG("[pgsql] Received parameter " << key << "=" << value);
 
-        client_opts_[key] = value;
+        // Server-reported ParameterStatus values are cached for the accessors
+        // (parameter_status() / server_version()) but kept SEPARATE from the
+        // client-supplied startup options: many of them (notably "server_version")
+        // are read-only GUC_REPORT parameters that PostgreSQL rejects with SQLSTATE
+        // 55P02 ("parameter ... cannot be changed") if sent back in a StartupMessage.
+        // Echoing them on reconnect (see create_startup_message) used to abort the
+        // re-handshake right after authentication.
+        server_params_[key] = value;
     }
 
     /**
@@ -1751,8 +1759,8 @@ public:
      */
     [[nodiscard]] std::optional<std::string_view>
     parameter_status(std::string_view key) const {
-        const auto it = client_opts_.find(std::string(key));
-        if (it == client_opts_.end())
+        const auto it = server_params_.find(std::string(key));
+        if (it == server_params_.end())
             return std::nullopt;
         return std::string_view{it->second};
     }
@@ -1772,8 +1780,8 @@ public:
      */
     [[nodiscard]] int
     server_version() const {
-        const auto it = client_opts_.find("server_version");
-        if (it == client_opts_.end())
+        const auto it = server_params_.find("server_version");
+        if (it == server_params_.end())
             return 0;
         int       major = 0, minor = 0, patch = 0;
         const int n = std::sscanf(it->second.c_str(), "%d.%d.%d", &major, &minor, &patch);
@@ -2138,6 +2146,7 @@ public:
         connect_suspend_valid_.reset();
         serverPid_       = 0;
         serverSecret_    = 0;
+        server_params_.clear(); // server ParameterStatus is per-backend; drop the stale cache
         _error           = error::db_error{"unknown error"};
         _current_command = root_transaction();
         _current_query   = nullptr;

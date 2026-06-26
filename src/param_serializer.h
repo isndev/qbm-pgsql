@@ -350,14 +350,16 @@ public:
                 add_string_vector(param);
                 return;
             }
-            // Special cases for byte arrays - keep existing behavior
+            // Special cases for byte arrays (bytea).
             else if constexpr (std::is_same_v<value_type, std::vector<char>> || std::is_same_v<value_type, std::vector<unsigned char>>
                                || std::is_same_v<value_type, std::vector<std::byte>>) {
-                if (!param.empty()) {
-                    add_byte_array(reinterpret_cast<const byte *>(param.data()), param.size());
-                } else {
-                    add_null();
-                }
+                // An EMPTY byte vector is a valid zero-length bytea (''::bytea, length 0), NOT
+                // a SQL NULL. write_byte_array() encodes a 0-length value correctly (length 0,
+                // no payload); routing empty to add_null() (a -1 length sentinel) was a bug that
+                // made `length($1::bytea)` come back NULL for an empty input. param.data() may be
+                // nullptr when size()==0, but add_byte_array copies a zero-length range, so the
+                // pointer is never dereferenced.
+                add_byte_array(reinterpret_cast<const byte *>(param.data()), param.size());
                 return;
             }
             // General case: handle as a PostgreSQL array
