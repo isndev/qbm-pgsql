@@ -105,13 +105,19 @@ BM_PreparedInsert(benchmark::State &state) {
         state.SkipWithError("postgres unreachable (set QB_PG_DSN)");
         return;
     }
-    bool prepared = false;
-    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
-        auto p = co_await db->prepare("qb_bench_ins", "INSERT INTO qb_pgsql_bench_t (id, v) VALUES ($1, $2)",
-                                      type_oid_sequence{oid::int4, oid::text});
-        prepared = p.ok();
-        co_return;
-    }());
+    // The statement is parsed server-side ONCE for the lifetime of the shared connection:
+    // google-benchmark re-invokes this function (estimation + measured passes), and a second
+    // Parse of the same name on the persistent connection raises 42P05
+    // (prepared statement already exists). Guard so we only prepare on the first call.
+    static bool prepared = false;
+    if (!prepared) {
+        qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+            auto p = co_await db->prepare("qb_bench_ins", "INSERT INTO qb_pgsql_bench_t (id, v) VALUES ($1, $2)",
+                                          type_oid_sequence{oid::int4, oid::text});
+            prepared = p.ok();
+            co_return;
+        }());
+    }
     if (!prepared) {
         state.SkipWithError("prepare failed");
         return;

@@ -59,15 +59,18 @@ TEST(TypeConverterNumericBinary, RoundTripCanonicalValues) {
     }
 }
 
-// ADD: NaN / +Infinity / -Infinity binary SIGN WORDS against ground truth.
-// numeric_send() emits ndigits=0, weight=0, dscale=0, sign = the special word.
-// Layout: [int16 ndigits=0000][int16 weight=0000][uint16 sign][uint16 dscale=0000].
+// ADD: NaN / +Infinity / -Infinity binary SIGN WORDS — decoder tolerance.
+// Layout: [int16 ndigits=0000][int16 weight=0000][uint16 sign][uint16 dscale].
+// The decoder ignores dscale for non-finite values, so the dscale=0 form below
+// decodes identically to PG's canonical numeric_send (which emits dscale=0x0020 for
+// ±Infinity, dscale=0 for NaN — see gt::numeric::specials). This pins exactly that
+// dscale-agnostic decode behavior.
 TEST(TypeConverterNumericBinary, NonFiniteSignWordsGroundTruth) {
     // sign 0xC000 == NaN.
     EXPECT_EQ(TypeConverter<numeric>::from_binary(hex_to_bytes("00000000c0000000")).str(), "NaN");
-    // sign 0xD000 == +Infinity (PG 14+ numeric_send infinity).
+    // sign 0xD000 == +Infinity (PG 14+ numeric_send infinity), dscale=0 accepted.
     EXPECT_EQ(TypeConverter<numeric>::from_binary(hex_to_bytes("00000000d0000000")).str(), "Infinity");
-    // sign 0xF000 == -Infinity.
+    // sign 0xF000 == -Infinity, dscale=0 accepted.
     EXPECT_EQ(TypeConverter<numeric>::from_binary(hex_to_bytes("00000000f0000000")).str(), "-Infinity");
 
     // And the converter round-trips the non-finite spellings through to_binary.

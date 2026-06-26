@@ -37,6 +37,7 @@
 #include "../../shared/test_config.hpp"
 
 using namespace qb::pg;
+using qb::pg::detail::numeric; // exact-decimal marker type (lives in detail)
 
 namespace {
 
@@ -274,29 +275,68 @@ TEST_F(QueryExecutionTest, ComplexCteQuery) {
 }
 
 /**
- * @brief DECIMAL/NUMERIC decode through both the text and binary result paths.
+ * @brief NUMERIC decode through the simple-query TEXT path and the prepared BINARY path.
  *
- * The amount column is `DECIMAL(10,2)`. `as<std::string>()` exercises the text path; the
- * `::float8` cast exercises the binary NUMERIC→double decoder (`TypeConverter<double>`).
- * SUM over the two completed orders is 100.50 + 150.25 = 250.75.
+ * The amount column is `DECIMAL(10,2)`; `SUM(amount)` over the two completed orders is
+ * 100.50 + 150.25 = 250.75, and `SUM` of a numeric returns `numeric` (OID 1700).
+ *
+ * Text leg (simple-query `execute(SQL)`): every column comes back in TEXT format, so
+ * `as<std::string>()` exercises the text NUMERIC decoder and `as<double>()` exercises the
+ * genuine NUMERIC→double path (`TypeConverter<double>::from_text` → `std::stod`).
+ *
+ * Binary leg (PREPARED, extended-query): numeric is on the `common.h` binary whitelist
+ * (`type_oid_prefers_binary_result_format`), so the field arrives in `Binary` format and
+ * `as<numeric>()` exercises the binary NUMERIC digit-array codec
+ * (`TypeConverter<numeric>::from_binary`) — the binary-NUMERIC coverage the previous version
+ * of this test only *claimed*: that body ran on the simple-query (text) path against a
+ * `::float8` cast (OID 701), so it never touched the binary NUMERIC decoder at all. This is
+ * distinct from datatypes-roundtrip (which echoes a `$1::numeric` parameter / a dedicated
+ * numeric column) — here the value is a server-side aggregate over a real DECIMAL column.
+ *
+ * NOTE: `as<double>()` is asserted only on the TEXT leg. On a BINARY numeric field,
+ * `TypeConverter<double>::from_binary` reinterprets the value bytes as a raw IEEE-754 double
+ * (it does NOT route through the numeric digit-array codec), so `as<double>()` on a binary
+ * numeric column yields garbage — there is no binary NUMERIC→double decoder. Reading a binary
+ * numeric as a double is therefore intentionally NOT exercised here.
  */
 TEST_F(QueryExecutionTest, DecimalDecodeTextAndBinary) {
-    bool ok = false;
-    auto st = db_->execute(
-                     R"(SELECT SUM(amount) AS s, SUM(amount)::float8 AS sf
-                        FROM test_orders WHERE status = 'completed')",
-                     [&](transaction &, results r) {
-                         ASSERT_EQ(r.size(), 1u);
-                         // Text path: exact NUMERIC string.
-                         EXPECT_EQ(r[0][0].as<std::string>(), "250.75");
-                         // Binary float8 path.
-                         EXPECT_DOUBLE_EQ(r[0][1].as<double>(), 250.75);
-                         ok = true;
-                     },
-                     [](error::db_error const &e) { ADD_FAILURE() << e.code << " " << e.what(); })
-                  .await();
-    ASSERT_TRUE(st);
-    ASSERT_TRUE(ok);
+    // Text leg: simple-query transport, text format. as<double>() is genuine here (std::stod).
+    bool text_ok = false;
+    ASSERT_TRUE(db_->execute(
+                       R"(SELECT SUM(amount) AS s
+                          FROM test_orders WHERE status = 'completed')",
+                       [&](transaction &, results r) {
+                           ASSERT_EQ(r.size(), 1u);
+                           EXPECT_EQ(r.field(0).format_code, protocol_data_format::Text);
+                           EXPECT_EQ(r[0][0].as<std::string>(), "250.75");
+                           EXPECT_DOUBLE_EQ(r[0][0].as<double>(), 250.75);
+                           text_ok = true;
+                       },
+                       [](error::db_error const &e) { ADD_FAILURE() << e.code << " " << e.what(); })
+                    .await());
+    ASSERT_TRUE(text_ok);
+
+    // Binary leg: prepared (extended-query) SELECT of a numeric aggregate. The numeric OID is
+    // on the binary whitelist, so the result arrives in Binary format and is decoded by the
+    // binary NUMERIC digit-array codec via as<numeric>().
+    ASSERT_TRUE(db_->prepare("sum_completed",
+                             R"(SELECT SUM(amount) AS s
+                                FROM test_orders WHERE status = 'completed')",
+                             type_oid_sequence{}, discard_prepare, discard_error)
+                    .await());
+    bool bin_ok = false;
+    ASSERT_TRUE(db_->execute(
+                       "sum_completed", params{},
+                       [&](transaction &, results r) {
+                           ASSERT_EQ(r.size(), 1u);
+                           EXPECT_EQ(r.field(0).format_code, protocol_data_format::Binary)
+                               << "numeric aggregate did not arrive in binary format";
+                           EXPECT_EQ(r[0][0].as<numeric>().str(), "250.75");
+                           bin_ok = true;
+                       },
+                       [](error::db_error const &e) { ADD_FAILURE() << e.code << " " << e.what(); })
+                    .await());
+    ASSERT_TRUE(bin_ok);
 }
 
 /**
