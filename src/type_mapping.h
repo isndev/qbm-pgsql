@@ -45,15 +45,22 @@ namespace qb::pg::detail {
  * This template structure provides a consistent way to determine the appropriate
  * PostgreSQL type OID for any C++ type used in parameter binding.
  *
- * The default implementation maps to the PostgreSQL 'unknown' type (OID 705).
- * Specialized implementations are provided for common C++ types.
+ * The primary template is INTENTIONALLY ill-formed: a C++ type with no mapping must
+ * fail at compile time rather than silently bind the PostgreSQL 'unknown' OID (705),
+ * which masked unsupported types and let, e.g., std::optional<numeric> ship as 705
+ * instead of numeric. Add a type_mapping<> specialization for any new supported type
+ * (this mirrors the fail-loud static_assert fallbacks in TypeConverter<T>'s
+ * to_binary/to_text/from_binary/from_text).
  *
  * @tparam T The C++ type to map to a PostgreSQL OID
  * @tparam Enable Optional SFINAE enabler for conditional specializations
  */
 template <typename T, typename Enable = void>
 struct type_mapping {
-    static constexpr integer type_oid = 705; // unknown
+    static_assert(!sizeof(T),
+                  "qbm-pgsql: no PostgreSQL OID mapping for this C++ type. Bind a supported "
+                  "type or add a type_mapping<> specialization. The generic fallback no longer "
+                  "silently sends OID 705 'unknown'.");
 };
 
 // Specializations for common C++ types
@@ -153,6 +160,11 @@ struct type_mapping<qb::time_of_day_tz> {
 }; // timetz
 template <>
 struct type_mapping<qb::calendar_interval> {
+    static constexpr integer type_oid = 1186;
+}; // interval
+// A std::chrono::duration is bound as INTERVAL, matching its TypeConverter<> get_oid.
+template <typename Rep, typename Period>
+struct type_mapping<std::chrono::duration<Rep, Period>> {
     static constexpr integer type_oid = 1186;
 }; // interval
 

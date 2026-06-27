@@ -480,3 +480,29 @@ TEST(TypeConverterScalarOid, KnownOids) {
     EXPECT_EQ(TypeConverter<std::vector<byte>>::get_oid(), static_cast<integer>(oid::bytea));
     EXPECT_EQ(TypeConverter<qb::uuid>::get_oid(), static_cast<integer>(oid::uuid));
 }
+
+// The two OID sources — type_mapping<T> (via get_type_oid<T>(), used for prepared-statement
+// parameter type lists) and TypeConverter<T>::get_oid() — must agree for every supported
+// type. They historically diverged: numeric and std::chrono::duration had a correct
+// TypeConverter OID but no type_mapping spec, so get_type_oid<> silently fell back to 705
+// ('unknown'). The generic type_mapping fallback is now a hard compile error, and these
+// specs close the gap.
+TEST(TypeConverterScalarOid, TypeMappingAgreesWithConverterGetOid) {
+    EXPECT_EQ(get_type_oid<bool>(), TypeConverter<bool>::get_oid());
+    EXPECT_EQ(get_type_oid<smallint>(), TypeConverter<smallint>::get_oid());
+    EXPECT_EQ(get_type_oid<integer>(), TypeConverter<integer>::get_oid());
+    EXPECT_EQ(get_type_oid<bigint>(), TypeConverter<bigint>::get_oid());
+    EXPECT_EQ(get_type_oid<float>(), TypeConverter<float>::get_oid());
+    EXPECT_EQ(get_type_oid<double>(), TypeConverter<double>::get_oid());
+    EXPECT_EQ(get_type_oid<std::string>(), TypeConverter<std::string>::get_oid());
+    EXPECT_EQ(get_type_oid<qb::uuid>(), TypeConverter<qb::uuid>::get_oid());
+    EXPECT_EQ(get_type_oid<qb::json>(), TypeConverter<qb::json>::get_oid());
+    // Previously 705-fallback; now resolved.
+    EXPECT_EQ(get_type_oid<numeric>(), static_cast<integer>(oid::numeric));
+    EXPECT_EQ(get_type_oid<numeric>(), TypeConverter<numeric>::get_oid());
+    EXPECT_EQ(get_type_oid<std::chrono::seconds>(), static_cast<integer>(oid::interval));
+    EXPECT_EQ(get_type_oid<std::chrono::microseconds>(), static_cast<integer>(oid::interval));
+    // std::optional<T> forwards to the inner type's OID, including the newly-mapped ones.
+    EXPECT_EQ(get_type_oid<std::optional<numeric>>(), static_cast<integer>(oid::numeric));
+    EXPECT_EQ(get_type_oid<std::optional<integer>>(), static_cast<integer>(oid::int4));
+}
