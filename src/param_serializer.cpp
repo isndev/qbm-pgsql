@@ -47,21 +47,21 @@ ParamSerializer::add_string_vector(const std::vector<std::string> &values) {
 
 void
 ParamSerializer::write_smallint(std::vector<byte> &buffer, smallint value) {
-    smallint    networkValue = htons(value);
+    smallint    networkValue = qb::endian::to_big_endian(value);
     const byte *bytes        = reinterpret_cast<const byte *>(&networkValue);
     buffer.insert(buffer.end(), bytes, bytes + sizeof(smallint));
 }
 
 void
 ParamSerializer::write_smallint_at(std::vector<byte> &buffer, size_t pos, smallint value) {
-    smallint    networkValue = htons(value);
+    smallint    networkValue = qb::endian::to_big_endian(value);
     const byte *bytes        = reinterpret_cast<const byte *>(&networkValue);
     std::copy(bytes, bytes + sizeof(smallint), buffer.begin() + pos);
 }
 
 void
 ParamSerializer::write_integer(std::vector<byte> &buffer, integer value) {
-    integer     networkValue = htonl(value);
+    integer     networkValue = qb::endian::to_big_endian(value);
     const byte *bytes        = reinterpret_cast<const byte *>(&networkValue);
     buffer.insert(buffer.end(), bytes, bytes + sizeof(integer));
 }
@@ -87,7 +87,7 @@ ParamSerializer::write_smallint(smallint value) {
     write_integer(params_buffer_, 2);
 
     // Write value (network byte order)
-    smallint    networkValue = htons(value);
+    smallint    networkValue = qb::endian::to_big_endian(value);
     const byte *bytes        = reinterpret_cast<const byte *>(&networkValue);
     params_buffer_.insert(params_buffer_.end(), bytes, bytes + sizeof(smallint));
 }
@@ -98,7 +98,7 @@ ParamSerializer::write_integer(integer value) {
     write_integer(params_buffer_, 4);
 
     // Write value (network byte order)
-    integer     networkValue = htonl(value);
+    integer     networkValue = qb::endian::to_big_endian(value);
     const byte *bytes        = reinterpret_cast<const byte *>(&networkValue);
     params_buffer_.insert(params_buffer_.end(), bytes, bytes + sizeof(integer));
 }

@@ -392,12 +392,11 @@ TypeConverter<qb::jsonb>::from_text(const std::string &text) {
 
 void
 TypeConverter<std::string>::to_binary(const value_type &value, std::vector<byte> &buffer) {
-    // For NUMERIC, we send as text to preserve exact precision
-    // Write length
+    // Bind framing for a text value: [int32 byte-length][raw bytes], no NUL terminator.
     integer len = static_cast<integer>(value.size());
     buffer.resize(buffer.size() + sizeof(integer));
     byte   *dest = &buffer[buffer.size() - sizeof(integer)];
-    integer nbo  = htonl(len);
+    integer nbo  = qb::endian::to_big_endian(len);
     memcpy(dest, &nbo, sizeof(integer));
 
     // Write raw data (without null terminator)
@@ -591,7 +590,7 @@ TypeConverter<numeric>::to_binary(const value_type &num, std::vector<byte> &buff
     const integer           len  = static_cast<integer>(body.size());
     buffer.resize(buffer.size() + sizeof(integer));
     byte   *dest = &buffer[buffer.size() - sizeof(integer)];
-    integer nbo  = htonl(len);
+    integer nbo  = qb::endian::to_big_endian(len);
     std::memcpy(dest, &nbo, sizeof(integer));
     buffer.insert(buffer.end(), body.begin(), body.end());
 }
@@ -606,7 +605,7 @@ TypeConverter<numeric>::from_binary(std::span<const byte> buffer) {
     if (buffer.size() >= sizeof(integer) + 8) {
         integer len = 0;
         std::memcpy(&len, buffer.data(), sizeof(integer));
-        len = ntohl(len);
+        len = qb::endian::from_big_endian(len);
         if (len >= 0 && static_cast<size_t>(len) == buffer.size() - sizeof(integer)) {
             return numeric(decode_pg_numeric(buffer.data() + sizeof(integer), buffer.size() - sizeof(integer)));
         }
@@ -622,7 +621,7 @@ void
 TypeConverter<qb::date>::to_binary(const value_type &d, std::vector<byte> &buffer) {
     buffer.resize(buffer.size() + sizeof(integer));
     byte   *dest = &buffer[buffer.size() - sizeof(integer)];
-    integer nbo  = htonl(4);
+    integer nbo  = qb::endian::to_big_endian(4);
     std::memcpy(dest, &nbo, sizeof(integer));
     int32_t     net_days = qb::endian::to_big_endian(static_cast<int32_t>(d.days_since_epoch() - DAYS_1970_TO_2000));
     const byte *bytes    = reinterpret_cast<const byte *>(&net_days);
@@ -649,7 +648,7 @@ void
 TypeConverter<qb::time_of_day>::to_binary(const value_type &t, std::vector<byte> &buffer) {
     buffer.resize(buffer.size() + sizeof(integer));
     byte   *dest = &buffer[buffer.size() - sizeof(integer)];
-    integer nbo  = htonl(8);
+    integer nbo  = qb::endian::to_big_endian(8);
     std::memcpy(dest, &nbo, sizeof(integer));
     int64_t     net_micros = qb::endian::to_big_endian(static_cast<int64_t>(t.since_midnight().count()));
     const byte *bytes      = reinterpret_cast<const byte *>(&net_micros);
@@ -676,7 +675,7 @@ void
 TypeConverter<qb::time_of_day_tz>::to_binary(const value_type &z, std::vector<byte> &buffer) {
     buffer.resize(buffer.size() + sizeof(integer));
     byte   *dest = &buffer[buffer.size() - sizeof(integer)];
-    integer nbo  = htonl(12);
+    integer nbo  = qb::endian::to_big_endian(12);
     std::memcpy(dest, &nbo, sizeof(integer));
     int64_t     net_micros = qb::endian::to_big_endian(static_cast<int64_t>(z.tod.since_midnight().count()));
     const byte *b1         = reinterpret_cast<const byte *>(&net_micros);
@@ -731,7 +730,7 @@ void
 TypeConverter<qb::calendar_interval>::to_binary(const value_type &iv, std::vector<byte> &buffer) {
     buffer.resize(buffer.size() + sizeof(integer));
     byte   *dest = &buffer[buffer.size() - sizeof(integer)];
-    integer nbo  = htonl(16);
+    integer nbo  = qb::endian::to_big_endian(16);
     std::memcpy(dest, &nbo, sizeof(integer));
     int64_t     net_micros = qb::endian::to_big_endian(static_cast<int64_t>(iv.micros.count()));
     const byte *b          = reinterpret_cast<const byte *>(&net_micros);
@@ -786,7 +785,7 @@ TypeConverter<std::vector<std::byte>>::to_binary(const value_type &v, std::vecto
     const integer len = static_cast<integer>(v.size());
     buffer.resize(buffer.size() + sizeof(integer));
     byte   *dest = &buffer[buffer.size() - sizeof(integer)];
-    integer nbo  = htonl(len);
+    integer nbo  = qb::endian::to_big_endian(len);
     std::memcpy(dest, &nbo, sizeof(integer));
     for (std::byte b : v)
         buffer.push_back(static_cast<byte>(b));

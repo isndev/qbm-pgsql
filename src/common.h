@@ -34,11 +34,6 @@
 #include <qb/system/container/unordered_map.h>
 #include <qb/system/time.h>
 #include <qb/uuid.h>
-#ifndef _WIN32
-#include <netinet/in.h> // For htons, htonl
-#else
-#include <winsock2.h>
-#endif
 
 #include "./pg_types.h"
 #include "./util/streambuf.h"

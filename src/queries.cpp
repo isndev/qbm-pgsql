@@ -12,6 +12,7 @@
  * Licensed under the Apache License, Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0)
  * @ingroup Pgsql
  */
+#include <qb/system/endian.h> // qb::endian::from_big_endian
 #include "./queries.h"
 
 namespace qb::pg::detail {
@@ -84,7 +85,7 @@ QueryParams::param_count() const {
         // Extract the number of parameters from the buffer
         smallint count;
         std::memcpy(&count, _params.data(), sizeof(smallint));
-        return ntohs(count); // Convert from network byte order to host byte order
+        return qb::endian::from_big_endian(count); // network (big-endian) -> host
     }
     return 0;
 }

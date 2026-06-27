@@ -64,9 +64,18 @@ TEST(TypeConverterScalarToText, FloatDoubleSpecialValues) {
     EXPECT_EQ(TypeConverter<double>::to_text(std::numeric_limits<double>::infinity()), "Infinity");
     EXPECT_EQ(TypeConverter<double>::to_text(-std::numeric_limits<double>::infinity()), "-Infinity");
 
-    // Normal value: std::to_string(float/double) (locale-default "%f", 6 decimals).
-    EXPECT_EQ(TypeConverter<double>::to_text(1.5), std::to_string(1.5));
-    EXPECT_EQ(TypeConverter<float>::to_text(2.25f), std::to_string(2.25f));
+    // Normal values use std::to_chars: the SHORTEST round-trip-exact decimal, no fixed
+    // 6-digit truncation and no trailing-zero padding.
+    EXPECT_EQ(TypeConverter<double>::to_text(1.5), "1.5");
+    EXPECT_EQ(TypeConverter<float>::to_text(2.25f), "2.25");
+    EXPECT_EQ(TypeConverter<double>::to_text(0.0), "0");
+    EXPECT_EQ(TypeConverter<double>::to_text(-42.0), "-42");
+    // Precision that std::to_string ("%f", 6 decimals) would have destroyed.
+    EXPECT_EQ(TypeConverter<double>::to_text(1234.56789012345), "1234.56789012345");
+    EXPECT_EQ(TypeConverter<double>::to_text(1e-9), "1e-09");
+    // to_text -> from_text is exact for an awkward value.
+    const double awkward = 0.1 + 0.2; // 0.30000000000000004
+    EXPECT_EQ(TypeConverter<double>::from_text(TypeConverter<double>::to_text(awkward)), awkward);
 }
 
 // bytea hex ("\\x...") and UUID canonical form.

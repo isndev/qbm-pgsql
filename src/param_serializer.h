@@ -446,7 +446,7 @@ public:
         // Write the actual parameter count (may differ from expected when
         // vector<string> expands into multiple parameters).
         ensure_param_count_fits();
-        smallint actual_count_be = htons(param_count());
+        smallint actual_count_be = qb::endian::to_big_endian(param_count());
         std::memcpy(params_buffer_.data(), &actual_count_be, sizeof(smallint));
     }
 

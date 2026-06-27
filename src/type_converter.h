@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv> // std::to_chars / std::from_chars (locale-independent, round-trip exact)
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -177,13 +178,13 @@ public:
         } else if constexpr (std::is_same_v<value_type, smallint>) {
             // PostgreSQL smallint: length (2) + network value
             write_integer(buffer, 2);
-            smallint    netval = htons(value);
+            smallint    netval = qb::endian::to_big_endian(value);
             const byte *bytes  = reinterpret_cast<const byte *>(&netval);
             buffer.insert(buffer.end(), bytes, bytes + sizeof(smallint));
         } else if constexpr (std::is_same_v<value_type, integer>) {
             // PostgreSQL integer: length (4) + network value
             write_integer(buffer, 4);
-            integer     netval = htonl(value);
+            integer     netval = qb::endian::to_big_endian(value);
             const byte *bytes  = reinterpret_cast<const byte *>(&netval);
             buffer.insert(buffer.end(), bytes, bytes + sizeof(integer));
         } else if constexpr (std::is_same_v<value_type, bigint>) {
@@ -289,13 +290,20 @@ public:
         } else if constexpr (std::is_integral_v<value_type>) {
             return std::to_string(value);
         } else if constexpr (std::is_floating_point_v<value_type>) {
-            // Special values
+            // PostgreSQL spells the non-finite values out in full.
             if (std::isnan(value))
                 return "NaN";
             if (std::isinf(value)) {
                 return value > 0 ? "Infinity" : "-Infinity";
             }
-            return std::to_string(value);
+            // std::to_chars gives the SHORTEST round-trip-exact decimal. std::to_string
+            // is fixed at 6 fractional digits, which both loses precision (1234.56789012
+            // -> "1234.567890") and pads trailing zeros — wrong for a value sent to the DB.
+            char        buf[64];
+            const auto [ptr, ec] = std::to_chars(buf, buf + sizeof(buf), value);
+            if (ec != std::errc())
+                throw error::client_error("failed to format floating-point value as text");
+            return std::string(buf, ptr);
         } else if constexpr (std::is_same_v<value_type, bytea> || std::is_same_v<value_type, std::vector<byte>>) {
             std::string result = "\\x";
             char        hex[3];
@@ -638,7 +646,7 @@ public:
      */
     static void
     write_integer(std::vector<byte> &buffer, integer value) {
-        integer     networkValue = htonl(value);
+        integer     networkValue = qb::endian::to_big_endian(value);
         const byte *bytes        = reinterpret_cast<const byte *>(&networkValue);
         buffer.insert(buffer.end(), bytes, bytes + sizeof(integer));
     }
@@ -716,7 +724,7 @@ struct TypeConverter<qb::uuid> {
 private:
     static void
     write_integer(std::vector<byte> &buffer, integer value) {
-        integer     nbo   = htonl(value);
+        integer     nbo   = qb::endian::to_big_endian(value);
         const byte *bytes = reinterpret_cast<const byte *>(&nbo);
         buffer.insert(buffer.end(), bytes, bytes + sizeof(integer));
     }
@@ -796,7 +804,7 @@ struct TypeConverter<qb::wall_time> {
 private:
     static void
     write_integer(std::vector<byte> &buffer, integer value) {
-        integer     nbo   = htonl(value);
+        integer     nbo   = qb::endian::to_big_endian(value);
         const byte *bytes = reinterpret_cast<const byte *>(&nbo);
         buffer.insert(buffer.end(), bytes, bytes + sizeof(integer));
     }
@@ -872,7 +880,7 @@ private:
     write_integer(std::vector<byte> &buffer, integer value) {
         buffer.resize(buffer.size() + sizeof(integer));
         byte   *dest = &buffer[buffer.size() - sizeof(integer)];
-        integer nbo  = htonl(value);
+        integer nbo  = qb::endian::to_big_endian(value);
         memcpy(dest, &nbo, sizeof(integer));
     }
 };
@@ -951,7 +959,7 @@ private:
     write_integer(std::vector<byte> &buffer, integer value) {
         buffer.resize(buffer.size() + sizeof(integer));
         byte   *dest = &buffer[buffer.size() - sizeof(integer)];
-        integer nbo  = htonl(value);
+        integer nbo  = qb::endian::to_big_endian(value);
         memcpy(dest, &nbo, sizeof(integer));
     }
 };
@@ -982,7 +990,7 @@ struct TypeConverter<std::chrono::duration<Rep, Period>> {
         // Write total length (16 bytes for interval)
         buffer.resize(buffer.size() + sizeof(integer));
         byte   *dest = &buffer[buffer.size() - sizeof(integer)];
-        integer nbo  = htonl(16);
+        integer nbo  = qb::endian::to_big_endian(16);
         memcpy(dest, &nbo, sizeof(integer));
 
         // Convert to microseconds
@@ -1066,17 +1074,21 @@ struct TypeConverter<std::chrono::duration<Rep, Period>> {
 };
 
 // ============================================================================
-// P0: PostgreSQL NUMERIC/DECIMAL type support
+// std::string <-> PostgreSQL text/varchar
 // ============================================================================
 
 /**
- * @brief Type converter for PostgreSQL NUMERIC/DECIMAL type
+ * @brief Type converter for std::string, bound as a PostgreSQL text value.
  *
- * PostgreSQL NUMERIC is an arbitrary precision decimal type.
- * We use std::string to preserve exact precision (financial calculations).
+ * Maps to the `text` OID (25). PostgreSQL implicitly coerces a text Bind value to the
+ * target column's actual type (varchar, bpchar, and — because NUMERIC accepts its
+ * canonical decimal spelling — numeric, etc.), so a plain std::string parameter works
+ * against most textual/decimal columns without an explicit cast. For an EXACT decimal
+ * with a guaranteed numeric OID and binary NUMERIC framing, use qb::pg::numeric
+ * (TypeConverter<numeric>) instead of a raw std::string.
  *
- * Binary format: Complex structure with sign, weight, and digits.
- * For simplicity, we use text format which is more reliable.
+ * from_binary reads the field value bytes verbatim (see type_converter.cpp); to_binary
+ * writes the Bind [int32 len][bytes] framing.
  */
 template <>
 struct TypeConverter<std::string> {
@@ -1084,8 +1096,8 @@ struct TypeConverter<std::string> {
 
     static integer
     get_oid() {
-        // Note: This returns text OID by default
-        // For NUMERIC, the caller should specify oid::numeric (1700)
+        // Always the text OID. PostgreSQL coerces text -> the column's real type on Bind;
+        // for a value that must carry the numeric OID/format, bind qb::pg::numeric.
         return static_cast<integer>(oid::text);
     }
 
@@ -1426,7 +1438,7 @@ encode_pg_array(const std::vector<Elem> &vec) {
             integer                 len  = static_cast<integer>(body.size()); \
             buffer.resize(buffer.size() + sizeof(integer));                   \
             byte   *dest = &buffer[buffer.size() - sizeof(integer)];          \
-            integer nbo  = htonl(len);                                        \
+            integer nbo  = qb::endian::to_big_endian(len);                                        \
             std::memcpy(dest, &nbo, sizeof(integer));                         \
             buffer.insert(buffer.end(), body.begin(), body.end());            \
         }                                                                     \
