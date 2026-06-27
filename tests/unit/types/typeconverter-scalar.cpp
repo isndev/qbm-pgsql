@@ -433,19 +433,27 @@ TEST(TypeConverterScalarOptional, ToBinaryToTextFromText) {
 TEST(TypeConverterStringTest, NumericAsTextSpecialization) {
     EXPECT_EQ(TypeConverter<std::string>::get_oid(), static_cast<integer>(oid::text));
 
-    // to_binary writes [int32 len][bytes]; from_binary reads the prefixed form.
+    // to_binary writes the Bind [int32 len][bytes] framing; from_binary receives the
+    // field VALUE bytes only (the protocol already stripped the per-field length
+    // prefix) and must read them VERBATIM. So a to_binary->from_binary self-round-trip
+    // is NOT identity: from_binary sees the 4-byte length header as part of the value.
     std::vector<byte> buf;
     TypeConverter<std::string>::to_binary("12.5", buf);
     ASSERT_EQ(buf.size(), 4u + 4u);
-    EXPECT_EQ(TypeConverter<std::string>::from_binary(buf), "12.5");
+    EXPECT_EQ(TypeConverter<std::string>::from_binary(buf), std::string("\0\0\0\x04""12.5", 8));
 
-    // Buffer shorter than the 4-byte header -> "".
-    EXPECT_EQ(TypeConverter<std::string>::from_binary(hex_to_bytes("0000")), "");
-    // Header length <= 0 -> "" (here len == 0).
-    EXPECT_EQ(TypeConverter<std::string>::from_binary(hex_to_bytes("00000000")), "");
+    // Value bytes are returned exactly, including leading NULs (a binary string / bytea
+    // beginning with NUL must NOT be mistaken for a length prefix and stripped).
+    EXPECT_EQ(TypeConverter<std::string>::from_binary(hex_to_bytes("0000")), std::string("\0\0", 2));
+    EXPECT_EQ(TypeConverter<std::string>::from_binary(hex_to_bytes("00000000")), std::string("\0\0\0\0", 4));
 
-    // read_string on a real length-prefixed binary string: [int32 5]["hello"].
-    EXPECT_EQ(TypeConverter<std::string>::from_binary(hex_to_bytes("0000000568656c6c6f")), "hello");
+    // No prefix interpretation: these 9 bytes decode to themselves, not "hello".
+    EXPECT_EQ(TypeConverter<std::string>::from_binary(hex_to_bytes("0000000568656c6c6f")),
+              std::string("\0\0\0\x05hello", 9));
+    // The value bytes "hello" alone decode to "hello".
+    EXPECT_EQ(TypeConverter<std::string>::from_binary(hex_to_bytes("68656c6c6f")), "hello");
+    // Empty value -> empty string (not a throw).
+    EXPECT_TRUE(TypeConverter<std::string>::from_binary(std::vector<byte>{}).empty());
 
     // to_text / from_text are identity for the NUMERIC-as-text converter.
     EXPECT_EQ(TypeConverter<std::string>::to_text("123.456"), "123.456");

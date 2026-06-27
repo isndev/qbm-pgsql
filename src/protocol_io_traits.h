@@ -445,7 +445,9 @@ struct binary_reader<std::string> {
 
         std::vector<byte>                buffer(begin, end);
         static detail::ParamUnserializer unserializer;
-        value = unserializer.read_string(buffer);
+        // Field value bytes (length prefix already stripped) -> read verbatim; read_string()'s
+        // leading-NUL heuristic would corrupt a value beginning with a NUL.
+        value = unserializer.read_text_string(buffer);
         return end;
     }
 };

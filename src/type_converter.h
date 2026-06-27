@@ -362,7 +362,12 @@ public:
         static ParamUnserializer unserializer;
 
         if constexpr (std::is_same_v<value_type, std::string>) {
-            return unserializer.read_string(buffer);
+            // The protocol layer already stripped the per-field length prefix, so the
+            // buffer IS the value bytes — read them verbatim. read_string()'s legacy
+            // binary-vs-text auto-detection (strip a phantom 4-byte prefix when a NUL
+            // is in the first 3 bytes) MISFIRES here and would corrupt a value that
+            // begins with a NUL (e.g. a bytea read as a string).
+            return unserializer.read_text_string(buffer);
         } else if constexpr (std::is_same_v<value_type, smallint>) {
             return unserializer.read_smallint(buffer);
         } else if constexpr (std::is_same_v<value_type, integer>) {

@@ -575,6 +575,39 @@ public:
 
             // 3. Use the TypeConverter to convert according to format
             if (is_binary) {
+                // A floating value over the BINARY wire must be decoded per the COLUMN's
+                // actual type, NOT by blindly reading sizeof(result_type) bytes: a NUMERIC /
+                // int8 / temporal / uuid binary value is not IEEE-754, and a plain
+                // from_binary<double> read the first 8 bytes as a double -> garbage (the
+                // size guard only catches buffers < 8). int and NUMERIC columns convert to
+                // the requested float; a column with no numeric meaning fails LOUDLY with a
+                // typed error instead of silently returning a corrupt value.
+                if constexpr (std::is_floating_point_v<result_type>) {
+                    static detail::ParamUnserializer fconv;
+                    switch (description().type_oid) {
+                        case oid::float4:
+                            return static_cast<result_type>(fconv.read_float(data));
+                        case oid::float8:
+                            return static_cast<result_type>(fconv.read_double(data));
+                        case oid::int2:
+                            return static_cast<result_type>(fconv.read_smallint(data));
+                        case oid::int4:
+                            return static_cast<result_type>(fconv.read_integer(data));
+                        case oid::int8:
+                            return static_cast<result_type>(fconv.read_bigint(data));
+                        case oid::numeric:
+                            // NBASE digit-array -> canonical decimal string -> double
+                            // (std::stod also accepts "NaN"/"Infinity"/"-Infinity").
+                            return static_cast<result_type>(
+                                std::stod(detail::decode_pg_numeric(data.data(), data.size())));
+                        default:
+                            throw error::client_error(
+                                "field '" + name() + "' (type OID " +
+                                std::to_string(static_cast<int>(description().type_oid)) +
+                                ") is not a numeric/floating-point column; read it via "
+                                "as<std::string>() or the type matching its column");
+                    }
+                }
                 return detail::TypeConverter<result_type>::from_binary(data);
             } else {
                 // Text format: the protocol layer already stripped the per-field

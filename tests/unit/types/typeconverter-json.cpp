@@ -49,22 +49,21 @@ TEST(TypeConverterJsonToText, DumpRoundTrip) {
 // ----------------------------------------------------------------------------
 
 TEST(TypeConverterJsonTest, BinaryAndTextPaths) {
-    // to_binary ([int32 len][json text]) -> from_binary round-trip.
-    qb::json          obj = qb::json::parse(R"({"a":1})");
-    std::vector<byte> buf;
-    TypeConverter<qb::json>::to_binary(obj, buf);
-    EXPECT_EQ(TypeConverter<qb::json>::from_binary(buf), obj);
+    // from_binary receives the field VALUE bytes: the protocol already stripped the
+    // per-field length prefix, and `json` (unlike `jsonb`) has no version byte, so the
+    // bytes ARE the JSON text. This is NOT a to_binary round-trip — to_binary writes the
+    // Bind [int32 len] framing, which from_binary must never see.
+    auto value_of = [](std::string_view s) { return std::vector<byte>(s.data(), s.data() + s.size()); };
 
-    // Buffer <= 4 bytes -> "buffer too small" throw.
-    EXPECT_THROW(TypeConverter<qb::json>::from_binary(hex_to_bytes("00000004")), std::runtime_error);
+    const std::string text = R"({"a":1})";
+    EXPECT_EQ(TypeConverter<qb::json>::from_binary(value_of(text)), qb::json::parse(text));
+
+    // Empty buffer -> throw.
+    EXPECT_THROW(TypeConverter<qb::json>::from_binary(std::vector<byte>{}), std::runtime_error);
 
     // Key-value pair array payload [["k","v"]] -> converted to an object {"k":"v"}.
     {
-        const std::string payload = R"([["k","v"]])";
-        std::vector<byte> kv;
-        kv.insert(kv.end(), 4, static_cast<byte>(0)); // 4-byte length prefix (skipped)
-        kv.insert(kv.end(), payload.begin(), payload.end());
-        auto parsed = TypeConverter<qb::json>::from_binary(kv);
+        auto parsed = TypeConverter<qb::json>::from_binary(value_of(R"([["k","v"]])"));
         ASSERT_TRUE(parsed.is_object());
         EXPECT_EQ(parsed["k"], "v");
     }
@@ -73,11 +72,7 @@ TEST(TypeConverterJsonTest, BinaryAndTextPaths) {
     // number, so the converter stringifies it via .dump() to form the object key
     // (the non-string-key branch). [[1,"a"],[2,"b"]] -> {"1":"a","2":"b"}.
     {
-        const std::string payload = R"([[1,"a"],[2,"b"]])";
-        std::vector<byte> kv;
-        kv.insert(kv.end(), 4, static_cast<byte>(0)); // 4-byte length prefix (skipped)
-        kv.insert(kv.end(), payload.begin(), payload.end());
-        auto parsed = TypeConverter<qb::json>::from_binary(kv);
+        auto parsed = TypeConverter<qb::json>::from_binary(value_of(R"([[1,"a"],[2,"b"]])"));
         ASSERT_TRUE(parsed.is_object());
         EXPECT_EQ(parsed["1"], "a");
         EXPECT_EQ(parsed["2"], "b");
