@@ -210,6 +210,84 @@ TEST_F(ListenNotify, CbConsumer_ReconnectAndReListen_StillDelivers) {
     sub.disconnect();
 }
 
+// A throwing on_notify callback must be swallowed (logged) by deliver_pg_notify and must
+// NOT prevent the notification from being queued for receive(): the consumer keeps working.
+// Exercises the catch(std::exception&) arm of the on_notify_callback_ path.
+TEST_F(ListenNotify, CbConsumer_OnNotifyCallbackThrows_StillQueuesAndSurvives) {
+    std::atomic<int>                cb_calls{0};
+    qb::pg::tcp::notify_cb_consumer sub{dsn_tcp_string()};
+    sub.on_notify([&](qb::pg::notification &&n) {
+        if (n.channel == std::string(kChan)) {
+            cb_calls.fetch_add(1, std::memory_order_relaxed);
+            throw std::runtime_error("intentional on_notify throw");
+        }
+    });
+    ASSERT_TRUE(qb::io::async::run_sync(sub.connect(dsn_tcp_string())));
+    ASSERT_TRUE(sub.listen(std::string(kChan), discard_query, discard_error).await());
+    ASSERT_TRUE(pub_->notify(std::string(kChan), "throw-but-queue", discard_query, discard_error)
+                    .await());
+
+    // Drain the subscriber socket so the NotificationResponse reaches deliver_pg_notify,
+    // where the throwing callback fires and is swallowed, then the message is still queued.
+    EXPECT_TRUE(pump_until([&] { return cb_calls.load(std::memory_order_relaxed) >= 1; }, kDeadline))
+        << "throwing on_notify callback was never invoked";
+    EXPECT_EQ(cb_calls.load(std::memory_order_relaxed), 1);
+
+    // The throw did not poison the queue: receive() still yields the notification.
+    bool got = false;
+    ASSERT_TRUE(qb::io::async::run_sync([&]() -> qb::io::async::task<bool> {
+        auto n = co_await sub.receive();
+        got    = n.has_value() && n->payload == "throw-but-queue";
+        co_return got;
+    }()));
+    EXPECT_TRUE(got);
+    EXPECT_TRUE(sub.is_connected());
+    sub.disconnect();
+}
+
+// A throwing on_notify_dropped callback (capacity overflow path) must also be swallowed:
+// with capacity 1 and 2 queued notifications, the 2nd routes to on_notify_dropped, whose
+// throw is caught. The consumer remains usable.
+TEST_F(ListenNotify, CoConsumer_OnDroppedCallbackThrows_Swallowed) {
+    std::atomic<int>                dropped_calls{0};
+    qb::pg::tcp::notify_co_consumer sub(dsn_tcp_string(), /*capacity*/ 1);
+    sub.on_notify_dropped([&](qb::pg::notification &&n) {
+        if (n.channel == std::string(kChan)) {
+            dropped_calls.fetch_add(1, std::memory_order_relaxed);
+            throw std::runtime_error("intentional on_notify_dropped throw");
+        }
+    });
+
+    ASSERT_TRUE(qb::io::async::run_sync([&]() -> qb::io::async::task<bool> {
+        if (!co_await sub.connect(dsn_tcp_string()))
+            co_return false;
+        if (!(co_await sub.listen(std::string(kChan))).ok())
+            co_return false;
+        // Capacity 1, two notifications -> the second overflows to on_notify_dropped.
+        for (const char *p : {"keep", "drop"})
+            if (!(co_await pub_->notify(std::string(kChan), p)).ok())
+                co_return false;
+        co_return true;
+    }()));
+
+    // Drain so both NotificationResponses reach the queue; the second triggers the
+    // (throwing) dropped handler before the first receive() frees a slot.
+    EXPECT_TRUE(pump_until([&] { return dropped_calls.load(std::memory_order_relaxed) >= 1; },
+                           kDeadline))
+        << "overflow notification never routed to on_notify_dropped";
+    EXPECT_EQ(dropped_calls.load(std::memory_order_relaxed), 1);
+
+    // Queue still holds the first (kept) notification despite the dropped-handler throw.
+    bool got_keep = false;
+    ASSERT_TRUE(qb::io::async::run_sync([&]() -> qb::io::async::task<bool> {
+        auto n   = co_await sub.receive();
+        got_keep = n.has_value() && n->payload == "keep";
+        co_return got_keep;
+    }()));
+    EXPECT_TRUE(got_keep);
+    sub.disconnect();
+}
+
 // ---------------------------------------------------------------------------
 // notify_co_consumer — coroutine receive()
 // ---------------------------------------------------------------------------
@@ -473,6 +551,129 @@ TEST_F(ListenNotify, EmptyChannel_CoroForms_FailGracefully) {
     EXPECT_TRUE(unlisten_failed);
     EXPECT_TRUE(survived);
 }
+
+// ---------------------------------------------------------------------------
+// SSL (stcp) consumer — drives the `qb::pg::tcp::ssl::notify_co_consumer` /
+// `notify_cb_consumer` instantiation and, through it, the entire
+// `Database<stcp, void>` protocol path for NOTIFY: on_notification_response,
+// on_command_complete (LISTEN/NOTIFY/UNLISTEN), on_ready_for_query, consume/
+// deliver_pg_notify over TLS. The publisher must live on the SAME TLS daemon
+// (NOTIFY does not cross independent PostgreSQL servers), so both sides use the
+// SSL DSN. Skips (never fails) when the TLS daemon is unreachable.
+// ---------------------------------------------------------------------------
+#ifdef QB_HAS_SSL
+
+using qb::pg::test::dsn_ssl_string;
+
+namespace {
+
+[[nodiscard]] bool
+ssl_dsn_pinned() noexcept {
+    const char *v = std::getenv("QB_PG_SSL_DSN");
+    return v != nullptr && v[0] != '\0';
+}
+
+/// Publisher fixture on the TLS daemon: a connected SSL db used to emit NOTIFYs.
+class SslListenNotify : public ::testing::Test {
+protected:
+    std::unique_ptr<qb::pg::tcp::ssl::database> pub_;
+
+    void
+    SetUp() override {
+        pub_ = std::make_unique<qb::pg::tcp::ssl::database>();
+        if (!qb::io::async::run_sync(pub_->connect(dsn_ssl_string()))) {
+            if (!ssl_dsn_pinned())
+                GTEST_SKIP() << qb::pg::test::kDaemonUnreachableSentinel
+                             << " (TLS postgres at " << dsn_ssl_string()
+                             << " not reachable and QB_PG_SSL_DSN unset)";
+            else
+                FAIL() << "QB_PG_SSL_DSN is set but TLS connect failed: " << dsn_ssl_string();
+        }
+    }
+
+    void
+    TearDown() override {
+        if (pub_) {
+            pub_->disconnect();
+            pub_.reset();
+        }
+    }
+};
+
+} // namespace
+
+// Callback consumer over TLS: connect -> LISTEN -> receive a NOTIFY emitted by a second
+// TLS backend. Covers Database<stcp>::on_notification_response + consume/deliver_pg_notify
+// + the stcp on_command_complete/on_ready_for_query path for LISTEN.
+TEST_F(SslListenNotify, SslCbConsumer_ReceivesPayload) {
+    int                                  hits{};
+    std::string                          last_payload;
+    qb::pg::tcp::ssl::notify_cb_consumer sub{dsn_ssl_string()};
+    sub.on_notify([&](qb::pg::notification &&n) {
+        if (n.channel == std::string(kChan)) {
+            last_payload = std::move(n.payload);
+            ++hits;
+        }
+    });
+    ASSERT_TRUE(qb::io::async::run_sync(sub.connect(dsn_ssl_string())));
+    ASSERT_TRUE(sub.listen(std::string(kChan), discard_query, discard_error).await());
+    ASSERT_TRUE(pub_->notify(std::string(kChan), "ssl-cb-ok", discard_query, discard_error)
+                    .await());
+
+    EXPECT_TRUE(pump_until([&] { return hits >= 1; }, kDeadline))
+        << "TLS notification for " << kChan << " never delivered";
+    EXPECT_EQ(hits, 1);
+    EXPECT_EQ(last_payload, "ssl-cb-ok");
+    EXPECT_TRUE(sub.is_connected());
+    sub.disconnect();
+}
+
+// Coroutine receive() over TLS, plus multi-payload ordering and UNLISTEN. Covers the
+// stcp on_command_complete path for both NOTIFY and UNLISTEN commands and exercises the
+// stcp consumer's channel receive() across more than one message.
+TEST_F(SslListenNotify, SslCoConsumer_ReceiveOrderedAndUnlisten) {
+    ASSERT_TRUE(qb::io::async::run_sync([&]() -> qb::io::async::task<bool> {
+        qb::pg::tcp::ssl::notify_co_consumer sub(dsn_ssl_string());
+        if (!co_await sub.connect(dsn_ssl_string()))
+            co_return false;
+        if (!(co_await sub.listen(std::string(kChan))).ok())
+            co_return false;
+        if (!(co_await pub_->notify(std::string(kChan), "ssl-1")).ok())
+            co_return false;
+        if (!(co_await pub_->notify(std::string(kChan), "ssl-2")).ok())
+            co_return false;
+        auto a = co_await sub.receive();
+        auto b = co_await sub.receive();
+        if (!(a.has_value() && b.has_value() && a->payload == "ssl-1" && b->payload == "ssl-2"))
+            co_return false;
+        if (a->server_backend_pid <= 0)
+            co_return false;
+        // UNLISTEN over TLS exercises the stcp command-complete path for UNLISTEN.
+        co_return (co_await sub.unlisten(std::string(kChan))).ok();
+    }()));
+}
+
+// SSL plain database surfaces its own NOTIFY through on_incoming_notify — drives the
+// Database<stcp>::on_incoming_notify hook (distinct from the consumer subclasses) and the
+// stcp on_notification_response routing on a non-consumer database.
+TEST_F(SslListenNotify, SslPlainDatabase_OnIncomingNotify) {
+    int hits = 0;
+    pub_->on_incoming_notify([&](qb::pg::notification &&n) {
+        if (n.channel == std::string(kChan))
+            ++hits;
+    });
+    ASSERT_TRUE(pub_->listen(std::string(kChan), discard_query, discard_error).await());
+    ASSERT_TRUE(pub_->notify(std::string(kChan), "ssl-plain", discard_query, discard_error)
+                    .await());
+
+    EXPECT_TRUE(pump_until([&] { return hits >= 1; }, kDeadline))
+        << "SSL plain database did not surface its own notification";
+    EXPECT_EQ(hits, 1);
+    pub_->on_incoming_notify({});
+    ASSERT_TRUE(pub_->unlisten_all(discard_query, discard_error).await());
+}
+
+#endif // QB_HAS_SSL
 
 int
 main(int argc, char **argv) {
