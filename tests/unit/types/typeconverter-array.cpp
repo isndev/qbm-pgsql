@@ -96,6 +96,31 @@ TEST(TypeConverterArrayBinary, ScalarElementTypesAgainstPostgresGroundTruth) {
         (std::vector<bool>{true, false, true}));
 }
 
+// decode_pg_array's bounds guards must degrade gracefully (empty / partial result) on a
+// malformed or truncated binary array header — never read out of bounds. Each case targets
+// one guard branch in decode_pg_array.
+TEST(TypeConverterArrayBinary, MalformedBuffersDecodeGracefullyWithoutOob) {
+    using IV = std::vector<integer>;
+    // header shorter than the 12-byte ndim+flags+elem_oid prefix -> empty.
+    EXPECT_TRUE(TypeConverter<IV>::from_binary(hex_to_bytes("00000001")).empty());
+    // ndim < 0 -> empty (the zero-dimensional / negative guard).
+    EXPECT_TRUE(TypeConverter<IV>::from_binary(hex_to_bytes("ffffffff0000000000000017")).empty());
+    // ndim == 1 but no room for the 8-byte dim header (off+8 > size) -> empty.
+    EXPECT_TRUE(TypeConverter<IV>::from_binary(hex_to_bytes("000000010000000000000017")).empty());
+    // a negative dimension size (dim_size = 0xffffffff, lower_bound = 1) -> empty.
+    EXPECT_TRUE(TypeConverter<IV>::from_binary(hex_to_bytes("000000010000000000000017ffffffff00000001")).empty());
+    // a bogus huge dimension (dim_size = 0x7fffffff) whose count exceeds the buffer -> empty.
+    EXPECT_TRUE(TypeConverter<IV>::from_binary(hex_to_bytes("0000000100000000000000177fffffff00000001")).empty());
+    // header claims 3 elements but the buffer holds only one (10) -> partial {10}, no OOB.
+    EXPECT_EQ(TypeConverter<IV>::from_binary(
+                  hex_to_bytes("0000000100000000000000170000000300000001000000040000000a")),
+              (IV{10}));
+    // a negative element length that is NOT the -1 NULL sentinel (here -2) -> break (empty).
+    // header: ndim=1, flags, elem_oid, dim_size=1, lower_bound, then elem_len=0xfffffffe.
+    EXPECT_TRUE(
+        TypeConverter<IV>::from_binary(hex_to_bytes("0000000100000000000000170000000100000001fffffffe")).empty());
+}
+
 // ----------------------------------------------------------------------------
 // NULL elements: the plain-element path defaults; the optional-element path nullopts
 // ----------------------------------------------------------------------------

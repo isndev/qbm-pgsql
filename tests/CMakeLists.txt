@@ -62,6 +62,7 @@ endfunction()
 # -----------------------------------------------------------------------------
 qpg_test(unit unserializer-primitives  unit/wire/unserializer-primitives.cpp   EXTRA_LABELS wire)
 qpg_test(unit typeconverter-codecs     unit/wire/typeconverter-codecs.cpp      EXTRA_LABELS wire)
+qpg_test(unit result-format-routing    unit/wire/result-format-routing.cpp     EXTRA_LABELS wire)
 qpg_test(unit param-serializer-encode  unit/serialization/param-serializer-encode.cpp EXTRA_LABELS wire)
 qpg_test(unit typeconverter-scalar     unit/types/typeconverter-scalar.cpp     EXTRA_LABELS types)
 qpg_test(unit typeconverter-numeric    unit/types/typeconverter-numeric.cpp    EXTRA_LABELS types)
