@@ -169,6 +169,7 @@ using nullable = std::optional<T>;
  * objects.
  */
 enum class oid : int {
+    invalid          = 0,    /**< InvalidOid: no type / unmapped (PostgreSQL InvalidOid) */
     boolean          = 16,   /**< Boolean type (true/false) */
     bytea            = 17,   /**< Variable-length binary data */
     char_            = 18,   /**< Single character */
@@ -205,10 +206,14 @@ enum class oid : int {
     macaddr          = 829,  /**< MAC address */
     inet             = 869,  /**< IPv4 or IPv6 address */
     cidr             = 650,  /**< IPv4 or IPv6 network */
+    json_array       = 199,  /**< Array of json */
     boolean_array    = 1000, /**< Array of boolean */
+    bytea_array      = 1001, /**< Array of bytea */
     int2_array       = 1005, /**< Array of int2 */
     int4_array       = 1007, /**< Array of int4 */
     text_array       = 1009, /**< Array of text */
+    bpchar_array     = 1014, /**< Array of bpchar (char(n)) */
+    varchar_array    = 1015, /**< Array of varchar */
     int8_array       = 1016, /**< Array of int8 */
     oid_array        = 1028, /**< Array of OIDs */
     float4_array     = 1021, /**< Array of float4 */
@@ -223,6 +228,13 @@ enum class oid : int {
     timestamptz      = 1184, /**< Date and time with time zone */
     interval         = 1186, /**< Time interval */
     timetz           = 1266, /**< Time of day with time zone */
+    date_array       = 1182, /**< Array of date */
+    time_array       = 1183, /**< Array of time */
+    timestamp_array  = 1115, /**< Array of timestamp */
+    timestamptz_array = 1185,/**< Array of timestamptz */
+    interval_array   = 1187, /**< Array of interval */
+    timetz_array     = 1270, /**< Array of timetz */
+    numeric_array    = 1231, /**< Array of numeric */
     bit              = 1560, /**< Fixed-length bit string */
     varbit           = 1562, /**< Variable-length bit string */
     numeric          = 1700, /**< Exact numeric with selectable precision */
@@ -235,6 +247,7 @@ enum class oid : int {
     regrole          = 4096, /**< Registered role */
     regtypearray     = 2211, /**< Array of registered types */
     uuid             = 2950, /**< Universally unique identifier */
+    uuid_array       = 2951, /**< Array of uuid */
     lsn              = 3220, /**< Log sequence number */
     tsvector         = 3614, /**< Text search vector */
     gtsvector        = 3642, /**< GiST index internal text search vector */
@@ -242,6 +255,7 @@ enum class oid : int {
     regconfig        = 3734, /**< Registered text search configuration */
     regdictionary    = 3769, /**< Registered text search dictionary */
     jsonb            = 3802, /**< Binary JSON data */
+    jsonb_array      = 3807, /**< Array of jsonb */
     int4_range       = 3904, /**< Range of integers */
     record           = 2249, /**< Anonymous composite type */
     record_array     = 2287, /**< Array of records */
@@ -282,6 +296,46 @@ std::ostream &operator<<(std::ostream &out, oid val);
  * @return std::istream& Reference to the input stream
  */
 std::istream &operator>>(std::istream &in, oid &val);
+
+/**
+ * @brief Map a scalar element type OID to its canonical PostgreSQL array type OID.
+ *
+ * Used when binding a `std::vector<T>` parameter: the Bind message must carry the
+ * concrete array OID (e.g. `_int4` = 1007), never the `anyarray` pseudo-type (2277),
+ * which PostgreSQL rejects as an invalid parameter type. Returns `oid::invalid` (0)
+ * for an element type that has no canonical array companion here, so the caller can
+ * fail loudly instead of emitting a wire-invalid Bind.
+ *
+ * @param element The scalar element type OID.
+ * @return The array type OID, or oid::invalid if unmapped.
+ */
+constexpr oid
+array_oid_for_element(oid element) noexcept {
+    switch (element) {
+        case oid::boolean:     return oid::boolean_array;
+        case oid::bytea:       return oid::bytea_array;
+        case oid::int2:        return oid::int2_array;
+        case oid::int4:        return oid::int4_array;
+        case oid::int8:        return oid::int8_array;
+        case oid::oid_t:       return oid::oid_array;
+        case oid::float4:      return oid::float4_array;
+        case oid::float8:      return oid::float8_array;
+        case oid::numeric:     return oid::numeric_array;
+        case oid::text:        return oid::text_array;
+        case oid::varchar:     return oid::varchar_array;
+        case oid::bpchar:      return oid::bpchar_array;
+        case oid::uuid:        return oid::uuid_array;
+        case oid::json:        return oid::json_array;
+        case oid::jsonb:       return oid::jsonb_array;
+        case oid::date:        return oid::date_array;
+        case oid::time:        return oid::time_array;
+        case oid::timetz:      return oid::timetz_array;
+        case oid::timestamp:   return oid::timestamp_array;
+        case oid::timestamptz: return oid::timestamptz_array;
+        case oid::interval:    return oid::interval_array;
+        default:               return oid::invalid;
+    }
+}
 
 /**
  * @brief Type codes for various PostgreSQL types

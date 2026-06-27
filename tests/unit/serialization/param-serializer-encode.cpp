@@ -412,13 +412,23 @@ TEST_F(ParamSerializerTest, BoolVectorEncodesArrayHeaderAndElements) {
     EXPECT_EQ(static_cast<unsigned char>(buf[e2 + 4]), 1u); // true
 }
 
-TEST_F(ParamSerializerTest, EmptyVectorEncodesNull) {
+TEST_F(ParamSerializerTest, EmptyVectorEncodesEmptyArrayNotNull) {
+    // An empty std::vector binds an EMPTY ARRAY ('{}'), not SQL NULL: a non-NULL value
+    // (length >= 0) whose body is PostgreSQL's zero-dimension array header
+    // [ndim=0][hasnull=0][elemtype]. (Binding NULL would change `col = ANY($1)` and
+    // array_length semantics.)
     std::vector<int> empty;
     serializer->serialize_params(empty);
     const auto &buf = serializer->params_buffer();
     ASSERT_EQ(serializer->param_count(), 1);
-    EXPECT_EQ(serializer->param_types()[0], 1007); // int4[]
-    EXPECT_EQ(read_be<integer>(buf, sizeof(smallint)), -1);
+    EXPECT_EQ(serializer->param_types()[0], 1007);                 // int4[]
+    EXPECT_EQ(read_be<integer>(buf, sizeof(smallint)), 20);        // value length = 20 (NOT -1/NULL)
+    const std::size_t body = sizeof(smallint) + sizeof(integer);
+    EXPECT_EQ(read_be<integer>(buf, body + 0), 1);                 // ndim = 1
+    EXPECT_EQ(read_be<integer>(buf, body + 4), 0);                 // has-nulls = 0
+    EXPECT_EQ(read_be<integer>(buf, body + 8), 23);                // element OID = int4
+    EXPECT_EQ(read_be<integer>(buf, body + 12), 0);               // dimension size = 0
+    EXPECT_EQ(read_be<integer>(buf, body + 16), 1);               // lower bound = 1
 }
 
 TEST_F(ParamSerializerTest, DifferentNumericVectorTypesGetCorrectArrayOids) {
@@ -441,6 +451,62 @@ TEST_F(ParamSerializerTest, MixedParametersWithVectorGetCorrectOidsAndCount) {
     EXPECT_EQ(serializer->param_types()[1], 1007); // int4[]
     EXPECT_EQ(serializer->param_types()[2], 23);   // int4
     EXPECT_EQ(read_be<smallint>(buf, 0), 3);
+}
+
+// array_oid_for_element is the single source of truth for the Bind array OID. It must
+// map every supported scalar to its concrete _T array OID (never anyarray 2277, which
+// PostgreSQL rejects as a parameter type) and return invalid for the unmappable.
+TEST(ArrayOidMapping, MapsEverySupportedElementToConcreteArrayOidNotAnyarray) {
+    EXPECT_EQ(array_oid_for_element(oid::boolean), oid::boolean_array);
+    EXPECT_EQ(array_oid_for_element(oid::bytea), oid::bytea_array);
+    EXPECT_EQ(array_oid_for_element(oid::int2), oid::int2_array);
+    EXPECT_EQ(array_oid_for_element(oid::int4), oid::int4_array);
+    EXPECT_EQ(array_oid_for_element(oid::int8), oid::int8_array);
+    EXPECT_EQ(array_oid_for_element(oid::oid_t), oid::oid_array);
+    EXPECT_EQ(array_oid_for_element(oid::float4), oid::float4_array);
+    EXPECT_EQ(array_oid_for_element(oid::float8), oid::float8_array);
+    EXPECT_EQ(array_oid_for_element(oid::numeric), oid::numeric_array);
+    EXPECT_EQ(array_oid_for_element(oid::text), oid::text_array);
+    EXPECT_EQ(array_oid_for_element(oid::varchar), oid::varchar_array);
+    EXPECT_EQ(array_oid_for_element(oid::bpchar), oid::bpchar_array);
+    EXPECT_EQ(array_oid_for_element(oid::uuid), oid::uuid_array);
+    EXPECT_EQ(array_oid_for_element(oid::json), oid::json_array);
+    EXPECT_EQ(array_oid_for_element(oid::jsonb), oid::jsonb_array);
+    EXPECT_EQ(array_oid_for_element(oid::date), oid::date_array);
+    EXPECT_EQ(array_oid_for_element(oid::time), oid::time_array);
+    EXPECT_EQ(array_oid_for_element(oid::timetz), oid::timetz_array);
+    EXPECT_EQ(array_oid_for_element(oid::timestamp), oid::timestamp_array);
+    EXPECT_EQ(array_oid_for_element(oid::timestamptz), oid::timestamptz_array);
+    EXPECT_EQ(array_oid_for_element(oid::interval), oid::interval_array);
+    // Unmapped element types -> invalid (the caller throws rather than emit anyarray).
+    EXPECT_EQ(array_oid_for_element(oid::point), oid::invalid);
+    EXPECT_EQ(array_oid_for_element(oid::any_array), oid::invalid);
+    // ...and it is usable in a constant expression.
+    static_assert(array_oid_for_element(oid::int4) == oid::int4_array);
+}
+
+// Regression: element types ABSENT from the old switch (numeric, uuid, json, ...) used
+// to fall back to anyarray (2277); now they bind their concrete array OID end-to-end.
+TEST_F(ParamSerializerTest, PreviouslyAnyarrayElementVectorsNowGetConcreteArrayOid) {
+    serializer->reset();
+    serializer->serialize_params(std::vector<numeric>{numeric("1.5"), numeric("2.5")});
+    EXPECT_EQ(serializer->param_types()[0], static_cast<integer>(oid::numeric_array)); // 1231
+
+    serializer->reset();
+    serializer->serialize_params(std::vector<qb::json>{qb::json::parse(R"({"a":1})")});
+    EXPECT_EQ(serializer->param_types()[0], static_cast<integer>(oid::json_array)); // 199
+}
+
+// std::vector<std::string> is the ONE intentional exception to "vector -> array param":
+// it expands to N separate text params (batch VALUES ($1),($2),...), via add_string_vector,
+// NOT a single text[] array. This pins that documented asymmetry so the array-OID unification
+// does not silently absorb it.
+TEST_F(ParamSerializerTest, StringVectorStaysMultiParamTextNotTextArray) {
+    serializer->serialize_params(std::vector<std::string>{"a", "b", "c"});
+    ASSERT_EQ(serializer->param_count(), 3);
+    EXPECT_EQ(serializer->param_types()[0], static_cast<integer>(oid::text)); // 25, per-string
+    EXPECT_EQ(serializer->param_types()[1], static_cast<integer>(oid::text)); // 25
+    EXPECT_EQ(serializer->param_types()[2], static_cast<integer>(oid::text)); // 25
 }
 
 // ===========================================================================
