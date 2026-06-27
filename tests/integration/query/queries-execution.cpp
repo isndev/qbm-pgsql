@@ -32,6 +32,7 @@
 #include <string>
 #include <vector>
 #include <gtest/gtest.h>
+#include <qb/system/parse.h> // qb::to_number (locale-free, non-throwing NUMERIC text parse)
 #include "../pgsql.h"
 #include "../../shared/pg_integration_fixture.hpp"
 #include "../../shared/test_config.hpp"
@@ -269,7 +270,7 @@ TEST_F(QueryExecutionTest, ComplexCteQuery) {
                    EXPECT_EQ(r[0][0].as<std::string>(), "John Doe");
                    EXPECT_EQ(r[0][1].as<int>(), 2);
                    EXPECT_EQ(r[0][2].as<std::string>(), "301.25");
-                   EXPECT_NEAR(std::stod(r[0][3].as<std::string>()), 150.63, 0.01);
+                   EXPECT_NEAR(qb::to_number<double>(r[0][3].as<std::string>()).value(), 150.63, 0.01);
                    EXPECT_EQ(r[0][4].as<std::string>(), "High Value");
                });
 }
@@ -282,7 +283,7 @@ TEST_F(QueryExecutionTest, ComplexCteQuery) {
  *
  * Text leg (simple-query `execute(SQL)`): every column comes back in TEXT format, so
  * `as<std::string>()` exercises the text NUMERIC decoder and `as<double>()` exercises the
- * genuine NUMERIC→double path (`TypeConverter<double>::from_text` → `std::stod`).
+ * genuine NUMERIC→double path (`TypeConverter<double>::from_text` → `qb::to_number`).
  *
  * Binary leg (PREPARED, extended-query): numeric is on the `common.h` binary whitelist
  * (`type_oid_prefers_binary_result_format`), so the field arrives in `Binary` format and
@@ -300,7 +301,7 @@ TEST_F(QueryExecutionTest, ComplexCteQuery) {
  * numeric as a double is therefore intentionally NOT exercised here.
  */
 TEST_F(QueryExecutionTest, DecimalDecodeTextAndBinary) {
-    // Text leg: simple-query transport, text format. as<double>() is genuine here (std::stod).
+    // Text leg: simple-query transport, text format. as<double>() is genuine here (qb::to_number).
     bool text_ok = false;
     ASSERT_TRUE(db_->execute(
                        R"(SELECT SUM(amount) AS s

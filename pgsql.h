@@ -1846,8 +1846,32 @@ public:
         const auto it = server_params_.find("server_version");
         if (it == server_params_.end())
             return 0;
-        int       major = 0, minor = 0, patch = 0;
-        const int n = std::sscanf(it->second.c_str(), "%d.%d.%d", &major, &minor, &patch);
+        // Faithful, locale-free replacement for sscanf("%d.%d.%d"): n is the count of
+        // dot-separated integer fields actually parsed (major required, minor/patch
+        // optional, scan stops at the first missing field), exactly like sscanf's return.
+        int                    major = 0, minor = 0, patch = 0, n = 0;
+        const std::string_view sv  = it->second;
+        std::size_t            pos = 0, used = 0;
+        if (const auto a = qb::to_number_prefix<int>(sv.substr(pos), &used)) {
+            major = *a;
+            pos += used;
+            n = 1;
+            if (pos < sv.size() && sv[pos] == '.') {
+                ++pos;
+                if (const auto b = qb::to_number_prefix<int>(sv.substr(pos), &used)) {
+                    minor = *b;
+                    pos += used;
+                    n = 2;
+                    if (pos < sv.size() && sv[pos] == '.') {
+                        ++pos;
+                        if (const auto c = qb::to_number_prefix<int>(sv.substr(pos), &used)) {
+                            patch = *c;
+                            n     = 3;
+                        }
+                    }
+                }
+            }
+        }
         if (n >= 2 && major >= 10)
             return major * 10000 + minor; // modern scheme: major.minor
         if (n >= 3)
