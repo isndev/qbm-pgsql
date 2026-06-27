@@ -22,6 +22,7 @@
  */
 
 #include <chrono>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <gtest/gtest.h>
@@ -228,6 +229,95 @@ TEST(DsnParse, MalformedNoSlashAfterSchemaThrows) {
 /// `schema:::` — the slash state sees ':' instead of '/' and rejects.
 TEST(DsnParse, MalformedColonAfterSchemaThrows) {
     EXPECT_THROW((void) parse("tcp:::"), std::runtime_error);
+}
+
+// ---------------------------------------------------------------------------
+// transaction_mode / isolation_level stream operators + to_string (common.cpp).
+// ---------------------------------------------------------------------------
+
+/// Each named isolation level prints its canonical lowercase spelling.
+TEST(TransactionModeFormat, IsolationLevelNamesStreamed) {
+    auto render = [](isolation_level lvl) {
+        std::ostringstream os;
+        os << lvl;
+        return os.str();
+    };
+    EXPECT_EQ(render(isolation_level::read_committed), "read committed");
+    EXPECT_EQ(render(isolation_level::repeatable_read), "repeatable read");
+    EXPECT_EQ(render(isolation_level::serializable), "serializable");
+}
+
+/// An out-of-range isolation level falls to the "Unknown ..." branch.
+TEST(TransactionModeFormat, UnknownIsolationLevelFallback) {
+    std::ostringstream os;
+    os << static_cast<isolation_level>(99);
+    EXPECT_NE(os.str().find("Unknown transaction isolation level"), std::string::npos);
+}
+
+/// A default transaction_mode (read committed, read-write, non-deferrable) is empty.
+TEST(TransactionModeFormat, DefaultModeRendersEmpty) {
+    EXPECT_EQ(to_string(transaction_mode{}), "");
+}
+
+/// Non-default isolation alone emits just the ISOLATION LEVEL clause.
+TEST(TransactionModeFormat, IsolationOnlyClause) {
+    transaction_mode m{isolation_level::serializable};
+    EXPECT_EQ(to_string(m), " ISOLATION LEVEL serializable");
+}
+
+/// read_only after a non-default isolation inserts the leading comma (need_comma path).
+TEST(TransactionModeFormat, IsolationAndReadOnlyCommaSeparated) {
+    transaction_mode m{isolation_level::serializable, /*ro=*/true};
+    EXPECT_EQ(to_string(m), " ISOLATION LEVEL serializable, READ ONLY");
+}
+
+/// read_only alone (default isolation) emits READ ONLY without a leading comma.
+TEST(TransactionModeFormat, ReadOnlyOnlyNoComma) {
+    transaction_mode m{isolation_level::read_committed, /*ro=*/true};
+    EXPECT_EQ(to_string(m), " READ ONLY");
+}
+
+/// deferrable after read_only inserts its own comma (the deferrable need_comma branch).
+TEST(TransactionModeFormat, ReadOnlyAndDeferrableCommaSeparated) {
+    transaction_mode m{isolation_level::serializable, /*ro=*/true, /*def=*/true};
+    EXPECT_EQ(to_string(m), " ISOLATION LEVEL serializable, READ ONLY, DEFERRABLE");
+}
+
+/// deferrable alone (no prior clause) emits DEFERRABLE with no leading comma.
+TEST(TransactionModeFormat, DeferrableOnlyNoComma) {
+    transaction_mode m{isolation_level::read_committed, /*ro=*/false, /*def=*/true};
+    EXPECT_EQ(to_string(m), " DEFERRABLE");
+}
+
+// ---------------------------------------------------------------------------
+// `_db` user-defined literal (common.cpp operator""_db).
+// ---------------------------------------------------------------------------
+
+TEST(DbAliasLiteral, ProducesDbaliasFromStringLiteral) {
+    using namespace qb::pg;
+    dbalias a = "primary"_db;
+    EXPECT_EQ(static_cast<const std::string &>(a), "primary");
+}
+
+// ---------------------------------------------------------------------------
+// DSN parser rare default branches (common.cpp:211/226/244/253).
+// ---------------------------------------------------------------------------
+
+/// A ']' encountered outside the database state is treated as a literal token byte
+/// (the `]` else-branch). Here it appears inside the URI before any '['.
+TEST(DsnParse, StrayCloseBracketInUriIsLiteral) {
+    const auto opts = parse("tcp://localhost]5432[db]");
+    // The ']' is pushed into the current (uri) token verbatim.
+    EXPECT_NE(opts.uri.find(']'), std::string::npos);
+    EXPECT_EQ(opts.database, "db");
+}
+
+/// A '@' after the host (state == url) is not a credential separator and is kept
+/// as a literal value byte (the '@' default branch).
+TEST(DsnParse, AtSignInUrlIsLiteral) {
+    const auto opts = parse("tcp://host@name:5432[db]");
+    // First '@' splits user/url; a later state keeps subsequent bytes literally.
+    EXPECT_EQ(opts.database, "db");
 }
 
 int

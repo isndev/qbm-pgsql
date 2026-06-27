@@ -390,6 +390,89 @@ TEST(ProtocolMessage, ResetReadOnHeaderOnlyMessage) {
     EXPECT_FALSE(m.read(c));
 }
 
+// ===========================================================================
+// parse_header_attributes (pgsql.cpp) — the key=value[,;] attribute parser used
+// to decode SASL/SCRAM auth header fields. Global-namespace free function
+// declared in pgsql.h. Drives the name/value/quoted/ignore state machine and
+// the control-char + max-length guards.
+// ===========================================================================
+
+namespace {
+qb::icase_unordered_map<std::string>
+parse_attrs(const std::string &s) {
+    return ::parse_header_attributes(s.c_str(), s.size());
+}
+} // namespace
+
+TEST(ParseHeaderAttributes, SimpleKeyValuePairs) {
+    auto d = parse_attrs("r=abc,s=def,i=4096");
+    EXPECT_EQ(d.at("r"), "abc");
+    EXPECT_EQ(d.at("s"), "def");
+    EXPECT_EQ(d.at("i"), "4096");
+}
+
+TEST(ParseHeaderAttributes, SemicolonAndCommaSeparators) {
+    // ';' as a separator in NAME state with a pending (value-less) name, and as a
+    // value terminator. Drives the name-terminator emplace (line 48) and the
+    // value ';'/',' end branch.
+    auto d = parse_attrs("k1=v1;k2=v2");
+    EXPECT_EQ(d.at("k1"), "v1");
+    EXPECT_EQ(d.at("k2"), "v2");
+}
+
+TEST(ParseHeaderAttributes, EmptyValueAndEmptyNameTokens) {
+    // "a=" -> key with empty value; a stray ";;" yields empty names that are skipped.
+    auto d = parse_attrs("a=;;b=2");
+    EXPECT_EQ(d.at("a"), "");
+    EXPECT_EQ(d.at("b"), "2");
+}
+
+TEST(ParseHeaderAttributes, LeadingWhitespaceInNameAndValueIgnored) {
+    // Spaces in NAME state are skipped; leading unquoted whitespace in VALUE is
+    // ignored until the first non-space (the `*ptr != ' ' || !value.empty()` guard).
+    auto d = parse_attrs(" key =  value ");
+    EXPECT_EQ(d.at("key"), "value ");
+}
+
+TEST(ParseHeaderAttributes, QuotedValuePreservesDelimitersThenIgnoresTrailing) {
+    // A quoted value keeps the embedded ',' and ';'; after the closing quote the
+    // parser enters IGNORE state and drops everything until the next ',' / ';'
+    // (lines 90-111). Then a fresh attribute resumes.
+    auto d = parse_attrs("k='a,b;c' junk , n=2");
+    EXPECT_EQ(d.at("k"), "a,b;c");
+    EXPECT_EQ(d.at("n"), "2");
+}
+
+TEST(ParseHeaderAttributes, DoubleQuotedValue) {
+    auto d = parse_attrs("k=\"hello world\"");
+    EXPECT_EQ(d.at("k"), "hello world");
+}
+
+TEST(ParseHeaderAttributes, QuoteCharMidUnquotedValueIsLiteral) {
+    // A quote that appears after value bytes already accumulated is treated as a
+    // literal value character (the `attribute_value.empty()` else-branch, line 79).
+    auto d = parse_attrs("k=ab'cd");
+    EXPECT_EQ(d.at("k"), "ab'cd");
+}
+
+TEST(ParseHeaderAttributes, ControlCharInNameThrows) {
+    // A control byte in the attribute name trips the guard (line 55-56).
+    std::string s = "ke\x01y=v";
+    EXPECT_THROW(::parse_header_attributes(s.c_str(), s.size()), std::runtime_error);
+}
+
+TEST(ParseHeaderAttributes, ControlCharInUnquotedValueThrows) {
+    // A control byte in an unquoted value trips the value guard (line 85-86).
+    std::string s = "k=va\x02lue";
+    EXPECT_THROW(::parse_header_attributes(s.c_str(), s.size()), std::runtime_error);
+}
+
+TEST(ParseHeaderAttributes, LastAttributeFlushedAtEndOfString) {
+    // No trailing separator: the final attribute is emplaced after the loop.
+    auto d = parse_attrs("only=tail");
+    EXPECT_EQ(d.at("only"), "tail");
+}
+
 int
 main(int argc, char **argv) {
     testing::InitGoogleTest(&argc, argv);

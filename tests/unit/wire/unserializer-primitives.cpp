@@ -242,6 +242,90 @@ TEST_F(UnserializerPrimitives, TextShapedByteaIsReturnedRaw) {
     EXPECT_EQ(std::memcmp(result.data(), buf.data(), buf.size()), 0);
 }
 
+// ---------------------------------------------------------------------------
+// read_bool: binary length-prefix form, every text spelling, raw single byte.
+// (param_unserializer.cpp:257-285 — previously entirely uncovered.)
+// ---------------------------------------------------------------------------
+
+TEST_F(UnserializerPrimitives, ReadBoolEmptyBufferThrows) {
+    std::vector<byte> empty;
+    EXPECT_THROW(u.read_bool(empty), std::runtime_error);
+}
+
+TEST_F(UnserializerPrimitives, ReadBoolBinaryLengthPrefixedForm) {
+    // Formal binary bool: [int32 length == 1][value byte]. length==1 path.
+    auto framed_true  = big_endian_bytes<integer>(1);
+    framed_true.push_back(static_cast<byte>(1));
+    auto framed_false = big_endian_bytes<integer>(1);
+    framed_false.push_back(static_cast<byte>(0));
+    EXPECT_TRUE(u.read_bool(framed_true));
+    EXPECT_FALSE(u.read_bool(framed_false));
+}
+
+TEST_F(UnserializerPrimitives, ReadBoolBinaryLengthNotOneFallsThroughToRaw) {
+    // read_bool takes the binary branch ONLY when the 4-byte BE length prefix == 1 (value=buffer[4]);
+    // otherwise it falls through to text, then to the raw last-resort `buffer[0] != 0`. So the FIRST
+    // byte decides the raw outcome. length prefix 0x02000000 (!=1), buffer[0]==0x02 -> raw -> true.
+    std::vector<byte> raw_true{byte(0x02), byte(0x00), byte(0x00), byte(0x00), byte(0x00)};
+    EXPECT_TRUE(u.read_bool(raw_true));
+    // length prefix 99 (!=1), buffer[0]==0x00 -> raw -> false.
+    std::vector<byte> raw_false{byte(0x00), byte(0x00), byte(0x00), byte(0x63), byte(0x02)};
+    EXPECT_FALSE(u.read_bool(raw_false));
+}
+
+TEST_F(UnserializerPrimitives, ReadBoolTextSpellings) {
+    auto B = [](const char *s) {
+        return std::vector<byte>(reinterpret_cast<const byte *>(s), reinterpret_cast<const byte *>(s) + std::strlen(s));
+    };
+    // True spellings.
+    EXPECT_TRUE(u.read_bool(B("true")));
+    EXPECT_TRUE(u.read_bool(B("t")));
+    EXPECT_TRUE(u.read_bool(B("1")));
+    EXPECT_TRUE(u.read_bool(B("y")));
+    EXPECT_TRUE(u.read_bool(B("yes")));
+    EXPECT_TRUE(u.read_bool(B("on")));
+    // False spellings (text-letter first byte but not a true spelling).
+    EXPECT_FALSE(u.read_bool(B("false")));
+    EXPECT_FALSE(u.read_bool(B("f")));
+    EXPECT_FALSE(u.read_bool(B("0")));
+    EXPECT_FALSE(u.read_bool(B("n")));
+    // Uppercase first byte enters the text branch too.
+    EXPECT_FALSE(u.read_bool(B("F")));
+    EXPECT_FALSE(u.read_bool(B("T"))); // "T" alone is not a listed true spelling
+}
+
+TEST_F(UnserializerPrimitives, ReadBoolRawSingleByteLastResort) {
+    // A short buffer (<5) whose first byte is not a recognized text letter:
+    // the raw-byte last resort returns buffer[0] != 0.
+    std::vector<byte> nz{static_cast<byte>(0x42)};
+    std::vector<byte> z{static_cast<byte>(0x00)};
+    EXPECT_TRUE(u.read_bool(nz));
+    EXPECT_FALSE(u.read_bool(z));
+}
+
+// ---------------------------------------------------------------------------
+// read_string binary-detection branch (param_unserializer.cpp:184 TRUE path):
+// a small buffer whose first bytes look like a length prefix is read as binary.
+// ---------------------------------------------------------------------------
+
+TEST_F(UnserializerPrimitives, ReadStringBinaryDetectionSucceeds) {
+    // [int32 length == 3]["abc"] : byte[0..2] include a zero, size in [4,1MiB],
+    // so the heuristic takes the binary path and read_binary_string returns "abc".
+    auto framed = pg_binary_string("abc");
+    EXPECT_EQ(u.read_string(framed), "abc");
+}
+
+TEST_F(UnserializerPrimitives, ReadStringBinaryDetectionFallsBackToTextOnInvalidLength) {
+    // Leading zero triggers the binary path, but the declared length (0x00FFFFFF)
+    // exceeds the buffer, so read_binary_string throws and read_string recovers by
+    // returning the raw bytes as text.
+    std::vector<byte> buf{static_cast<byte>(0x00), static_cast<byte>(0xFF), static_cast<byte>(0xFF), static_cast<byte>(0xFF),
+                          static_cast<byte>('x')};
+    const std::string out = u.read_string(buf);
+    ASSERT_EQ(out.size(), buf.size());
+    EXPECT_EQ(std::memcmp(out.data(), buf.data(), buf.size()), 0);
+}
+
 } // namespace
 
 int

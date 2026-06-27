@@ -266,6 +266,11 @@ TEST(TypeConverterScalarFromBinary, BoolAndUuidEdgeSizes) {
     // UUID 16-byte value decodes to the canonical form.
     auto u = TypeConverter<qb::uuid>::from_binary(hex_to_bytes("550e8400e29b41d4a716446655440000"));
     EXPECT_EQ(u, qb::uuid::from_string("550e8400-e29b-41d4-a716-446655440000").value());
+
+    // UUID 20-byte length-prefixed value: a 4-byte prefix precedes the 16 raw
+    // bytes (the >= 20 path that strips the prefix and reads from offset 4).
+    auto prefixed = TypeConverter<qb::uuid>::from_binary(hex_to_bytes("00000010550e8400e29b41d4a716446655440000"));
+    EXPECT_EQ(prefixed, qb::uuid::from_string("550e8400-e29b-41d4-a716-446655440000").value());
 }
 
 // ----------------------------------------------------------------------------

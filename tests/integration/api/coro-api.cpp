@@ -1040,6 +1040,277 @@ TEST_F(PgsqlCoroApiTest, ChannelBindingFalseOnPlaintext) {
     EXPECT_FALSE(db_->used_channel_binding());
 }
 
+// --------------------------------------------------------------------------------------
+// Client-side savepoint-name validation (pg_savepoint_name_ok early-return branches)
+// --------------------------------------------------------------------------------------
+
+// An EMPTY savepoint name is rejected client-side (name.empty() branch) on all three
+// savepoint verbs — savepoint / rollback_savepoint / release_savepoint — without ever
+// touching the wire. The connection must stay usable afterwards.
+TEST_F(PgsqlCoroApiTest, CoroSavepointEmptyNameRejectedClientSide) {
+    bool sp_failed = false, rb_failed = false, rel_failed = false, survived = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        auto b = co_await db_->begin();
+        if (!b)
+            co_return;
+        auto sp   = co_await db_->savepoint("");
+        sp_failed = !sp.ok();
+        auto rb   = co_await db_->rollback_savepoint("");
+        rb_failed = !rb.ok();
+        auto rel   = co_await db_->release_savepoint("");
+        rel_failed = !rel.ok();
+        (void) co_await db_->rollback();
+        auto ok  = co_await db_->query("SELECT 1");
+        survived = ok.ok();
+        co_return;
+    }());
+    EXPECT_TRUE(sp_failed) << "empty savepoint name must be rejected client-side";
+    EXPECT_TRUE(rb_failed) << "empty rollback-to name must be rejected client-side";
+    EXPECT_TRUE(rel_failed) << "empty release name must be rejected client-side";
+    EXPECT_TRUE(survived);
+}
+
+// A savepoint name longer than 63 bytes is rejected client-side (name.size() > 63 branch).
+TEST_F(PgsqlCoroApiTest, CoroSavepointTooLongNameRejectedClientSide) {
+    bool failed = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        auto b = co_await db_->begin();
+        if (!b)
+            co_return;
+        auto sp = co_await db_->savepoint(std::string(64, 'a'));
+        failed  = !sp.ok();
+        (void) co_await db_->rollback();
+        co_return;
+    }());
+    EXPECT_TRUE(failed) << "savepoint name > 63 chars must be rejected client-side";
+}
+
+// rollback_savepoint / release_savepoint reject a malformed (non-alnum) name client-side
+// (the per-character validation branch on those two verbs specifically).
+TEST_F(PgsqlCoroApiTest, CoroRollbackAndReleaseSavepointInvalidNameRejected) {
+    bool rb_failed = false, rel_failed = false, survived = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        auto b = co_await db_->begin();
+        if (!b)
+            co_return;
+        auto rb   = co_await db_->rollback_savepoint("bad name!");
+        rb_failed = !rb.ok();
+        auto rel   = co_await db_->release_savepoint("also bad!");
+        rel_failed = !rel.ok();
+        (void) co_await db_->rollback();
+        auto ok  = co_await db_->query("SELECT 1");
+        survived = ok.ok();
+        co_return;
+    }());
+    EXPECT_TRUE(rb_failed) << "malformed rollback-to name must be rejected client-side";
+    EXPECT_TRUE(rel_failed) << "malformed release name must be rejected client-side";
+    EXPECT_TRUE(survived);
+}
+
+// --------------------------------------------------------------------------------------
+// execute_file / prepare_file error paths (missing file -> failed Reply, no throw)
+// --------------------------------------------------------------------------------------
+
+// A non-existent path makes coro execute_file resolve with a failed Reply (the
+// std::filesystem::exists()==false branch) — not throw, not hang.
+TEST_F(PgsqlCoroApiTest, CoroExecuteFileMissingFileFails) {
+    std::filesystem::path const missing =
+        std::filesystem::temp_directory_path() / "qb_pgsql_no_such_execute_file_zzz.sql";
+    std::error_code ec;
+    std::filesystem::remove(missing, ec); // ensure absent
+    bool failed = false, survived = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        auto r   = co_await db_->execute_file(missing);
+        failed   = !r.ok();
+        auto ok  = co_await db_->query("SELECT 1");
+        survived = ok.ok();
+        co_return;
+    }());
+    EXPECT_TRUE(failed) << "execute_file on a missing path must resolve with a failed Reply";
+    EXPECT_TRUE(survived);
+}
+
+// A non-existent path makes coro prepare_file resolve with a failed Reply.
+TEST_F(PgsqlCoroApiTest, CoroPrepareFileMissingFileFails) {
+    std::filesystem::path const missing =
+        std::filesystem::temp_directory_path() / "qb_pgsql_no_such_prepare_file_zzz.sql";
+    std::error_code ec;
+    std::filesystem::remove(missing, ec);
+    bool failed = false, survived = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        auto pr  = co_await db_->prepare_file("qb_coro_missing_prep_stmt", missing, type_oid_sequence{});
+        failed   = !pr.ok();
+        auto ok  = co_await db_->query("SELECT 1");
+        survived = ok.ok();
+        co_return;
+    }());
+    EXPECT_TRUE(failed) << "prepare_file on a missing path must resolve with a failed Reply";
+    EXPECT_TRUE(survived);
+}
+
+// --------------------------------------------------------------------------------------
+// with_transaction: COMMIT-time failure -> ROLLBACK -> failed Reply
+// --------------------------------------------------------------------------------------
+
+// A DEFERRABLE INITIALLY DEFERRED unique constraint defers the duplicate-key check to
+// COMMIT time, so the body succeeds but tr.commit() fails. with_transaction must then
+// ROLLBACK and return a failed Reply (the value-path commit-failure branch). The
+// connection must remain usable.
+TEST_F(PgsqlCoroApiTest, WithTransaction_CommitFailureRollsBackValuePath) {
+    constexpr char const *kDeferT = "qb_pgsql_coro_defer_commit";
+    ASSERT_TRUE(db_->execute(std::string("DROP TABLE IF EXISTS ") + kDeferT, qb::pg::discard_query, qb::pg::discard_error).await());
+    ASSERT_TRUE(db_->execute(std::string("CREATE TABLE ") + kDeferT +
+                                 " (id int, UNIQUE(id) DEFERRABLE INITIALLY DEFERRED)",
+                             qb::pg::discard_query, qb::pg::discard_error)
+                    .await());
+    bool failed = false, survived = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        auto r = co_await with_transaction(*db_, [](Transaction &tr) -> qb::io::async::task<int> {
+            auto a = co_await tr.execute(std::string("INSERT INTO ") + kDeferT + " VALUES (1)");
+            if (!a)
+                throw transaction_abort{a.error()};
+            auto b = co_await tr.execute(std::string("INSERT INTO ") + kDeferT + " VALUES (1)");
+            if (!b)
+                throw transaction_abort{b.error()};
+            co_return 7; // both INSERTs succeed; the dup-key check fires at COMMIT
+        });
+        failed   = !r.ok(); // COMMIT must fail, so the Reply is a failure
+        auto ok  = co_await db_->query("SELECT 1");
+        survived = ok.ok();
+        co_return;
+    }());
+    (void) db_->execute(std::string("DROP TABLE IF EXISTS ") + kDeferT, qb::pg::discard_query, qb::pg::discard_error).await();
+    EXPECT_TRUE(failed) << "with_transaction must surface the deferred-constraint COMMIT failure";
+    EXPECT_TRUE(survived);
+}
+
+// Same deferred-constraint COMMIT failure but through a task<void> body (the void-path
+// commit-failure branch).
+TEST_F(PgsqlCoroApiTest, WithTransaction_CommitFailureRollsBackVoidPath) {
+    constexpr char const *kDeferT = "qb_pgsql_coro_defer_commit_void";
+    ASSERT_TRUE(db_->execute(std::string("DROP TABLE IF EXISTS ") + kDeferT, qb::pg::discard_query, qb::pg::discard_error).await());
+    ASSERT_TRUE(db_->execute(std::string("CREATE TABLE ") + kDeferT +
+                                 " (id int, UNIQUE(id) DEFERRABLE INITIALLY DEFERRED)",
+                             qb::pg::discard_query, qb::pg::discard_error)
+                    .await());
+    bool failed = false, survived = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        auto r = co_await with_transaction(*db_, [](Transaction &tr) -> qb::io::async::task<void> {
+            auto a = co_await tr.execute(std::string("INSERT INTO ") + kDeferT + " VALUES (1)");
+            if (!a)
+                throw transaction_abort{a.error()};
+            auto b = co_await tr.execute(std::string("INSERT INTO ") + kDeferT + " VALUES (1)");
+            if (!b)
+                throw transaction_abort{b.error()};
+        });
+        failed   = !r.ok();
+        auto ok  = co_await db_->query("SELECT 1");
+        survived = ok.ok();
+        co_return;
+    }());
+    (void) db_->execute(std::string("DROP TABLE IF EXISTS ") + kDeferT, qb::pg::discard_query, qb::pg::discard_error).await();
+    EXPECT_TRUE(failed) << "void-body with_transaction must surface the deferred COMMIT failure";
+    EXPECT_TRUE(survived);
+}
+
+// --------------------------------------------------------------------------------------
+// with_transaction with every explicit isolation level + read-only (begin(mode) coro path
+// + to_string ISOLATION LEVEL / READ ONLY / DEFERRABLE emission).
+// --------------------------------------------------------------------------------------
+
+// REPEATABLE READ is actually applied: the body reads SHOW transaction_isolation back.
+TEST_F(PgsqlCoroApiTest, WithTransaction_RepeatableReadIsolationApplied) {
+    std::string seen;
+    bool        ok = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        transaction_mode mode;
+        mode.isolation = isolation_level::repeatable_read;
+        auto r         = co_await with_transaction(*db_, mode, [](Transaction &tr) -> qb::io::async::task<std::string> {
+            auto q = co_await tr.query("SHOW transaction_isolation");
+            if (!q.ok() || q.result().size() != 1)
+                throw transaction_abort{q.error()};
+            co_return q.result()[0][0].as<std::string>();
+        });
+        ok = r.ok();
+        if (ok)
+            seen = r.result();
+        co_return;
+    }());
+    EXPECT_TRUE(ok);
+    EXPECT_EQ(seen, "repeatable read");
+}
+
+// SERIALIZABLE READ ONLY DEFERRABLE: drives the full transaction_mode to_string emission
+// (ISOLATION LEVEL SERIALIZABLE, READ ONLY, DEFERRABLE) AND the begin(mode) coro path; the
+// body reads back both the isolation and the read-only GUC.
+TEST_F(PgsqlCoroApiTest, WithTransaction_SerializableReadOnlyDeferrableApplied) {
+    std::string iso, ro;
+    bool        ok = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        transaction_mode mode{isolation_level::serializable, /*read_only=*/true, /*deferrable=*/true};
+        auto             r = co_await with_transaction(*db_, mode, [](Transaction &tr) -> qb::io::async::task<std::string> {
+            auto a = co_await tr.query("SHOW transaction_isolation");
+            auto b = co_await tr.query("SHOW transaction_read_only");
+            if (!a.ok() || !b.ok())
+                throw transaction_abort{a.ok() ? b.error() : a.error()};
+            co_return a.result()[0][0].as<std::string>() + "|" + b.result()[0][0].as<std::string>();
+        });
+        ok = r.ok();
+        if (ok) {
+            auto const &v   = r.result();
+            auto        bar = v.find('|');
+            iso             = v.substr(0, bar);
+            ro              = v.substr(bar + 1);
+        }
+        co_return;
+    }());
+    EXPECT_TRUE(ok);
+    EXPECT_EQ(iso, "serializable");
+    EXPECT_EQ(ro, "on");
+}
+
+// Imperative coro begin(mode) with READ COMMITTED + DEFERRABLE only (no isolation change):
+// exercises the DEFERRABLE-without-isolation branch of to_string (need_comma == false path).
+TEST_F(PgsqlCoroApiTest, CoroBeginDeferrableOnly) {
+    bool ok = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        transaction_mode mode;
+        mode.deferrable = true; // isolation stays read_committed, read_only stays false
+        auto b          = co_await db_->begin(mode);
+        if (!b.ok())
+            co_return;
+        auto q  = co_await db_->query("SELECT 1");
+        auto c  = co_await db_->commit();
+        ok      = q.ok() && c.ok();
+        co_return;
+    }());
+    EXPECT_TRUE(ok) << "BEGIN ... DEFERRABLE (no isolation change) must succeed";
+}
+
+// --------------------------------------------------------------------------------------
+// connect(connection_options) overload (struct-form connect)
+// --------------------------------------------------------------------------------------
+
+// The connect(connection_options) overload (carries connect_timeout / ssl_verify) connects
+// and the session is usable. A fresh database is used so its options are pristine.
+TEST_F(PgsqlCoroApiTest, ConnectWithOptionsStruct) {
+    auto opts          = connection_options::parse(qb::pg::test::dsn_tcp_string());
+    opts.connect_timeout = std::chrono::seconds(5);
+    auto db            = std::make_unique<qb::pg::tcp::database>();
+    bool ok = false, queried = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        ok = static_cast<bool>(co_await db->connect(opts));
+        if (!ok)
+            co_return;
+        auto q  = co_await db->query("SELECT 1");
+        queried = q.ok() && q.result().size() == 1 && q.result()[0][0].as<int>() == 1;
+        co_return;
+    }());
+    EXPECT_TRUE(ok) << "connect(connection_options) failed";
+    EXPECT_TRUE(queried);
+    db->disconnect();
+}
+
 int
 main(int argc, char **argv) {
     qb::io::async::init();
