@@ -443,22 +443,6 @@ public:
     }
 
 private:
-    // Traits pattern for type-based serialization
-
-    /**
-     * @brief Base template for param serializer traits
-     *
-     * This template is specialized for each supported type
-     */
-    template <typename T, typename Enable = void>
-    struct param_serializer_traits {
-        static void
-        add_param(ParamSerializer &, const T &) {
-            static_assert(!sizeof(T), "Unsupported parameter type");
-        }
-    };
-
-private:
     std::vector<byte>    params_buffer_;
     std::vector<integer> param_types_;
 
@@ -702,6 +686,3 @@ private:
 };
 
 } // namespace qb::pg::detail
-
-// Include the template specializations
-#include "./param_serializer.tpp"
