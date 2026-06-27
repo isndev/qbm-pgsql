@@ -581,115 +581,28 @@ private:
     add_vector(const VecType &vector) {
         using element_type = typename VecType::value_type;
 
-        // Get array element OID type from the element type
-        integer element_oid = TypeConverter<element_type>::get_oid();
+        const integer element_oid = TypeConverter<element_type>::get_oid();
 
-        // Determine the array OID based on element type OID
-        // This is a simplification; PostgreSQL array OIDs typically follow a pattern
-        // but a proper implementation would use a mapping from element OID to array OID
-        integer array_oid = 0;
-
-        // Array type determination - common array OIDs
-        switch (element_oid) {
-            case 16:
-                array_oid = 1000;
-                break; // boolean array
-            case 21:
-                array_oid = 1005;
-                break; // int2 array
-            case 23:
-                array_oid = 1007;
-                break; // int4 array
-            case 20:
-                array_oid = 1016;
-                break; // int8 array
-            case 700:
-                array_oid = 1021;
-                break; // float4 array
-            case 701:
-                array_oid = 1022;
-                break; // float8 array
-            case 25:
-                array_oid = 1009;
-                break; // text array
-            default:
-                array_oid = 2277;
-                break; // Use anyarray as fallback
+        // Map the scalar element OID to its concrete PostgreSQL array OID. The previous
+        // anyarray (2277) fallback was wrong: anyarray is a pseudo-type PostgreSQL rejects
+        // as a Bind parameter type, so any vector of an unlisted element (uuid, numeric,
+        // temporal, json, ...) produced a wire error. An element type with no array
+        // companion now fails loudly here instead of emitting an invalid Bind.
+        const oid array_oid = array_oid_for_element(static_cast<oid>(element_oid));
+        if (array_oid == oid::invalid) {
+            throw std::invalid_argument(
+                "pgsql: cannot bind std::vector parameter - element type OID " +
+                std::to_string(element_oid) + " has no PostgreSQL array type mapping");
         }
+        param_types_.push_back(static_cast<integer>(array_oid));
 
-        // Add the array OID type
-        param_types_.push_back(array_oid);
-
-        // For empty vectors, write NULL
-        if (vector.empty()) {
-            write_null();
-            return;
-        }
-
-        // OPTIMIZED: Reserve space for param_types_ (P0-3 fix)
-        param_types_.reserve(param_types_.size() + 1);
-
-        // Prepare a binary buffer for the array
-        std::vector<byte> array_buffer;
-
-        // PostgreSQL array binary format:
-        // int32 number of dimensions (1 for 1D array)
-        // int32 has nulls flag (1 if array has nulls, 0 otherwise)
-        // int32 element type OID
-        // int32 dimension size
-        // int32 dimension lower bound (typically 1)
-        // followed by each element with int32 length prefix and data
-
-        // OPTIMIZED: Reserve space for header + estimated elements (P0-3 fix)
-        // Header = 20 bytes, each element = 4 bytes length prefix + data
-        size_t estimated_element_size = sizeof(integer); // length prefix
-        if constexpr (std::is_same_v<element_type, smallint>)
-            estimated_element_size += sizeof(smallint);
-        else if constexpr (std::is_same_v<element_type, integer>)
-            estimated_element_size += sizeof(integer);
-        else if constexpr (std::is_same_v<element_type, bigint>)
-            estimated_element_size += sizeof(bigint);
-        else if constexpr (std::is_same_v<element_type, float>)
-            estimated_element_size += sizeof(float);
-        else if constexpr (std::is_same_v<element_type, double>)
-            estimated_element_size += sizeof(double);
-        else if constexpr (std::is_same_v<element_type, bool>)
-            estimated_element_size += sizeof(byte);
-        else
-            estimated_element_size += 32; // default estimate for strings/complex types
-        array_buffer.reserve(20 + vector.size() * estimated_element_size);
-
-        // We'll start with a 1D array header (20 bytes)
-        // Number of dimensions
-        write_integer(array_buffer, 1);
-
-        // Has nulls flag (0 = no nulls, check or implement if needed)
-        write_integer(array_buffer, 0);
-
-        // Element type OID
-        write_integer(array_buffer, element_oid);
-
-        // Dimension size
-        write_integer(array_buffer, static_cast<integer>(vector.size()));
-
-        // Lower bound (typically 1 for PostgreSQL arrays)
-        write_integer(array_buffer, 1);
-
-        // Now serialize each element
-        for (const auto &elem : vector) {
-            // For each element, use TypeConverter to serialize it
-            std::vector<byte> elem_buffer;
-            TypeConverter<element_type>::to_binary(elem, elem_buffer);
-
-            // Add element data to array buffer
-            array_buffer.insert(array_buffer.end(), elem_buffer.begin(), elem_buffer.end());
-        }
-
-        // Write the total array length
-        write_integer(params_buffer_, static_cast<integer>(array_buffer.size()));
-
-        // Write the array data
-        params_buffer_.insert(params_buffer_.end(), array_buffer.begin(), array_buffer.end());
+        // Build the array value bytes via the shared encoder (the exact inverse of
+        // decode_pg_array). An empty vector yields a valid EMPTY ARRAY ('{}', ndim=1
+        // size=0), NOT SQL NULL — binding NULL would be a different value and break
+        // `col = ANY($1)` / array_length / cardinality semantics.
+        const std::vector<byte> body = encode_pg_array<element_type>(vector);
+        write_integer(params_buffer_, static_cast<integer>(body.size()));
+        params_buffer_.insert(params_buffer_.end(), body.begin(), body.end());
     }
 };
 

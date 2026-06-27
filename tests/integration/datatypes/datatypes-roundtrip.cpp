@@ -616,6 +616,52 @@ TEST_F(DataTypesRoundTrip, IntArray_OneDimensional) {
     EXPECT_TRUE(ok);
 }
 
+// REGRESSION (serde audit): an EMPTY std::vector binds an empty array ('{}'), NOT SQL
+// NULL. The server must see a non-NULL value of cardinality 0. (The old add_vector wrote
+// add_null() for an empty vector, so `cardinality($1)` came back NULL.)
+TEST_F(DataTypesRoundTrip, EmptyIntArrayParam_BindsEmptyArrayNotNull) {
+    ASSERT_TRUE(db_->prepare("eia",
+                             "SELECT ($1::int[]) IS NOT NULL AS not_null, "
+                             "cardinality($1::int[]) AS card",
+                             type_oid_sequence{oid::int4_array}, discard_prepare, discard_error)
+                    .await());
+    const std::vector<int> empty;
+    bool                   ok = false;
+    ASSERT_TRUE(db_->execute(
+                      "eia", params(empty),
+                      [&](transaction &, results r) {
+                          ASSERT_EQ(r.size(), 1u);
+                          EXPECT_TRUE(r[0][0].as<bool>());           // IS NOT NULL
+                          EXPECT_EQ(r[0][1].as<int>(), 0);           // empty array, cardinality 0
+                          ok = true;
+                      },
+                      [](error::db_error e) { FAIL() << e.what(); })
+                   .await());
+    EXPECT_TRUE(ok);
+}
+
+// REGRESSION (serde audit): a vector of an element type ABSENT from the old add_vector
+// switch (numeric here) used to bind the anyarray pseudo-OID (2277), which PostgreSQL
+// rejects. The fixed array-OID map binds numeric[] (1231); the server confirms the value
+// bytes are wire-correct by comparing against its own ARRAY literal.
+TEST_F(DataTypesRoundTrip, NumericArrayParam_PreviouslyAnyarray_BindsAndMatches) {
+    ASSERT_TRUE(db_->prepare("nap", "SELECT $1::numeric[] = ARRAY[1.5,2.5,3.25]::numeric[] AS eq",
+                             type_oid_sequence{oid::numeric_array}, discard_prepare, discard_error)
+                    .await());
+    const std::vector<numeric> a{numeric("1.5"), numeric("2.5"), numeric("3.25")};
+    bool                       ok = false;
+    ASSERT_TRUE(db_->execute(
+                      "nap", params(a),
+                      [&](transaction &, results r) {
+                          ASSERT_EQ(r.size(), 1u);
+                          EXPECT_TRUE(r[0][0].as<bool>()); // server-side array equality
+                          ok = true;
+                      },
+                      [](error::db_error e) { FAIL() << e.what(); })
+                   .await());
+    EXPECT_TRUE(ok);
+}
+
 TEST_F(DataTypesRoundTrip, IntArray_MultiDimensional_FlattensInOrder) {
     // ndim > 1: the binary array header carries 2 dims. The std::vector<int> decoder
     // flattens row-major; assert against the server's own flattened ordering via unnest.
