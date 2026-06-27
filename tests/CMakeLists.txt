@@ -93,6 +93,8 @@ qpg_itest(wire-formats          integration/protocol/wire-formats.cpp)
 qpg_itest(listen-notify         integration/notify/listen-notify.cpp           REQUIRES coroutine)
 qpg_itest(coro-api              integration/api/coro-api.cpp                    REQUIRES coroutine)
 qpg_itest(errors-sqlstate       integration/errors/errors-sqlstate.cpp         REQUIRES coroutine)
+qpg_itest(database-api-extra    integration/api/database-api-extra.cpp         REQUIRES coroutine)
+qpg_itest(param-roundtrip       integration/serialization/param-roundtrip.cpp  REQUIRES coroutine)
 
 if(QB_HAS_SSL)
     qpg_itest(connection-ssl    integration/connection/connection-ssl.cpp      REQUIRES ssl coroutine EXTRA_LABELS ssl)
