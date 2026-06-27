@@ -1148,6 +1148,14 @@ struct numeric {
     }
 };
 
+// numeric's type_mapping lives here (not in type_mapping.h) because the numeric type is
+// only declared above. Keeps the two OID sources (type_mapping<T> and
+// TypeConverter<T>::get_oid) in agreement for the exact-decimal type.
+template <>
+struct type_mapping<numeric> {
+    static constexpr integer type_oid = 1700;
+}; // numeric
+
 /**
  * @brief Decode PostgreSQL binary NUMERIC (value bytes, no length prefix) into a
  *        canonical decimal string. Mirrors PostgreSQL's numeric_out.
