@@ -15,6 +15,9 @@
 #include <regex>
 #include <stdexcept>
 
+#include <qb/system/parse.h>
+
+#include "./error.h"
 #include "./protocol_io_traits.h"
 
 namespace qb {
@@ -48,15 +51,26 @@ convert_from_text(const char *data, size_t size) {
     std::string text(data, size);
 
     if constexpr (std::is_same_v<T, smallint>) {
-        return static_cast<smallint>(std::stoi(text));
+        // PostgreSQL text-format int2 is a whole canonical integer field.
+        if (auto v = qb::to_number<smallint>(text))
+            return *v;
+        throw error::client_error("Invalid int2 text value: " + text);
     } else if constexpr (std::is_same_v<T, integer>) {
-        return std::stoi(text);
+        if (auto v = qb::to_number<integer>(text))
+            return *v;
+        throw error::client_error("Invalid int4 text value: " + text);
     } else if constexpr (std::is_same_v<T, bigint>) {
-        return std::stoll(text);
+        if (auto v = qb::to_number<bigint>(text))
+            return *v;
+        throw error::client_error("Invalid int8 text value: " + text);
     } else if constexpr (std::is_same_v<T, float>) {
-        return std::stof(text);
+        if (auto v = qb::to_number<float>(text))
+            return *v;
+        throw error::client_error("Invalid float4 text value: " + text);
     } else if constexpr (std::is_same_v<T, double>) {
-        return std::stod(text);
+        if (auto v = qb::to_number<double>(text))
+            return *v;
+        throw error::client_error("Invalid float8 text value: " + text);
     } else if constexpr (std::is_same_v<T, bool>) {
         return (text == "t" || text == "true" || text == "y" || text == "yes" || text == "1");
     } else {

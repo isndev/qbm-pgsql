@@ -56,7 +56,8 @@
 #include <qb/io.h>
 #include <qb/io/crypto.h> // qb::crypto::to_hex_string / hex_to_string (bytea hex codec)
 #include <qb/system/endian.h>
-#include <qb/system/time.h> // qb::safe_gmtime / safe_timegm / civil date helpers
+#include <qb/system/parse.h> // qb::to_number / to_number_prefix (locale-free, non-throwing string->number)
+#include <qb/system/time.h>  // qb::safe_gmtime / safe_timegm / civil date helpers
 
 #include "./common.h"
 #include "./error.h" // qb::pg::error::client_error (thrown by text/binary converters)
@@ -496,29 +497,32 @@ public:
         if constexpr (std::is_same_v<value_type, std::string>) {
             return text;
         } else if constexpr (std::is_same_v<value_type, smallint>) {
-            int v;
-            try {
-                v = std::stoi(text);
-            } catch (const std::exception &e) {
-                throw error::client_error("Cannot parse smallint from text: " + text + " (" + e.what() + ")");
-            }
-            // std::stoi fits an int, so 40000 would NOT throw but would silently wrap on
-            // the int16 cast (-> -25536). Range-check before narrowing.
-            if (v < std::numeric_limits<smallint>::min() || v > std::numeric_limits<smallint>::max())
+            // PREFIX parse (the std::stoi idiom): skip leading whitespace, take the
+            // longest numeric prefix, tolerate trailing characters ("12abc" -> 12).
+            // nullopt means no number at all or magnitude past int range -> fail loud.
+            const auto v = qb::to_number_prefix<int>(text);
+            if (!v)
+                throw error::client_error("Cannot parse smallint from text: " + text);
+            // int fits 40000, so it would NOT overflow but would silently wrap on the
+            // int16 cast (-> -25536). Range-check before narrowing.
+            if (*v < std::numeric_limits<smallint>::min() || *v > std::numeric_limits<smallint>::max())
                 throw error::client_error("smallint value out of range: " + text);
-            return static_cast<smallint>(v);
+            return static_cast<smallint>(*v);
         } else if constexpr (std::is_same_v<value_type, integer>) {
-            try {
-                return static_cast<integer>(std::stoi(text));
-            } catch (const std::exception &e) {
-                throw error::client_error("Cannot parse integer from text: " + text + " (" + e.what() + ")");
-            }
+            // PREFIX parse: longest numeric prefix, trailing data ignored ("100 200"
+            // -> 100). nullopt on no-number or > int32 magnitude -> client_error
+            // (matches std::stoi's out_of_range -> caught -> client_error).
+            const auto v = qb::to_number_prefix<int>(text);
+            if (!v)
+                throw error::client_error("Cannot parse integer from text: " + text);
+            return static_cast<integer>(*v);
         } else if constexpr (std::is_same_v<value_type, bigint>) {
-            try {
-                return static_cast<bigint>(std::stoll(text));
-            } catch (const std::exception &e) {
-                throw error::client_error("Cannot parse bigint from text: " + text + " (" + e.what() + ")");
-            }
+            // PREFIX parse via long long (the std::stoll idiom): "9000000000xyz" ->
+            // 9000000000; nullopt on no-number or > int64 magnitude -> client_error.
+            const auto v = qb::to_number_prefix<long long>(text);
+            if (!v)
+                throw error::client_error("Cannot parse bigint from text: " + text);
+            return static_cast<bigint>(*v);
         } else if constexpr (std::is_same_v<value_type, float>) {
             // Special values
             if (text == "NaN")
@@ -527,23 +531,17 @@ public:
                 return std::numeric_limits<float>::infinity();
             if (text == "-Infinity" || text == "-inf")
                 return -std::numeric_limits<float>::infinity();
-            // std::strtof, NOT std::stof: stof throws std::out_of_range on a SUBNORMAL
-            // underflow even though the subnormal is the correct, representable value the
-            // server stores and sends (e.g. FLT_TRUE_MIN ~1.4e-45). strtof returns that value
-            // with errno==ERANGE; we accept it and reject ONLY a true overflow (ERANGE *and* an
-            // infinite result) or a fully-unparseable string (no characters consumed). strtof
-            // also still recognises "inf"/"nan" case-insensitively (matches PG's accept).
-            {
-                const char *str = text.c_str();
-                char       *end = nullptr;
-                errno           = 0;
-                const float v   = std::strtof(str, &end);
-                if (end == str)
-                    throw error::client_error("Cannot parse float from text: " + text);
-                if (errno == ERANGE && std::isinf(v))
-                    throw error::client_error("float value out of range: " + text);
-                return v;
-            }
+            // PREFIX parse via qb::to_number_prefix<float> (the std::strtof idiom),
+            // which folds in the old errno/isinf handling: a SUBNORMAL underflow
+            // (e.g. FLT_TRUE_MIN ~1.4e-45) parses EXACTLY to its representable value
+            // (std::stof would throw out_of_range on it); a fully-unparseable string
+            // ("garbage") yields nullopt -> client_error; a true magnitude overflow
+            // ("1e40" > FLT_MAX) yields nullopt -> client_error. Trailing characters
+            // are tolerated ("1.5xyz" -> 1.5). from_chars recognises "inf"/"nan"
+            // case-insensitively just like strtof.
+            if (const auto v = qb::to_number_prefix<float>(text))
+                return *v;
+            throw error::client_error("Cannot parse float from text: " + text);
         } else if constexpr (std::is_same_v<value_type, double>) {
             // Special values
             if (text == "NaN")
@@ -552,24 +550,16 @@ public:
                 return std::numeric_limits<double>::infinity();
             if (text == "-Infinity" || text == "-inf")
                 return -std::numeric_limits<double>::infinity();
-            // std::strtod, NOT std::stod: stod throws std::out_of_range on a SUBNORMAL
-            // underflow even though the subnormal is the correct, representable value the
-            // server stores and sends (e.g. DBL_TRUE_MIN ~4.9e-324). strtod returns that value
-            // with errno==ERANGE; we accept it and reject ONLY a true overflow (ERANGE *and* an
-            // infinite result, e.g. "1e400") or a fully-unparseable string (end==str, so the
-            // dead-catch concern of the old std::stod comment no longer applies — malformed
-            // input is rejected explicitly here). strtod recognises "inf"/"nan" case-insensitively.
-            {
-                const char *str = text.c_str();
-                char        *end = nullptr;
-                errno            = 0;
-                const double v   = std::strtod(str, &end);
-                if (end == str)
-                    throw error::client_error("Cannot parse double from text: " + text);
-                if (errno == ERANGE && std::isinf(v))
-                    throw error::client_error("double value out of range: " + text);
-                return v;
-            }
+            // PREFIX parse via qb::to_number_prefix<double> (the std::strtod idiom),
+            // folding in the old errno/isinf handling: a SUBNORMAL underflow (e.g.
+            // DBL_TRUE_MIN ~4.9e-324) parses EXACTLY (std::stod would throw out_of_range
+            // on it); a fully-unparseable string ("garbage") -> nullopt -> client_error;
+            // a true magnitude overflow ("1e400") -> nullopt -> client_error. Trailing
+            // characters are tolerated ("2.5 extra" -> 2.5). from_chars recognises
+            // "inf"/"nan" case-insensitively just like strtod.
+            if (const auto v = qb::to_number_prefix<double>(text))
+                return *v;
+            throw error::client_error("Cannot parse double from text: " + text);
         } else if constexpr (std::is_same_v<value_type, bool>) {
             return (text == "t" || text == "true" || text == "1" || text == "yes" || text == "y" || text == "on");
         } else if constexpr (std::is_same_v<value_type, bytea> || std::is_same_v<value_type, std::vector<byte>>) {
@@ -578,15 +568,17 @@ public:
             // Hexadecimal format (\x...)
             if (text.length() >= 2 && text.substr(0, 2) == "\\x") {
                 std::string hex = text.substr(2);
-                try {
-                    for (size_t i = 0; i + 1 < hex.length(); i += 2) {
-                        byte byte_val = static_cast<byte>(std::stoi(hex.substr(i, 2), nullptr, 16));
-                        result.push_back(byte_val);
-                    }
-                } catch (const std::exception &e) {
-                    // Consistency: every other from_text parser surfaces a malformed value as
-                    // error::client_error, not a raw std::invalid_argument from std::stoi.
-                    throw error::client_error("invalid bytea hex text: '" + text + "' (" + e.what() + ")");
+                for (size_t i = 0; i + 1 < hex.length(); i += 2) {
+                    // STRICT base-16 parse of exactly one 2-char hex pair. A non-hex
+                    // pair ("ZZ") yields nullopt; surface it as error::client_error so
+                    // every from_text parser reports malformed input the same way (the
+                    // old std::stoi(...,16) threw std::invalid_argument here, caught and
+                    // re-wrapped). A trailing odd nibble is still dropped by the i+1<len
+                    // guard (e.g. "\\xabc" -> one byte 0xAB, 'c' ignored).
+                    const auto v = qb::to_number<unsigned int>(std::string_view(hex).substr(i, 2), 16);
+                    if (!v)
+                        throw error::client_error("invalid bytea hex text: '" + text + "'");
+                    result.push_back(static_cast<byte>(*v));
                 }
             } else {
                 // Raw format
@@ -610,19 +602,35 @@ public:
 
             std::smatch matches;
             if (std::regex_match(text, matches, timestamp_regex)) {
-                year   = std::stoi(matches[1]);
-                month  = std::stoi(matches[2]);
-                day    = std::stoi(matches[3]);
-                hour   = std::stoi(matches[4]);
-                minute = std::stoi(matches[5]);
-                second = std::stoi(matches[6]);
+                // Each capture group is a bounded run of digits (\d{4}, \d{1,2}, ...),
+                // so it is a WHOLE numeric field — strict parse. The regex bounds keep
+                // every group within int range, so nullopt is unreachable here; we
+                // still surface it as the same domain error the no-match path throws
+                // rather than risk a bad_optional_access on hostile wire input.
+                auto field = [&](const std::ssub_match &m) -> int {
+                    const std::string s = m.str();
+                    const auto        v = qb::to_number<int>(s);
+                    if (!v)
+                        throw std::runtime_error("Invalid timestamp format");
+                    return *v;
+                };
+                year   = field(matches[1]);
+                month  = field(matches[2]);
+                day    = field(matches[3]);
+                hour   = field(matches[4]);
+                minute = field(matches[5]);
+                second = field(matches[6]);
 
                 // Parse microseconds if present
                 if (matches.size() > 7 && matches[7].matched) {
-                    // Pad with zeros if less than 6 digits
+                    // Pad with zeros if less than 6 digits, then strict-parse the WHOLE
+                    // (now 6-digit) field. ".5" -> "500000" -> 500000.
                     std::string micro_str = matches[7].str();
                     micro_str.append(6 - micro_str.length(), '0');
-                    microsecond = std::stoi(micro_str);
+                    const auto v = qb::to_number<int>(micro_str);
+                    if (!v)
+                        throw std::runtime_error("Invalid timestamp format");
+                    microsecond = *v;
                 }
 
                 // Set tm structure
@@ -1091,15 +1099,13 @@ struct TypeConverter<std::chrono::duration<Rep, Period>> {
 
     static value_type
     from_text(const std::string &text) {
-        // Simple parsing for "X seconds" format
-        // This is a simplified implementation
-        try {
-            size_t  pos   = 0;
-            int64_t value = std::stoll(text, &pos);
-            return std::chrono::duration_cast<value_type>(std::chrono::seconds(value));
-        } catch (...) {
-            return value_type::zero();
-        }
+        // Simple parsing for "X seconds" format (this is a simplified implementation).
+        // PREFIX parse via the std::stoll idiom: take the leading integer, ignore the
+        // trailing " seconds". Best-effort — an unparseable/absent number yields the
+        // zero duration rather than aborting (matches the old catch-all -> zero()).
+        if (const auto value = qb::to_number_prefix<long long>(text))
+            return std::chrono::duration_cast<value_type>(std::chrono::seconds(*value));
+        return value_type::zero();
     }
 };
 

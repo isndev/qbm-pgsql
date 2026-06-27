@@ -16,6 +16,8 @@
  */
 #include "./type_converter.h"
 
+#include <qb/system/parse.h> // qb::to_number (locale-free, throw-free string->number)
+
 namespace qb::pg::detail {
 
 // ============================================================================
@@ -185,7 +187,15 @@ TypeConverter<qb::wall_time>::from_text(const std::string &text) {
             end_pos++;
         }
         std::string usec_str = text.substr(dot_pos + 1, end_pos - (dot_pos + 1));
-        usec                 = std::stoi(usec_str);
+        // usec_str is the run of ASCII digits after the '.' (delimited by the
+        // first non-digit), i.e. an exact, sign-free, whitespace-free whole field
+        // -> STRICT parse. The only failure mode is an overflow (more digits than
+        // fit in int) on hostile wire input; fail loud with the module's domain
+        // error instead of std::stoi's raw std::out_of_range.
+        if (auto parsed = qb::to_number<int>(usec_str))
+            usec = *parsed;
+        else
+            throw error::client_error("invalid microsecond fraction in timestamp text: '" + usec_str + "'");
 
         // Adjust to the correct scale (microseconds)
         int digits = static_cast<int>(usec_str.length());

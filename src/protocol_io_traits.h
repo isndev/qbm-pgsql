@@ -21,6 +21,8 @@
 #include <string>
 #include <type_traits>
 
+#include <qb/system/parse.h>
+
 #include "./common.h"
 #include "./param_unserializer.h"
 
@@ -532,12 +534,13 @@ struct text_reader<smallint> {
             return begin;
 
         std::string text_value(begin, null_terminator);
-        try {
-            value = std::stoi(text_value);
+        // std::stoi parsed into int then narrowed to smallint; preserve that
+        // exact range/narrowing behaviour by parsing into int.
+        if (auto parsed = qb::to_number_prefix<int>(text_value)) {
+            value = static_cast<smallint>(*parsed);
             return null_terminator + 1; // Skip the \0
-        } catch (const std::exception &) {
-            return begin;
         }
+        return begin;
     }
 };
 
@@ -564,12 +567,11 @@ struct text_reader<integer> {
             return begin;
 
         std::string text_value(begin, null_terminator);
-        try {
-            value = std::stoi(text_value);
+        if (auto parsed = qb::to_number_prefix<integer>(text_value)) {
+            value = *parsed;
             return null_terminator + 1; // Skip the \0
-        } catch (const std::exception &) {
-            return begin;
         }
+        return begin;
     }
 };
 
@@ -596,12 +598,11 @@ struct text_reader<bigint> {
             return begin;
 
         std::string text_value(begin, null_terminator);
-        try {
-            value = std::stoll(text_value);
+        if (auto parsed = qb::to_number_prefix<bigint>(text_value)) {
+            value = *parsed;
             return null_terminator + 1; // Skip the \0
-        } catch (const std::exception &) {
-            return begin;
         }
+        return begin;
     }
 };
 
@@ -628,12 +629,11 @@ struct text_reader<float> {
             return begin;
 
         std::string text_value(begin, null_terminator);
-        try {
-            value = std::stof(text_value);
+        if (auto parsed = qb::to_number_prefix<float>(text_value)) {
+            value = *parsed;
             return null_terminator + 1; // Skip the \0
-        } catch (const std::exception &) {
-            return begin;
         }
+        return begin;
     }
 };
 
@@ -660,12 +660,11 @@ struct text_reader<double> {
             return begin;
 
         std::string text_value(begin, null_terminator);
-        try {
-            value = std::stod(text_value);
+        if (auto parsed = qb::to_number_prefix<double>(text_value)) {
+            value = *parsed;
             return null_terminator + 1; // Skip the \0
-        } catch (const std::exception &) {
-            return begin;
         }
+        return begin;
     }
 };
 
