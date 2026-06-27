@@ -15,6 +15,8 @@
  * Licensed under the Apache License, Version 2.0 (the "License").
  */
 
+#include <cstdint>
+#include <cstring>
 #include <optional>
 #include <span>
 #include <string>
@@ -189,6 +191,44 @@ TEST(TypeConverterArrayBinary, DecodeGuardPaths) {
 
     // Element length present but value truncated (claims 4 bytes, only 2 follow) -> empty.
     EXPECT_TRUE(decode_pg_array<integer>(hex_to_bytes("0000000100000000000000170000000100000001000000040102")).empty());
+}
+
+// ----------------------------------------------------------------------------
+// Array converter to_text / from_text are intentionally inert (arrays travel in
+// binary). They must be reachable and return the documented empty result rather
+// than mis-encoding — covers the QB_PG_DEFINE_ARRAY_CONVERTER text stubs.
+// ----------------------------------------------------------------------------
+
+TEST(TypeConverterArrayText, TextStubsAreInert) {
+    EXPECT_EQ(TypeConverter<std::vector<integer>>::to_text(std::vector<integer>{1, 2, 3}), std::string{});
+    EXPECT_TRUE(TypeConverter<std::vector<integer>>::from_text("{1,2,3}").empty());
+    EXPECT_EQ(TypeConverter<std::vector<std::string>>::to_text(std::vector<std::string>{"a", "b"}), std::string{});
+    EXPECT_TRUE(TypeConverter<std::vector<std::string>>::from_text("{a,b}").empty());
+    EXPECT_EQ(TypeConverter<std::vector<double>>::to_text(std::vector<double>{1.5}), std::string{});
+}
+
+// to_binary for every registered array element type frames as [int32 body-len][body]
+// and round-trips through from_binary (exercises encode_pg_array<Elem> + each
+// QB_PG_DEFINE_ARRAY_CONVERTER::to_binary, not just the int4 specialization).
+TEST(TypeConverterArrayBinary, ToBinaryRoundTripAllElementTypes) {
+    auto rt = [](auto vec) {
+        using V = decltype(vec);
+        std::vector<byte> buf;
+        TypeConverter<V>::to_binary(vec, buf);
+        ASSERT_GE(buf.size(), 4u);
+        // declared body length matches the bytes after the prefix
+        integer len_be;
+        std::memcpy(&len_be, buf.data(), sizeof(integer));
+        EXPECT_EQ(static_cast<size_t>(ntohl(static_cast<uint32_t>(len_be))), buf.size() - 4u);
+        std::vector<byte> body(buf.begin() + 4, buf.end());
+        EXPECT_EQ(TypeConverter<V>::from_binary(body), vec);
+    };
+    rt(std::vector<bool>{true, false, true});
+    rt(std::vector<smallint>{7, -8, 9});
+    rt(std::vector<bigint>{1, 2, 3});
+    rt(std::vector<float>{1.5f, -2.5f});
+    rt(std::vector<double>{1.5, 2.5});
+    rt(std::vector<std::string>{"apple", "banana"});
 }
 
 // ----------------------------------------------------------------------------

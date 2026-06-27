@@ -256,6 +256,42 @@ TEST(ResultsetPopulated, RowsAffectedAndDeepSnapshot) {
     EXPECT_EQ(snap.rows_affected(), 2);
 }
 
+// Lightweight accessor / iterator-default surface that the higher-level tests above
+// never touch directly: resultset operator bool / operator!, row::row_index,
+// row::index_of_name, field::row_index / field::field_index, operator-(row,row), and
+// the default-constructed const_row_iterator / const_field_iterator valid() == false.
+TEST(ResultsetPopulated, AccessorAndIteratorDefaultSurface) {
+    PopulatedResult pr({"id", "name"}, {{"1", "a"}, {"2", "b"}, {"3", "c"}});
+    resultset       rs = pr.rs();
+
+    // operator bool / operator! on a non-empty set.
+    EXPECT_TRUE(static_cast<bool>(rs));
+    EXPECT_FALSE(!rs);
+
+    // row::row_index reflects each row's ordinal; operator-(row,row) is the index delta.
+    resultset::row r0 = rs[0];
+    resultset::row r2 = rs[2];
+    EXPECT_EQ(r0.row_index(), 0u);
+    EXPECT_EQ(r2.row_index(), 2u);
+    EXPECT_EQ(r2 - r0, 2);
+
+    // row::index_of_name delegates to the resultset (found + npos).
+    EXPECT_EQ(r0.index_of_name("name"), 1u);
+    EXPECT_EQ(r0.index_of_name("nope"), resultset::npos);
+
+    // field::row_index / field::field_index carry the field's coordinates.
+    resultset::row::value_type f = r2[1]; // row 2 == {"3","c"}, column 1 == "c"
+    EXPECT_EQ(f.row_index(), 2u);
+    EXPECT_EQ(f.field_index(), 1u);
+    EXPECT_EQ(f.as<std::string>(), "c");
+
+    // Default-constructed iterators are invalid (no backing resultset).
+    resultset::const_row_iterator   dead_row{};
+    resultset::const_field_iterator dead_field{};
+    EXPECT_FALSE(dead_row.valid());
+    EXPECT_FALSE(dead_field.valid());
+}
+
 // resultset::json() materializes rows as an array of {name: value-or-null}.
 TEST(ResultsetPopulated, JsonSerialization) {
     PopulatedResult pr({"id", "name"}, {{"1", ""}}, {false, true});

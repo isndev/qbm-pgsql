@@ -22,9 +22,12 @@
  */
 
 #include <cmath>
+#include <cstring>
 #include <limits>
+#include <optional>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 #include <gtest/gtest.h>
 #include "../pgsql.h"
@@ -271,6 +274,156 @@ TEST(TypeConverterScalarFromBinary, BoolAndUuidEdgeSizes) {
     // bytes (the >= 20 path that strips the prefix and reads from offset 4).
     auto prefixed = TypeConverter<qb::uuid>::from_binary(hex_to_bytes("00000010550e8400e29b41d4a716446655440000"));
     EXPECT_EQ(prefixed, qb::uuid::from_string("550e8400-e29b-41d4-a716-446655440000").value());
+}
+
+// ----------------------------------------------------------------------------
+// Generic TypeConverter<T>::to_binary for the scalar types (the encoder half).
+//
+// The encode suite drives scalar binding through ParamSerializer::add_* (which call
+// write_*), and serialize_params only ever forwards int / std::string / bool to the
+// generic to_binary. The remaining scalar branches of the primary-template to_binary
+// (smallint / bigint / float / double / bytea / UUID / timestamptz) are otherwise
+// never exercised. Each case strips the 4-byte big-endian length prefix to_binary
+// writes, then compares the VALUE bytes to PostgreSQL *send() ground truth (captured
+// via `encode(int2send(...),'hex')` etc. on PG 18.4).
+// ----------------------------------------------------------------------------
+
+namespace {
+// to_binary frames as [int32 big-endian length][value]. Return (declared_len, value).
+template <typename T>
+std::pair<integer, std::vector<byte>>
+encode_value(const T &v) {
+    std::vector<byte> buf;
+    TypeConverter<T>::to_binary(v, buf);
+    EXPECT_GE(buf.size(), 4u);
+    integer len_be;
+    std::memcpy(&len_be, buf.data(), sizeof(integer));
+    return {static_cast<integer>(ntohl(static_cast<uint32_t>(len_be))), std::vector<byte>(buf.begin() + 4, buf.end())};
+}
+} // namespace
+
+TEST(TypeConverterScalarToBinary, BoolEncodesLengthOnePlusByte) {
+    auto [len, val] = encode_value<bool>(true);
+    EXPECT_EQ(len, 1);
+    ASSERT_EQ(val.size(), 1u);
+    EXPECT_EQ(static_cast<unsigned char>(val[0]), 0x01);
+
+    auto [len0, val0] = encode_value<bool>(false);
+    EXPECT_EQ(len0, 1);
+    ASSERT_EQ(val0.size(), 1u);
+    EXPECT_EQ(static_cast<unsigned char>(val0[0]), 0x00);
+}
+
+TEST(TypeConverterScalarToBinary, IntegerFamilyAgainstSendGroundTruth) {
+    // int2send(12345)=3039, int2send(-32768)=8000.
+    {
+        auto [len, val] = encode_value<smallint>(static_cast<smallint>(12345));
+        EXPECT_EQ(len, 2);
+        EXPECT_EQ(val, hex_to_bytes("3039"));
+    }
+    {
+        auto [len, val] = encode_value<smallint>(std::numeric_limits<smallint>::min());
+        EXPECT_EQ(len, 2);
+        EXPECT_EQ(val, hex_to_bytes("8000"));
+    }
+    // int4send(987654321)=3ade68b1.
+    {
+        auto [len, val] = encode_value<integer>(987654321);
+        EXPECT_EQ(len, 4);
+        EXPECT_EQ(val, hex_to_bytes("3ade68b1"));
+    }
+    // int8send(INT64_MAX)=7fffffffffffffff, int8send(-1)=ffffffffffffffff.
+    {
+        auto [len, val] = encode_value<bigint>(std::numeric_limits<bigint>::max());
+        EXPECT_EQ(len, 8);
+        EXPECT_EQ(val, hex_to_bytes("7fffffffffffffff"));
+    }
+    {
+        auto [len, val] = encode_value<bigint>(static_cast<bigint>(-1));
+        EXPECT_EQ(len, 8);
+        EXPECT_EQ(val, hex_to_bytes("ffffffffffffffff"));
+    }
+}
+
+TEST(TypeConverterScalarToBinary, FloatDoubleAgainstSendGroundTruth) {
+    // float4send(1.5)=3fc00000.
+    {
+        auto [len, val] = encode_value<float>(1.5f);
+        EXPECT_EQ(len, 4);
+        EXPECT_EQ(val, hex_to_bytes("3fc00000"));
+    }
+    // float8send(-2.5)=c004000000000000.
+    {
+        auto [len, val] = encode_value<double>(-2.5);
+        EXPECT_EQ(len, 8);
+        EXPECT_EQ(val, hex_to_bytes("c004000000000000"));
+    }
+    // NaN / +Inf bit patterns are preserved big-endian (float4 NaN=7fc00000).
+    {
+        auto [len, val] = encode_value<float>(std::numeric_limits<float>::quiet_NaN());
+        EXPECT_EQ(len, 4);
+        EXPECT_EQ(static_cast<unsigned char>(val[0]) & 0x7Fu, 0x7Fu); // exponent all-ones
+    }
+}
+
+TEST(TypeConverterScalarToBinary, ByteaAndUuidAndTimestamp) {
+    // bytea: length == byte count, value == raw bytes (no escaping).
+    {
+        std::vector<byte> raw = hex_to_bytes("deadbeef");
+        auto [len, val]       = encode_value<std::vector<byte>>(raw);
+        EXPECT_EQ(len, 4);
+        EXPECT_EQ(val, raw);
+    }
+    // Empty bytea is a valid zero-length value (length 0, no payload) — NOT a NULL.
+    {
+        auto [len, val] = encode_value<std::vector<byte>>(std::vector<byte>{});
+        EXPECT_EQ(len, 0);
+        EXPECT_TRUE(val.empty());
+    }
+    // UUID: 16 raw bytes, length 16. uuid_send(...) ground truth.
+    {
+        qb::uuid u      = qb::uuid::from_string("550e8400-e29b-41d4-a716-446655440000").value();
+        auto [len, val] = encode_value<qb::uuid>(u);
+        EXPECT_EQ(len, 16);
+        EXPECT_EQ(val, hex_to_bytes("550e8400e29b41d4a716446655440000"));
+    }
+    // timestamptz: 8 bytes micros-since-2000, big-endian. timestamptz_send ground truth.
+    {
+        qb::wall_time ts = TypeConverter<qb::wall_time>::from_binary(hex_to_bytes("0002b6b29f385180"));
+        auto [len, val]  = encode_value<qb::wall_time>(ts);
+        EXPECT_EQ(len, 8);
+        EXPECT_EQ(val, hex_to_bytes("0002b6b29f385180"));
+    }
+}
+
+// std::optional<T>::to_binary: present delegates to the inner encoder; nullopt writes
+// the -1 length sentinel (0xFFFFFFFF) and no payload. Also covers optional to_text
+// (delegate vs "") and optional from_text (empty -> nullopt vs delegate).
+TEST(TypeConverterScalarOptional, ToBinaryToTextFromText) {
+    // present integer -> identical to the bare int4 encoding (len 4, value 0000002a).
+    {
+        std::vector<byte> buf;
+        TypeConverter<std::optional<integer>>::to_binary(std::optional<integer>{42}, buf);
+        ASSERT_EQ(buf.size(), 8u);
+        EXPECT_EQ(std::vector<byte>(buf.begin() + 4, buf.end()), hex_to_bytes("0000002a"));
+    }
+    // nullopt -> exactly the 4-byte -1 sentinel, no payload.
+    {
+        std::vector<byte> buf;
+        TypeConverter<std::optional<integer>>::to_binary(std::optional<integer>{}, buf);
+        ASSERT_EQ(buf.size(), 4u);
+        EXPECT_EQ(buf, hex_to_bytes("ffffffff"));
+    }
+    // to_text: present delegates, nullopt -> "".
+    EXPECT_EQ(TypeConverter<std::optional<integer>>::to_text(std::optional<integer>{7}), "7");
+    EXPECT_EQ(TypeConverter<std::optional<integer>>::to_text(std::optional<integer>{}), "");
+    // from_text: empty -> nullopt, non-empty delegates to the inner from_text.
+    EXPECT_FALSE(TypeConverter<std::optional<integer>>::from_text("").has_value());
+    auto some = TypeConverter<std::optional<integer>>::from_text("123");
+    ASSERT_TRUE(some.has_value());
+    EXPECT_EQ(*some, 123);
+    // optional<string> empty text -> nullopt (the inner is std::string, still empty=>null).
+    EXPECT_FALSE(TypeConverter<std::optional<std::string>>::from_text("").has_value());
 }
 
 // ----------------------------------------------------------------------------

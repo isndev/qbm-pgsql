@@ -33,6 +33,17 @@ TEST(TypeConverterJsonOid, KnownOids) {
     EXPECT_EQ(TypeConverter<qb::jsonb>::get_oid(), static_cast<integer>(oid::jsonb));
 }
 
+// JSON / JSONB to_text delegate to nlohmann::dump() (compact, key-sorted for jsonb).
+TEST(TypeConverterJsonToText, DumpRoundTrip) {
+    qb::json j = qb::json::parse(R"({"a":1,"b":[true,null]})");
+    EXPECT_EQ(TypeConverter<qb::json>::to_text(j), j.dump());
+
+    qb::jsonb jb(qb::json::parse(R"({"z":2,"a":1})"));
+    EXPECT_EQ(TypeConverter<qb::jsonb>::to_text(jb), jb.dump());
+    // to_text must yield valid JSON that re-parses to the same value.
+    EXPECT_EQ(qb::json::parse(TypeConverter<qb::json>::to_text(j)), j);
+}
+
 // ----------------------------------------------------------------------------
 // JSON (text varlena)
 // ----------------------------------------------------------------------------
