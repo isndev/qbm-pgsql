@@ -90,6 +90,39 @@ TEST(ScramEscape, EscapesCommaAndEquals) {
     EXPECT_EQ(scram_escape_saslname(",="), "=2C=3D");
 }
 
+// ---------------------------------------------------------------------------
+// SCRAM iteration-count bound (DoS guard)
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief `scram_validate_iteration_count` accepts only a sane [1, kMaxScramIterations].
+ *
+ * The `i=` count comes from the (untrusted) SCRAM server-first message and feeds
+ * PBKDF2 synchronously on the I/O event-loop thread, so an unbounded value is a
+ * denial of service (i=2147483647 => minutes of inline HMAC stalling the core).
+ * This pins the accept/reject contract without a live handshake.
+ */
+TEST(ScramIteration, AcceptsSaneRangeRejectsHostileAndMalformed) {
+    // Accepted: PostgreSQL's server default, the minimum, and the exact ceiling.
+    EXPECT_EQ(scram_validate_iteration_count("4096"), 4096);
+    EXPECT_EQ(scram_validate_iteration_count("1"), 1);
+    EXPECT_EQ(scram_validate_iteration_count(std::to_string(kMaxScramIterations)),
+              kMaxScramIterations);
+
+    // Rejected — the DoS guard: one past the ceiling and the INT_MAX worst case.
+    EXPECT_THROW(scram_validate_iteration_count(std::to_string(kMaxScramIterations + 1)),
+                 error::connection_error);
+    EXPECT_THROW(scram_validate_iteration_count("2147483647"), error::connection_error);
+
+    // Rejected — malformed / non-positive / overflow / trailing junk (to_number strict).
+    EXPECT_THROW(scram_validate_iteration_count("0"), error::connection_error);
+    EXPECT_THROW(scram_validate_iteration_count("-5"), error::connection_error);
+    EXPECT_THROW(scram_validate_iteration_count(""), error::connection_error);
+    EXPECT_THROW(scram_validate_iteration_count("abc"), error::connection_error);
+    EXPECT_THROW(scram_validate_iteration_count("4096x"), error::connection_error);
+    EXPECT_THROW(scram_validate_iteration_count("99999999999999999999"), error::connection_error);
+}
+
 int
 main(int argc, char **argv) {
     testing::InitGoogleTest(&argc, argv);
