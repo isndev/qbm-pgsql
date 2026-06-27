@@ -38,14 +38,11 @@ ParamUnserializer::read_smallint(std::span<const byte> buffer) {
         throw std::runtime_error("Buffer too small for smallint");
     }
 
-    // Convert from network byte order (big-endian)
-    union {
-        smallint value;
-        byte     bytes[sizeof(smallint)];
-    } data;
-
-    std::memcpy(data.bytes, buffer.data(), sizeof(smallint));
-    return ntohs(data.value);
+    // Convert from network byte order (big-endian). memcpy + qb::endian (not a
+    // type-punning union, whose cross-member read is UB) — matches read_bigint.
+    smallint value;
+    std::memcpy(&value, buffer.data(), sizeof(smallint));
+    return qb::endian::from_big_endian(value);
 }
 
 /**
@@ -65,14 +62,11 @@ ParamUnserializer::read_integer(std::span<const byte> buffer) {
         throw std::runtime_error("Buffer too small for integer");
     }
 
-    // Convert from network byte order (big-endian)
-    union {
-        integer value;
-        byte    bytes[sizeof(integer)];
-    } data;
-
-    std::memcpy(data.bytes, buffer.data(), sizeof(integer));
-    return ntohl(data.value);
+    // Convert from network byte order (big-endian). memcpy + qb::endian (not a
+    // type-punning union, whose cross-member read is UB) — matches read_bigint.
+    integer value;
+    std::memcpy(&value, buffer.data(), sizeof(integer));
+    return qb::endian::from_big_endian(value);
 }
 
 /**

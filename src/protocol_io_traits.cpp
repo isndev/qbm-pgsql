@@ -12,9 +12,6 @@
  */
 #include <array>
 #include <ctime>
-#ifndef _WIN32
-#include <netinet/in.h> // For htons, htonl
-#endif
 #include <regex>
 #include <stdexcept>
 
