@@ -101,7 +101,8 @@
 #include <qb/io/tcp/ssl/socket.h>
 #endif
 #include <qb/system/allocator/pipe.h>
-#include <qb/system/cpu.h> // qb::scope_guard
+#include <qb/system/cpu.h>    // qb::scope_guard
+#include <qb/system/parse.h>  // qb::to_number (locale-free, non-throwing)
 
 // P1-1: Socket includes for keepalive support
 #ifdef _WIN32
@@ -406,6 +407,34 @@ using namespace qb::pg;
 [[nodiscard]] inline bool
 scram_server_nonce_extends_client(std::string_view client_nonce, std::string_view server_nonce) noexcept {
     return !client_nonce.empty() && server_nonce.size() > client_nonce.size() && server_nonce.starts_with(client_nonce);
+}
+
+/// Hard upper bound on the SCRAM-SHA-256 iteration count this client will honour.
+/// PostgreSQL's server default is 4096; this is ~244x that. The count is
+/// server-controlled and feeds PBKDF2 SYNCHRONOUSLY on the I/O event-loop thread,
+/// so an unbounded value (e.g. i=2147483647 => ~minutes of HMAC) would stall every
+/// actor on the core — a trivial denial of service from a hostile or MITM'd server.
+inline constexpr int kMaxScramIterations = 1'000'000;
+
+/**
+ * @brief Parse and bound-check a SCRAM server-first `i=` iteration count.
+ *
+ * Accepts only a canonical base-10 integer in [1, ::qb::pg::kMaxScramIterations].
+ * Rejects a missing/empty, non-numeric, overflowing, non-positive, or absurdly
+ * large value — the last being the denial-of-service guard documented on
+ * ::qb::pg::kMaxScramIterations.
+ *
+ * @param text The raw `i=` attribute value from the SCRAM server-first message.
+ * @return The validated iteration count.
+ * @throws error::connection_error if @p text is malformed or out of range.
+ */
+[[nodiscard]] inline int
+scram_validate_iteration_count(std::string_view text) {
+    const auto parsed = qb::to_number<int>(text);
+    if (!parsed || *parsed < 1 || *parsed > kMaxScramIterations) {
+        throw error::connection_error("SCRAM iteration count missing, malformed, or out of range");
+    }
+    return *parsed;
 }
 
 /**
@@ -985,22 +1014,15 @@ public:
                     throw error::connection_error("SCRAM: server nonce does not extend the client nonce");
                 }
 
-                // Validate and parse iteration count safely
-                // SECURITY FIX: Added validation and error handling to prevent
-                // crashes from malicious or malformed SCRAM responses
-                int iteration = 0;
-                try {
-                    auto it = params.find("i");
-                    if (it == params.end()) {
-                        throw error::connection_error("Missing iteration count in SCRAM response");
-                    }
-                    iteration = std::stoi(it->second);
-                    if (iteration < 1) {
-                        throw error::connection_error("Invalid iteration count: must be positive");
-                    }
-                } catch (const std::exception &e) {
-                    throw error::connection_error(std::string("Invalid SCRAM iteration count: ") + e.what());
+                // Parse + bound-check the iteration count. SECURITY: the count is
+                // server-controlled and feeds PBKDF2 SYNCHRONOUSLY on the I/O event-loop
+                // thread, so an unbounded value is a DoS (see scram_validate_iteration_count
+                // / kMaxScramIterations).
+                const auto it = params.find("i");
+                if (it == params.end()) {
+                    throw error::connection_error("Missing iteration count in SCRAM response");
                 }
+                const int iteration = scram_validate_iteration_count(it->second);
 
                 // Client-first-message-bare — MUST match the bytes sent in the SASL
                 // client-first (same saslname escaping of the username).
