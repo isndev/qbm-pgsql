@@ -169,10 +169,32 @@ TypeConverter<qb::wall_time>::from_text(const std::string &text) {
 
     int year = 0, month = 0, day = 0, hour = 0, min = 0, sec = 0;
 
-    // Use sscanf which is more tolerant of formats
-    int matched = sscanf(text.c_str(), "%d-%d-%d %d:%d:%d", &year, &month, &day, &hour, &min, &sec);
-
-    if (matched != 6) {
+    // Faithful, locale-free, overflow-safe replacement for
+    // sscanf("%d-%d-%d %d:%d:%d") == 6. Each take() parses a signed integer prefix
+    // (skipping leading whitespace, like %d), so the date/time separator space is
+    // absorbed by the hour field's own whitespace skip; the '-'/':' separators are
+    // matched literally. All six fields are required.
+    const std::string_view sv  = text;
+    std::size_t            pos = 0;
+    const auto             take = [&](int &out) noexcept -> bool {
+        if (pos >= sv.size())
+            return false;
+        std::size_t used = 0;
+        const auto  v    = qb::to_number_prefix<int>(sv.substr(pos), &used);
+        if (!v)
+            return false;
+        out = *v;
+        pos += used;
+        return true;
+    };
+    const auto lit = [&](char c) noexcept -> bool {
+        if (pos >= sv.size() || sv[pos] != c)
+            return false;
+        ++pos;
+        return true;
+    };
+    if (!(take(year) && lit('-') && take(month) && lit('-') && take(day) && take(hour) && lit(':') && take(min) &&
+          lit(':') && take(sec))) {
         throw std::runtime_error("Invalid timestamp format");
     }
 
