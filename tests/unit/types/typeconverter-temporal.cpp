@@ -250,6 +250,23 @@ TEST(TypeConverterTemporalText, TimeRoundTrips) {
               "08:00:00-08:00");
 }
 
+// DATE and INTERVAL inline to_text / from_text (the converter delegates to
+// qb::date::to_string / qb::date::parse and qb::calendar_interval::to_string).
+TEST(TypeConverterTemporalText, DateAndIntervalToFromText) {
+    // DATE to_text == qb::date::to_string; from_text parses ISO, bad input -> default.
+    qb::date d = qb::date::from_ymd(2024, 3, 15);
+    EXPECT_EQ(TypeConverter<qb::date>::to_text(d), "2024-03-15");
+    EXPECT_EQ(TypeConverter<qb::date>::from_text("2024-03-15"), d);
+    // Unparseable text -> the value_or(qb::date{}) fallback (epoch default), not a throw.
+    EXPECT_EQ(TypeConverter<qb::date>::from_text("not-a-date"), qb::date{});
+
+    // calendar_interval to_text delegates to qb::calendar_interval::to_string.
+    qb::calendar_interval iv(1, 2, std::chrono::microseconds{11045000000LL}); // 1 mon 2 day 03:04:05
+    const std::string     txt = TypeConverter<qb::calendar_interval>::to_text(iv);
+    EXPECT_EQ(txt, iv.to_string());
+    EXPECT_FALSE(txt.empty());
+}
+
 // std::chrono::seconds from_text: leading integer parsed, garbage -> zero.
 TEST(TypeConverterTemporalText, SecondsFromText) {
     using secs = std::chrono::seconds;
