@@ -247,13 +247,28 @@ TEST(TypeConverterJson, DecodeFromTextValidAndInvalid) {
     EXPECT_THROW(TypeConverter<qb::json>::from_text(R"({"unclosed": "object")"), std::runtime_error);
 }
 
-TEST(TypeConverterJson, DecodeBinaryStripsLengthPrefix) {
-    const std::string json = R"({"a":1,"b":[2,3]})";
-    std::vector<byte> buf;
-    TypeConverter<qb::json>::to_binary(qb::json::parse(json), buf);
-    const qb::json result = TypeConverter<qb::json>::from_binary(buf);
+TEST(TypeConverterJson, DecodeBinaryReadsValueBytesAsJsonText) {
+    // from_binary receives the field VALUE bytes (the protocol strips the per-field length
+    // prefix; `json` has no version byte) -> the bytes ARE the JSON text. NOT a to_binary
+    // round-trip (to_binary writes the Bind [int32 len] framing, which from_binary never sees).
+    const std::string       json = R"({"a":1,"b":[2,3]})";
+    const std::vector<byte> value(json.data(), json.data() + json.size());
+    const qb::json          result = TypeConverter<qb::json>::from_binary(value);
     EXPECT_EQ(result["a"].get<int>(), 1);
     EXPECT_EQ(result["b"][1].get<int>(), 3);
+}
+
+// REGRESSION (serde audit HIGH #2): from_binary<std::string> receives the field VALUE bytes
+// (length prefix already stripped). It must read them VERBATIM. The legacy read_string() it used
+// to call would, for a 4..1MB buffer with a NUL in the first 3 bytes, assume a phantom 4-byte
+// length prefix and strip it — corrupting a binary string / bytea value that begins with NULs.
+TEST(TypeConverterCodecs, FromBinaryStringReadsValueBytesVerbatimIncludingLeadingNuls) {
+    const std::vector<byte> value{byte(0), byte(0), byte(1), byte(2), byte('h'), byte('i')};
+    const std::string       s = TypeConverter<std::string>::from_binary(value);
+    EXPECT_EQ(s.size(), 6u);                          // not 2 (old read_string stripped 4)
+    EXPECT_EQ(s, std::string("\0\0\x01\x02hi", 6));   // exact bytes, NULs preserved
+    // An empty value decodes to an empty string (not a throw).
+    EXPECT_TRUE(TypeConverter<std::string>::from_binary(std::vector<byte>{}).empty());
 }
 
 } // namespace

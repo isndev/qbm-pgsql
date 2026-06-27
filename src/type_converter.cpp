@@ -241,12 +241,15 @@ TypeConverter<qb::json>::to_binary(const qb::json &value, std::vector<byte> &buf
 TypeConverter<qb::json>::value_type
 TypeConverter<qb::json>::from_binary(std::span<const byte> buffer) {
     try {
-        if (buffer.size() <= 4) {
-            throw std::runtime_error("Invalid JSON binary format: buffer too small");
+        if (buffer.empty()) {
+            throw std::runtime_error("Invalid JSON binary value: empty buffer");
         }
 
-        // Skip the 4-byte length prefix
-        std::string json_str(reinterpret_cast<const char *>(buffer.data() + 4), buffer.size() - 4);
+        // The protocol layer already stripped the per-field length prefix, and `json`
+        // (unlike `jsonb`) has no version byte — so the buffer IS the JSON text value.
+        // (The old `+ 4` dropped the first 4 chars; latent today because json columns
+        // route to the text result format, but a real bug if ever binary-routed.)
+        std::string json_str(reinterpret_cast<const char *>(buffer.data()), buffer.size());
 
         // OPTIMIZED: Single parse with format detection (P0-10 fix)
         // Previously called parse TWICE on error path - wasteful CPU usage
@@ -405,17 +408,15 @@ TypeConverter<std::string>::to_binary(const value_type &value, std::vector<byte>
 
 TypeConverter<std::string>::value_type
 TypeConverter<std::string>::from_binary(std::span<const byte> buffer) {
-    // Read as text (length-prefixed)
-    if (buffer.size() < 4) {
-        return "";
-    }
-    integer len;
-    std::memcpy(&len, buffer.data(), sizeof(integer));
-    len = ntohl(len);
-    if (len <= 0 || static_cast<size_t>(len) > buffer.size() - 4) {
-        return "";
-    }
-    return std::string(reinterpret_cast<const char *>(buffer.data() + 4), len);
+    // The protocol layer has already stripped the per-field length prefix, so the buffer IS
+    // the value bytes (a text/varchar value, or a bytea read as a string). Read them VERBATIM,
+    // preserving any embedded/leading NULs.
+    //
+    // (The old code reinterpreted the first 4 bytes as an int32 length prefix and stripped them
+    //  -> for real value bytes that prefix-as-length was garbage, so e.g. a 6-byte bytea
+    //  {00 00 01 02 'h' 'i'} decoded its first 4 bytes to len=258 > remaining 2 and returned ""
+    //  -- as<std::string>() on any binary value silently produced an empty/wrong string.)
+    return std::string(reinterpret_cast<const char *>(buffer.data()), buffer.size());
 }
 
 // ============================================================================

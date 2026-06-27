@@ -425,6 +425,56 @@ TEST_F(DataTypesRoundTrip, Numeric_ExactDecimal) {
     EXPECT_TRUE(ok);
 }
 
+// REGRESSION (serde audit HIGH #1): as<double>() over the BINARY wire used to read
+// sizeof(double) bytes of whatever the column was -> a NUMERIC's NBASE digit-array decoded as a
+// raw IEEE-754 double = garbage. It now decodes per the column OID: NUMERIC/int -> converted to
+// the float; a column with no numeric meaning (date here) fails LOUDLY instead of returning garbage.
+TEST_F(DataTypesRoundTrip, ReadAsDoublePerColumnOidNotGarbage) {
+    ASSERT_TRUE(db_->prepare("ad", "SELECT $1::numeric AS n, 42::int8 AS i, '2024-01-01'::date AS d",
+                             type_oid_sequence{oid::numeric}, discard_prepare, discard_error)
+                    .await());
+    bool ok = false;
+    ASSERT_TRUE(db_->execute(
+                      "ad", params(numeric("1234.5678")),
+                      [&](transaction &, results r) {
+                          ASSERT_EQ(r.size(), 1u);
+                          EXPECT_EQ(r.field(0).format_code, protocol_data_format::Binary);
+                          EXPECT_NEAR(r[0][0].as<double>(), 1234.5678, 1e-9); // NUMERIC -> double (was garbage)
+                          EXPECT_DOUBLE_EQ(r[0][1].as<double>(), 42.0);       // int8 -> double conversion
+                          EXPECT_THROW((void) r[0][2].as<double>(),
+                                       error::client_error); // date -> not numeric -> loud throw
+                          ok = true;
+                      },
+                      [](error::db_error e) { FAIL() << e.what(); })
+                   .await());
+    EXPECT_TRUE(ok);
+}
+
+// REGRESSION (serde audit HIGH #2): TypeConverter<std::string>::from_binary used to interpret the
+// first 4 value bytes as a length prefix and strip them, so as<std::string>() on ANY binary value
+// (a bytea here) returned "" or a wrong substring. It now reads the value bytes verbatim. Drives the
+// param round-trip too (a bytea bound from a std::vector<char> with leading NULs).
+TEST_F(DataTypesRoundTrip, ByteaWithLeadingNulsReadAsStringIsVerbatim) {
+    ASSERT_TRUE(db_->prepare("bnul", "SELECT $1::bytea AS b", type_oid_sequence{oid::bytea},
+                             discard_prepare, discard_error)
+                    .await());
+    const std::vector<char> raw{0, 0, 1, 2, 'h', 'i'}; // leading NULs the old prefix-strip would eat
+    bool                    ok = false;
+    ASSERT_TRUE(db_->execute(
+                      "bnul", params(raw),
+                      [&](transaction &, results r) {
+                          ASSERT_EQ(r.size(), 1u);
+                          ASSERT_FALSE(r[0][0].is_null());
+                          EXPECT_EQ(r.field(0).format_code, protocol_data_format::Binary);
+                          EXPECT_EQ(r[0][0].as<std::string>(),
+                                    std::string("\0\0\x01\x02hi", 6)); // 6 bytes verbatim
+                          ok = true;
+                      },
+                      [](error::db_error e) { FAIL() << e.what(); })
+                   .await());
+    EXPECT_TRUE(ok);
+}
+
 TEST_F(DataTypesRoundTrip, Numeric_HighPrecision_RealColumn) {
     // Replaces the EdgeCases "HIGHPREC:" TEXT hack: a genuine NUMERIC column round-trip.
     ASSERT_TRUE(db_->execute("CREATE TEMP TABLE hp (n NUMERIC)", discard_query, discard_error)

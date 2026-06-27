@@ -84,7 +84,9 @@ FieldReader::read_value(const std::vector<byte> &buffer, bool &value) {
 bool
 FieldReader::read_value(const std::vector<byte> &buffer, std::string &value) {
     try {
-        value = unserializer.read_string(buffer);
+        // Field value bytes (length prefix already stripped) -> verbatim; read_string()'s
+        // leading-NUL heuristic would corrupt a value beginning with a NUL.
+        value = unserializer.read_text_string(buffer);
         return true;
     } catch (const std::exception &) {
         return false;
