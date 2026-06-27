@@ -301,6 +301,42 @@ TEST_F(PgsqlDbApiExtra, ReconnectAfterForcedErrorLandsFreshBackend) {
     EXPECT_EQ(decoded, 99) << "the reconnected session must be fully usable";
 }
 
+// --------------------------------------------------------------------------------------
+// Query after disconnect() fails fast (does not hang) — REGRESSION
+// --------------------------------------------------------------------------------------
+
+// A query/execute/prepare submitted AFTER disconnect() must FAIL FAST with a connection
+// error, never hang. Before the is_connection_usable() guard (+ disconnect() clearing
+// is_connected_ synchronously), the command was enqueued on a dead connection and its
+// coroutine awaiter never resolved — run_sync blocked forever. If this regresses, the
+// run_sync calls below never return and the test times out.
+TEST_F(PgsqlDbApiExtra, QueryAfterDisconnectFailsFastInsteadOfHanging) {
+    ASSERT_TRUE(db_->is_connection_alive());
+    db_->disconnect();
+    ASSERT_FALSE(db_->is_connection_alive()) << "disconnect() must clear the connected state synchronously";
+
+    bool resolved = false;
+    bool ok       = true;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        auto r   = co_await db_->query("SELECT 1"); // MUST resolve, not hang
+        resolved = true;
+        ok       = r.ok();
+        co_return;
+    }());
+    EXPECT_TRUE(resolved) << "the awaiter must resolve on a disconnected handle (no hang)";
+    EXPECT_FALSE(ok) << "a query after disconnect() must return a failed Reply";
+
+    // execute() and prepare() on a dead handle fail fast the same way.
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        auto e = co_await db_->execute(std::string_view("SELECT 2"));
+        EXPECT_FALSE(e.ok()) << "execute() after disconnect() must fail fast";
+        auto p =
+            co_await db_->prepare(std::string_view("p_dead"), std::string_view("SELECT $1::int"), type_oid_sequence{23});
+        EXPECT_FALSE(p.ok()) << "prepare() after disconnect() must fail fast";
+        co_return;
+    }());
+}
+
 int
 main(int argc, char **argv) {
     qb::io::async::init();

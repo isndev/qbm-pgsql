@@ -1721,6 +1721,19 @@ public:
     }
 
     /**
+     * @brief A new query may only be enqueued while the handle is connected.
+     *
+     * Overrides Transaction::is_connection_usable() so the coroutine query/execute entry
+     * points fail fast on a disconnected handle instead of enqueuing a command that can
+     * never be sent (which would hang the caller's awaiter). `is_connected_` is cleared
+     * synchronously by disconnect() and by on(disconnected).
+     */
+    [[nodiscard]] bool
+    is_connection_usable() const noexcept override {
+        return is_connected_;
+    }
+
+    /**
      * @brief Check if the connection is alive (P1-1)
      *
      * Performs a lightweight check to determine if the connection
@@ -2190,6 +2203,19 @@ public:
      */
     void
     disconnect() {
+        // Mark the handle down and fail any in-flight / queued query SYNCHRONOUSLY rather
+        // than relying on an async on(disconnected) event — a *local* disconnect may not
+        // deliver one, leaving is_connected_ true and those queries' coroutine awaiters
+        // unresolved (hanging) forever. Clearing is_connected_ here also makes the
+        // is_connection_usable() guard reject any query submitted after disconnect().
+        // on(disconnected), if it fires later, is a no-op (its `if (is_connected_)` guard
+        // is already false and fail_all_pending drains an empty queue).
+        if (is_connected_) {
+            is_connected_ = false;
+            on_error_query(error::connection_error("database disconnected by client"));
+            root_transaction()->fail_all_pending(error::connection_error("database disconnected by client"));
+            _current_command = root_transaction();
+        }
         static_cast<qb::io::async::tcp::client<Database<QB_IO_, NotifyDerived>, QB_IO_, void> &>(*this).disconnect();
         // Same rationale as `Redis::await()` / `Transaction::await()`: may run from a
         // coroutine or nested I/O path where `async::run()` would throw.

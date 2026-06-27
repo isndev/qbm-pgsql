@@ -55,6 +55,20 @@ pg_fail_void(error::db_error err) {
     }};
 }
 
+/** Awaiter that resolves immediately with a failure (any Reply<T>). */
+template <typename T>
+[[nodiscard]] inline pg_reply_awaiter<T>
+pg_fail(error::db_error err) {
+    return pg_reply_awaiter<T>{
+        [e = std::move(err)](pg_coro_complete<T> complete) mutable { complete(::qb::pg::Reply<T>::failure(std::move(e))); }};
+}
+
+/** Connection-down error used to fail a query/execute/prepare submitted on a closed handle. */
+[[nodiscard]] inline error::connection_error
+pg_not_connected_error() {
+    return error::connection_error("connection is not established; query rejected (the handle is disconnected)");
+}
+
 /** Simple query that returns no meaningful rowset: completion → Reply<void>. */
 [[nodiscard]] inline pg_reply_awaiter<void>
 pg_execute_void_sql(Transaction *self, std::string sql) {
@@ -81,6 +95,8 @@ pg_try_build_and_execute_void_sql(Transaction *self, Build &&build) {
 
 inline pg_reply_awaiter<resultset>
 Transaction::execute(std::string_view expr) {
+    if (!is_connection_usable())
+        return pg_fail<resultset>(pg_not_connected_error());
     return pg_reply_awaiter<resultset>{[this, sql = std::string(expr)](pg_coro_complete<resultset> complete) {
         this->execute(
             std::string_view(sql),
@@ -91,6 +107,8 @@ Transaction::execute(std::string_view expr) {
 
 inline pg_reply_awaiter<PreparedQuery>
 Transaction::prepare(std::string_view query_name, std::string_view expr, type_oid_sequence types) {
+    if (!is_connection_usable())
+        return pg_fail<PreparedQuery>(pg_not_connected_error());
     return pg_reply_awaiter<PreparedQuery>{[this, qn = std::string(query_name), ex = std::string(expr),
                                             t = std::move(types)](pg_coro_complete<PreparedQuery> complete) mutable {
         this->prepare(
@@ -104,6 +122,8 @@ Transaction::prepare(std::string_view query_name, std::string_view expr, type_oi
 
 inline pg_reply_awaiter<resultset>
 Transaction::execute(std::string_view query_name, QueryParams &&params) {
+    if (!is_connection_usable())
+        return pg_fail<resultset>(pg_not_connected_error());
     return pg_reply_awaiter<resultset>{[this, qn = std::string(query_name),
                                         p = std::move(params)](pg_coro_complete<resultset> complete) mutable {
         this->execute(
