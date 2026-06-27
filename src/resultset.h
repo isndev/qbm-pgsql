@@ -41,6 +41,7 @@
 #include <tuple>
 #include <vector>
 #include <qb/json.h>
+#include <qb/system/parse.h>
 #include "./common.h"
 #include "./data_iterator.h"
 #include "./error.h"
@@ -595,11 +596,24 @@ public:
                             return static_cast<result_type>(fconv.read_integer(data));
                         case oid::int8:
                             return static_cast<result_type>(fconv.read_bigint(data));
-                        case oid::numeric:
+                        case oid::numeric: {
                             // NBASE digit-array -> canonical decimal string -> double
-                            // (std::stod also accepts "NaN"/"Infinity"/"-Infinity").
-                            return static_cast<result_type>(
-                                std::stod(detail::decode_pg_numeric(data.data(), data.size())));
+                            // (qb::to_number<double> also accepts "NaN"/"Infinity"/
+                            // "-Infinity", matching the old std::stod here). The decoded
+                            // text is a single canonical number, so parse it STRICTLY;
+                            // a value the decoder could not render finite/canonical
+                            // fails loud with the module's domain error rather than the
+                            // raw std::stod exception.
+                            const std::string num =
+                                detail::decode_pg_numeric(data.data(), data.size());
+                            const auto parsed = qb::to_number<double>(num);
+                            if (!parsed)
+                                throw error::client_error(
+                                    "field '" + name() +
+                                    "' NUMERIC value '" + num +
+                                    "' could not be decoded as a floating-point number");
+                            return static_cast<result_type>(*parsed);
+                        }
                         default:
                             throw error::client_error(
                                 "field '" + name() + "' (type OID " +

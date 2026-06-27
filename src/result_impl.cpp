@@ -21,6 +21,7 @@
  * @ingroup Pgsql
  */
 #include "./result_impl.h"
+#include <qb/system/parse.h>
 #include <exception>
 #include <iostream>
 #include <sstream>
@@ -40,11 +41,11 @@ result_impl::set_command_tag(std::string tag) {
     // Parse the last whitespace-delimited token as the row count.
     const auto pos = command_tag_.rfind(' ');
     if (pos != std::string::npos) {
-        try {
-            rows_affected_ = std::stoll(command_tag_.substr(pos + 1));
-        } catch (...) {
-            rows_affected_ = 0;
-        }
+        // The trailing token is an exact whole integer (no surrounding
+        // whitespace by construction); a non-numeric/out-of-range tag
+        // (e.g. "BEGIN") best-effort defaults to 0, as the old catch did.
+        rows_affected_ =
+            qb::to_number<long long>(command_tag_.substr(pos + 1)).value_or(0);
     }
 }
 
