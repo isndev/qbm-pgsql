@@ -374,6 +374,14 @@ public:
             add_null();
         }
 
+        // C-string / string-literal params: the decayed type of a string literal is `const char*`,
+        // which has no TypeConverter. Route it through the std::string path so `params("text")`
+        // serializes as a text/varchar parameter (PostgreSQL infers the column type / cast). This
+        // is the live, tested replacement for the old never-wired param_serializer_traits<const char*>.
+        else if constexpr (std::is_same_v<value_type, const char *> || std::is_same_v<value_type, char *>) {
+            add_param(std::string(param));
+        }
+
         // Standard scalar case: serialize via TypeConverter. Guarded as the final
         // `else` so it is NOT instantiated for vector/nullptr types — otherwise
         // TypeConverter<std::vector<T>>::to_binary would be ODR-used here (and now

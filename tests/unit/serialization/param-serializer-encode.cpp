@@ -304,6 +304,25 @@ TEST_P(ByteaEncodeTest, EncodesByteaOidLengthAndExactBytes) {
 
 INSTANTIATE_TEST_SUITE_P(Sizes, ByteaEncodeTest, ::testing::Values<std::size_t>(0, 1, 16, 256, 512));
 
+// A C-string / string-literal param (decayed type `const char*`, which has no TypeConverter) must
+// route through the std::string path and serialize IDENTICALLY to the equivalent std::string param.
+// This is the live, tested replacement for the never-wired param_serializer_traits<const char*>;
+// without the add_param const-char* branch, `params("text")` is a TypeConverter<char*> static_assert.
+TEST_F(ParamSerializerTest, CStringLiteralSerializesIdenticallyToStdString) {
+    ParamSerializer lit, str;
+    lit.add_param("hello");              // const char* literal
+    str.add_param(std::string("hello")); // std::string
+
+    ASSERT_EQ(lit.param_count(), 1);
+    EXPECT_EQ(lit.param_types(), str.param_types());     // identical OID
+    EXPECT_EQ(lit.params_buffer(), str.params_buffer()); // byte-identical wire payload
+
+    const auto &buf = lit.params_buffer();
+    ASSERT_GE(buf.size(), sizeof(integer) + 5);
+    EXPECT_EQ(read_be<integer>(buf, 0), 5); // int32 length prefix
+    EXPECT_EQ(std::string(reinterpret_cast<const char *>(buf.data() + sizeof(integer)), 5), "hello");
+}
+
 // ===========================================================================
 // serialize_params header + 1-D array body.
 // ===========================================================================
