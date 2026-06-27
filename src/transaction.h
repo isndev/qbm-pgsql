@@ -140,6 +140,20 @@ public:
     [[nodiscard]] Transaction *parent() const;
 
     /**
+     * @brief Whether the underlying connection can still accept new queries.
+     *
+     * The root `Database` overrides this to report its live connection state; a
+     * sub-transaction delegates up to the root. Used by the coroutine query/execute
+     * entry points to fail FAST (a connection error) instead of enqueuing a command on
+     * a closed connection — which would never complete, hanging the caller's awaiter.
+     */
+    [[nodiscard]] virtual bool
+    is_connection_usable() const noexcept {
+        const Transaction *p = parent();
+        return p == nullptr || p->is_connection_usable();
+    }
+
+    /**
      * @brief Adds a sub-transaction to the queue
      *
      * @param cmd Pointer to the sub-transaction
