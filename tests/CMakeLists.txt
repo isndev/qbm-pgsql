@@ -69,6 +69,7 @@ qpg_test(unit typeconverter-temporal   unit/types/typeconverter-temporal.cpp   E
 qpg_test(unit typeconverter-array      unit/types/typeconverter-array.cpp      EXTRA_LABELS types)
 qpg_test(unit typeconverter-json       unit/types/typeconverter-json.cpp       EXTRA_LABELS types)
 qpg_test(unit datastructures           unit/types/datastructures.cpp           EXTRA_LABELS types)
+qpg_test(unit oid-stream               unit/types/oid-stream.cpp               EXTRA_LABELS types)
 qpg_test(unit protocol-message-codec   unit/protocol/protocol-message-codec.cpp EXTRA_LABELS protocol)
 qpg_test(unit dsn-parse                unit/dsn/dsn-parse.cpp                   EXTRA_LABELS dsn)
 qpg_test(unit scram-and-cancel         unit/auth/scram-and-cancel.cpp          EXTRA_LABELS auth)
