@@ -419,6 +419,61 @@ TEST(ListenNotifyTwoConnections, PeerNotifyDoesNotBreakListener) {
     b->disconnect();
 }
 
+// ---------------------------------------------------------------------------
+// Empty-channel validation: build_{notify,listen,unlisten}_sql reject an empty
+// channel name. Callback forms invoke on_error AND rethrow; coroutine forms
+// surface it as a failed Reply (the build-throws -> pg_fail_void path).
+// ---------------------------------------------------------------------------
+
+TEST_F(ListenNotify, EmptyChannel_CallbackForms_InvokeErrorAndThrow) {
+    bool notify_err = false, listen_err = false, unlisten_err = false;
+    bool notify_threw = false, listen_threw = false, unlisten_threw = false;
+
+    try {
+        pub_->notify("", "payload", discard_query, [&](error::db_error const &) { notify_err = true; });
+    } catch (error::db_error const &) {
+        notify_threw = true;
+    }
+    try {
+        pub_->listen("", discard_query, [&](error::db_error const &) { listen_err = true; });
+    } catch (error::db_error const &) {
+        listen_threw = true;
+    }
+    try {
+        pub_->unlisten("", discard_query, [&](error::db_error const &) { unlisten_err = true; });
+    } catch (error::db_error const &) {
+        unlisten_threw = true;
+    }
+
+    EXPECT_TRUE(notify_err);
+    EXPECT_TRUE(notify_threw);
+    EXPECT_TRUE(listen_err);
+    EXPECT_TRUE(listen_threw);
+    EXPECT_TRUE(unlisten_err);
+    EXPECT_TRUE(unlisten_threw);
+    EXPECT_TRUE(pub_->execute("SELECT 1", discard_query, discard_error).await())
+        << "connection must remain usable after rejected empty-channel calls";
+}
+
+TEST_F(ListenNotify, EmptyChannel_CoroForms_FailGracefully) {
+    bool notify_failed = false, listen_failed = false, unlisten_failed = false, survived = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        auto n        = co_await pub_->notify("", "payload");
+        notify_failed = !n.ok();
+        auto l        = co_await pub_->listen("");
+        listen_failed = !l.ok();
+        auto u          = co_await pub_->unlisten("");
+        unlisten_failed = !u.ok();
+        auto ok  = co_await pub_->query("SELECT 1");
+        survived = ok.ok();
+        co_return;
+    }());
+    EXPECT_TRUE(notify_failed);
+    EXPECT_TRUE(listen_failed);
+    EXPECT_TRUE(unlisten_failed);
+    EXPECT_TRUE(survived);
+}
+
 int
 main(int argc, char **argv) {
     qb::io::async::init();

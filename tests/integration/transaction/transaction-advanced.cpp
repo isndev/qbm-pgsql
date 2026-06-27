@@ -471,6 +471,81 @@ TEST_F(AdvancedTransactionTest, SerializableContentionRaises40001) {
     con_b.disconnect();
 }
 
+/**
+ * @brief Calling begin() on an already-open transaction context invokes the error callback
+ *        with "already in transaction" (the `_parent != nullptr` guard in the callback begin).
+ *
+ * The outer begin's success callback receives a child `Transaction&` whose `_parent` is set;
+ * a nested `t.begin(...)` on it must short-circuit to on_error without issuing a second BEGIN.
+ */
+TEST_F(AdvancedTransactionTest, NestedBeginCallbackReportsAlreadyInTransaction) {
+    bool inner_error = false;
+    bool outer_ok    = false;
+    auto st          = db_->begin(
+                          [&](Transaction &t) {
+            // t is a child transaction (its _parent is the root): a second begin must fail.
+            t.begin(
+                [](Transaction &) { ADD_FAILURE() << "nested begin must not succeed"; },
+                [&](error::db_error const &e) {
+                    inner_error = true;
+                    EXPECT_NE(std::string(e.what()).find("already in transaction"), std::string::npos);
+                });
+                          },
+                          [](error::db_error const &e) { ADD_FAILURE() << e.what(); })
+                       .await();
+    outer_ok = static_cast<bool>(st);
+    EXPECT_TRUE(outer_ok);
+    EXPECT_TRUE(inner_error) << "nested begin should have reported 'already in transaction'";
+}
+
+/**
+ * @brief execute(prepared_name, params, on_success) — the single-success-callback prepared
+ *        overload (it forwards an empty error callback). Verifies the decoded value.
+ */
+TEST_F(AdvancedTransactionTest, ExecutePreparedSingleSuccessCallback) {
+    bool prepared = false;
+    ASSERT_TRUE(db_->prepare(
+                       "qb_adv_single_cb_stmt", "SELECT $1::int + 1", type_oid_sequence{oid::int4},
+                       [&](Transaction &, PreparedQuery const &) { prepared = true; }, discard_error)
+                    .await());
+    ASSERT_TRUE(prepared);
+
+    int  decoded = -1;
+    bool ran     = false;
+    // Single-success-callback overload: no explicit error callback supplied.
+    auto st = db_->execute("qb_adv_single_cb_stmt", params{41}, [&](Transaction &, results r) {
+                     ASSERT_EQ(r.size(), 1u);
+                     decoded = r[0][0].as<int>();
+                     ran     = true;
+                 }).await();
+    EXPECT_TRUE(static_cast<bool>(st));
+    EXPECT_TRUE(ran);
+    EXPECT_EQ(decoded, 42);
+}
+
+/**
+ * @brief REPEATABLE READ via the callback begin(on_success, on_error, mode) overload; the
+ *        body reads SHOW transaction_isolation back to prove the mode was applied.
+ */
+TEST_F(AdvancedTransactionTest, ExplicitRepeatableReadCallbackMode) {
+    std::string seen;
+    transaction_mode mode{isolation_level::repeatable_read};
+    auto             st = db_->begin(
+                              [&](Transaction &t) {
+                    t.execute(
+                        "SHOW transaction_isolation",
+                        [&](Transaction &, results r) {
+                            ASSERT_EQ(r.size(), 1u);
+                            seen = r[0][0].as<std::string>();
+                        },
+                        [](error::db_error const &e) { ADD_FAILURE() << e.what(); });
+                              },
+                              [](error::db_error const &e) { ADD_FAILURE() << e.what(); }, mode)
+                              .await();
+    EXPECT_TRUE(static_cast<bool>(st));
+    EXPECT_EQ(seen, "repeatable read");
+}
+
 int
 main(int argc, char **argv) {
     qb::io::async::init();

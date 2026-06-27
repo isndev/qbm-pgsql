@@ -58,6 +58,20 @@ TEST(TypeConverterJsonTest, BinaryAndTextPaths) {
         EXPECT_EQ(parsed["k"], "v");
     }
 
+    // Key-value pair array with a NON-string key: the first element of a pair is a
+    // number, so the converter stringifies it via .dump() to form the object key
+    // (the non-string-key branch). [[1,"a"],[2,"b"]] -> {"1":"a","2":"b"}.
+    {
+        const std::string payload = R"([[1,"a"],[2,"b"]])";
+        std::vector<byte> kv;
+        kv.insert(kv.end(), 4, static_cast<byte>(0)); // 4-byte length prefix (skipped)
+        kv.insert(kv.end(), payload.begin(), payload.end());
+        auto parsed = TypeConverter<qb::json>::from_binary(kv);
+        ASSERT_TRUE(parsed.is_object());
+        EXPECT_EQ(parsed["1"], "a");
+        EXPECT_EQ(parsed["2"], "b");
+    }
+
     // from_text: valid parses, invalid throws.
     EXPECT_EQ(TypeConverter<qb::json>::from_text(R"({"x":true})"), qb::json::parse(R"({"x":true})"));
     EXPECT_THROW(TypeConverter<qb::json>::from_text("{not json"), std::runtime_error);
@@ -104,6 +118,19 @@ TEST(TypeConverterJsonbTest, VarlenaBranchAndRoundTrip) {
         auto parsed = TypeConverter<qb::jsonb>::from_binary(wire);
         ASSERT_TRUE(parsed.is_object());
         EXPECT_EQ(parsed["k"], "v");
+    }
+
+    // Key-value pair array with a NON-string key: number key stringified via .dump().
+    {
+        const std::string payload = R"([[10,"x"],[20,"y"]])";
+        std::vector<byte> wire;
+        wire.insert(wire.end(), 4, static_cast<byte>(0)); // varlena header (ignored)
+        wire.push_back(static_cast<byte>(1));             // jsonb version
+        wire.insert(wire.end(), payload.begin(), payload.end());
+        auto parsed = TypeConverter<qb::jsonb>::from_binary(wire);
+        ASSERT_TRUE(parsed.is_object());
+        EXPECT_EQ(parsed["10"], "x");
+        EXPECT_EQ(parsed["20"], "y");
     }
 
     // Unversioned / unsupported leading bytes -> throw.
