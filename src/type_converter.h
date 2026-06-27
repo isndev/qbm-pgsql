@@ -30,6 +30,7 @@
 #include <array>
 #include <charconv> // std::to_chars / std::from_chars (locale-independent, round-trip exact)
 #include <chrono>
+#include <cerrno> // errno / ERANGE — distinguish float overflow from subnormal underflow
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -526,10 +527,22 @@ public:
                 return std::numeric_limits<float>::infinity();
             if (text == "-Infinity" || text == "-inf")
                 return -std::numeric_limits<float>::infinity();
-            try {
-                return std::stof(text);
-            } catch (const std::exception &e) {
-                throw error::client_error("Cannot parse float from text: " + text + " (" + e.what() + ")");
+            // std::strtof, NOT std::stof: stof throws std::out_of_range on a SUBNORMAL
+            // underflow even though the subnormal is the correct, representable value the
+            // server stores and sends (e.g. FLT_TRUE_MIN ~1.4e-45). strtof returns that value
+            // with errno==ERANGE; we accept it and reject ONLY a true overflow (ERANGE *and* an
+            // infinite result) or a fully-unparseable string (no characters consumed). strtof
+            // also still recognises "inf"/"nan" case-insensitively (matches PG's accept).
+            {
+                const char *str = text.c_str();
+                char       *end = nullptr;
+                errno           = 0;
+                const float v   = std::strtof(str, &end);
+                if (end == str)
+                    throw error::client_error("Cannot parse float from text: " + text);
+                if (errno == ERANGE && std::isinf(v))
+                    throw error::client_error("float value out of range: " + text);
+                return v;
             }
         } else if constexpr (std::is_same_v<value_type, double>) {
             // Special values
@@ -539,12 +552,23 @@ public:
                 return std::numeric_limits<double>::infinity();
             if (text == "-Infinity" || text == "-inf")
                 return -std::numeric_limits<double>::infinity();
-            // std::stod (not strtod) so malformed input throws instead of silently
-            // yielding 0.0 — strtod cannot throw, making the catch below dead.
-            try {
-                return std::stod(text);
-            } catch (const std::exception &e) {
-                throw error::client_error("Cannot parse double from text: " + text + " (" + e.what() + ")");
+            // std::strtod, NOT std::stod: stod throws std::out_of_range on a SUBNORMAL
+            // underflow even though the subnormal is the correct, representable value the
+            // server stores and sends (e.g. DBL_TRUE_MIN ~4.9e-324). strtod returns that value
+            // with errno==ERANGE; we accept it and reject ONLY a true overflow (ERANGE *and* an
+            // infinite result, e.g. "1e400") or a fully-unparseable string (end==str, so the
+            // dead-catch concern of the old std::stod comment no longer applies — malformed
+            // input is rejected explicitly here). strtod recognises "inf"/"nan" case-insensitively.
+            {
+                const char *str = text.c_str();
+                char        *end = nullptr;
+                errno            = 0;
+                const double v   = std::strtod(str, &end);
+                if (end == str)
+                    throw error::client_error("Cannot parse double from text: " + text);
+                if (errno == ERANGE && std::isinf(v))
+                    throw error::client_error("double value out of range: " + text);
+                return v;
             }
         } else if constexpr (std::is_same_v<value_type, bool>) {
             return (text == "t" || text == "true" || text == "1" || text == "yes" || text == "y" || text == "on");
@@ -554,9 +578,15 @@ public:
             // Hexadecimal format (\x...)
             if (text.length() >= 2 && text.substr(0, 2) == "\\x") {
                 std::string hex = text.substr(2);
-                for (size_t i = 0; i + 1 < hex.length(); i += 2) {
-                    byte byte_val = static_cast<byte>(std::stoi(hex.substr(i, 2), nullptr, 16));
-                    result.push_back(byte_val);
+                try {
+                    for (size_t i = 0; i + 1 < hex.length(); i += 2) {
+                        byte byte_val = static_cast<byte>(std::stoi(hex.substr(i, 2), nullptr, 16));
+                        result.push_back(byte_val);
+                    }
+                } catch (const std::exception &e) {
+                    // Consistency: every other from_text parser surfaces a malformed value as
+                    // error::client_error, not a raw std::invalid_argument from std::stoi.
+                    throw error::client_error("invalid bytea hex text: '" + text + "' (" + e.what() + ")");
                 }
             } else {
                 // Raw format

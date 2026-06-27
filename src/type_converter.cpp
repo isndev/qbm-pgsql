@@ -515,16 +515,30 @@ encode_pg_numeric(const std::string &in) {
         neg = (in[i] == '-');
         ++i;
     }
+    // Strict: every character of the integer/fraction part must be a digit (or the single
+    // decimal point). Previously any non-digit was SILENTLY skipped, so "abc" encoded as the
+    // zero NUMERIC, "12abc" as 12, and "1e5" as 15 — silent data corruption sent to the server.
+    // A malformed value must fail loudly, like every other from_text/encode path.
+    const auto reject = [&in]() {
+        throw error::client_error("invalid NUMERIC text representation: '" + in + "'");
+    };
     std::string intpart, fracpart;
-    for (; i < in.size() && in[i] != '.'; ++i)
-        if (in[i] >= '0' && in[i] <= '9')
-            intpart += in[i];
+    for (; i < in.size() && in[i] != '.'; ++i) {
+        if (in[i] < '0' || in[i] > '9')
+            reject();
+        intpart += in[i];
+    }
     if (i < in.size() && in[i] == '.') {
         ++i;
-        for (; i < in.size(); ++i)
-            if (in[i] >= '0' && in[i] <= '9')
-                fracpart += in[i];
+        for (; i < in.size(); ++i) {
+            if (in[i] < '0' || in[i] > '9')
+                reject();
+            fracpart += in[i];
+        }
     }
+    // No digits at all ("", "+", "-", ".", "+.") is not a number.
+    if (intpart.empty() && fracpart.empty())
+        reject();
     const int dscale = static_cast<int>(fracpart.size());
 
     // Align to base-10000 limb boundaries: integer part left-padded, fraction
