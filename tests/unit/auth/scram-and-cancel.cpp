@@ -110,17 +110,17 @@ TEST(ScramIteration, AcceptsSaneRangeRejectsHostileAndMalformed) {
               kMaxScramIterations);
 
     // Rejected — the DoS guard: one past the ceiling and the INT_MAX worst case.
-    EXPECT_THROW(scram_validate_iteration_count(std::to_string(kMaxScramIterations + 1)),
+    EXPECT_THROW((void) scram_validate_iteration_count(std::to_string(kMaxScramIterations + 1)),
                  error::connection_error);
-    EXPECT_THROW(scram_validate_iteration_count("2147483647"), error::connection_error);
+    EXPECT_THROW((void) scram_validate_iteration_count("2147483647"), error::connection_error);
 
     // Rejected — malformed / non-positive / overflow / trailing junk (to_number strict).
-    EXPECT_THROW(scram_validate_iteration_count("0"), error::connection_error);
-    EXPECT_THROW(scram_validate_iteration_count("-5"), error::connection_error);
-    EXPECT_THROW(scram_validate_iteration_count(""), error::connection_error);
-    EXPECT_THROW(scram_validate_iteration_count("abc"), error::connection_error);
-    EXPECT_THROW(scram_validate_iteration_count("4096x"), error::connection_error);
-    EXPECT_THROW(scram_validate_iteration_count("99999999999999999999"), error::connection_error);
+    EXPECT_THROW((void) scram_validate_iteration_count("0"), error::connection_error);
+    EXPECT_THROW((void) scram_validate_iteration_count("-5"), error::connection_error);
+    EXPECT_THROW((void) scram_validate_iteration_count(""), error::connection_error);
+    EXPECT_THROW((void) scram_validate_iteration_count("abc"), error::connection_error);
+    EXPECT_THROW((void) scram_validate_iteration_count("4096x"), error::connection_error);
+    EXPECT_THROW((void) scram_validate_iteration_count("99999999999999999999"), error::connection_error);
 }
 
 int
