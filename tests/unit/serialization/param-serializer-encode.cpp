@@ -181,6 +181,50 @@ TEST_F(ParamSerializerTest, EmptyStringEncodesZeroLength) {
     EXPECT_EQ(read_be<integer>(buf, 0), 0);
 }
 
+// add_string_view is the zero-copy text encoder: it must emit the same
+// [int32 length][raw bytes] text wire form as add_string, with NO null
+// terminator. Covers both the non-empty body copy and the empty-view skip.
+TEST_F(ParamSerializerTest, StringViewEncodesTextOidLengthAndContent) {
+    const std::string_view sv = "view content";
+    serializer->add_string_view(sv);
+    {
+        const auto &buf = serializer->params_buffer();
+        ASSERT_EQ(serializer->param_count(), 1);
+        EXPECT_EQ(serializer->param_types()[0], 25); // text
+        EXPECT_EQ(read_be<integer>(buf, 0), static_cast<integer>(sv.size()));
+        EXPECT_EQ(read_str(buf, sizeof(integer), sv.size()), std::string(sv));
+    }
+
+    serializer->reset();
+    serializer->add_string_view(std::string_view{});
+    {
+        const auto &buf = serializer->params_buffer();
+        EXPECT_EQ(serializer->param_types()[0], 25);
+        EXPECT_EQ(read_be<integer>(buf, 0), 0);
+    }
+}
+
+// add_cstring serializes a NUL-terminated C-string as text using strlen() for the
+// length (terminator excluded), and maps a null pointer to a SQL NULL (-1 length).
+TEST_F(ParamSerializerTest, CStringEncodesTextOidLengthContentAndNullPointer) {
+    serializer->add_cstring("c-string value");
+    {
+        const auto &buf = serializer->params_buffer();
+        ASSERT_EQ(serializer->param_count(), 1);
+        EXPECT_EQ(serializer->param_types()[0], 25); // text
+        EXPECT_EQ(read_be<integer>(buf, 0), 14);     // strlen("c-string value")
+        EXPECT_EQ(read_str(buf, sizeof(integer), 14), "c-string value");
+    }
+
+    serializer->reset();
+    serializer->add_cstring(nullptr);
+    {
+        const auto &buf = serializer->params_buffer();
+        EXPECT_EQ(serializer->param_types()[0], 25); // text OID retained
+        EXPECT_EQ(read_be<integer>(buf, 0), -1);     // NULL
+    }
+}
+
 TEST_F(ParamSerializerTest, BooleanEncodesSingleByte) {
     serializer->add_bool(true);
     const auto &t = serializer->params_buffer();
