@@ -699,8 +699,7 @@ private:
             try_resume_connect_wait();
             return;
         }
-        if (this->protocol())
-            this->clear_protocols();
+        this->clear_protocols(); // idempotent: drops any prior protocol, resets to the NoProtocol sentinel
         this->transport() = std::forward<Sock_>(sock);
         attach_pg_protocol_and_handshake_timer(timer_gen, t_out);
     }
