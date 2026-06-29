@@ -100,6 +100,18 @@ TEST_F(ListenNotify, Listen_Unlisten_Coro_ViaRunSync) {
     ASSERT_TRUE(pub_->unlisten(std::string(kChan), discard_query, discard_error).await());
 }
 
+// unlisten_all() has a coroutine overload distinct from the callback overload the
+// other tests use; co_await it after LISTENing on two channels (issues UNLISTEN *).
+TEST_F(ListenNotify, UnlistenAll_Coro_ViaRunSync) {
+    ASSERT_TRUE(qb::io::async::run_sync([&]() -> qb::io::async::task<bool> {
+        if (!(co_await pub_->listen(std::string(kChan))).ok())
+            co_return false;
+        if (!(co_await pub_->listen(std::string(kChan2))).ok())
+            co_return false;
+        co_return (co_await pub_->unlisten_all()).ok();
+    }()));
+}
+
 // ---------------------------------------------------------------------------
 // notify_cb_consumer — async delivery driven by pump_until
 // ---------------------------------------------------------------------------

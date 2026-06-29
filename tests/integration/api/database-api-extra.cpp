@@ -333,6 +333,10 @@ TEST_F(PgsqlDbApiExtra, QueryAfterDisconnectFailsFastInsteadOfHanging) {
         auto p =
             co_await db_->prepare(std::string_view("p_dead"), std::string_view("SELECT $1::int"), type_oid_sequence{23});
         EXPECT_FALSE(p.ok()) << "prepare() after disconnect() must fail fast";
+        // The prepared-name + params execute() coroutine overload guards on the
+        // same not-connected predicate and must also fail fast (not hang).
+        auto ep = co_await db_->execute(std::string_view("p_dead"), params{1});
+        EXPECT_FALSE(ep.ok()) << "execute(name, params) after disconnect() must fail fast";
         co_return;
     }());
 }
