@@ -1,6 +1,6 @@
 # Query execution
 
-> **Audience:** Adopter · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 2.0.0 (C++20 default, C++23
+> **Audience:** Adopter · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 2.6.0 (C++20 default, C++23
 > supported)
 
 Run simple queries, extended (prepared) queries, SQL files, and `LISTEN`/`NOTIFY` against a `qb::pg::tcp::database` (or
@@ -52,6 +52,24 @@ payload, possibly empty). Check **`reply.ok()`** before **`reply.result()`**.
 | **`LISTEN` / `NOTIFY` / `UNLISTEN`**    | Simple query                  | Payload/channel safety: [`src/pg_notify_sql.h`](../src/pg_notify_sql.h). |
 
 One connection = **one serial** stream ([`transaction.cpp`](../src/transaction.cpp) **`_queries`** queue).
+
+The extended (prepared) path on the wire:
+
+```mermaid
+sequenceDiagram
+    participant C as client (qb::pg)
+    participant S as PostgreSQL server
+    C->>S: Parse (name, SQL, param OIDs)
+    C->>S: Bind (params, binary)
+    C->>S: Execute · Sync
+    S-->>C: ParseComplete · BindComplete
+    S-->>C: RowDescription
+    loop each row
+        S-->>C: DataRow
+    end
+    S-->>C: CommandComplete · ReadyForQuery
+    Note over C: decoded into qb::pg::results<br/>field.as&lt;T&gt;() · std::optional&lt;T&gt; for NULL
+```
 
 ---
 
@@ -288,7 +306,7 @@ PID **`server_backend_pid`**. The handler runs on the I/O thread when a `Notific
 
 **`notify_co_consumer`:** optional **`on_notify`**, **`on_notify_dropped`**, **`co_await receive()`** —
 **`notify_cb_consumer`** is an alias of the same class ([`pgsql.h`](../pgsql.h)). See
-[`tests/test-notify.cpp`](../tests/test-notify.cpp) for the `io_pump` and ordering patterns.
+[`tests/integration/notify/listen-notify.cpp`](../tests/integration/notify/listen-notify.cpp) for the `io_pump` and ordering patterns.
 
 ---
 

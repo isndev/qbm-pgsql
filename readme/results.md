@@ -1,6 +1,6 @@
 # Result sets and field access
 
-> **Audience:** Adopter · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 2.0.0 (C++20 default, C++23
+> **Audience:** Adopter · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 2.6.0 (C++20 default, C++23
 > supported)
 
 How to read rows and columns from `qb::pg::results` — the container a query hands back — using container iteration,
@@ -16,7 +16,7 @@ mismatches), [transaction.md](./transaction.md) (the `status` / `await()` path).
 ## Summary
 
 A query returns a `qb::pg::results` object. `results` is the public type alias for `qb::pg::detail::resultset` (
-`pgsql.h:2433`) — that is the only public spelling. The class itself only exists as `qb::pg::detail::resultset` (used
+`pgsql.h:2414`) — that is the only public spelling. The class itself only exists as `qb::pg::detail::resultset` (used
 internally, e.g. in `pg_reply_awaiter<resultset>`); there is no public `qb::pg::resultset`. You reach a result set
 through three paths:
 
@@ -83,7 +83,7 @@ The `&&` overload (`std::move(reply).result()`) moves the value out; the `&` ove
 `pg_reply.h:52,57`).
 
 ```cpp
-<!-- src: qbm/pgsql/tests/test-pgsql-coro-api.cpp:83 -->
+<!-- src: qbm/pgsql/tests/integration/api/coro-api.cpp:104-118 -->
 #include <pgsql/pgsql.h>
 
 auto reply = co_await db->query("SELECT id, name FROM users LIMIT 3");
@@ -104,7 +104,7 @@ The success callback receives the result set by value as its second argument. Th
 `error::db_error const&`.
 
 ```cpp
-<!-- src: qbm/pgsql/tests/test-transaction.cpp:121 -->
+<!-- src: qbm/pgsql/tests/integration/transaction/transaction-basic.cpp:58-64 -->
 #include <pgsql/pgsql.h>
 
 db.execute(
@@ -145,7 +145,17 @@ if (st) {
 
 ## The `results` container
 
-`results` (alias of `resultset`) is a row-wise container, modeled on a standard C++ container.
+`results` (alias of `resultset`) is a row-wise container, modeled on a standard C++ container. Only `results` owns
+storage; `row` and `field` are non-owning views into it and must not outlive it:
+
+```mermaid
+flowchart TD
+    RS["results (= detail::resultset)<br/>shared_ptr&lt;const result_impl&gt; — owns the rows"]
+    RS --> R0["results::row<br/>non-owning view (parent ptr + row index)"]
+    R0 --> F0["results::field<br/>non-owning view of one cell"]
+    F0 --> AS["field.as&lt;T&gt;() → Text or Binary path per column format_code"]
+    F0 --> TXT["field.text() / view() — zero-copy, valid only while results is alive"]
+```
 
 | Capability       | Members                                                                                                  | Notes                                                    |
 |:-----------------|:---------------------------------------------------------------------------------------------------------|:---------------------------------------------------------|
@@ -264,7 +274,7 @@ A `results::field` is a non-owning view of one cell. Its core members:
 `std::decay_t<T>` (`resultset.h:459-492`):
 
 ```cpp
-<!-- src: qbm/pgsql/tests/test-data-types-integration.cpp:380 -->
+<!-- src: qbm/pgsql/tests/integration/datatypes/datatypes-roundtrip.cpp:284-289 -->
 qb::pg::smallint s   = result[0][0].as<qb::pg::smallint>();
 qb::pg::integer  i   = result[0][0].as<qb::pg::integer>();
 qb::pg::bigint   b   = result[0][0].as<qb::pg::bigint>();

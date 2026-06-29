@@ -1,6 +1,6 @@
 # Transactions and command queues
 
-> **Audience:** Adopter · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 2.0.0 (C++20 default, C++23
+> **Audience:** Adopter · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 2.6.0 (C++20 default, C++23
 > supported)
 
 How `qb::pg::detail::Transaction` drives `BEGIN`/`COMMIT`/`ROLLBACK`, savepoints, isolation modes, statement timeout,
@@ -30,6 +30,17 @@ The public include is `#include <pgsql/pgsql.h>`; the public namespace is `qb::p
 `Transaction` base itself). The aliases you use day to day are `qb::pg::transaction` (the callback parameter type),
 `qb::pg::params` (prepared-statement arguments), and `qb::pg::Reply<T>` (coroutine results).
 
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> InTransaction: begin(mode)
+    InTransaction --> InTransaction: execute · savepoint
+    InTransaction --> Committed: commit
+    InTransaction --> RolledBack: rollback · or error → transaction_abort
+    Committed --> [*]
+    RolledBack --> [*]
+```
+
 ---
 
 ## Concepts
@@ -45,6 +56,15 @@ The public include is `#include <pgsql/pgsql.h>`; the public namespace is `qb::p
 - `_queries` — a queue of `ISqlQuery` instances (`BeginQuery`, `CommitQuery`, `RollbackQuery`, `SavePointQuery`,
   `SimpleQuery`, …) that are the wire-level units actually sent to PostgreSQL.
 
+```mermaid
+flowchart TB
+    T["qb::pg::detail::Transaction<br/>(the database object itself)"]
+    T --> SC["_sub_commands — FIFO of lifecycle commands<br/>Begin · End · SavePoint · Then · Error · Prepare …"]
+    T --> Q["_queries — FIFO of wire units (ISqlQuery)<br/>BeginQuery · CommitQuery · SimpleQuery …"]
+    SC -- "each command pushes 1+ queries" --> Q
+    Q -- "sent when the event loop turns" --> PG["PostgreSQL"]
+```
+
 A command (lifecycle unit) pushes one or more queries (wire units). `Transaction` is **non-copyable and non-movable** —
 the default, copy, and move constructors and assignment operators are all deleted (`src/transaction.h:91-99`). Hold it
 by reference or pointer; never by value.
@@ -58,7 +78,7 @@ normal case inside an actor), you do **not** call `await` after every statement.
 
 ### Status and `await`
 
-<!-- src: src/transaction.cpp:185-222, src/transaction.h:641-703 -->
+<!-- src: src/transaction.cpp:176-213, src/transaction.h:712-781 -->
 
 `Transaction::await()` is a **blocking drain on the current thread**: it pumps
 `qb::io::async::listener::current.run(EVRUN_ONCE)` until both queues are empty, then returns a `status` snapshot. It is
@@ -70,7 +90,7 @@ recorded (the success sentinel is `_error.sqlstate == sqlstate::unknown_code`):
 ```cpp
 auto st = db.execute("SELECT 1", qb::pg::discard_query, qb::pg::discard_error).await();
 if (st) {                       // explicit operator bool
-    auto rows = st.results();   // qb::pg::resultset
+    auto rows = st.results();   // qb::pg::results
 } else {
     auto const& e = st.error(); // qb::pg::error::db_error
 }
@@ -170,7 +190,7 @@ There is no separate "next" type: `then` passes `*parent()`, the parent transact
 
 ## The coroutine transaction block
 
-<!-- src: src/transaction_coro.inl:136-157, tests/test-pgsql-coro-api.cpp:107-139 -->
+<!-- src: src/transaction_coro.inl:136-157, tests/integration/api/coro-api.cpp:221-245 -->
 
 The coroutine path is imperative: `begin` / `execute` / `commit` (or `rollback`) are explicit, and you branch on `ok()`.
 
@@ -201,7 +221,7 @@ qb::io::async::task<void> transfer(qb::pg::tcp::database& db) {
 
 ### `with_transaction` (coroutine sugar)
 
-<!-- src: src/with_transaction.h:103-139, tests/test-pgsql-coro-api.cpp:175-226 -->
+<!-- src: src/with_transaction.h:103-139, tests/integration/api/coro-api.cpp:286-323 -->
 
 `qb::pg::with_transaction(db, body)` wraps the begin → body → commit/rollback dance. It runs `BEGIN`, awaits your
 `body(tr)` (which must return `qb::io::async::task<T>`), then `COMMIT`. On `begin` failure, `commit` failure, a thrown
@@ -384,8 +404,8 @@ co_await db.notify("jobs");
 
 ### Subscribing (LISTEN / receiving)
 
-`listen`, `unlisten`, and `unlisten_all` register and clear channel subscriptions on a connection (callback overloads
-and `co_await` → `Reply<void>` forms exist for `listen` and `unlisten`; `unlisten_all` is coroutine-only). Subscribing
+`listen`, `unlisten`, and `unlisten_all` register and clear channel subscriptions on a connection (each has both a
+callback overload and a `co_await` → `Reply<void>` form). Subscribing
 alone is not enough — you must give the connection somewhere to deliver inbound `NOTIFY` messages:
 
 - A plain `database` only **logs** an inbound `NOTIFY` unless you set

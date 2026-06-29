@@ -9,6 +9,26 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 Tracks changes on the development branch not yet part of a tagged release.
 
+_Nothing yet._
+
+## [2.6.0] - 2026-06-29
+
+Aligned with the qb 2.6.0 framework release.
+
+### Changed
+
+- Test suite restructured into tiered `unit/` / `system/` / `integration/` / `benchmark/` directories.
+
+### Fixed
+
+- Reconnect after a failed transaction no longer surfaces a stale `55P02`.
+- Empty `bytea` values round-trip as an empty buffer instead of being decoded as NULL.
+
+### Documentation
+
+- Narrative and reference docs overhauled; every page carries code-verified `src:` citations enforced by
+  `scripts/doc-lint.sh`.
+
 ## [2.0.0]
 
 Aligns qbm-pgsql with the qb 2.0 framework (C++20 baseline) and hardens the PostgreSQL wire-protocol paths.
@@ -37,4 +57,5 @@ Aligns qbm-pgsql with the qb 2.0 framework (C++20 baseline) and hardens the Post
 - Drop the connection via `not_ok()` on a malformed frame instead of attempting a reconnect.
 - Fixed a heap over-read in the timestamp binary decoder for 9–11 byte fields.
 
-[Unreleased]: https://github.com/isndev/qbm-pgsql/compare/main...HEAD
+[Unreleased]: https://github.com/isndev/qbm-pgsql/compare/v2.6.0...HEAD
+[2.6.0]: https://github.com/isndev/qbm-pgsql/releases/tag/v2.6.0

@@ -1,6 +1,6 @@
 # Integration testing
 
-> **Audience:** Contributor · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 2.0.0 (C++20 default, C++23
+> **Audience:** Contributor · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 2.6.0 (C++20 default, C++23
 > supported)
 
 Build and run the qbm-pgsql test suite under CTest: pure-unit suites run anywhere, while the integration suites need a
@@ -27,18 +27,20 @@ govern how you run them:
 
 ### Unit suites versus integration suites
 
-The split is structural, not a label — a suite is "unit" iff it never opens a connection.
+The split is structural by tier: `unit/` never opens a socket, `system/` exercises the event loop with no
+daemon (a connect-to-dead-host timeout), and `integration/` needs a live server.
 
-| Kind        | Suites                                                                                                                                                                                                                               | Server required |
-|-------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------|
-| Unit        | `param-serializer`, `param-unserializer`, `param-parsing`, `protocol-message`, `data-types`, `params`                                                                                                                                | No              |
-| Integration | `connection`, `data-types-integration`, `prepared-statements`, `transaction`, `transaction-advanced`, `operations`, `queries`, `error-handling`, `protocol-integration`, `pgsql-coro-api`, `notify`, and `connection-ssl` (TLS only) | Yes             |
+| Tier        | Suites                                                                                                                                                                                                                                                                              | Server required |
+|-------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------|
+| Unit        | `unserializer-primitives`, `typeconverter-codecs`, `result-format-routing`, `param-serializer-encode`, `typeconverter-{scalar,numeric,temporal,array,json,adversarial}`, `datastructures`, `oid-stream`, `protocol-message-codec`, `dsn-parse`, `scram-and-cancel`, `prepared-storage-lru` | No              |
+| System      | `connect-timeout` (connects to a dead host — no daemon, network-timing dependent)                                                                                                                                                                                                  | No              |
+| Integration | `connection-lifecycle`, `queries`, `prepared-statements`, `transaction-basic`, `transaction-advanced`, `datatypes-roundtrip`, `wire-formats`, `listen-notify`, `coro-api`, `errors-sqlstate`, `database-api-extra`, `param-roundtrip`, and `connection-ssl` (TLS only)              | Yes             |
 
-The unit suites exercise wire-format encoding and decoding, parameter serialization, and protocol-message framing in
-isolation — they pass on any host. The integration suites drive a real wire handshake, prepared statements,
-transactions, type round-trips, and asynchronous NOTIFY delivery against a server.
+The unit suites exercise wire-format encoding and decoding, parameter serialization, type conversion, and
+protocol-message framing in isolation — they pass on any host. The integration suites drive a real wire
+handshake, prepared statements, transactions, type round-trips, and asynchronous NOTIFY delivery against a server.
 
-<!-- src: qbm/pgsql/tests/CMakeLists.txt:18-37 -->
+<!-- src: qbm/pgsql/tests/CMakeLists.txt:60-110 -->
 
 ### How a missing server is handled
 
@@ -46,7 +48,7 @@ Each integration fixture connects in `SetUp()` and skips when the connect fails.
 up?" probe; the skip is per fixture.
 
 ```cpp
-// src: qbm/pgsql/tests/test-transaction.cpp:74-81
+// src: qbm/pgsql/tests/shared/pg_integration_fixture.hpp:62-67
 void SetUp() override {
     db_ = std::make_unique<qb::pg::tcp::database>();
     if (!qb::io::async::run_sync(db_->connect(qb::pg::test::dsn_tcp_string()))) {
@@ -79,10 +81,12 @@ or across machines — point each runner at its own database, or run them sequen
 ### Test names and binaries
 
 `qb_register_module_test` names each CTest entry and binary
-`qbm-pgsql-test-<name>` (<!-- src: qb/cmake/qbFunctions.cmake:611 -->) and places the executable in
+`qbm-pgsql-test-<tier>-<name>` — for example `qbm-pgsql-test-integration-connection-lifecycle`
+(<!-- src: qb/cmake/qbFunctions.cmake:812-818 -->) — and places the executable in
 `${CMAKE_BINARY_DIR}/bin/tests` with that directory as its working
-directory (<!-- src: qb/cmake/qbFunctions.cmake:325-359 -->). Every test gets a 300-second CTest timeout and the
-`qb-tests` label (<!-- src: qb/cmake/qbFunctions.cmake:364-367 -->). Each binary links `GTest::gtest_main`, so it
+directory (<!-- src: qb/cmake/qbFunctions.cmake:514-516 -->). Each test carries `tier:<tier>` and
+`module:qbm-pgsql` CTest labels plus a per-tier timeout (unit 60 s, integration 300 s)
+(<!-- src: qb/cmake/qbFunctions.cmake:306-388 -->). Each binary links `GTest::gtest_main`, so it
 accepts the usual `--gtest_filter`, `--gtest_list_tests`, and `--gtest_repeat` flags.
 
 `connection-ssl` is the one conditional suite: it is commented out of the main `QB_PGSQL_TESTS` list and registered
@@ -91,7 +95,7 @@ OpenSSL (<!-- src: qbm/pgsql/tests/CMakeLists.txt:23,55-62 -->).
 
 ## Configuring the server
 
-The suites read their connection strings from the environment via [`test_config.hpp`](../tests/test_config.hpp), which
+The suites read their connection strings from the environment via [`test_config.hpp`](../tests/shared/test_config.hpp), which
 is the single source of truth for the defaults. Set these before running CTest to point every suite at your server.
 
 | Variable            | Role                                                                                                                                                                         | Default                                                   |
@@ -100,7 +104,7 @@ is the single source of truth for the defaults. Set these before running CTest t
 | `QB_PG_SSL_DSN`     | DSN for `qb::pg::tcp::ssl::database` (only read when `QB_HAS_SSL`). `tcp://` is valid — the client sends a PostgreSQL `SSLRequest` and upgrades when the server answers `S`. | same as `QB_PG_DSN`                                       |
 | `QB_PG_INVALID_DSN` | DSN that must *fail* authentication; used by negative connection tests.                                                                                                      | `tcp://test:__qb_invalid_password__@localhost:5432[test]` |
 
-<!-- src: qbm/pgsql/tests/test_config.hpp:33-79 -->
+<!-- src: qbm/pgsql/tests/shared/test_config.hpp:33-52 -->
 
 The default fixture is a role `test` with password `test` owning a database `test`. Create that, or override
 `QB_PG_DSN`, before expecting the integration suites to do anything but skip.
@@ -115,7 +119,7 @@ in [connection.md](./connection.md); the test config only wraps it.
 detects this and skips rather than fail, but only when you have not set `QB_PG_INVALID_DSN` yourself:
 
 ```cpp
-// src: qbm/pgsql/tests/test-connection.cpp:121-127
+// src: qbm/pgsql/tests/integration/connection/connection-lifecycle.cpp:104-113
 const bool connected =
     qb::io::async::run_sync(invalid_db->connect(qb::pg::test::dsn_invalid_auth_string()));
 if (connected && std::getenv("QB_PG_INVALID_DSN") == nullptr) {
@@ -130,8 +134,8 @@ passwords (a `md5` or `scram-sha-256` socket with a wrong password).
 ### The TLS case
 
 `connection-ssl` connects over `QB_PG_SSL_DSN` and skips when TLS cannot complete, again only if you have not set the
-variable yourself — the gate is the `QB_PG_ASSERT_SSL_CONNECTED` test macro, not an environment
-variable (<!-- src: qbm/pgsql/tests/test-connection-ssl.cpp:57-66 -->). On a build without OpenSSL the suite is not
+variable yourself — the gate is the `ssl_dsn_pinned()` helper keyed on the `QB_PG_SSL_DSN` environment variable: when it
+is unset a failed TLS probe skips, and when it is set a failed probe is a hard failure (<!-- src: qbm/pgsql/tests/integration/connection/connection-ssl.cpp:54-56,80-88 -->). On a build without OpenSSL the suite is not
 compiled at all, so there is nothing to skip.
 
 ## Steps
@@ -181,18 +185,19 @@ demonstrates.
 
 | Topic                                                             | Start with                                                                                              |
 |-------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------|
-| Connect, reconnect, DSN, invalid auth, timeout                    | `test-connection.cpp`                                                                                   |
-| TLS upgrade and SSL handshake                                     | `test-connection-ssl.cpp` (built only with `QB_HAS_SSL`)                                                |
-| Coroutines, `with_transaction`, savepoints, `run_sync`            | `test-pgsql-coro-api.cpp`                                                                               |
-| Callback `begin` / `then` / `error`, nested savepoints, `await()` | `test-transaction.cpp`                                                                                  |
-| Timeouts (`set_timeout`), constraints, cursors, advanced SQL      | `test-transaction-advanced.cpp`                                                                         |
-| LISTEN / NOTIFY, consumer, pump ordering                          | `test-notify.cpp`                                                                                       |
-| Prepared-statement LRU, eviction, large results                   | `test-prepared-statements.cpp`                                                                          |
-| Type round-trips, including `qb::wall_time` (`timestamptz`)       | `test-data-types.cpp` (unit), `test-data-types-integration.cpp` (live)                                  |
-| COPY edges, binary columns, end-to-end protocol                   | `test-protocol-integration.cpp`, `test-protocol-message.cpp`                                            |
-| Simple/prepared `execute` / `query`, parameter binding            | `test-queries.cpp`, `test-operations.cpp`                                                               |
-| Parameter serialization and parsing (wire units)                  | `test-param-serializer.cpp`, `test-param-unserializer.cpp`, `test-param-parsing.cpp`, `test-params.cpp` |
-| `Reply<T>`, `db_error`, SQLSTATE, `value_is_null`                 | `test-error-handling.cpp`                                                                               |
+| Connect, reconnect, DSN, invalid auth                             | `integration/connection/connection-lifecycle.cpp`, `unit/dsn/dsn-parse.cpp`                             |
+| Connect timeout                                                   | `system/connection/connect-timeout.cpp`                                                                 |
+| TLS upgrade and SSL handshake                                     | `integration/connection/connection-ssl.cpp` (built only with `QB_HAS_SSL`)                             |
+| Coroutines, `with_transaction`, savepoints, `run_sync`            | `integration/api/coro-api.cpp`                                                                          |
+| Callback `begin` / `then` / `error`, nested savepoints, `await()` | `integration/transaction/transaction-basic.cpp`                                                        |
+| Timeouts (`set_timeout`), constraints, cursors, advanced SQL      | `integration/transaction/transaction-advanced.cpp`                                                     |
+| LISTEN / NOTIFY, consumer, pump ordering                          | `integration/notify/listen-notify.cpp`                                                                 |
+| Prepared-statement LRU, eviction, large results                   | `integration/prepared/prepared-statements.cpp`, `unit/prepared/prepared-storage-lru.cpp`               |
+| Type round-trips, including `qb::wall_time` (`timestamptz`)       | `unit/types/typeconverter-*.cpp` (unit), `integration/datatypes/datatypes-roundtrip.cpp` (live)        |
+| COPY edges, binary columns, end-to-end protocol                   | `integration/protocol/wire-formats.cpp`, `unit/protocol/protocol-message-codec.cpp`                    |
+| Simple/prepared `execute` / `query`, parameter binding            | `integration/query/queries-execution.cpp`, `integration/api/database-api-extra.cpp`                    |
+| Parameter serialization and parsing (wire units)                  | `unit/serialization/param-serializer-encode.cpp`, `integration/serialization/param-roundtrip.cpp`, `unit/wire/unserializer-primitives.cpp` |
+| `Reply<T>`, `db_error`, SQLSTATE, `value_is_null`                 | `integration/errors/errors-sqlstate.cpp`                                                               |
 
 ## Pitfalls
 
@@ -215,5 +220,5 @@ demonstrates.
 - [transaction.md](./transaction.md) — `begin` / `commit` / `rollback`, `set_timeout`, `with_transaction`.
 - [queries.md](./queries.md) — `execute` / `query` / `prepare`, LISTEN / NOTIFY.
 - [`../README.md`](../README.md) — module positioning, build matrix, and `qb_load_modules` wiring.
-- [`../tests/test_config.hpp`](../tests/test_config.hpp) — the authoritative DSN defaults; grep it when adding a suite
+- [`../tests/shared/test_config.hpp`](../tests/shared/test_config.hpp) — the authoritative DSN defaults; grep it when adding a suite
   or environment variable.
