@@ -45,16 +45,16 @@
 
 #include <filesystem>
 #include <fstream>
+#include <gtest/gtest.h>
 #include <limits>
 #include <string>
 #include <vector>
-#include <gtest/gtest.h>
 #include <qb/io/async.h>
 #include <qb/io/async/coroutine.h>
 #include <qb/io/async/coroutine/utils.h>
-#include "../pgsql.h"
 #include "../../shared/pg_integration_fixture.hpp"
 #include "../../shared/test_config.hpp"
+#include "../pgsql.h"
 
 using namespace qb::pg;
 using namespace qb::pg::detail;
@@ -78,8 +78,7 @@ protected:
         if (IsSkipped())
             return;
 
-        auto status =
-            db_->execute("CREATE TEMP TABLE test_prepared (id SERIAL PRIMARY KEY, value TEXT)", discard_query, discard_error).await();
+        auto status = db_->execute("CREATE TEMP TABLE test_prepared (id SERIAL PRIMARY KEY, value TEXT)", discard_query, discard_error).await();
         ASSERT_TRUE(status) << "Failed to create TEMP table test_prepared";
     }
 
@@ -127,14 +126,14 @@ TEST_F(PreparedStatementsIntegration, PrepareRejectsTooManyParamTypes) {
     // round-trip, not just a status bool.
     bool round_trip_ok = false;
     auto ok            = db_->execute(
-                              "SELECT 1",
-                              [&round_trip_ok](Transaction &, results r) {
-                       ASSERT_EQ(r.size(), 1U);
-                       EXPECT_EQ(r[0][0].as<int>(), 1);
-                       round_trip_ok = true;
-                              },
-                              [](error::db_error const &e) { ADD_FAILURE() << "post-rejection SELECT 1 failed: " << e.what(); })
-                           .await();
+                                "SELECT 1",
+                                [&round_trip_ok](Transaction &, results r) {
+                         ASSERT_EQ(r.size(), 1U);
+                         EXPECT_EQ(r[0][0].as<int>(), 1);
+                         round_trip_ok = true;
+                                },
+                                [](error::db_error const &e) { ADD_FAILURE() << "post-rejection SELECT 1 failed: " << e.what(); })
+                             .await();
     EXPECT_TRUE(ok);
     EXPECT_TRUE(round_trip_ok);
 }
@@ -153,15 +152,14 @@ TEST_F(PreparedStatementsIntegration, PrepareSuccessCallbackOnly) {
                                    EXPECT_EQ(q.name, "test_prepare_success_only");
                                    prepared = true;
                                  })
-                      .await();
+                        .await();
     ASSERT_TRUE(status);
     ASSERT_TRUE(prepared);
 
     // It must be executable.
     bool inserted = false;
     ASSERT_TRUE(db_->execute(
-                       "test_prepare_success_only", params{std::string("cb_only")},
-                       [&inserted](Transaction &, results) { inserted = true; },
+                       "test_prepare_success_only", params{std::string("cb_only")}, [&inserted](Transaction &, results) { inserted = true; },
                        [](error::db_error const &e) { ADD_FAILURE() << e.what(); })
                     .await());
     ASSERT_TRUE(inserted);
@@ -176,10 +174,9 @@ TEST_F(PreparedStatementsIntegration, PrepareSuccessCallbackOnly) {
  *        stores each row; verified with exact decoded values via the callback path.
  */
 TEST_F(PreparedStatementsIntegration, PrepareAndExecute) {
-    ASSERT_TRUE(
-        db_->prepare("test_prepare", "INSERT INTO test_prepared (value) VALUES ($1)", type_oid_sequence{oid::text}, discard_prepare,
-                     discard_error)
-            .await());
+    ASSERT_TRUE(db_->prepare("test_prepare", "INSERT INTO test_prepared (value) VALUES ($1)", type_oid_sequence{oid::text}, discard_prepare,
+                             discard_error)
+                    .await());
     ASSERT_TRUE(db_->execute("test_prepare", params{std::string("test1")}, discard_query, discard_error).await());
     ASSERT_TRUE(db_->execute("test_prepare", params{std::string("test2")}, discard_query, discard_error).await());
 
@@ -203,10 +200,9 @@ TEST_F(PreparedStatementsIntegration, PrepareAndExecute) {
  *        Surfaces the reply error and asserts exact decoded values per row.
  */
 TEST_F(PreparedStatementsIntegration, PrepareAndExecute_CoroutineVerify) {
-    ASSERT_TRUE(
-        db_->prepare("test_prepare_coro", "INSERT INTO test_prepared (value) VALUES ($1)", type_oid_sequence{oid::text}, discard_prepare,
-                     discard_error)
-            .await());
+    ASSERT_TRUE(db_->prepare("test_prepare_coro", "INSERT INTO test_prepared (value) VALUES ($1)", type_oid_sequence{oid::text},
+                             discard_prepare, discard_error)
+                    .await());
     ASSERT_TRUE(db_->execute("test_prepare_coro", params{std::string("c1")}, discard_query, discard_error).await());
     ASSERT_TRUE(db_->execute("test_prepare_coro", params{std::string("c2")}, discard_query, discard_error).await());
 
@@ -267,8 +263,7 @@ TEST_F(PreparedStatementsIntegration, PrepareCoroExecutePreparedCoro) {
  * @brief A prepared statement correctly binds multiple parameters in one execution.
  */
 TEST_F(PreparedStatementsIntegration, MultipleParameters) {
-    ASSERT_TRUE(db_->prepare("test_prepare_multi",
-                             "INSERT INTO test_prepared (value) VALUES ($1 || ' - ' || $2 || ' - ' || $3)",
+    ASSERT_TRUE(db_->prepare("test_prepare_multi", "INSERT INTO test_prepared (value) VALUES ($1 || ' - ' || $2 || ' - ' || $3)",
                              type_oid_sequence{oid::text, oid::text, oid::text}, discard_prepare, discard_error)
                     .await());
     ASSERT_TRUE(db_->execute("test_prepare_multi", params{std::string("string"), std::string("42"), std::string("3.14159")}, discard_query,
@@ -432,15 +427,14 @@ TEST_F(PreparedStatementsIntegration, ParameterCountBehavior) {
     {
         sqlstate::code seen = sqlstate::unknown_code;
         std::string    msg;
-        auto           status =
-            db_->execute(
-                   "two_params", params{std::string("param1"), std::string("param2"), std::string("extra")},
-                   [](Transaction &, results) { ADD_FAILURE() << "execute with too many params should not succeed"; },
-                   [&seen, &msg](error::db_error const &e) {
-                       seen = e.sqlstate;
-                       msg  = e.what();
-                   })
-                .await();
+        auto           status = db_->execute(
+                                       "two_params", params{std::string("param1"), std::string("param2"), std::string("extra")},
+                                       [](Transaction &, results) { ADD_FAILURE() << "execute with too many params should not succeed"; },
+                                       [&seen, &msg](error::db_error const &e) {
+                                 seen = e.sqlstate;
+                                 msg  = e.what();
+                                       })
+                                    .await();
         EXPECT_FALSE(status);
         EXPECT_EQ(seen, sqlstate::protocol_violation) << "too-many-params error: " << msg;
     }
@@ -464,24 +458,23 @@ TEST_F(PreparedStatementsIntegration, ParameterCountBehavior) {
 TEST_F(PreparedStatementsIntegration, PrepareNonexistentTable) {
     sqlstate::code prep_seen = sqlstate::unknown_code;
     std::string    prep_msg;
-    auto           prep_status =
-        db_->prepare("prep_nonexistent", "INSERT INTO nonexistent_relation_xyz (value) VALUES ($1)", type_oid_sequence{oid::text},
-                     discard_prepare,
-                     [&prep_seen, &prep_msg](error::db_error const &e) {
-                         prep_seen = e.sqlstate;
-                         prep_msg  = e.what();
-                     })
-            .await();
+    auto           prep_status = db_->prepare("prep_nonexistent", "INSERT INTO nonexistent_relation_xyz (value) VALUES ($1)",
+                                              type_oid_sequence{oid::text}, discard_prepare,
+                                              [&prep_seen, &prep_msg](error::db_error const &e) {
+                                        prep_seen = e.sqlstate;
+                                        prep_msg  = e.what();
+                                              })
+                                     .await();
     EXPECT_FALSE(prep_status) << "PREPARE on a nonexistent table must fail at parse time";
     EXPECT_EQ(prep_seen, sqlstate::undefined_table) << "error: " << prep_msg;
 
     // The failed prepare stored nothing: executing the name is a client-side unknown-statement
     // error (no wire round-trip), distinct from the server-side 42P01 reported above.
-    auto exec_status = db_->execute(
-                              "prep_nonexistent", params{std::string("test")},
-                              [](Transaction &, results) { ADD_FAILURE() << "execute against a never-stored statement must not succeed"; },
-                              discard_error)
-                           .await();
+    auto exec_status =
+        db_->execute(
+               "prep_nonexistent", params{std::string("test")},
+               [](Transaction &, results) { ADD_FAILURE() << "execute against a never-stored statement must not succeed"; }, discard_error)
+            .await();
     EXPECT_FALSE(exec_status);
 }
 
@@ -605,8 +598,8 @@ TEST_F(PreparedStatementsIntegration, PreparedSelect) {
     ASSERT_TRUE(db_->execute("INSERT INTO test_prepared (value) VALUES ('select_test_2')", discard_query, discard_error).await());
     ASSERT_TRUE(db_->execute("INSERT INTO test_prepared (value) VALUES ('other_value')", discard_query, discard_error).await());
 
-    ASSERT_TRUE(db_->prepare("test_select", "SELECT id, value FROM test_prepared WHERE value LIKE $1 ORDER BY id",
-                             type_oid_sequence{oid::text}, discard_prepare, discard_error)
+    ASSERT_TRUE(db_->prepare("test_select", "SELECT id, value FROM test_prepared WHERE value LIKE $1 ORDER BY id", type_oid_sequence{oid::text},
+                             discard_prepare, discard_error)
                     .await());
 
     bool select_success = false;
@@ -718,9 +711,9 @@ TEST_F(PreparedStatementsIntegration, SqlTransactionBehavior) {
 
     // COMMIT path.
     ASSERT_TRUE(db_->execute("BEGIN", discard_query, discard_error).await());
-    ASSERT_TRUE(db_->prepare("tx_insert", "INSERT INTO test_prepared (value) VALUES ($1)", type_oid_sequence{oid::text}, discard_prepare,
-                             discard_error)
-                    .await());
+    ASSERT_TRUE(
+        db_->prepare("tx_insert", "INSERT INTO test_prepared (value) VALUES ($1)", type_oid_sequence{oid::text}, discard_prepare, discard_error)
+            .await());
     ASSERT_TRUE(db_->execute("tx_insert", params{std::string("sql_transaction_test")}, discard_query, discard_error).await());
     ASSERT_TRUE(db_->execute("COMMIT", discard_query, discard_error).await());
 
@@ -769,9 +762,9 @@ TEST_F(PreparedStatementsIntegration, SqlTransactionBehavior) {
  */
 TEST_F(PreparedStatementsIntegration, ParameterTypeEdgeCases) {
     ASSERT_TRUE(db_->execute("DROP TABLE IF EXISTS test_param_types", discard_query, discard_error).await());
-    ASSERT_TRUE(db_->execute("CREATE TEMP TABLE test_param_types (id SERIAL PRIMARY KEY, int_val INTEGER, text_val TEXT)", discard_query,
-                             discard_error)
-                    .await());
+    ASSERT_TRUE(
+        db_->execute("CREATE TEMP TABLE test_param_types (id SERIAL PRIMARY KEY, int_val INTEGER, text_val TEXT)", discard_query, discard_error)
+            .await());
 
     ASSERT_TRUE(db_->prepare("insert_types", "INSERT INTO test_param_types (int_val, text_val) VALUES ($1, $2)",
                              type_oid_sequence{oid::int4, oid::text}, discard_prepare, discard_error)
@@ -784,11 +777,11 @@ TEST_F(PreparedStatementsIntegration, ParameterTypeEdgeCases) {
     const std::vector<std::pair<int, std::string>> test_cases = {
         {-1000000, "Large negative value"},
         {1000000, "Large positive value"},
-        {42, ""},                                            // empty string
-        {43, "Special chars: !@#$%^&*(){}[]<>?/\\|'\"`~"},   // special characters
-        {44, std::string(1000, 'x')},                        // long string
+        {42, ""},                                                                       // empty string
+        {43, "Special chars: !@#$%^&*(){}[]<>?/\\|'\"`~"},                              // special characters
+        {44, std::string(1000, 'x')},                                                   // long string
         {45, "Unicode: \xC3\xA1\xC3\xA9\xC3\xAD\xC3\xB3\xC3\xBA\xC3\xB1 \xE2\x82\xAC"}, // unicode (UTF-8)
-        {46, "'; DROP TABLE students; --"}                   // SQL-injection attempt (must be inert)
+        {46, "'; DROP TABLE students; --"}                                              // SQL-injection attempt (must be inert)
     };
 
     for (const auto &test_case : test_cases) {
@@ -952,18 +945,16 @@ TEST_F(PreparedStatementsIntegration, AsyncBatchedPreparedInsertsAllLand) {
     static constexpr int kBatch = 100;
 
     ASSERT_TRUE(db_->execute("DELETE FROM test_prepared", discard_query, discard_error).await());
-    ASSERT_TRUE(
-        db_->prepare("async_batch_insert", "INSERT INTO test_prepared (value) VALUES ($1)", type_oid_sequence{oid::text}, discard_prepare,
-                     discard_error)
-            .await());
+    ASSERT_TRUE(db_->prepare("async_batch_insert", "INSERT INTO test_prepared (value) VALUES ($1)", type_oid_sequence{oid::text},
+                             discard_prepare, discard_error)
+                    .await());
 
     bool queued = false;
     auto status = db_->begin(
                          [&queued](Transaction &tr) {
                              for (int i = 0; i < kBatch; ++i) {
                                  tr.execute(
-                                     "async_batch_insert", params{std::string("prepared_") + std::to_string(i)},
-                                     [](Transaction &, results) {},
+                                     "async_batch_insert", params{std::string("prepared_") + std::to_string(i)}, [](Transaction &, results) {},
                                      [i](error::db_error const &e) { ADD_FAILURE() << "Failed at " << i << ": " << e.what(); });
                              }
                              queued = true;

@@ -29,15 +29,15 @@
 
 #include <atomic>
 #include <chrono>
-#include <string>
 #include <gtest/gtest.h>
+#include <string>
 #include <qb/io/async.h>
 #include <qb/io/async/coroutine.h>
 #include <qb/io/async/coroutine/utils.h>
-#include "../pgsql.h"
 #include "../../shared/pg_integration_fixture.hpp"
 #include "../../shared/pg_pump.hpp"
 #include "../../shared/test_config.hpp"
+#include "../pgsql.h"
 
 using namespace qb::pg;
 using qb::pg::test::dsn_tcp_string;
@@ -45,9 +45,9 @@ using qb::pg::test::pump_until;
 
 namespace {
 
-constexpr std::string_view kChan  = "qb_pgsql_notify_test_ch";
-constexpr std::string_view kChan2 = "qb_pgsql_notify_test_ch2";
-constexpr std::string_view kOther = "qb_pgsql_notify_other_ch";
+constexpr std::string_view kChan     = "qb_pgsql_notify_test_ch";
+constexpr std::string_view kChan2    = "qb_pgsql_notify_test_ch2";
+constexpr std::string_view kOther    = "qb_pgsql_notify_other_ch";
 constexpr auto             kDeadline = std::chrono::seconds(5);
 
 /// Publisher fixture: a connected db used to emit NOTIFYs; skips when daemon is down.
@@ -59,8 +59,7 @@ protected:
     SetUp() override {
         pub_ = std::make_unique<qb::pg::tcp::database>();
         if (!qb::io::async::run_sync(pub_->connect(dsn_tcp_string())))
-            GTEST_SKIP() << qb::pg::test::kDaemonUnreachableSentinel
-                         << " (postgres at " << dsn_tcp_string() << " not reachable)";
+            GTEST_SKIP() << qb::pg::test::kDaemonUnreachableSentinel << " (postgres at " << dsn_tcp_string() << " not reachable)";
     }
 
     void
@@ -79,8 +78,7 @@ protected:
 // ---------------------------------------------------------------------------
 
 TEST_F(ListenNotify, Notify_Callback_WithPayload) {
-    ASSERT_TRUE(pub_->notify(std::string(kChan), "hello-payload", discard_query, discard_error)
-                    .await());
+    ASSERT_TRUE(pub_->notify(std::string(kChan), "hello-payload", discard_query, discard_error).await());
 }
 
 TEST_F(ListenNotify, Notify_Coro_WithAndWithoutPayload) {
@@ -130,8 +128,7 @@ TEST_F(ListenNotify, CbConsumer_ReceivesPayload) {
     ASSERT_TRUE(sub.listen(std::string(kChan), discard_query, discard_error).await());
     ASSERT_TRUE(pub_->notify(std::string(kChan), "cb-ok", discard_query, discard_error).await());
 
-    EXPECT_TRUE(pump_until([&] { return hits >= 1; }, kDeadline))
-        << "notification for " << kChan << " never delivered";
+    EXPECT_TRUE(pump_until([&] { return hits >= 1; }, kDeadline)) << "notification for " << kChan << " never delivered";
     EXPECT_EQ(hits, 1);
     EXPECT_EQ(last_payload, "cb-ok");
     EXPECT_TRUE(sub.is_connected());
@@ -152,8 +149,7 @@ TEST_F(ListenNotify, CbConsumer_MultiPayload_Ordered) {
     for (const char *p : {"p1", "p2", "p3"})
         ASSERT_TRUE(pub_->notify(std::string(kChan), p, discard_query, discard_error).await());
 
-    EXPECT_TRUE(pump_until([&] { return received.size() >= 3; }, kDeadline))
-        << "expected 3 notifications, got " << received.size();
+    EXPECT_TRUE(pump_until([&] { return received.size() >= 3; }, kDeadline)) << "expected 3 notifications, got " << received.size();
     ASSERT_EQ(received.size(), 3u);
     EXPECT_EQ(received[0], "p1");
     EXPECT_EQ(received[1], "p2");
@@ -171,8 +167,7 @@ TEST_F(ListenNotify, CbConsumer_AfterUnlisten_NoDelivery) {
     ASSERT_TRUE(qb::io::async::run_sync(sub.connect(dsn_tcp_string())));
     ASSERT_TRUE(sub.listen(std::string(kChan), discard_query, discard_error).await());
     ASSERT_TRUE(sub.unlisten(std::string(kChan), discard_query, discard_error).await());
-    ASSERT_TRUE(pub_->notify(std::string(kChan), "after-unlisten", discard_query, discard_error)
-                    .await());
+    ASSERT_TRUE(pub_->notify(std::string(kChan), "after-unlisten", discard_query, discard_error).await());
 
     // Give any (wrongly) delivered notification a bounded window to show up, then assert
     // none did.
@@ -213,11 +208,9 @@ TEST_F(ListenNotify, CbConsumer_ReconnectAndReListen_StillDelivers) {
     // be re-established explicitly.
     ASSERT_TRUE(qb::io::async::run_sync(sub.connect(dsn_tcp_string())));
     ASSERT_TRUE(sub.listen(std::string(kChan), discard_query, discard_error).await());
-    ASSERT_TRUE(pub_->notify(std::string(kChan), "after-reconnect", discard_query, discard_error)
-                    .await());
+    ASSERT_TRUE(pub_->notify(std::string(kChan), "after-reconnect", discard_query, discard_error).await());
 
-    EXPECT_TRUE(pump_until([&] { return hits >= 1; }, kDeadline))
-        << "notification not delivered after reconnect + re-LISTEN";
+    EXPECT_TRUE(pump_until([&] { return hits >= 1; }, kDeadline)) << "notification not delivered after reconnect + re-LISTEN";
     EXPECT_EQ(hits, 1);
     sub.disconnect();
 }
@@ -236,8 +229,7 @@ TEST_F(ListenNotify, CbConsumer_OnNotifyCallbackThrows_StillQueuesAndSurvives) {
     });
     ASSERT_TRUE(qb::io::async::run_sync(sub.connect(dsn_tcp_string())));
     ASSERT_TRUE(sub.listen(std::string(kChan), discard_query, discard_error).await());
-    ASSERT_TRUE(pub_->notify(std::string(kChan), "throw-but-queue", discard_query, discard_error)
-                    .await());
+    ASSERT_TRUE(pub_->notify(std::string(kChan), "throw-but-queue", discard_query, discard_error).await());
 
     // Drain the subscriber socket so the NotificationResponse reaches deliver_pg_notify,
     // where the throwing callback fires and is swallowed, then the message is still queued.
@@ -284,8 +276,7 @@ TEST_F(ListenNotify, CoConsumer_OnDroppedCallbackThrows_Swallowed) {
 
     // Drain so both NotificationResponses reach the queue; the second triggers the
     // (throwing) dropped handler before the first receive() frees a slot.
-    EXPECT_TRUE(pump_until([&] { return dropped_calls.load(std::memory_order_relaxed) >= 1; },
-                           kDeadline))
+    EXPECT_TRUE(pump_until([&] { return dropped_calls.load(std::memory_order_relaxed) >= 1; }, kDeadline))
         << "overflow notification never routed to on_notify_dropped";
     EXPECT_EQ(dropped_calls.load(std::memory_order_relaxed), 1);
 
@@ -331,8 +322,7 @@ TEST_F(ListenNotify, CoConsumer_TwoSequentialReceives_Ordered) {
             co_return false;
         auto a = co_await sub.receive();
         auto b = co_await sub.receive();
-        co_return a.has_value() && b.has_value() && a->payload == "first"
-            && b->payload == "second";
+        co_return a.has_value() && b.has_value() && a->payload == "first" && b->payload == "second";
     }()));
 }
 
@@ -351,8 +341,7 @@ TEST_F(ListenNotify, CoConsumer_CallbackAndReceive) {
         if (!(co_await pub_->notify(std::string(kChan), "both")).ok())
             co_return false;
         auto n = co_await sub.receive();
-        co_return n.has_value() && n->payload == "both"
-            && cb_hits.load(std::memory_order_relaxed) == 1;
+        co_return n.has_value() && n->payload == "both" && cb_hits.load(std::memory_order_relaxed) == 1;
     }()));
 }
 
@@ -414,8 +403,7 @@ TEST_F(ListenNotify, CoConsumer_CapacityTwo_DropBoundary) {
 
     ASSERT_TRUE(qb::io::async::run_sync([&]() -> qb::io::async::task<bool> {
         auto first = co_await sub.receive();
-        co_return first.has_value() && first->payload == "one"
-            && dropped.load(std::memory_order_relaxed) == 1;
+        co_return first.has_value() && first->payload == "one" && dropped.load(std::memory_order_relaxed) == 1;
     }()));
     sub.disconnect();
 }
@@ -433,8 +421,7 @@ TEST_F(ListenNotify, PlainDatabase_OnIncomingNotify) {
     ASSERT_TRUE(pub_->listen(std::string(kChan), discard_query, discard_error).await());
     ASSERT_TRUE(pub_->notify(std::string(kChan), "plain", discard_query, discard_error).await());
 
-    EXPECT_TRUE(pump_until([&] { return hits >= 1; }, kDeadline))
-        << "plain database did not surface its own notification";
+    EXPECT_TRUE(pump_until([&] { return hits >= 1; }, kDeadline)) << "plain database did not surface its own notification";
     EXPECT_EQ(hits, 1);
     pub_->on_incoming_notify({});
     ASSERT_TRUE(pub_->unlisten_all(discard_query, discard_error).await());
@@ -451,8 +438,7 @@ TEST_F(ListenNotify, PlainDatabase_TwoChannels_TwoHits) {
     ASSERT_TRUE(pub_->notify(std::string(kChan), "a", discard_query, discard_error).await());
     ASSERT_TRUE(pub_->notify(std::string(kChan2), "b", discard_query, discard_error).await());
 
-    EXPECT_TRUE(pump_until([&] { return hits >= 2; }, kDeadline))
-        << "expected 2 notifications across channels, got " << hits;
+    EXPECT_TRUE(pump_until([&] { return hits >= 2; }, kDeadline)) << "expected 2 notifications across channels, got " << hits;
     EXPECT_EQ(hits, 2);
     pub_->on_incoming_notify({});
     ASSERT_TRUE(pub_->unlisten_all(discard_query, discard_error).await());
@@ -470,8 +456,7 @@ TEST_F(ListenNotify, PlainDatabase_EmptyPayload) {
     ASSERT_TRUE(pub_->listen(std::string(kChan), discard_query, discard_error).await());
     ASSERT_TRUE(pub_->notify(std::string(kChan), "", discard_query, discard_error).await());
 
-    EXPECT_TRUE(pump_until([&] { return hits >= 1; }, kDeadline))
-        << "empty-payload notification not delivered";
+    EXPECT_TRUE(pump_until([&] { return hits >= 1; }, kDeadline)) << "empty-payload notification not delivered";
     EXPECT_EQ(hits, 1);
     EXPECT_TRUE(last.empty());
     pub_->on_incoming_notify({});
@@ -484,8 +469,7 @@ TEST_F(ListenNotify, PlainDatabase_EmptyPayload) {
 
 TEST_F(ListenNotify, SequentialQueries_AfterListenNotify_NoHang) {
     ASSERT_TRUE(pub_->execute("LISTEN qb_proto_chan", discard_query, discard_error).await());
-    ASSERT_TRUE(pub_->execute("NOTIFY qb_proto_chan, 'ping'", discard_query, discard_error)
-                    .await());
+    ASSERT_TRUE(pub_->execute("NOTIFY qb_proto_chan, 'ping'", discard_query, discard_error).await());
     EXPECT_TRUE(pub_->execute("SELECT 1", discard_query, discard_error).await());
 }
 
@@ -494,15 +478,12 @@ TEST_F(ListenNotify, SequentialQueries_AfterListenNotify_NoHang) {
 TEST(ListenNotifyTwoConnections, PeerNotifyDoesNotBreakListener) {
     auto a = std::make_unique<qb::pg::tcp::database>();
     auto b = std::make_unique<qb::pg::tcp::database>();
-    if (!qb::io::async::run_sync(a->connect(dsn_tcp_string()))
-        || !qb::io::async::run_sync(b->connect(dsn_tcp_string()))) {
+    if (!qb::io::async::run_sync(a->connect(dsn_tcp_string())) || !qb::io::async::run_sync(b->connect(dsn_tcp_string()))) {
         GTEST_SKIP() << qb::pg::test::kDaemonUnreachableSentinel;
     }
 
     ASSERT_TRUE(a->execute("LISTEN qb_proto_peer", discard_query, discard_error).await());
-    ASSERT_TRUE(b->execute("SELECT pg_notify('qb_proto_peer', 'from_b')", discard_query,
-                           discard_error)
-                    .await());
+    ASSERT_TRUE(b->execute("SELECT pg_notify('qb_proto_peer', 'from_b')", discard_query, discard_error).await());
     EXPECT_TRUE(a->execute("SELECT 1", discard_query, discard_error).await());
 
     a->disconnect();
@@ -548,14 +529,14 @@ TEST_F(ListenNotify, EmptyChannel_CallbackForms_InvokeErrorAndThrow) {
 TEST_F(ListenNotify, EmptyChannel_CoroForms_FailGracefully) {
     bool notify_failed = false, listen_failed = false, unlisten_failed = false, survived = false;
     qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
-        auto n        = co_await pub_->notify("", "payload");
-        notify_failed = !n.ok();
-        auto l        = co_await pub_->listen("");
-        listen_failed = !l.ok();
+        auto n          = co_await pub_->notify("", "payload");
+        notify_failed   = !n.ok();
+        auto l          = co_await pub_->listen("");
+        listen_failed   = !l.ok();
         auto u          = co_await pub_->unlisten("");
         unlisten_failed = !u.ok();
-        auto ok  = co_await pub_->query("SELECT 1");
-        survived = ok.ok();
+        auto ok         = co_await pub_->query("SELECT 1");
+        survived        = ok.ok();
         co_return;
     }());
     EXPECT_TRUE(notify_failed);
@@ -595,8 +576,7 @@ protected:
         pub_ = std::make_unique<qb::pg::tcp::ssl::database>();
         if (!qb::io::async::run_sync(pub_->connect(dsn_ssl_string()))) {
             if (!ssl_dsn_pinned())
-                GTEST_SKIP() << qb::pg::test::kDaemonUnreachableSentinel
-                             << " (TLS postgres at " << dsn_ssl_string()
+                GTEST_SKIP() << qb::pg::test::kDaemonUnreachableSentinel << " (TLS postgres at " << dsn_ssl_string()
                              << " not reachable and QB_PG_SSL_DSN unset)";
             else
                 FAIL() << "QB_PG_SSL_DSN is set but TLS connect failed: " << dsn_ssl_string();
@@ -629,11 +609,9 @@ TEST_F(SslListenNotify, SslCbConsumer_ReceivesPayload) {
     });
     ASSERT_TRUE(qb::io::async::run_sync(sub.connect(dsn_ssl_string())));
     ASSERT_TRUE(sub.listen(std::string(kChan), discard_query, discard_error).await());
-    ASSERT_TRUE(pub_->notify(std::string(kChan), "ssl-cb-ok", discard_query, discard_error)
-                    .await());
+    ASSERT_TRUE(pub_->notify(std::string(kChan), "ssl-cb-ok", discard_query, discard_error).await());
 
-    EXPECT_TRUE(pump_until([&] { return hits >= 1; }, kDeadline))
-        << "TLS notification for " << kChan << " never delivered";
+    EXPECT_TRUE(pump_until([&] { return hits >= 1; }, kDeadline)) << "TLS notification for " << kChan << " never delivered";
     EXPECT_EQ(hits, 1);
     EXPECT_EQ(last_payload, "ssl-cb-ok");
     EXPECT_TRUE(sub.is_connected());
@@ -675,11 +653,9 @@ TEST_F(SslListenNotify, SslPlainDatabase_OnIncomingNotify) {
             ++hits;
     });
     ASSERT_TRUE(pub_->listen(std::string(kChan), discard_query, discard_error).await());
-    ASSERT_TRUE(pub_->notify(std::string(kChan), "ssl-plain", discard_query, discard_error)
-                    .await());
+    ASSERT_TRUE(pub_->notify(std::string(kChan), "ssl-plain", discard_query, discard_error).await());
 
-    EXPECT_TRUE(pump_until([&] { return hits >= 1; }, kDeadline))
-        << "SSL plain database did not surface its own notification";
+    EXPECT_TRUE(pump_until([&] { return hits >= 1; }, kDeadline)) << "SSL plain database did not surface its own notification";
     EXPECT_EQ(hits, 1);
     pub_->on_incoming_notify({});
     ASSERT_TRUE(pub_->unlisten_all(discard_query, discard_error).await());

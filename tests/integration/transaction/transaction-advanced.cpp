@@ -26,11 +26,11 @@
  */
 
 #include <chrono>
-#include <string>
 #include <gtest/gtest.h>
-#include "../pgsql.h"
+#include <string>
 #include "../../shared/pg_integration_fixture.hpp"
 #include "../../shared/test_config.hpp"
+#include "../pgsql.h"
 
 using namespace qb::pg;
 using namespace qb::pg::detail;
@@ -67,20 +67,20 @@ protected:
 
 /** @brief READ COMMITTED (explicit mode) reads the seeded counter. */
 TEST_F(AdvancedTransactionTest, ExplicitReadCommitted) {
-    bool ok = false;
+    bool             ok = false;
     transaction_mode mode{isolation_level::read_committed};
     auto             st = db_->begin(
-                              [&](Transaction &t) {
-                    t.execute(
-                        "SELECT counter FROM test_advanced_transactions WHERE value = 'row1'",
-                        [&](Transaction &, results r) {
-                            ASSERT_EQ(r.size(), 1u);
-                            EXPECT_EQ(r[0][0].as<int>(), 10);
-                            ok = true;
-                        },
-                        [](error::db_error const &e) { ADD_FAILURE() << e.what(); });
-                              },
-                              [](error::db_error const &e) { ADD_FAILURE() << e.what(); }, mode)
+                                 [&](Transaction &t) {
+                         t.execute(
+                             "SELECT counter FROM test_advanced_transactions WHERE value = 'row1'",
+                             [&](Transaction &, results r) {
+                                 ASSERT_EQ(r.size(), 1u);
+                                 EXPECT_EQ(r[0][0].as<int>(), 10);
+                                 ok = true;
+                             },
+                             [](error::db_error const &e) { ADD_FAILURE() << e.what(); });
+                                 },
+                                 [](error::db_error const &e) { ADD_FAILURE() << e.what(); }, mode)
                               .await();
     EXPECT_TRUE(st);
     EXPECT_TRUE(ok);
@@ -120,14 +120,14 @@ TEST_F(AdvancedTransactionTest, ReadOnlyTransactionRejectsWrite) {
 
     bool verified = false;
     auto verify   = db_->execute(
-                        "SELECT COUNT(*) FROM test_advanced_transactions WHERE value = 'readonly_test'",
-                        [&](Transaction &, results r) {
-                      ASSERT_EQ(r.size(), 1u);
-                      EXPECT_EQ(r[0][0].as<int>(), 0);
-                      verified = true;
-                        },
-                        [](error::db_error const &e) { ADD_FAILURE() << e.what(); })
-                      .await();
+                           "SELECT COUNT(*) FROM test_advanced_transactions WHERE value = 'readonly_test'",
+                           [&](Transaction &, results r) {
+                             ASSERT_EQ(r.size(), 1u);
+                             EXPECT_EQ(r[0][0].as<int>(), 0);
+                             verified = true;
+                           },
+                           [](error::db_error const &e) { ADD_FAILURE() << e.what(); })
+                        .await();
     EXPECT_TRUE(verify);
     EXPECT_TRUE(verified);
 }
@@ -165,33 +165,34 @@ TEST_F(AdvancedTransactionTest, SavepointRestoration) {
  * row1's counter by 5, so the table holds EXACTLY 4 rows and row1's counter is EXACTLY 15.
  * Error callbacks fail the test loudly instead of swallowing a real failure. */
 TEST_F(AdvancedTransactionTest, MultiOperationTransaction) {
-    auto fail_on_error = [](error::db_error const &e) { ADD_FAILURE() << e.code << " " << e.what(); };
-    bool count_ok      = false;
-    bool counter_ok    = false;
-    auto st            = db_->begin([&](Transaction &t) {
-                     t.execute("INSERT INTO test_advanced_transactions (value, counter) VALUES ('temp_row', 100)", discard_query,
-                               fail_on_error);
-                     t.execute("UPDATE test_advanced_transactions SET counter = counter + 5 WHERE value = 'row1'", discard_query,
-                               fail_on_error);
-                     t.execute(
-                         "SELECT COUNT(*) FROM test_advanced_transactions",
-                         [&](Transaction &, results r) {
-                             ASSERT_EQ(r.size(), 1u);
-                             EXPECT_EQ(r[0][0].as<int>(), 4);
-                             count_ok = true;
-                         },
-                         fail_on_error);
-                     // The UPDATE's effect: row1 counter went 10 -> 15.
-                     t.execute(
-                         "SELECT counter FROM test_advanced_transactions WHERE value = 'row1'",
-                         [&](Transaction &, results r) {
-                             ASSERT_EQ(r.size(), 1u);
-                             EXPECT_EQ(r[0][0].as<int>(), 15);
-                             counter_ok = true;
-                         },
-                         fail_on_error);
-                 })
-                  .await();
+    auto fail_on_error = [](error::db_error const &e) {
+        ADD_FAILURE() << e.code << " " << e.what();
+    };
+    bool count_ok   = false;
+    bool counter_ok = false;
+    auto st =
+        db_->begin([&](Transaction &t) {
+               t.execute("INSERT INTO test_advanced_transactions (value, counter) VALUES ('temp_row', 100)", discard_query, fail_on_error);
+               t.execute("UPDATE test_advanced_transactions SET counter = counter + 5 WHERE value = 'row1'", discard_query, fail_on_error);
+               t.execute(
+                   "SELECT COUNT(*) FROM test_advanced_transactions",
+                   [&](Transaction &, results r) {
+                       ASSERT_EQ(r.size(), 1u);
+                       EXPECT_EQ(r[0][0].as<int>(), 4);
+                       count_ok = true;
+                   },
+                   fail_on_error);
+               // The UPDATE's effect: row1 counter went 10 -> 15.
+               t.execute(
+                   "SELECT counter FROM test_advanced_transactions WHERE value = 'row1'",
+                   [&](Transaction &, results r) {
+                       ASSERT_EQ(r.size(), 1u);
+                       EXPECT_EQ(r[0][0].as<int>(), 15);
+                       counter_ok = true;
+                   },
+                   fail_on_error);
+           })
+            .await();
     EXPECT_TRUE(st);
     EXPECT_TRUE(count_ok);
     EXPECT_TRUE(counter_ok);
@@ -200,15 +201,15 @@ TEST_F(AdvancedTransactionTest, MultiOperationTransaction) {
 /** @brief An invalid statement inside `begin` fails the block and fires the error callback. */
 TEST_F(AdvancedTransactionTest, BasicErrorHandling) {
     bool error_handled = false;
-    auto st            = db_->begin(
-                          [](Transaction &t) {
-                    t.execute(
-                        "SELECT * FROM nonexistent_table",
-                        [](Transaction &, results) { ADD_FAILURE() << "query on missing table must fail"; },
-                        [](error::db_error const &e) { EXPECT_EQ(e.code, "42P01"); });
-                          },
-                          [&](error::db_error const &) { error_handled = true; })
-                         .await();
+    auto st =
+        db_->begin(
+               [](Transaction &t) {
+                   t.execute(
+                       "SELECT * FROM nonexistent_table", [](Transaction &, results) { ADD_FAILURE() << "query on missing table must fail"; },
+                       [](error::db_error const &e) { EXPECT_EQ(e.code, "42P01"); });
+               },
+               [&](error::db_error const &) { error_handled = true; })
+            .await();
     EXPECT_FALSE(st);
     EXPECT_TRUE(error_handled);
 }
@@ -225,16 +226,16 @@ TEST_F(AdvancedTransactionTest, StatementTimeout) {
     bool saw_error = false;
     auto start     = std::chrono::steady_clock::now();
     auto st        = db_->begin([&](Transaction &t) {
-                       t.execute("SET statement_timeout = '1000'", discard_query, discard_error);
-                       t.execute(
-                           "SELECT pg_sleep(3)", [](Transaction &, results) { ADD_FAILURE() << "pg_sleep should be cut off by timeout"; },
-                           [&](error::db_error const &e) {
-                               saw_error = true;
-                               EXPECT_EQ(e.code, "57014") << e.what(); // query_canceled (statement timeout)
-                           });
-                   })
-                  .await();
-    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
+                     t.execute("SET statement_timeout = '1000'", discard_query, discard_error);
+                     t.execute(
+                         "SELECT pg_sleep(3)", [](Transaction &, results) { ADD_FAILURE() << "pg_sleep should be cut off by timeout"; },
+                         [&](error::db_error const &e) {
+                             saw_error = true;
+                             EXPECT_EQ(e.code, "57014") << e.what(); // query_canceled (statement timeout)
+                         });
+                        })
+                         .await();
+    auto elapsed   = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
 
     EXPECT_FALSE(st);
     EXPECT_TRUE(saw_error);
@@ -245,15 +246,15 @@ TEST_F(AdvancedTransactionTest, StatementTimeout) {
 TEST_F(AdvancedTransactionTest, StatementTimeoutViaSetTimeout) {
     bool saw_error = false;
     auto st        = db_->set_timeout(std::chrono::milliseconds(1000))
-                  .begin([&](Transaction &t) {
+                         .begin([&](Transaction &t) {
                       t.execute(
                           "SELECT pg_sleep(3)", [](Transaction &, results) { ADD_FAILURE() << "pg_sleep should be cut off"; },
                           [&](error::db_error const &e) {
                               saw_error = true;
                               EXPECT_EQ(e.code, "57014") << e.what(); // query_canceled (statement timeout)
                           });
-                  })
-                  .await();
+                         })
+                         .await();
     EXPECT_TRUE(saw_error);
     EXPECT_FALSE(static_cast<bool>(st));
 }
@@ -276,18 +277,17 @@ TEST_F(AdvancedTransactionTest, DeallocatePreparedStatement) {
     EXPECT_TRUE(first_ok);
 
     bool dealloc_ok = false;
-    ASSERT_TRUE(db_->begin([&](Transaction &t) {
-                       t.execute("DEALLOCATE test_dealloc_stmt", [&](Transaction &, results) { dealloc_ok = true; });
-                   })
-                    .await());
+    ASSERT_TRUE(
+        db_->begin([&](Transaction &t) { t.execute("DEALLOCATE test_dealloc_stmt", [&](Transaction &, results) { dealloc_ok = true; }); })
+            .await());
     EXPECT_TRUE(dealloc_ok);
 
     bool error_caught = false;
     auto reuse        = db_->execute(
-                       "test_dealloc_stmt", params{std::string("row1")},
-                       [](Transaction &, results) { ADD_FAILURE() << "deallocated statement must not execute"; },
-                       [&](error::db_error const &) { error_caught = true; })
-                    .await();
+                               "test_dealloc_stmt", params{std::string("row1")},
+                               [](Transaction &, results) { ADD_FAILURE() << "deallocated statement must not execute"; },
+                               [&](error::db_error const &) { error_caught = true; })
+                            .await();
     EXPECT_FALSE(reuse);
     EXPECT_TRUE(error_caught);
 }
@@ -295,41 +295,41 @@ TEST_F(AdvancedTransactionTest, DeallocatePreparedStatement) {
 /** @brief A unique-constraint violation rolls the whole transaction back. */
 TEST_F(AdvancedTransactionTest, ConstraintViolationRollsBack) {
     ASSERT_TRUE(db_->execute("DROP TABLE IF EXISTS test_unique_constraint", discard_query, discard_error).await());
-    ASSERT_TRUE(db_->execute("CREATE TABLE test_unique_constraint (id SERIAL PRIMARY KEY, unique_value TEXT UNIQUE)", discard_query,
-                             discard_error)
-                    .await());
-    ASSERT_TRUE(db_->execute("INSERT INTO test_unique_constraint (unique_value) VALUES ('unique_string')", discard_query, discard_error)
-                    .await());
+    ASSERT_TRUE(
+        db_->execute("CREATE TABLE test_unique_constraint (id SERIAL PRIMARY KEY, unique_value TEXT UNIQUE)", discard_query, discard_error)
+            .await());
+    ASSERT_TRUE(
+        db_->execute("INSERT INTO test_unique_constraint (unique_value) VALUES ('unique_string')", discard_query, discard_error).await());
 
     bool first_insert = false;
     bool error_caught = false;
-    auto st           = db_->begin(
-                          [&](Transaction &t) {
-                    t.execute("INSERT INTO test_unique_constraint (unique_value) VALUES ('different_unique')",
-                              [&](Transaction &tr, results) {
-                                  first_insert = true;
-                                  tr.execute(
-                                      "INSERT INTO test_unique_constraint (unique_value) VALUES ('unique_string')",
-                                      [](Transaction &, results) { ADD_FAILURE() << "duplicate must violate UNIQUE"; },
-                                      [](error::db_error const &e) { EXPECT_EQ(e.code, "23505"); }); // unique_violation
-                              });
-                          },
-                          [&](error::db_error const &) { error_caught = true; })
-                        .await();
+    auto st =
+        db_->begin(
+               [&](Transaction &t) {
+                   t.execute("INSERT INTO test_unique_constraint (unique_value) VALUES ('different_unique')", [&](Transaction &tr, results) {
+                       first_insert = true;
+                       tr.execute(
+                           "INSERT INTO test_unique_constraint (unique_value) VALUES ('unique_string')",
+                           [](Transaction &, results) { ADD_FAILURE() << "duplicate must violate UNIQUE"; },
+                           [](error::db_error const &e) { EXPECT_EQ(e.code, "23505"); }); // unique_violation
+                   });
+               },
+               [&](error::db_error const &) { error_caught = true; })
+            .await();
     EXPECT_FALSE(st);
     EXPECT_TRUE(first_insert);
     EXPECT_TRUE(error_caught);
 
     bool verified = false;
     auto verify   = db_->execute(
-                        "SELECT COUNT(*) FROM test_unique_constraint WHERE unique_value = 'different_unique'",
-                        [&](Transaction &, results r) {
-                      ASSERT_EQ(r.size(), 1u);
-                      EXPECT_EQ(r[0][0].as<int>(), 0); // rolled back
-                      verified = true;
-                        },
-                        [](error::db_error const &e) { ADD_FAILURE() << e.what(); })
-                      .await();
+                           "SELECT COUNT(*) FROM test_unique_constraint WHERE unique_value = 'different_unique'",
+                           [&](Transaction &, results r) {
+                             ASSERT_EQ(r.size(), 1u);
+                             EXPECT_EQ(r[0][0].as<int>(), 0); // rolled back
+                             verified = true;
+                           },
+                           [](error::db_error const &e) { ADD_FAILURE() << e.what(); })
+                        .await();
     EXPECT_TRUE(verify);
     EXPECT_TRUE(verified);
 
@@ -343,8 +343,8 @@ TEST_F(AdvancedTransactionTest, TransactionWithCursor) {
 
     ASSERT_TRUE(db_->begin([&](Transaction &t) {
                        for (int i = 0; i < kRows; ++i)
-                           t.execute("INSERT INTO test_advanced_transactions (value, counter) VALUES ('cursor_row_" + std::to_string(i)
-                                         + "', " + std::to_string(i) + ")",
+                           t.execute("INSERT INTO test_advanced_transactions (value, counter) VALUES ('cursor_row_" + std::to_string(i) + "', "
+                                         + std::to_string(i) + ")",
                                      discard_query, discard_error);
                    })
                     .await());
@@ -355,16 +355,15 @@ TEST_F(AdvancedTransactionTest, TransactionWithCursor) {
                      t.execute(
                          "DECLARE test_cursor CURSOR FOR SELECT * FROM test_advanced_transactions "
                          "WHERE value LIKE 'cursor_row_%' ORDER BY counter",
-                         [&](Transaction &, results) { cursor_created = true; },
-                         [](error::db_error const &e) { ADD_FAILURE() << e.what(); });
+                         [&](Transaction &, results) { cursor_created = true; }, [](error::db_error const &e) { ADD_FAILURE() << e.what(); });
                      for (int i = 0; i < 3; ++i)
                          t.execute(
                              "FETCH " + std::to_string(kFetch) + " FROM test_cursor",
                              [&](Transaction &, results r) { rows_fetched += static_cast<int>(r.size()); },
                              [](error::db_error const &e) { ADD_FAILURE() << e.what(); });
                      t.execute("CLOSE test_cursor", discard_query, discard_error);
-                 })
-                  .await();
+                             })
+                              .await();
 
     EXPECT_TRUE(st);
     EXPECT_TRUE(cursor_created);
@@ -453,12 +452,8 @@ TEST_F(AdvancedTransactionTest, SerializableContentionRaises40001) {
     // surface on either side, so collect SQLSTATEs from both commits.
     std::string code_a;
     std::string code_b;
-    (void) con_a.execute(
-                    "COMMIT", [](Transaction &, results) {}, [&](error::db_error const &e) { code_a = e.code; })
-        .await();
-    (void) con_b.execute(
-                    "COMMIT", [](Transaction &, results) {}, [&](error::db_error const &e) { code_b = e.code; })
-        .await();
+    (void) con_a.execute("COMMIT", [](Transaction &, results) {}, [&](error::db_error const &e) { code_a = e.code; }).await();
+    (void) con_b.execute("COMMIT", [](Transaction &, results) {}, [&](error::db_error const &e) { code_b = e.code; }).await();
 
     EXPECT_TRUE(code_a == "40001" || code_b == "40001")
         << "expected a serialization_failure (40001) on one of the two commits; got a='" << code_a << "' b='" << code_b << "'";
@@ -482,18 +477,17 @@ TEST_F(AdvancedTransactionTest, NestedBeginCallbackReportsAlreadyInTransaction) 
     bool inner_error = false;
     bool outer_ok    = false;
     auto st          = db_->begin(
-                          [&](Transaction &t) {
-            // t is a child transaction (its _parent is the root): a second begin must fail.
-            t.begin(
-                [](Transaction &) { ADD_FAILURE() << "nested begin must not succeed"; },
-                [&](error::db_error const &e) {
-                    inner_error = true;
-                    EXPECT_NE(std::string(e.what()).find("already in transaction"), std::string::npos);
-                });
-                          },
-                          [](error::db_error const &e) { ADD_FAILURE() << e.what(); })
-                       .await();
-    outer_ok = static_cast<bool>(st);
+                              [&](Transaction &t) {
+                         // t is a child transaction (its _parent is the root): a second begin must fail.
+                         t.begin([](Transaction &) { ADD_FAILURE() << "nested begin must not succeed"; },
+                                 [&](error::db_error const &e) {
+                                     inner_error = true;
+                                     EXPECT_NE(std::string(e.what()).find("already in transaction"), std::string::npos);
+                                 });
+                              },
+                              [](error::db_error const &e) { ADD_FAILURE() << e.what(); })
+                           .await();
+    outer_ok         = static_cast<bool>(st);
     EXPECT_TRUE(outer_ok);
     EXPECT_TRUE(inner_error) << "nested begin should have reported 'already in transaction'";
 }
@@ -513,11 +507,13 @@ TEST_F(AdvancedTransactionTest, ExecutePreparedSingleSuccessCallback) {
     int  decoded = -1;
     bool ran     = false;
     // Single-success-callback overload: no explicit error callback supplied.
-    auto st = db_->execute("qb_adv_single_cb_stmt", params{41}, [&](Transaction &, results r) {
-                     ASSERT_EQ(r.size(), 1u);
-                     decoded = r[0][0].as<int>();
-                     ran     = true;
-                 }).await();
+    auto st = db_->execute("qb_adv_single_cb_stmt", params{41},
+                           [&](Transaction &, results r) {
+                               ASSERT_EQ(r.size(), 1u);
+                               decoded = r[0][0].as<int>();
+                               ran     = true;
+                           })
+                  .await();
     EXPECT_TRUE(static_cast<bool>(st));
     EXPECT_TRUE(ran);
     EXPECT_EQ(decoded, 42);
@@ -528,19 +524,19 @@ TEST_F(AdvancedTransactionTest, ExecutePreparedSingleSuccessCallback) {
  *        body reads SHOW transaction_isolation back to prove the mode was applied.
  */
 TEST_F(AdvancedTransactionTest, ExplicitRepeatableReadCallbackMode) {
-    std::string seen;
+    std::string      seen;
     transaction_mode mode{isolation_level::repeatable_read};
     auto             st = db_->begin(
-                              [&](Transaction &t) {
-                    t.execute(
-                        "SHOW transaction_isolation",
-                        [&](Transaction &, results r) {
-                            ASSERT_EQ(r.size(), 1u);
-                            seen = r[0][0].as<std::string>();
-                        },
-                        [](error::db_error const &e) { ADD_FAILURE() << e.what(); });
-                              },
-                              [](error::db_error const &e) { ADD_FAILURE() << e.what(); }, mode)
+                                 [&](Transaction &t) {
+                         t.execute(
+                             "SHOW transaction_isolation",
+                             [&](Transaction &, results r) {
+                                 ASSERT_EQ(r.size(), 1u);
+                                 seen = r[0][0].as<std::string>();
+                             },
+                             [](error::db_error const &e) { ADD_FAILURE() << e.what(); });
+                                 },
+                                 [](error::db_error const &e) { ADD_FAILURE() << e.what(); }, mode)
                               .await();
     EXPECT_TRUE(static_cast<bool>(st));
     EXPECT_EQ(seen, "repeatable read");

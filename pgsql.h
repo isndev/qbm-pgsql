@@ -101,8 +101,8 @@
 #include <qb/io/tcp/ssl/socket.h>
 #endif
 #include <qb/system/allocator/pipe.h>
-#include <qb/system/cpu.h>    // qb::scope_guard
-#include <qb/system/parse.h>  // qb::to_number (locale-free, non-throwing)
+#include <qb/system/cpu.h>   // qb::scope_guard
+#include <qb/system/parse.h> // qb::to_number (locale-free, non-throwing)
 
 // P1-1: Socket includes for keepalive support
 #ifdef _WIN32
@@ -2230,8 +2230,8 @@ public:
         connect_coroutine_pending_ = false;
         connect_suspend_handle_    = {};
         connect_suspend_valid_.reset();
-        serverPid_       = 0;
-        serverSecret_    = 0;
+        serverPid_    = 0;
+        serverSecret_ = 0;
         server_params_.clear(); // server ParameterStatus is per-backend; drop the stale cache
         _error           = error::db_error{"unknown error"};
         _current_command = root_transaction();

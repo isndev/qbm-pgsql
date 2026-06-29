@@ -604,22 +604,18 @@ public:
                             // a value the decoder could not render finite/canonical
                             // fails loud with the module's domain error rather than the
                             // raw std::stod exception.
-                            const std::string num =
-                                detail::decode_pg_numeric(data.data(), data.size());
-                            const auto parsed = qb::to_number<double>(num);
+                            const std::string num    = detail::decode_pg_numeric(data.data(), data.size());
+                            const auto        parsed = qb::to_number<double>(num);
                             if (!parsed)
-                                throw error::client_error(
-                                    "field '" + name() +
-                                    "' NUMERIC value '" + num +
-                                    "' could not be decoded as a floating-point number");
+                                throw error::client_error("field '" + name() + "' NUMERIC value '" + num
+                                                          + "' could not be decoded as a floating-point number");
                             return static_cast<result_type>(*parsed);
                         }
                         default:
-                            throw error::client_error(
-                                "field '" + name() + "' (type OID " +
-                                std::to_string(static_cast<int>(description().type_oid)) +
-                                ") is not a numeric/floating-point column; read it via "
-                                "as<std::string>() or the type matching its column");
+                            throw error::client_error("field '" + name() + "' (type OID "
+                                                      + std::to_string(static_cast<int>(description().type_oid))
+                                                      + ") is not a numeric/floating-point column; read it via "
+                                                        "as<std::string>() or the type matching its column");
                     }
                 }
                 return detail::TypeConverter<result_type>::from_binary(data);

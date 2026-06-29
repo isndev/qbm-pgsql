@@ -39,8 +39,8 @@
 
 #include <gtest/gtest.h>
 
-#include "../pgsql.h"
 #include "../../shared/pg_wire_ground_truth.hpp"
+#include "../pgsql.h"
 
 using namespace qb::pg;
 using namespace qb::pg::detail;
@@ -155,7 +155,7 @@ TEST(TypeConverterIntegerBinary, NegativeInt8SignExtendsToInt32) {
     EXPECT_EQ(TypeConverter<integer>::from_binary(int4_neg), -1);
 
     // int2 -42 (BE 0xFFD6) decodes to -42 through the smallint reader.
-    std::vector<byte> int2_neg(2, 0);
+    std::vector<byte>  int2_neg(2, 0);
     const std::int16_t be = static_cast<std::int16_t>(htons(static_cast<std::uint16_t>(-42)));
     std::memcpy(int2_neg.data(), &be, sizeof(be));
     EXPECT_EQ(TypeConverter<integer>::from_binary(int2_neg), -42);
@@ -164,12 +164,12 @@ TEST(TypeConverterIntegerBinary, NegativeInt8SignExtendsToInt32) {
 // bigint decode preserves the full 64-bit range (no int32 narrowing).
 TEST(TypeConverterIntegerBinary, BigintDecodesFullRange) {
     std::vector<byte> max(8, 0);
-    const bigint be = static_cast<bigint>(qb::endian::to_big_endian(std::numeric_limits<bigint>::max()));
+    const bigint      be = static_cast<bigint>(qb::endian::to_big_endian(std::numeric_limits<bigint>::max()));
     std::memcpy(max.data(), &be, sizeof(be));
     EXPECT_EQ(TypeConverter<bigint>::from_binary(max), std::numeric_limits<bigint>::max());
 
     std::vector<byte> neg(8, 0);
-    const bigint be2 = static_cast<bigint>(qb::endian::to_big_endian(static_cast<bigint>(-9000000000LL)));
+    const bigint      be2 = static_cast<bigint>(qb::endian::to_big_endian(static_cast<bigint>(-9000000000LL)));
     std::memcpy(neg.data(), &be2, sizeof(be2));
     EXPECT_EQ(TypeConverter<bigint>::from_binary(neg), -9000000000LL);
 }
@@ -356,8 +356,8 @@ TEST(ProtocolMessage, DataRowRejectsTruncatedFieldLengthRead) {
     m.write(static_cast<integer>(3));  // col0 length = 3
     m.write('a');
     m.write('b');
-    m.write('c');                      // col0 data
-    m.write('x');                      // only 1 of col1's 4 length bytes
+    m.write('c'); // col0 data
+    m.write('x'); // only 1 of col1's 4 length bytes
     (void) m.buffer();
     m.reset_read();
     row_data row;
@@ -447,8 +447,8 @@ TEST(ProtocolRowData, SwapExchangesContents) {
 
     row_data empty;
     populated.swap(empty);
-    EXPECT_TRUE(populated.empty());  // contents moved out
-    EXPECT_EQ(empty.size(), 1u);     // contents moved in
+    EXPECT_TRUE(populated.empty()); // contents moved out
+    EXPECT_EQ(empty.size(), 1u);    // contents moved in
     EXPECT_FALSE(empty.is_null(0));
 }
 
@@ -475,7 +475,7 @@ TEST(ProtocolMessage, PackAppendsSecondMessageWireBytes) {
     message sync(sync_tag);
     fail.pack(sync);
 
-    auto                     r = fail.buffer();
+    auto                      r = fail.buffer();
     std::vector<std::uint8_t> wire(r.first, r.second);
 
     // First message: tag at offset 0, then its int32 length (== body bytes, excl. tag).

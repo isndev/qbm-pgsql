@@ -13,12 +13,12 @@
  * Licensed under the Apache License, Version 2.0 (the "License").
  */
 
+#include <gtest/gtest.h>
 #include <optional>
 #include <string>
 #include <vector>
-#include <gtest/gtest.h>
-#include "../pgsql.h"
 #include "../../shared/pg_wire_ground_truth.hpp"
+#include "../pgsql.h"
 
 using namespace qb::pg;
 using namespace qb::pg::detail;
@@ -53,7 +53,9 @@ TEST(TypeConverterJsonTest, BinaryAndTextPaths) {
     // per-field length prefix, and `json` (unlike `jsonb`) has no version byte, so the
     // bytes ARE the JSON text. This is NOT a to_binary round-trip — to_binary writes the
     // Bind [int32 len] framing, which from_binary must never see.
-    auto value_of = [](std::string_view s) { return std::vector<byte>(s.data(), s.data() + s.size()); };
+    auto value_of = [](std::string_view s) {
+        return std::vector<byte>(s.data(), s.data() + s.size());
+    };
 
     const std::string text = R"({"a":1})";
     EXPECT_EQ(TypeConverter<qb::json>::from_binary(value_of(text)), qb::json::parse(text));
@@ -191,7 +193,7 @@ TEST(TypeConverterJsonbTest, NestedDocumentVersionedWire) {
 
     // Version byte 2 (unsupported) -> throw.
     std::vector<byte> badVersion = wire;
-    badVersion[4] = static_cast<byte>(2);
+    badVersion[4]                = static_cast<byte>(2);
     EXPECT_THROW(TypeConverter<qb::jsonb>::from_binary(badVersion), std::runtime_error);
 }
 

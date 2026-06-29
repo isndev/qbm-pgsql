@@ -26,14 +26,14 @@
  *
  * @ingroup Pgsql
  */
-#include <string>
 #include <gtest/gtest.h>
+#include <string>
 #include <qb/io/async.h>
 #include <qb/io/async/coroutine.h>
 #include <qb/io/async/coroutine/utils.h>
-#include "../pgsql.h"
 #include "../../shared/pg_integration_fixture.hpp"
 #include "../../shared/test_config.hpp"
+#include "../pgsql.h"
 
 using namespace qb::pg;
 using namespace qb::pg::detail;
@@ -59,8 +59,8 @@ protected:
                                  ")",
                                  discard_query, discard_error)
                         .await());
-        ASSERT_TRUE(db_->execute("INSERT INTO test_errors (value, unique_value) VALUES ('test1', 'unique1')", discard_query, discard_error)
-                        .await());
+        ASSERT_TRUE(
+            db_->execute("INSERT INTO test_errors (value, unique_value) VALUES ('test1', 'unique1')", discard_query, discard_error).await());
     }
 
     void
@@ -78,13 +78,14 @@ TEST_F(PostgreSQLErrorHandlingTest, SyntaxError) {
     bool           error_caught = false;
     sqlstate::code state{};
     std::string    code;
-    (void) db_->execute(
-                  "INVALID SQL STATEMENT", [](Transaction &, results) { FAIL() << "Query should have failed"; },
-                  [&](error::db_error err) {
-                      error_caught = true;
-                      state        = err.sqlstate;
-                      code         = err.code;
-                  })
+    (void) db_
+        ->execute(
+            "INVALID SQL STATEMENT", [](Transaction &, results) { FAIL() << "Query should have failed"; },
+            [&](error::db_error err) {
+                error_caught = true;
+                state        = err.sqlstate;
+                code         = err.code;
+            })
         .await();
     EXPECT_TRUE(error_caught);
     EXPECT_EQ(state, sqlstate::syntax_error);
@@ -114,13 +115,14 @@ TEST_F(PostgreSQLErrorHandlingTest, TableNotFound) {
     bool           error_caught = false;
     sqlstate::code state{};
     std::string    code;
-    (void) db_->execute(
-                  "SELECT * FROM non_existent_table", [](Transaction &, results) { FAIL() << "Query should have failed"; },
-                  [&](error::db_error err) {
-                      error_caught = true;
-                      state        = err.sqlstate;
-                      code         = err.code;
-                  })
+    (void) db_
+        ->execute(
+            "SELECT * FROM non_existent_table", [](Transaction &, results) { FAIL() << "Query should have failed"; },
+            [&](error::db_error err) {
+                error_caught = true;
+                state        = err.sqlstate;
+                code         = err.code;
+            })
         .await();
     EXPECT_TRUE(error_caught);
     EXPECT_EQ(state, sqlstate::undefined_table);
@@ -150,13 +152,14 @@ TEST_F(PostgreSQLErrorHandlingTest, ColumnNotFound) {
     bool           error_caught = false;
     sqlstate::code state{};
     std::string    code;
-    (void) db_->execute(
-                  "SELECT non_existent_column FROM test_errors", [](Transaction &, results) { FAIL() << "Query should have failed"; },
-                  [&](error::db_error err) {
-                      error_caught = true;
-                      state        = err.sqlstate;
-                      code         = err.code;
-                  })
+    (void) db_
+        ->execute(
+            "SELECT non_existent_column FROM test_errors", [](Transaction &, results) { FAIL() << "Query should have failed"; },
+            [&](error::db_error err) {
+                error_caught = true;
+                state        = err.sqlstate;
+                code         = err.code;
+            })
         .await();
     EXPECT_TRUE(error_caught);
     EXPECT_EQ(state, sqlstate::undefined_column);
@@ -304,14 +307,15 @@ TEST_F(PostgreSQLErrorHandlingTest, PreparedStatementParameterError) {
     bool           error_caught = false;
     sqlstate::code state{};
     std::string    code;
-    (void) db_->execute(
-                  "test_prepare", {std::string("test_value")}, // missing second parameter
-                  [](Transaction &, results) { FAIL() << "Execute should have failed due to missing parameter"; },
-                  [&](error::db_error err) {
-                      error_caught = true;
-                      state        = err.sqlstate;
-                      code         = err.code;
-                  })
+    (void) db_
+        ->execute(
+            "test_prepare", {std::string("test_value")}, // missing second parameter
+            [](Transaction &, results) { FAIL() << "Execute should have failed due to missing parameter"; },
+            [&](error::db_error err) {
+                error_caught = true;
+                state        = err.sqlstate;
+                code         = err.code;
+            })
         .await();
     EXPECT_TRUE(error_caught);
     EXPECT_EQ(state, sqlstate::protocol_violation);

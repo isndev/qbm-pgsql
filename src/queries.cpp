@@ -12,8 +12,8 @@
  * Licensed under the Apache License, Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0)
  * @ingroup Pgsql
  */
-#include <qb/system/endian.h> // qb::endian::from_big_endian
 #include "./queries.h"
+#include <qb/system/endian.h> // qb::endian::from_big_endian
 
 namespace qb::pg::detail {
 

@@ -169,110 +169,110 @@ using nullable = std::optional<T>;
  * objects.
  */
 enum class oid : int {
-    invalid          = 0,    /**< InvalidOid: no type / unmapped (PostgreSQL InvalidOid) */
-    boolean          = 16,   /**< Boolean type (true/false) */
-    bytea            = 17,   /**< Variable-length binary data */
-    char_            = 18,   /**< Single character */
-    name             = 19,   /**< System identifier (limited-length string) */
-    int8             = 20,   /**< 8-byte integer (bigint) */
-    int2             = 21,   /**< 2-byte integer (smallint) */
-    int2_vector      = 22,   /**< Array of int2, used in system tables */
-    int4             = 23,   /**< 4-byte integer (integer) */
-    regproc          = 24,   /**< Registered procedure */
-    text             = 25,   /**< Variable-length string */
-    oid_t            = 26,   /**< Object identifier type (renamed to avoid conflicts) */
-    tid              = 27,   /**< Tuple identifier (physical location of row) */
-    xid              = 28,   /**< Transaction identifier */
-    cid              = 29,   /**< Command identifier */
-    oid_vector       = 30,   /**< Array of OIDs, used in system tables */
-    json             = 114,  /**< JSON data */
-    xml              = 142,  /**< XML data */
-    pg_node_tree     = 194,  /**< PostgreSQL internal node tree representation */
-    pg_ddl_command   = 32,   /**< PostgreSQL internal DDL command representation */
-    point            = 600,  /**< Geometric point (x,y) */
-    lseg             = 601,  /**< Geometric line segment */
-    path             = 602,  /**< Geometric path */
-    box              = 603,  /**< Geometric box */
-    polygon          = 604,  /**< Geometric polygon */
-    line             = 628,  /**< Geometric line */
-    float4           = 700,  /**< 4-byte floating-point number */
-    float8           = 701,  /**< 8-byte floating-point number */
-    abstime          = 702,  /**< Absolute time (deprecated) */
-    reltime          = 703,  /**< Relative time (deprecated) */
-    tinterval        = 704,  /**< Time interval (deprecated) */
-    unknown          = 705,  /**< Unknown type */
-    circle           = 718,  /**< Geometric circle */
-    cash             = 790,  /**< Monetary amount */
-    macaddr          = 829,  /**< MAC address */
-    inet             = 869,  /**< IPv4 or IPv6 address */
-    cidr             = 650,  /**< IPv4 or IPv6 network */
-    json_array       = 199,  /**< Array of json */
-    boolean_array    = 1000, /**< Array of boolean */
-    bytea_array      = 1001, /**< Array of bytea */
-    int2_array       = 1005, /**< Array of int2 */
-    int4_array       = 1007, /**< Array of int4 */
-    text_array       = 1009, /**< Array of text */
-    bpchar_array     = 1014, /**< Array of bpchar (char(n)) */
-    varchar_array    = 1015, /**< Array of varchar */
-    int8_array       = 1016, /**< Array of int8 */
-    oid_array        = 1028, /**< Array of OIDs */
-    float4_array     = 1021, /**< Array of float4 */
-    float8_array     = 1022, /**< Array of float8 */
-    acl_item         = 1033, /**< Access control list item */
-    cstring_array    = 1263, /**< Array of C strings */
-    bpchar           = 1042, /**< Blank-padded string (char(n)) */
-    varchar          = 1043, /**< Variable-length string with limit (varchar(n)) */
-    date             = 1082, /**< Date */
-    time             = 1083, /**< Time of day */
-    timestamp        = 1114, /**< Date and time */
-    timestamptz      = 1184, /**< Date and time with time zone */
-    interval         = 1186, /**< Time interval */
-    timetz           = 1266, /**< Time of day with time zone */
-    date_array       = 1182, /**< Array of date */
-    time_array       = 1183, /**< Array of time */
-    timestamp_array  = 1115, /**< Array of timestamp */
-    timestamptz_array = 1185,/**< Array of timestamptz */
-    interval_array   = 1187, /**< Array of interval */
-    timetz_array     = 1270, /**< Array of timetz */
-    numeric_array    = 1231, /**< Array of numeric */
-    bit              = 1560, /**< Fixed-length bit string */
-    varbit           = 1562, /**< Variable-length bit string */
-    numeric          = 1700, /**< Exact numeric with selectable precision */
-    refcursor        = 1790, /**< Reference to cursor */
-    regprocedure     = 2202, /**< Registered procedure (with args) */
-    regoper          = 2203, /**< Registered operator */
-    regoperator      = 2204, /**< Registered operator (with args) */
-    regclass         = 2205, /**< Registered class */
-    regtype          = 2206, /**< Registered type */
-    regrole          = 4096, /**< Registered role */
-    regtypearray     = 2211, /**< Array of registered types */
-    uuid             = 2950, /**< Universally unique identifier */
-    uuid_array       = 2951, /**< Array of uuid */
-    lsn              = 3220, /**< Log sequence number */
-    tsvector         = 3614, /**< Text search vector */
-    gtsvector        = 3642, /**< GiST index internal text search vector */
-    tsquery          = 3615, /**< Text search query */
-    regconfig        = 3734, /**< Registered text search configuration */
-    regdictionary    = 3769, /**< Registered text search dictionary */
-    jsonb            = 3802, /**< Binary JSON data */
-    jsonb_array      = 3807, /**< Array of jsonb */
-    int4_range       = 3904, /**< Range of integers */
-    record           = 2249, /**< Anonymous composite type */
-    record_array     = 2287, /**< Array of records */
-    cstring          = 2275, /**< C string */
-    any              = 2276, /**< Pseudo-type representing any type */
-    any_array        = 2277, /**< Pseudo-type representing any array */
-    void_            = 2278, /**< Pseudo-type representing void */
-    trigger          = 2279, /**< Trigger function */
-    evttrigger       = 3838, /**< Event trigger function */
-    language_handler = 2280, /**< Language handler */
-    internal         = 2281, /**< Internal data type */
-    opaque           = 2282, /**< Obsolete, used for function parameters */
-    any_element      = 2283, /**< Pseudo-type representing any array element */
-    any_non_array    = 2776, /**< Pseudo-type representing any non-array type */
-    any_enum         = 3500, /**< Pseudo-type representing any enum type */
-    fdw_handler      = 3115, /**< Foreign data wrapper handler */
-    any_range        = 3831  /**< Pseudo-type representing any range type */
+    invalid           = 0,    /**< InvalidOid: no type / unmapped (PostgreSQL InvalidOid) */
+    boolean           = 16,   /**< Boolean type (true/false) */
+    bytea             = 17,   /**< Variable-length binary data */
+    char_             = 18,   /**< Single character */
+    name              = 19,   /**< System identifier (limited-length string) */
+    int8              = 20,   /**< 8-byte integer (bigint) */
+    int2              = 21,   /**< 2-byte integer (smallint) */
+    int2_vector       = 22,   /**< Array of int2, used in system tables */
+    int4              = 23,   /**< 4-byte integer (integer) */
+    regproc           = 24,   /**< Registered procedure */
+    text              = 25,   /**< Variable-length string */
+    oid_t             = 26,   /**< Object identifier type (renamed to avoid conflicts) */
+    tid               = 27,   /**< Tuple identifier (physical location of row) */
+    xid               = 28,   /**< Transaction identifier */
+    cid               = 29,   /**< Command identifier */
+    oid_vector        = 30,   /**< Array of OIDs, used in system tables */
+    json              = 114,  /**< JSON data */
+    xml               = 142,  /**< XML data */
+    pg_node_tree      = 194,  /**< PostgreSQL internal node tree representation */
+    pg_ddl_command    = 32,   /**< PostgreSQL internal DDL command representation */
+    point             = 600,  /**< Geometric point (x,y) */
+    lseg              = 601,  /**< Geometric line segment */
+    path              = 602,  /**< Geometric path */
+    box               = 603,  /**< Geometric box */
+    polygon           = 604,  /**< Geometric polygon */
+    line              = 628,  /**< Geometric line */
+    float4            = 700,  /**< 4-byte floating-point number */
+    float8            = 701,  /**< 8-byte floating-point number */
+    abstime           = 702,  /**< Absolute time (deprecated) */
+    reltime           = 703,  /**< Relative time (deprecated) */
+    tinterval         = 704,  /**< Time interval (deprecated) */
+    unknown           = 705,  /**< Unknown type */
+    circle            = 718,  /**< Geometric circle */
+    cash              = 790,  /**< Monetary amount */
+    macaddr           = 829,  /**< MAC address */
+    inet              = 869,  /**< IPv4 or IPv6 address */
+    cidr              = 650,  /**< IPv4 or IPv6 network */
+    json_array        = 199,  /**< Array of json */
+    boolean_array     = 1000, /**< Array of boolean */
+    bytea_array       = 1001, /**< Array of bytea */
+    int2_array        = 1005, /**< Array of int2 */
+    int4_array        = 1007, /**< Array of int4 */
+    text_array        = 1009, /**< Array of text */
+    bpchar_array      = 1014, /**< Array of bpchar (char(n)) */
+    varchar_array     = 1015, /**< Array of varchar */
+    int8_array        = 1016, /**< Array of int8 */
+    oid_array         = 1028, /**< Array of OIDs */
+    float4_array      = 1021, /**< Array of float4 */
+    float8_array      = 1022, /**< Array of float8 */
+    acl_item          = 1033, /**< Access control list item */
+    cstring_array     = 1263, /**< Array of C strings */
+    bpchar            = 1042, /**< Blank-padded string (char(n)) */
+    varchar           = 1043, /**< Variable-length string with limit (varchar(n)) */
+    date              = 1082, /**< Date */
+    time              = 1083, /**< Time of day */
+    timestamp         = 1114, /**< Date and time */
+    timestamptz       = 1184, /**< Date and time with time zone */
+    interval          = 1186, /**< Time interval */
+    timetz            = 1266, /**< Time of day with time zone */
+    date_array        = 1182, /**< Array of date */
+    time_array        = 1183, /**< Array of time */
+    timestamp_array   = 1115, /**< Array of timestamp */
+    timestamptz_array = 1185, /**< Array of timestamptz */
+    interval_array    = 1187, /**< Array of interval */
+    timetz_array      = 1270, /**< Array of timetz */
+    numeric_array     = 1231, /**< Array of numeric */
+    bit               = 1560, /**< Fixed-length bit string */
+    varbit            = 1562, /**< Variable-length bit string */
+    numeric           = 1700, /**< Exact numeric with selectable precision */
+    refcursor         = 1790, /**< Reference to cursor */
+    regprocedure      = 2202, /**< Registered procedure (with args) */
+    regoper           = 2203, /**< Registered operator */
+    regoperator       = 2204, /**< Registered operator (with args) */
+    regclass          = 2205, /**< Registered class */
+    regtype           = 2206, /**< Registered type */
+    regrole           = 4096, /**< Registered role */
+    regtypearray      = 2211, /**< Array of registered types */
+    uuid              = 2950, /**< Universally unique identifier */
+    uuid_array        = 2951, /**< Array of uuid */
+    lsn               = 3220, /**< Log sequence number */
+    tsvector          = 3614, /**< Text search vector */
+    gtsvector         = 3642, /**< GiST index internal text search vector */
+    tsquery           = 3615, /**< Text search query */
+    regconfig         = 3734, /**< Registered text search configuration */
+    regdictionary     = 3769, /**< Registered text search dictionary */
+    jsonb             = 3802, /**< Binary JSON data */
+    jsonb_array       = 3807, /**< Array of jsonb */
+    int4_range        = 3904, /**< Range of integers */
+    record            = 2249, /**< Anonymous composite type */
+    record_array      = 2287, /**< Array of records */
+    cstring           = 2275, /**< C string */
+    any               = 2276, /**< Pseudo-type representing any type */
+    any_array         = 2277, /**< Pseudo-type representing any array */
+    void_             = 2278, /**< Pseudo-type representing void */
+    trigger           = 2279, /**< Trigger function */
+    evttrigger        = 3838, /**< Event trigger function */
+    language_handler  = 2280, /**< Language handler */
+    internal          = 2281, /**< Internal data type */
+    opaque            = 2282, /**< Obsolete, used for function parameters */
+    any_element       = 2283, /**< Pseudo-type representing any array element */
+    any_non_array     = 2776, /**< Pseudo-type representing any non-array type */
+    any_enum          = 3500, /**< Pseudo-type representing any enum type */
+    fdw_handler       = 3115, /**< Foreign data wrapper handler */
+    any_range         = 3831  /**< Pseudo-type representing any range type */
 };
 
 /**
@@ -312,28 +312,50 @@ std::istream &operator>>(std::istream &in, oid &val);
 constexpr oid
 array_oid_for_element(oid element) noexcept {
     switch (element) {
-        case oid::boolean:     return oid::boolean_array;
-        case oid::bytea:       return oid::bytea_array;
-        case oid::int2:        return oid::int2_array;
-        case oid::int4:        return oid::int4_array;
-        case oid::int8:        return oid::int8_array;
-        case oid::oid_t:       return oid::oid_array;
-        case oid::float4:      return oid::float4_array;
-        case oid::float8:      return oid::float8_array;
-        case oid::numeric:     return oid::numeric_array;
-        case oid::text:        return oid::text_array;
-        case oid::varchar:     return oid::varchar_array;
-        case oid::bpchar:      return oid::bpchar_array;
-        case oid::uuid:        return oid::uuid_array;
-        case oid::json:        return oid::json_array;
-        case oid::jsonb:       return oid::jsonb_array;
-        case oid::date:        return oid::date_array;
-        case oid::time:        return oid::time_array;
-        case oid::timetz:      return oid::timetz_array;
-        case oid::timestamp:   return oid::timestamp_array;
-        case oid::timestamptz: return oid::timestamptz_array;
-        case oid::interval:    return oid::interval_array;
-        default:               return oid::invalid;
+        case oid::boolean:
+            return oid::boolean_array;
+        case oid::bytea:
+            return oid::bytea_array;
+        case oid::int2:
+            return oid::int2_array;
+        case oid::int4:
+            return oid::int4_array;
+        case oid::int8:
+            return oid::int8_array;
+        case oid::oid_t:
+            return oid::oid_array;
+        case oid::float4:
+            return oid::float4_array;
+        case oid::float8:
+            return oid::float8_array;
+        case oid::numeric:
+            return oid::numeric_array;
+        case oid::text:
+            return oid::text_array;
+        case oid::varchar:
+            return oid::varchar_array;
+        case oid::bpchar:
+            return oid::bpchar_array;
+        case oid::uuid:
+            return oid::uuid_array;
+        case oid::json:
+            return oid::json_array;
+        case oid::jsonb:
+            return oid::jsonb_array;
+        case oid::date:
+            return oid::date_array;
+        case oid::time:
+            return oid::time_array;
+        case oid::timetz:
+            return oid::timetz_array;
+        case oid::timestamp:
+            return oid::timestamp_array;
+        case oid::timestamptz:
+            return oid::timestamptz_array;
+        case oid::interval:
+            return oid::interval_array;
+        default:
+            return oid::invalid;
     }
 }
 

@@ -29,16 +29,16 @@
  *
  * @ingroup Pgsql
  */
+#include <benchmark/benchmark.h>
 #include <cstdint>
 #include <memory>
 #include <string>
-#include <benchmark/benchmark.h>
 
 #include <qb/io/async.h>
 #include <qb/io/async/coroutine.h>
 #include <qb/io/async/coroutine/utils.h>
-#include "../pgsql.h"
 #include "../../shared/test_config.hpp"
+#include "../pgsql.h"
 
 using namespace qb::pg;
 using namespace qb::pg::detail;
@@ -112,8 +112,8 @@ BM_PreparedInsert(benchmark::State &state) {
     static bool prepared = false;
     if (!prepared) {
         qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
-            auto p = co_await db->prepare("qb_bench_ins", "INSERT INTO qb_pgsql_bench_t (id, v) VALUES ($1, $2)",
-                                          type_oid_sequence{oid::int4, oid::text});
+            auto p   = co_await db->prepare("qb_bench_ins", "INSERT INTO qb_pgsql_bench_t (id, v) VALUES ($1, $2)",
+                                            type_oid_sequence{oid::int4, oid::text});
             prepared = p.ok();
             co_return;
         }());

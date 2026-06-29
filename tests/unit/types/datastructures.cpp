@@ -15,10 +15,10 @@
  */
 
 #include <cstring>
+#include <gtest/gtest.h>
 #include <stdexcept>
 #include <string>
 #include <vector>
-#include <gtest/gtest.h>
 #include "../pgsql.h"
 
 using namespace qb::pg;
@@ -39,9 +39,7 @@ namespace {
 struct PopulatedResult {
     detail::result_impl impl;
 
-    explicit PopulatedResult(std::vector<std::string>                     names,
-                             std::vector<std::vector<std::string>>        rows,
-                             std::vector<bool>                            nulls_flat = {}) {
+    explicit PopulatedResult(std::vector<std::string> names, std::vector<std::vector<std::string>> rows, std::vector<bool> nulls_flat = {}) {
         auto &desc = impl.row_description();
         for (std::size_t i = 0; i < names.size(); ++i) {
             field_description fd{};
@@ -74,7 +72,8 @@ struct PopulatedResult {
     }
 
     // Borrowing wrapper — the resultset observes impl without owning it.
-    resultset rs() {
+    resultset
+    rs() {
         return resultset(&impl);
     }
 };

@@ -19,14 +19,14 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <gtest/gtest.h>
 #include <memory>
 #include <vector>
-#include <gtest/gtest.h>
 #include <qb/io/async.h>
-#include "../pgsql.h"
 #include "../../shared/pg_integration_fixture.hpp"
 #include "../../shared/pg_pump.hpp"
 #include "../../shared/test_config.hpp"
+#include "../pgsql.h"
 
 using namespace qb::pg;
 using qb::pg::test::dsn_tcp_string;
@@ -50,8 +50,7 @@ protected:
         // Reachability probe on a throwaway handle: skip (not fail) when PG is down.
         auto probe = std::make_unique<qb::pg::tcp::database>();
         if (!qb::pg::test::pg_try_connect(*probe))
-            GTEST_SKIP() << qb::pg::test::kDaemonUnreachableSentinel << " (postgres at "
-                         << dsn_tcp_string() << " not reachable)";
+            GTEST_SKIP() << qb::pg::test::kDaemonUnreachableSentinel << " (postgres at " << dsn_tcp_string() << " not reachable)";
         probe->disconnect();
         db_ = std::make_unique<qb::pg::tcp::database>();
     }
@@ -79,7 +78,7 @@ TEST_F(ConnectionLifecycle, ConnectSuccess) {
 
 /// `co_await connect()` on a spawned task (libev + coro_scheduler).
 TEST_F(ConnectionLifecycle, ConnectSuccess_Coroutine) {
-    bool ok = false;
+    bool ok  = false;
     int  pid = 0;
     qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
         ok  = co_await db_->connect(dsn_tcp_string());
@@ -102,8 +101,7 @@ TEST_F(ConnectionLifecycle, ConnectSuccess_Coroutine) {
  */
 TEST_F(ConnectionLifecycle, ConnectWithInvalidCredentials) {
     auto       invalid_db = std::make_unique<qb::pg::tcp::database>();
-    const bool connected =
-        qb::io::async::run_sync(invalid_db->connect(qb::pg::test::dsn_invalid_auth_string()));
+    const bool connected  = qb::io::async::run_sync(invalid_db->connect(qb::pg::test::dsn_invalid_auth_string()));
 
     if (connected) {
         if (std::getenv("QB_PG_INVALID_DSN") == nullptr) {
@@ -194,21 +192,20 @@ TEST_F(ConnectionLifecycle, ReconnectWithoutPrepareReconnectIsUsable) {
     db_->disconnect();
 
     // No prepare_reconnect(): the connector still opens a fresh socket and re-handshakes.
-    ASSERT_TRUE(qb::io::async::run_sync(db_->connect(dsn_tcp_string())))
-        << "bare connect() after disconnect() failed to re-handshake";
+    ASSERT_TRUE(qb::io::async::run_sync(db_->connect(dsn_tcp_string()))) << "bare connect() after disconnect() failed to re-handshake";
     const int second_pid = db_->backend_pid();
     EXPECT_GT(second_pid, 0) << "BackendKeyData PID must be captured on the bare reconnect";
     EXPECT_NE(second_pid, first_pid) << "a genuine re-handshake must land on a new backend process";
 
     int  decoded = -1;
     auto status  = db_->execute(
-                       "SELECT 1",
-                       [&](transaction &, results r) {
-                          ASSERT_EQ(r.size(), 1u);
-                          decoded = r[0][0].as<int>();
-                      },
-                       discard_error)
-                      .await();
+                          "SELECT 1",
+                          [&](transaction &, results r) {
+                             ASSERT_EQ(r.size(), 1u);
+                             decoded = r[0][0].as<int>();
+                          },
+                          discard_error)
+                       .await();
     EXPECT_TRUE(static_cast<bool>(status)) << "query on the bare-reconnected session failed";
     EXPECT_EQ(decoded, 1);
 }
@@ -229,10 +226,11 @@ TEST_F(ConnectionLifecycle, ReconnectWithoutPrepareReconnectIsUsable) {
 TEST_F(ConnectionLifecycle, DisconnectFailsAllQueuedQueries) {
     ASSERT_TRUE(qb::io::async::run_sync(db_->connect(dsn_tcp_string())));
 
-    int  errors        = 0;
-    int  with_message  = 0;
-    auto on_ok         = [](transaction &, results) {};
-    auto on_err        = [&](error::db_error const &e) {
+    int  errors       = 0;
+    int  with_message = 0;
+    auto on_ok        = [](transaction &, results) {
+    };
+    auto on_err = [&](error::db_error const &e) {
         ++errors;
         if (std::string(e.what()).size() > 0)
             ++with_message;
@@ -250,8 +248,7 @@ TEST_F(ConnectionLifecycle, DisconnectFailsAllQueuedQueries) {
     db_->disconnect();
 
     // All three error callbacks must fire (was 1 before fail_all_pending).
-    const bool all_failed = qb::pg::test::pump_until(
-        [&] { return errors >= 3; }, std::chrono::seconds(5));
+    const bool all_failed = qb::pg::test::pump_until([&] { return errors >= 3; }, std::chrono::seconds(5));
     EXPECT_TRUE(all_failed) << "only " << errors << "/3 queued queries were failed on disconnect";
     EXPECT_EQ(errors, 3);
     EXPECT_EQ(with_message, errors) << "each failed query must carry an error message";
@@ -291,8 +288,7 @@ TEST_F(ConnectionLifecycle, DeadlineTimerCancelledOnDestroy) {
     // window with the loop intact is the observable post-condition.
     qb::pg::test::pump_for(std::chrono::milliseconds(1500));
     reached_deadline_window = true;
-    EXPECT_TRUE(reached_deadline_window)
-        << "loop did not survive past the cancelled handshake deadline";
+    EXPECT_TRUE(reached_deadline_window) << "loop did not survive past the cancelled handshake deadline";
 }
 
 // --------------------------------------------------------------------------------------
@@ -306,28 +302,27 @@ TEST_F(ConnectionLifecycle, DeadlineTimerCancelledOnDestroy) {
  * decoded value. Each pooled connection now returns the integer `1`.
  */
 TEST_F(ConnectionLifecycle, ConnectionPool) {
-    constexpr int num_connections = 5;
+    constexpr int                                       num_connections = 5;
     std::vector<std::unique_ptr<qb::pg::tcp::database>> connections;
     connections.reserve(num_connections);
 
     for (int i = 0; i < num_connections; ++i) {
         auto conn = std::make_unique<qb::pg::tcp::database>();
-        ASSERT_TRUE(qb::io::async::run_sync(conn->connect(dsn_tcp_string())))
-            << "pool connection " << i << " failed to connect";
+        ASSERT_TRUE(qb::io::async::run_sync(conn->connect(dsn_tcp_string()))) << "pool connection " << i << " failed to connect";
         connections.push_back(std::move(conn));
     }
 
     for (std::size_t i = 0; i < connections.size(); ++i) {
-        int decoded = -1;
-        auto status = connections[i]
-                          ->execute(
-                              "SELECT 1",
-                              [&](transaction &, results res) {
+        int  decoded = -1;
+        auto status  = connections[i]
+                           ->execute(
+                               "SELECT 1",
+                               [&](transaction &, results res) {
                                   ASSERT_EQ(res.size(), 1u);
                                   decoded = res[0][0].as<int>();
-                              },
-                              discard_error)
-                          .await();
+                               },
+                               discard_error)
+                           .await();
         ASSERT_TRUE(status) << "pool connection " << i << " query failed";
         EXPECT_EQ(decoded, 1) << "pool connection " << i << " decoded wrong value";
     }
@@ -343,14 +338,13 @@ TEST_F(ConnectionLifecycle, ConnectionPool_Coroutine) {
             if (!co_await conn->connect(dsn_tcp_string()))
                 co_return;
             auto reply = co_await conn->query("SELECT 1");
-            if (reply.ok() && reply.result().size() == 1 &&
-                reply.result()[0][0].as<int>() == 1)
+            if (reply.ok() && reply.result().size() == 1 && reply.result()[0][0].as<int>() == 1)
                 ++ok_count;
         }
     }());
-    EXPECT_EQ(ok_count, num_connections)
-        << "only " << ok_count << "/" << num_connections << " coroutine pool connections "
-           "returned the decoded value 1";
+    EXPECT_EQ(ok_count, num_connections) << "only " << ok_count << "/" << num_connections
+                                         << " coroutine pool connections "
+                                            "returned the decoded value 1";
 }
 
 int

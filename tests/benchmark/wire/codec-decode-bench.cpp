@@ -31,15 +31,15 @@
  *
  * @ingroup Pgsql
  */
+#include <benchmark/benchmark.h>
 #include <cstdint>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
-#include <benchmark/benchmark.h>
 
-#include "../pgsql.h"
 #include "../../shared/pg_wire_ground_truth.hpp"
+#include "../pgsql.h"
 
 using namespace qb::pg;
 using namespace qb::pg::detail;
@@ -60,13 +60,13 @@ build_int4_array(int n) {
         b.push_back(static_cast<byte>((v >> 8) & 0xFF));
         b.push_back(static_cast<byte>(v & 0xFF));
     };
-    put_i32(1);                            // ndim
-    put_i32(0);                            // hasnull
-    put_i32(23);                           // elem oid (int4)
+    put_i32(1);                             // ndim
+    put_i32(0);                             // hasnull
+    put_i32(23);                            // elem oid (int4)
     put_i32(static_cast<std::uint32_t>(n)); // dim size
-    put_i32(1);                            // lower bound
+    put_i32(1);                             // lower bound
     for (int i = 0; i < n; ++i) {
-        put_i32(4);                              // element length
+        put_i32(4);                             // element length
         put_i32(static_cast<std::uint32_t>(i)); // element value
     }
     return b;
@@ -172,7 +172,7 @@ static void
 BM_DecodeString(benchmark::State &state) {
     // read_string consumes the whole field as text (the 1 MB auto-detect heuristic only
     // engages for very large payloads; here we exercise the common short-string path).
-    const std::string       s    = "the quick brown fox jumps over the lazy dog";
+    const std::string       s = "the quick brown fox jumps over the lazy dog";
     const std::vector<byte> wire(reinterpret_cast<const byte *>(s.data()), reinterpret_cast<const byte *>(s.data()) + s.size());
     ParamUnserializer       un;
     if (un.read_string(std::span<const byte>(wire)) != s) {

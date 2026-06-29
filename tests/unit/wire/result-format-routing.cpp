@@ -24,12 +24,30 @@ using namespace qb::pg::detail;
 // Every OID with a real binary decoder requests the binary result format.
 TEST(ResultFormatRouting, BinaryDecodableOidsPreferBinary) {
     const oid binary_oids[] = {
-        oid::boolean, oid::int2,        oid::int4,         oid::int8,        oid::float4, oid::float8,
-        oid::numeric, oid::bytea,       oid::uuid,         oid::jsonb,       oid::timestamp, oid::timestamptz,
-        oid::date,    oid::time,        oid::timetz,       oid::interval,
+        oid::boolean,
+        oid::int2,
+        oid::int4,
+        oid::int8,
+        oid::float4,
+        oid::float8,
+        oid::numeric,
+        oid::bytea,
+        oid::uuid,
+        oid::jsonb,
+        oid::timestamp,
+        oid::timestamptz,
+        oid::date,
+        oid::time,
+        oid::timetz,
+        oid::interval,
         // 1-D arrays that have a std::vector<T> decoder.
-        oid::boolean_array, oid::int2_array, oid::int4_array, oid::int8_array,
-        oid::float4_array,  oid::float8_array, oid::text_array,
+        oid::boolean_array,
+        oid::int2_array,
+        oid::int4_array,
+        oid::int8_array,
+        oid::float4_array,
+        oid::float8_array,
+        oid::text_array,
     };
     for (oid t : binary_oids)
         EXPECT_TRUE(type_oid_prefers_binary_result_format(t))
@@ -40,9 +58,21 @@ TEST(ResultFormatRouting, BinaryDecodableOidsPreferBinary) {
 TEST(ResultFormatRouting, TextOnlyOidsPreferText) {
     const oid text_oids[] = {
         // varlena text (json has no version byte; varchar/text/name/xml are plain text)
-        oid::json, oid::varchar, oid::text, oid::name, oid::xml, oid::char_,
+        oid::json,
+        oid::varchar,
+        oid::text,
+        oid::name,
+        oid::xml,
+        oid::char_,
         // network / bit / geometric / money have no binary decoder -> text
-        oid::macaddr, oid::bit, oid::varbit, oid::point, oid::box, oid::circle, oid::line, oid::cash,
+        oid::macaddr,
+        oid::bit,
+        oid::varbit,
+        oid::point,
+        oid::box,
+        oid::circle,
+        oid::line,
+        oid::cash,
     };
     for (oid t : text_oids)
         EXPECT_FALSE(type_oid_prefers_binary_result_format(t))

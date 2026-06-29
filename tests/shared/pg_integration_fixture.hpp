@@ -25,9 +25,9 @@
 #ifndef QBM_PGSQL_TESTS_SHARED_PG_INTEGRATION_FIXTURE_HPP
 #define QBM_PGSQL_TESTS_SHARED_PG_INTEGRATION_FIXTURE_HPP
 
+#include <gtest/gtest.h>
 #include <memory>
 #include <string>
-#include <gtest/gtest.h>
 #include <qb/io/async.h>
 #include "../../pgsql.h"
 #include "test_config.hpp"
@@ -36,8 +36,7 @@ namespace qb::pg::test {
 
 /// Exact phrase CTest's SKIP_REGULAR_EXPRESSION matches (set by `REQUIRES live`) to mark a
 /// daemon-down binary as Skipped. Keep in sync with qb/cmake/qbFunctions.cmake.
-inline constexpr const char *kDaemonUnreachableSentinel =
-    "QBM_INTEGRATION_SKIP_DAEMON_UNREACHABLE";
+inline constexpr const char *kDaemonUnreachableSentinel = "QBM_INTEGRATION_SKIP_DAEMON_UNREACHABLE";
 
 /**
  * @brief Attempt to connect a database to @p dsn (default `QB_PG_DSN`). Returns true on
@@ -64,8 +63,7 @@ protected:
     SetUp() override {
         db_ = std::make_unique<qb::pg::tcp::database>();
         if (!pg_try_connect(*db_))
-            GTEST_SKIP() << kDaemonUnreachableSentinel << " (postgres at " << dsn_tcp_string()
-                         << " not reachable)";
+            GTEST_SKIP() << kDaemonUnreachableSentinel << " (postgres at " << dsn_tcp_string() << " not reachable)";
     }
 };
 

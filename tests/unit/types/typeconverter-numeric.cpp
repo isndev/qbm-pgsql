@@ -16,11 +16,11 @@
  * Licensed under the Apache License, Version 2.0 (the "License").
  */
 
+#include <gtest/gtest.h>
 #include <string>
 #include <vector>
-#include <gtest/gtest.h>
-#include "../pgsql.h"
 #include "../../shared/pg_wire_ground_truth.hpp"
+#include "../pgsql.h"
 
 using namespace qb::pg;
 using namespace qb::pg::detail;

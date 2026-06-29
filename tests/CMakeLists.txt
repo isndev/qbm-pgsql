@@ -28,83 +28,83 @@
 function(qpg_test TIER NAME RELPATH)
     cmake_parse_arguments(T "" "" "REQUIRES;EXTRA_LABELS" ${ARGN})
     qb_register_module_test(
-        MODULE_NAME pgsql TIER ${TIER} TEST_NAME ${NAME}
-        SOURCES ${RELPATH}
-        INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
-        LABELS module:qbm-pgsql tier:${TIER} ${T_EXTRA_LABELS}
-        REQUIRES ${T_REQUIRES})
+            MODULE_NAME pgsql TIER ${TIER} TEST_NAME ${NAME}
+            SOURCES ${RELPATH}
+            INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
+            LABELS module:qbm-pgsql tier:${TIER} ${T_EXTRA_LABELS}
+            REQUIRES ${T_REQUIRES})
 endfunction()
 
 # integration: as qpg_test + RESOURCE_LOCK qb_pgsql_integration + REQUIRES live.
 function(qpg_itest NAME RELPATH)
     cmake_parse_arguments(T "" "" "REQUIRES;EXTRA_LABELS" ${ARGN})
     qb_register_module_test(
-        MODULE_NAME pgsql TIER integration TEST_NAME ${NAME}
-        SOURCES ${RELPATH}
-        INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
-        LABELS module:qbm-pgsql tier:integration ${T_EXTRA_LABELS}
-        REQUIRES live ${T_REQUIRES}
-        RESOURCE_LOCK qb_pgsql_integration)
+            MODULE_NAME pgsql TIER integration TEST_NAME ${NAME}
+            SOURCES ${RELPATH}
+            INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
+            LABELS module:qbm-pgsql tier:integration ${T_EXTRA_LABELS}
+            REQUIRES live ${T_REQUIRES}
+            RESOURCE_LOCK qb_pgsql_integration)
 endfunction()
 
 function(qpg_bench NAME RELPATH)
     cmake_parse_arguments(B "" "" "REQUIRES;EXTRA_LABELS" ${ARGN})
     qb_register_module_benchmark(
-        MODULE_NAME pgsql BENCH_NAME ${NAME}
-        SOURCES ${RELPATH}
-        INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
-        LABELS module:qbm-pgsql bench ${B_EXTRA_LABELS}
-        REQUIRES ${B_REQUIRES})
+            MODULE_NAME pgsql BENCH_NAME ${NAME}
+            SOURCES ${RELPATH}
+            INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
+            LABELS module:qbm-pgsql bench ${B_EXTRA_LABELS}
+            REQUIRES ${B_REQUIRES})
 endfunction()
 
 # -----------------------------------------------------------------------------
 # UNIT — pure logic, parallel-safe
 # -----------------------------------------------------------------------------
-qpg_test(unit unserializer-primitives  unit/wire/unserializer-primitives.cpp   EXTRA_LABELS wire)
-qpg_test(unit typeconverter-codecs     unit/wire/typeconverter-codecs.cpp      EXTRA_LABELS wire)
-qpg_test(unit result-format-routing    unit/wire/result-format-routing.cpp     EXTRA_LABELS wire)
-qpg_test(unit param-serializer-encode  unit/serialization/param-serializer-encode.cpp EXTRA_LABELS wire)
-qpg_test(unit typeconverter-scalar     unit/types/typeconverter-scalar.cpp     EXTRA_LABELS types)
-qpg_test(unit typeconverter-numeric    unit/types/typeconverter-numeric.cpp    EXTRA_LABELS types)
-qpg_test(unit typeconverter-temporal   unit/types/typeconverter-temporal.cpp   EXTRA_LABELS types)
-qpg_test(unit typeconverter-array      unit/types/typeconverter-array.cpp      EXTRA_LABELS types)
-qpg_test(unit typeconverter-json       unit/types/typeconverter-json.cpp       EXTRA_LABELS types)
+qpg_test(unit unserializer-primitives unit/wire/unserializer-primitives.cpp EXTRA_LABELS wire)
+qpg_test(unit typeconverter-codecs unit/wire/typeconverter-codecs.cpp EXTRA_LABELS wire)
+qpg_test(unit result-format-routing unit/wire/result-format-routing.cpp EXTRA_LABELS wire)
+qpg_test(unit param-serializer-encode unit/serialization/param-serializer-encode.cpp EXTRA_LABELS wire)
+qpg_test(unit typeconverter-scalar unit/types/typeconverter-scalar.cpp EXTRA_LABELS types)
+qpg_test(unit typeconverter-numeric unit/types/typeconverter-numeric.cpp EXTRA_LABELS types)
+qpg_test(unit typeconverter-temporal unit/types/typeconverter-temporal.cpp EXTRA_LABELS types)
+qpg_test(unit typeconverter-array unit/types/typeconverter-array.cpp EXTRA_LABELS types)
+qpg_test(unit typeconverter-json unit/types/typeconverter-json.cpp EXTRA_LABELS types)
 qpg_test(unit typeconverter-adversarial unit/types/typeconverter-adversarial.cpp EXTRA_LABELS types)
-qpg_test(unit datastructures           unit/types/datastructures.cpp           EXTRA_LABELS types)
-qpg_test(unit oid-stream               unit/types/oid-stream.cpp               EXTRA_LABELS types)
-qpg_test(unit protocol-message-codec   unit/protocol/protocol-message-codec.cpp EXTRA_LABELS protocol)
-qpg_test(unit dsn-parse                unit/dsn/dsn-parse.cpp                   EXTRA_LABELS dsn)
-qpg_test(unit scram-and-cancel         unit/auth/scram-and-cancel.cpp          EXTRA_LABELS auth)
-qpg_test(unit prepared-storage-lru     unit/prepared/prepared-storage-lru.cpp  EXTRA_LABELS prepared)
+qpg_test(unit datastructures unit/types/datastructures.cpp EXTRA_LABELS types)
+qpg_test(unit oid-stream unit/types/oid-stream.cpp EXTRA_LABELS types)
+qpg_test(unit protocol-message-codec unit/protocol/protocol-message-codec.cpp EXTRA_LABELS protocol)
+qpg_test(unit dsn-parse unit/dsn/dsn-parse.cpp EXTRA_LABELS dsn)
+qpg_test(unit scram-and-cancel unit/auth/scram-and-cancel.cpp EXTRA_LABELS auth)
+qpg_test(unit prepared-storage-lru unit/prepared/prepared-storage-lru.cpp EXTRA_LABELS prepared)
 
 # -----------------------------------------------------------------------------
 # SYSTEM — no daemon (network-timing dependent → slow)
 # -----------------------------------------------------------------------------
-qpg_test(system connect-timeout        system/connection/connect-timeout.cpp   EXTRA_LABELS slow)
+qpg_test(system connect-timeout system/connection/connect-timeout.cpp EXTRA_LABELS slow)
 
 # -----------------------------------------------------------------------------
 # INTEGRATION — live postgres:5432 (REQUIRES live, RESOURCE_LOCK)
 # -----------------------------------------------------------------------------
-qpg_itest(connection-lifecycle  integration/connection/connection-lifecycle.cpp)
-qpg_itest(queries               integration/query/queries-execution.cpp        REQUIRES coroutine)
-qpg_itest(prepared-statements   integration/prepared/prepared-statements.cpp   REQUIRES coroutine)
-qpg_itest(transaction-basic     integration/transaction/transaction-basic.cpp  REQUIRES coroutine)
-qpg_itest(transaction-advanced  integration/transaction/transaction-advanced.cpp)
-qpg_itest(datatypes-roundtrip   integration/datatypes/datatypes-roundtrip.cpp  REQUIRES coroutine)
-qpg_itest(wire-formats          integration/protocol/wire-formats.cpp)
-qpg_itest(listen-notify         integration/notify/listen-notify.cpp           REQUIRES coroutine)
-qpg_itest(coro-api              integration/api/coro-api.cpp                    REQUIRES coroutine)
-qpg_itest(errors-sqlstate       integration/errors/errors-sqlstate.cpp         REQUIRES coroutine)
-qpg_itest(database-api-extra    integration/api/database-api-extra.cpp         REQUIRES coroutine)
-qpg_itest(param-roundtrip       integration/serialization/param-roundtrip.cpp  REQUIRES coroutine)
+qpg_itest(connection-lifecycle integration/connection/connection-lifecycle.cpp)
+qpg_itest(queries integration/query/queries-execution.cpp REQUIRES coroutine)
+qpg_itest(prepared-statements integration/prepared/prepared-statements.cpp REQUIRES coroutine)
+qpg_itest(transaction-basic integration/transaction/transaction-basic.cpp REQUIRES coroutine)
+qpg_itest(transaction-advanced integration/transaction/transaction-advanced.cpp)
+qpg_itest(datatypes-roundtrip integration/datatypes/datatypes-roundtrip.cpp REQUIRES coroutine)
+qpg_itest(wire-formats integration/protocol/wire-formats.cpp)
+qpg_itest(listen-notify integration/notify/listen-notify.cpp REQUIRES coroutine)
+qpg_itest(coro-api integration/api/coro-api.cpp REQUIRES coroutine)
+qpg_itest(errors-sqlstate integration/errors/errors-sqlstate.cpp REQUIRES coroutine)
+qpg_itest(database-api-extra integration/api/database-api-extra.cpp REQUIRES coroutine)
+qpg_itest(param-roundtrip integration/serialization/param-roundtrip.cpp REQUIRES coroutine)
 
-if(QB_HAS_SSL)
-    qpg_itest(connection-ssl    integration/connection/connection-ssl.cpp      REQUIRES ssl coroutine EXTRA_LABELS ssl)
-endif()
+if (QB_HAS_SSL)
+    qpg_itest(connection-ssl integration/connection/connection-ssl.cpp REQUIRES ssl coroutine EXTRA_LABELS ssl)
+endif ()
 
 # -----------------------------------------------------------------------------
 # BENCHMARK — wire benches daemon-free; prepared-throughput is live
 # -----------------------------------------------------------------------------
-qpg_bench(codec-decode    benchmark/wire/codec-decode-bench.cpp   EXTRA_LABELS wire)
-qpg_bench(param-encode    benchmark/wire/param-encode-bench.cpp   EXTRA_LABELS wire)
+qpg_bench(codec-decode benchmark/wire/codec-decode-bench.cpp EXTRA_LABELS wire)
+qpg_bench(param-encode benchmark/wire/param-encode-bench.cpp EXTRA_LABELS wire)
 qpg_bench(prepared-throughput benchmark/wire/prepared-throughput-bench.cpp REQUIRES live EXTRA_LABELS wire)

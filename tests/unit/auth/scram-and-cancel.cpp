@@ -16,8 +16,8 @@
  * Licensed under the Apache License, Version 2.0 (the "License").
  */
 
-#include <string>
 #include <gtest/gtest.h>
+#include <string>
 #include "../pgsql.h"
 
 using namespace qb::pg;
@@ -81,11 +81,11 @@ TEST(ScramNonce, ServerMustExtendClientNonce) {
  * @brief `=` → `=3D` (applied first), `,` → `=2C`; the inserted `=3D` is NOT re-escaped.
  */
 TEST(ScramEscape, EscapesCommaAndEquals) {
-    EXPECT_EQ(scram_escape_saslname("alice"), "alice");          // no special chars
-    EXPECT_EQ(scram_escape_saslname("a,b"), "a=2Cb");            // comma
-    EXPECT_EQ(scram_escape_saslname("a=b"), "a=3Db");            // equals
-    EXPECT_EQ(scram_escape_saslname("a=,b"), "a=3D=2Cb");        // equals before comma, no double-escape
-    EXPECT_EQ(scram_escape_saslname(""), "");                    // empty
+    EXPECT_EQ(scram_escape_saslname("alice"), "alice");   // no special chars
+    EXPECT_EQ(scram_escape_saslname("a,b"), "a=2Cb");     // comma
+    EXPECT_EQ(scram_escape_saslname("a=b"), "a=3Db");     // equals
+    EXPECT_EQ(scram_escape_saslname("a=,b"), "a=3D=2Cb"); // equals before comma, no double-escape
+    EXPECT_EQ(scram_escape_saslname(""), "");             // empty
     // Order matters: a comma followed by an equals must each map to its own code.
     EXPECT_EQ(scram_escape_saslname(",="), "=2C=3D");
 }
@@ -106,12 +106,10 @@ TEST(ScramIteration, AcceptsSaneRangeRejectsHostileAndMalformed) {
     // Accepted: PostgreSQL's server default, the minimum, and the exact ceiling.
     EXPECT_EQ(scram_validate_iteration_count("4096"), 4096);
     EXPECT_EQ(scram_validate_iteration_count("1"), 1);
-    EXPECT_EQ(scram_validate_iteration_count(std::to_string(kMaxScramIterations)),
-              kMaxScramIterations);
+    EXPECT_EQ(scram_validate_iteration_count(std::to_string(kMaxScramIterations)), kMaxScramIterations);
 
     // Rejected — the DoS guard: one past the ceiling and the INT_MAX worst case.
-    EXPECT_THROW((void) scram_validate_iteration_count(std::to_string(kMaxScramIterations + 1)),
-                 error::connection_error);
+    EXPECT_THROW((void) scram_validate_iteration_count(std::to_string(kMaxScramIterations + 1)), error::connection_error);
     EXPECT_THROW((void) scram_validate_iteration_count("2147483647"), error::connection_error);
 
     // Rejected — malformed / non-positive / overflow / trailing junk (to_number strict).

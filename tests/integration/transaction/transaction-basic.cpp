@@ -25,11 +25,11 @@
  * Skip-not-fail: derives from the shared fixture; cases skip when no live PG is reachable.
  */
 
-#include <string>
 #include <gtest/gtest.h>
-#include "../pgsql.h"
+#include <string>
 #include "../../shared/pg_integration_fixture.hpp"
 #include "../../shared/test_config.hpp"
+#include "../pgsql.h"
 
 using namespace qb::pg;
 using namespace qb::pg::detail;
@@ -43,8 +43,8 @@ protected:
         PgIntegrationTest::SetUp();
         if (IsSkipped())
             return;
-        ASSERT_TRUE(db_->execute("CREATE TEMP TABLE test_transactions (id SERIAL PRIMARY KEY, value TEXT)", discard_query, discard_error)
-                        .await());
+        ASSERT_TRUE(
+            db_->execute("CREATE TEMP TABLE test_transactions (id SERIAL PRIMARY KEY, value TEXT)", discard_query, discard_error).await());
     }
 };
 
@@ -73,13 +73,13 @@ TEST_F(TransactionBasicTest, BasicTransaction) {
 TEST_F(TransactionBasicTest, BasicTransactionCoroutineFollowUp) {
     bool txn_ok = false;
     auto st     = db_->begin(
-                      [&](Transaction &t) {
-                      t.execute(
-                          "INSERT INTO test_transactions (value) VALUES ('row')",
-                          [&](Transaction &, results) { txn_ok = true; }, [](error::db_error const &e) { ADD_FAILURE() << e.what(); });
-                  },
-                      [](error::db_error const &e) { ADD_FAILURE() << e.what(); })
-                  .await();
+                         [&](Transaction &t) {
+                         t.execute(
+                             "INSERT INTO test_transactions (value) VALUES ('row')", [&](Transaction &, results) { txn_ok = true; },
+                             [](error::db_error const &e) { ADD_FAILURE() << e.what(); });
+                         },
+                         [](error::db_error const &e) { ADD_FAILURE() << e.what(); })
+                      .await();
     ASSERT_TRUE(st);
     ASSERT_TRUE(txn_ok);
 
@@ -131,14 +131,14 @@ TEST_F(TransactionBasicTest, SavepointCoroRollbackUndoesRow) {
 TEST_F(TransactionBasicTest, TransactionRollbackOnError) {
     bool error_caught = false;
     auto st           = db_->begin(
-                          [](Transaction &t) {
-                    t.execute(
-                        "INSERT INTO nonexistent (value) VALUES ('test')",
-                        [](Transaction &, results) { ADD_FAILURE() << "insert into missing table must fail"; },
-                        [](error::db_error const &e) { EXPECT_EQ(e.code, "42P01"); });
-                          },
-                          [&](error::db_error const &) { error_caught = true; })
-                        .await();
+                               [](Transaction &t) {
+                         t.execute(
+                             "INSERT INTO nonexistent (value) VALUES ('test')",
+                             [](Transaction &, results) { ADD_FAILURE() << "insert into missing table must fail"; },
+                             [](error::db_error const &e) { EXPECT_EQ(e.code, "42P01"); });
+                               },
+                               [&](error::db_error const &) { error_caught = true; })
+                            .await();
     EXPECT_FALSE(st);
     EXPECT_TRUE(error_caught);
 }
@@ -152,8 +152,8 @@ TEST_F(TransactionBasicTest, NestedSavepointInsert) {
                              "nested_sp",
                              [&](Transaction &tr) {
                                  tr.execute(
-                                     "INSERT INTO test_transactions (value) VALUES ('nested')",
-                                     [&](Transaction &, results) { ok = true; }, [](error::db_error const &e) { ADD_FAILURE() << e.what(); });
+                                     "INSERT INTO test_transactions (value) VALUES ('nested')", [&](Transaction &, results) { ok = true; },
+                                     [](error::db_error const &e) { ADD_FAILURE() << e.what(); });
                              },
                              [](error::db_error const &e) { ADD_FAILURE() << e.what(); });
                      },
@@ -177,47 +177,48 @@ TEST_F(TransactionBasicTest, SavepointRollbackPreservesOuterWrite) {
 
     bool in_savepoint = false;
     bool error_caught = false;
-    (void) db_->begin(
-                  [&](Transaction &t) {
-                      t.savepoint(
-                          "sp1",
-                          [&](Transaction &tr2) {
-                              tr2.execute(
-                                  "INSERT INTO test_transactions (value) VALUES ('in_savepoint')",
-                                  [&](Transaction &tr3, results) {
-                                      in_savepoint = true;
-                                      tr3.execute(
-                                          "SELECT * FROM nonexistent_table",
-                                          [](Transaction &, results) { ADD_FAILURE() << "query on missing table must fail"; },
-                                          [&](error::db_error const &e) {
-                                              EXPECT_EQ(e.code, "42P01");
-                                              error_caught = true;
-                                          });
-                                  },
-                                  [](error::db_error const &e) { ADD_FAILURE() << "savepoint insert failed: " << e.what(); });
-                          },
-                          [](error::db_error const &e) { ADD_FAILURE() << "savepoint create failed: " << e.what(); });
-                  },
-                  [](error::db_error const &) { /* expected: block fails after the statement error */ })
+    (void) db_
+        ->begin(
+            [&](Transaction &t) {
+                t.savepoint(
+                    "sp1",
+                    [&](Transaction &tr2) {
+                        tr2.execute(
+                            "INSERT INTO test_transactions (value) VALUES ('in_savepoint')",
+                            [&](Transaction &tr3, results) {
+                                in_savepoint = true;
+                                tr3.execute(
+                                    "SELECT * FROM nonexistent_table",
+                                    [](Transaction &, results) { ADD_FAILURE() << "query on missing table must fail"; },
+                                    [&](error::db_error const &e) {
+                                        EXPECT_EQ(e.code, "42P01");
+                                        error_caught = true;
+                                    });
+                            },
+                            [](error::db_error const &e) { ADD_FAILURE() << "savepoint insert failed: " << e.what(); });
+                    },
+                    [](error::db_error const &e) { ADD_FAILURE() << "savepoint create failed: " << e.what(); });
+            },
+            [](error::db_error const &) { /* expected: block fails after the statement error */ })
         .await();
 
     bool verified = false;
     auto verify   = db_->begin(
-                        [&](Transaction &t) {
-                      t.execute(
-                          "SELECT * FROM test_transactions WHERE value = 'in_savepoint'",
-                          [](Transaction &, results r) { EXPECT_EQ(r.size(), 0u) << "savepoint write was not rolled back"; },
-                          [](error::db_error const &e) { ADD_FAILURE() << e.what(); });
-                      t.execute(
-                          "SELECT * FROM test_transactions WHERE value = 'before_savepoint'",
-                          [&](Transaction &, results r) {
-                          EXPECT_EQ(r.size(), 1u) << "outer write was not preserved";
-                          verified = true;
-                      },
-                          [](error::db_error const &e) { ADD_FAILURE() << e.what(); });
-                        },
-                        [](error::db_error const &e) { ADD_FAILURE() << e.what(); })
-                      .await();
+                           [&](Transaction &t) {
+                             t.execute(
+                                 "SELECT * FROM test_transactions WHERE value = 'in_savepoint'",
+                                 [](Transaction &, results r) { EXPECT_EQ(r.size(), 0u) << "savepoint write was not rolled back"; },
+                                 [](error::db_error const &e) { ADD_FAILURE() << e.what(); });
+                             t.execute(
+                                 "SELECT * FROM test_transactions WHERE value = 'before_savepoint'",
+                                 [&](Transaction &, results r) {
+                                     EXPECT_EQ(r.size(), 1u) << "outer write was not preserved";
+                                     verified = true;
+                                 },
+                                 [](error::db_error const &e) { ADD_FAILURE() << e.what(); });
+                           },
+                           [](error::db_error const &e) { ADD_FAILURE() << e.what(); })
+                        .await();
     EXPECT_TRUE(verify);
     EXPECT_TRUE(in_savepoint) << "in-savepoint insert never ran";
     EXPECT_TRUE(error_caught) << "savepoint error never fired";
@@ -229,30 +230,30 @@ TEST_F(TransactionBasicTest, MultipleNestedSavepoints) {
     bool sp1 = false;
     bool sp2 = false;
     auto st  = db_->begin(
-                     [&](Transaction &t) {
-                    t.savepoint(
-                        "sp1",
-                        [&](Transaction &tr1) {
-                            tr1.execute(
-                                "INSERT INTO test_transactions (value) VALUES ('sp1')",
-                                [&](Transaction &tr2, results) {
-                                    sp1 = true;
-                                    tr2.savepoint(
-                                        "sp2",
-                                        [&](Transaction &tr3) {
-                                            tr3.execute(
-                                                "INSERT INTO test_transactions (value) VALUES ('sp2')",
-                                                [&](Transaction &, results) { sp2 = true; },
-                                                [](error::db_error const &e) { ADD_FAILURE() << e.what(); });
-                                        },
-                                        [](error::db_error const &e) { ADD_FAILURE() << e.what(); });
-                                },
-                                [](error::db_error const &e) { ADD_FAILURE() << e.what(); });
-                        },
-                        [](error::db_error const &e) { ADD_FAILURE() << e.what(); });
-                     },
-                     [](error::db_error const &e) { ADD_FAILURE() << e.what(); })
-                  .await();
+                      [&](Transaction &t) {
+                         t.savepoint(
+                             "sp1",
+                             [&](Transaction &tr1) {
+                                 tr1.execute(
+                                     "INSERT INTO test_transactions (value) VALUES ('sp1')",
+                                     [&](Transaction &tr2, results) {
+                                         sp1 = true;
+                                         tr2.savepoint(
+                                             "sp2",
+                                             [&](Transaction &tr3) {
+                                                 tr3.execute(
+                                                     "INSERT INTO test_transactions (value) VALUES ('sp2')",
+                                                     [&](Transaction &, results) { sp2 = true; },
+                                                     [](error::db_error const &e) { ADD_FAILURE() << e.what(); });
+                                             },
+                                             [](error::db_error const &e) { ADD_FAILURE() << e.what(); });
+                                     },
+                                     [](error::db_error const &e) { ADD_FAILURE() << e.what(); });
+                             },
+                             [](error::db_error const &e) { ADD_FAILURE() << e.what(); });
+                      },
+                      [](error::db_error const &e) { ADD_FAILURE() << e.what(); })
+                   .await();
     EXPECT_TRUE(st);
     EXPECT_TRUE(sp1);
     EXPECT_TRUE(sp2);
@@ -263,28 +264,28 @@ TEST_F(TransactionBasicTest, CommitMultipleChanges) {
     bool insert_ok = false;
     bool select_ok = false;
     auto st        = db_->begin(
-                       [&](Transaction &t) {
-                    t.execute(
-                        "INSERT INTO test_transactions (value) VALUES ('test1')",
-                        [&](Transaction &tr1, results) {
-                            insert_ok = true;
-                            tr1.execute(
-                                "INSERT INTO test_transactions (value) VALUES ('test2')",
-                                [&](Transaction &tr2, results) {
-                                    tr2.execute(
-                                        "SELECT * FROM test_transactions",
-                                        [&](Transaction &, results r) {
-                                            EXPECT_EQ(r.size(), 2u);
-                                            select_ok = true;
-                                        },
-                                        [](error::db_error const &e) { ADD_FAILURE() << e.what(); });
-                                },
-                                [](error::db_error const &e) { ADD_FAILURE() << e.what(); });
-                        },
-                        [](error::db_error const &e) { ADD_FAILURE() << e.what(); });
-                       },
-                       [](error::db_error const &e) { ADD_FAILURE() << e.what(); })
-                    .await();
+                            [&](Transaction &t) {
+                         t.execute(
+                             "INSERT INTO test_transactions (value) VALUES ('test1')",
+                             [&](Transaction &tr1, results) {
+                                 insert_ok = true;
+                                 tr1.execute(
+                                     "INSERT INTO test_transactions (value) VALUES ('test2')",
+                                     [&](Transaction &tr2, results) {
+                                         tr2.execute(
+                                             "SELECT * FROM test_transactions",
+                                             [&](Transaction &, results r) {
+                                                 EXPECT_EQ(r.size(), 2u);
+                                                 select_ok = true;
+                                             },
+                                             [](error::db_error const &e) { ADD_FAILURE() << e.what(); });
+                                     },
+                                     [](error::db_error const &e) { ADD_FAILURE() << e.what(); });
+                             },
+                             [](error::db_error const &e) { ADD_FAILURE() << e.what(); });
+                            },
+                            [](error::db_error const &e) { ADD_FAILURE() << e.what(); })
+                         .await();
     EXPECT_TRUE(st);
     EXPECT_TRUE(insert_ok);
     EXPECT_TRUE(select_ok);
@@ -300,8 +301,8 @@ TEST_F(TransactionBasicTest, AbortedTransactionRequiresRollback) {
     auto st      = db_->execute(
                           "SELECT 1 / 0", [](Transaction &, results) { ADD_FAILURE() << "division by zero should error"; },
                           [&](error::db_error const &e) {
-                    EXPECT_EQ(e.code, "22012"); // division_by_zero
-                    div_err = true;
+                         EXPECT_EQ(e.code, "22012"); // division_by_zero
+                         div_err = true;
                           })
                        .await();
     EXPECT_FALSE(st);
@@ -345,8 +346,8 @@ TEST_F(TransactionBasicTest, AbortedTransactionRequiresRollback) {
 TEST_F(TransactionBasicTest, ReadCommittedIsolationAcrossConnections) {
     // The temp table lives on db_'s session; use a shared, committed table instead so the
     // observer connection can see it. Create + truncate up front.
-    ASSERT_TRUE(db_->execute("CREATE TABLE IF NOT EXISTS test_iso_shared (id SERIAL PRIMARY KEY, value TEXT)", discard_query, discard_error)
-                    .await());
+    ASSERT_TRUE(
+        db_->execute("CREATE TABLE IF NOT EXISTS test_iso_shared (id SERIAL PRIMARY KEY, value TEXT)", discard_query, discard_error).await());
     ASSERT_TRUE(db_->execute("DELETE FROM test_iso_shared", discard_query, discard_error).await());
 
     qb::pg::tcp::database observer;

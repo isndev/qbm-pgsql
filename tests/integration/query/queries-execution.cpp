@@ -29,13 +29,13 @@
 
 #include <filesystem>
 #include <fstream>
+#include <gtest/gtest.h>
 #include <string>
 #include <vector>
-#include <gtest/gtest.h>
 #include <qb/system/parse.h> // qb::to_number (locale-free, non-throwing NUMERIC text parse)
-#include "../pgsql.h"
 #include "../../shared/pg_integration_fixture.hpp"
 #include "../../shared/test_config.hpp"
+#include "../pgsql.h"
 
 using namespace qb::pg;
 using qb::pg::detail::numeric; // exact-decimal marker type (lives in detail)
@@ -111,13 +111,13 @@ protected:
     run_select(std::string_view sql, Check &&check) {
         bool cb_ran = false;
         auto st     = db_->execute(
-                          sql,
-                          [&](transaction &, results r) {
-                          check(r);
-                          cb_ran = true;
-                      },
-                          [&](error::db_error const &e) { ADD_FAILURE() << "callback query failed: " << e.code << " " << e.what(); })
-                      .await();
+                             sql,
+                             [&](transaction &, results r) {
+                             check(r);
+                             cb_ran = true;
+                             },
+                             [&](error::db_error const &e) { ADD_FAILURE() << "callback query failed: " << e.code << " " << e.what(); })
+                          .await();
         ASSERT_TRUE(st) << "callback transport: " << sql;
         ASSERT_TRUE(cb_ran) << "success callback never fired: " << sql;
 
@@ -350,16 +350,15 @@ TEST_F(QueryExecutionTest, DecimalDecodeTextAndBinary) {
 TEST_F(QueryExecutionTest, ParameterPassingShapes) {
     ASSERT_TRUE(db_->execute("CREATE TEMP TABLE test_perf (id SERIAL PRIMARY KEY, value TEXT)", discard_query, discard_error).await());
 
-    ASSERT_TRUE(db_->prepare("single_ins", "INSERT INTO test_perf (value) VALUES ($1)", type_oid_sequence{}, discard_prepare, discard_error)
-                    .await());
+    ASSERT_TRUE(
+        db_->prepare("single_ins", "INSERT INTO test_perf (value) VALUES ($1)", type_oid_sequence{}, discard_prepare, discard_error).await());
     ASSERT_TRUE(db_->prepare("quad_ins", "INSERT INTO test_perf (value) VALUES ($1),($2),($3),($4)", type_oid_sequence{}, discard_prepare,
                              discard_error)
                     .await());
 
     ASSERT_TRUE(db_->execute("single_ins", params{std::string("single")}, discard_query, discard_error).await());
     ASSERT_TRUE(db_->execute("quad_ins",
-                             params{std::string("explicit 1"), std::string("explicit 2"), std::string("explicit 3"),
-                                    std::string("explicit 4")},
+                             params{std::string("explicit 1"), std::string("explicit 2"), std::string("explicit 3"), std::string("explicit 4")},
                              discard_query, discard_error)
                     .await());
 
@@ -415,13 +414,13 @@ TEST_F(QueryExecutionTest, PreparedStatementBind) {
 TEST_F(QueryExecutionTest, MissingTableErrorIsUndefinedTable) {
     bool err_fired = false;
     auto st        = db_->execute(
-                       "SELECT * FROM nonexistent_table", [](transaction &, results) { FAIL() << "query on missing table must not succeed"; },
-                       [&](error::db_error const &e) {
-                    EXPECT_EQ(e.code, "42P01");
-                    EXPECT_EQ(e.sqlstate, sqlstate::undefined_table);
-                    err_fired = true;
-                       })
-                    .await();
+                            "SELECT * FROM nonexistent_table", [](transaction &, results) { FAIL() << "query on missing table must not succeed"; },
+                            [&](error::db_error const &e) {
+                         EXPECT_EQ(e.code, "42P01");
+                         EXPECT_EQ(e.sqlstate, sqlstate::undefined_table);
+                         err_fired = true;
+                            })
+                         .await();
     EXPECT_FALSE(st);
     EXPECT_TRUE(err_fired);
 
@@ -447,13 +446,13 @@ TEST_F(QueryExecutionTest, MissingTableErrorIsUndefinedTable) {
 TEST_F(QueryExecutionTest, MalformedSqlIsSyntaxError) {
     bool err_fired = false;
     auto st        = db_->execute(
-                       "SELEKT 1 FROMM nowhere", [](transaction &, results) { FAIL() << "malformed SQL must not succeed"; },
-                       [&](error::db_error const &e) {
-                    EXPECT_EQ(e.code, "42601");
-                    EXPECT_EQ(e.sqlstate, sqlstate::syntax_error);
-                    err_fired = true;
-                       })
-                    .await();
+                            "SELEKT 1 FROMM nowhere", [](transaction &, results) { FAIL() << "malformed SQL must not succeed"; },
+                            [&](error::db_error const &e) {
+                         EXPECT_EQ(e.code, "42601");
+                         EXPECT_EQ(e.sqlstate, sqlstate::syntax_error);
+                         err_fired = true;
+                            })
+                         .await();
     EXPECT_FALSE(st);
     EXPECT_TRUE(err_fired);
 
@@ -526,10 +525,11 @@ TEST_F(QueryExecutionTest, ExecuteFromFile) {
     bool error_cb     = false;
     bool exception_th = false;
     try {
-        (void) db_->execute_file(
-                       std::filesystem::temp_directory_path() / "qbm_pgsql_nonexistent.sql",
-                       [](transaction &, results) { FAIL() << "must not succeed on non-existent file"; },
-                       [&](error::db_error const &) { error_cb = true; })
+        (void) db_
+            ->execute_file(
+                std::filesystem::temp_directory_path() / "qbm_pgsql_nonexistent.sql",
+                [](transaction &, results) { FAIL() << "must not succeed on non-existent file"; },
+                [&](error::db_error const &) { error_cb = true; })
             .await();
         FAIL() << "expected error::query_error for non-existent file";
     } catch (const error::query_error &) {

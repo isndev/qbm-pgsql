@@ -23,15 +23,15 @@
 
 #include <cmath>
 #include <cstring>
+#include <gtest/gtest.h>
 #include <limits>
 #include <optional>
 #include <span>
 #include <string>
 #include <utility>
 #include <vector>
-#include <gtest/gtest.h>
-#include "../pgsql.h"
 #include "../../shared/pg_wire_ground_truth.hpp"
+#include "../pgsql.h"
 
 using namespace qb::pg;
 using namespace qb::pg::detail;
@@ -449,7 +449,9 @@ TEST(TypeConverterStringTest, NumericAsTextSpecialization) {
     std::vector<byte> buf;
     TypeConverter<std::string>::to_binary("12.5", buf);
     ASSERT_EQ(buf.size(), 4u + 4u);
-    EXPECT_EQ(TypeConverter<std::string>::from_binary(buf), std::string("\0\0\0\x04""12.5", 8));
+    EXPECT_EQ(TypeConverter<std::string>::from_binary(buf), std::string("\0\0\0\x04"
+                                                                        "12.5",
+                                                                        8));
 
     // Value bytes are returned exactly, including leading NULs (a binary string / bytea
     // beginning with NUL must NOT be mistaken for a length prefix and stripped).
@@ -457,8 +459,7 @@ TEST(TypeConverterStringTest, NumericAsTextSpecialization) {
     EXPECT_EQ(TypeConverter<std::string>::from_binary(hex_to_bytes("00000000")), std::string("\0\0\0\0", 4));
 
     // No prefix interpretation: these 9 bytes decode to themselves, not "hello".
-    EXPECT_EQ(TypeConverter<std::string>::from_binary(hex_to_bytes("0000000568656c6c6f")),
-              std::string("\0\0\0\x05hello", 9));
+    EXPECT_EQ(TypeConverter<std::string>::from_binary(hex_to_bytes("0000000568656c6c6f")), std::string("\0\0\0\x05hello", 9));
     // The value bytes "hello" alone decode to "hello".
     EXPECT_EQ(TypeConverter<std::string>::from_binary(hex_to_bytes("68656c6c6f")), "hello");
     // Empty value -> empty string (not a throw).

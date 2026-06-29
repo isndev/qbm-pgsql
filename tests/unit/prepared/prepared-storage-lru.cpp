@@ -16,9 +16,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License").
  */
 
+#include <gtest/gtest.h>
 #include <stdexcept>
 #include <string>
-#include <gtest/gtest.h>
 #include "../pgsql.h"
 
 using namespace qb::pg;
@@ -75,7 +75,7 @@ TEST(PreparedStorageLRU, EvictionPolicy) {
     EXPECT_TRUE(storage.has("q1"));  // accessed → survives
     EXPECT_FALSE(storage.has("q2")); // LRU → evicted
     EXPECT_TRUE(storage.has("q3"));
-    EXPECT_TRUE(storage.has("q4"));  // newly inserted
+    EXPECT_TRUE(storage.has("q4")); // newly inserted
     EXPECT_EQ(storage.evicted_count(), 1u);
 
     // Grow capacity: a further insert no longer evicts.

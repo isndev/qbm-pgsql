@@ -57,10 +57,9 @@ namespace qb::pg::detail {
  */
 template <typename T, typename Enable = void>
 struct type_mapping {
-    static_assert(!sizeof(T),
-                  "qbm-pgsql: no PostgreSQL OID mapping for this C++ type. Bind a supported "
-                  "type or add a type_mapping<> specialization. The generic fallback no longer "
-                  "silently sends OID 705 'unknown'.");
+    static_assert(!sizeof(T), "qbm-pgsql: no PostgreSQL OID mapping for this C++ type. Bind a supported "
+                              "type or add a type_mapping<> specialization. The generic fallback no longer "
+                              "silently sends OID 705 'unknown'.");
 };
 
 // Specializations for common C++ types
