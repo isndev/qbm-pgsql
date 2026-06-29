@@ -102,6 +102,18 @@ TEST(TypeConverterJsonTest, TextFormatShapes) {
     EXPECT_THROW(TypeConverter<qb::jsonb>::from_text(R"({"unclosed": "object")"), std::runtime_error);
 }
 
+// A top-level JSON array whose first element is NOT a [key,value] pair is not the
+// key-value (flat-map) shape, so from_binary returns it verbatim as an array.
+// BinaryAndTextPaths only covers object and key-value-array inputs, leaving the
+// "plain array" branch unexercised.
+TEST(TypeConverterJsonTest, FromBinaryPlainArrayNotKeyValue) {
+    const std::string text = "[1,2,3]";
+    std::vector<byte> bytes(text.data(), text.data() + text.size());
+    auto              parsed = TypeConverter<qb::json>::from_binary(bytes);
+    ASSERT_TRUE(parsed.is_array());
+    EXPECT_EQ(parsed, qb::json::parse(text));
+}
+
 // ----------------------------------------------------------------------------
 // JSONB (versioned varlena)
 // ----------------------------------------------------------------------------

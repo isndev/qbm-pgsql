@@ -347,6 +347,120 @@ TEST(ProtocolMessage, DataRowValidRoundTrip) {
     EXPECT_FALSE(row.is_null(1));
 }
 
+// A DataRow truncated mid-row (the per-field int32 length itself is cut short)
+// must fail the field-length read, not over-read (distinct from the oversized and
+// negative-count cases above, which fail earlier checks).
+TEST(ProtocolMessage, DataRowRejectsTruncatedFieldLengthRead) {
+    message m(data_row_tag);
+    m.write(static_cast<smallint>(2)); // 2 columns
+    m.write(static_cast<integer>(3));  // col0 length = 3
+    m.write('a');
+    m.write('b');
+    m.write('c');                      // col0 data
+    m.write('x');                      // only 1 of col1's 4 length bytes
+    (void) m.buffer();
+    m.reset_read();
+    row_data row;
+    EXPECT_FALSE(m.read(row));
+}
+
+// A field length below -1 is a protocol violation (only -1 == SQL NULL and >= 0
+// are valid), rejected rather than treated as a huge size.
+TEST(ProtocolMessage, DataRowRejectsInvalidNegativeFieldLength) {
+    message m(data_row_tag);
+    m.write(static_cast<smallint>(1)); // 1 column
+    m.write(static_cast<integer>(-2)); // length < -1
+    (void) m.buffer();
+    m.reset_read();
+    row_data row;
+    EXPECT_FALSE(m.read(row));
+}
+
+// The move constructor transfers the framed payload (tag + body).
+TEST(ProtocolMessage, MoveConstructorPreservesPayload) {
+    message src(query_tag);
+    src.write(std::string("SELECT 1"));
+    (void) src.buffer();
+    const auto len = src.length();
+
+    message dst(std::move(src));
+    EXPECT_EQ(dst.tag(), query_tag);
+    EXPECT_EQ(dst.length(), len);
+}
+
+// A default-constructed (empty-payload) message reports the empty tag.
+TEST(ProtocolMessage, DefaultMessageReportsEmptyTag) {
+    message m;
+    EXPECT_EQ(m.tag(), empty_tag);
+}
+
+// remaining() is empty once the read cursor has consumed the whole payload.
+TEST(ProtocolMessage, RemainingIsEmptyAfterConsumingPayload) {
+    message m(query_tag);
+    m.write('a');
+    m.reset_read();
+    char c{};
+    ASSERT_TRUE(m.read(c));
+    EXPECT_TRUE(m.remaining().empty());
+}
+
+// A short read of an integer (fewer than 4 bytes) fails and leaves the target
+// untouched (the integer analogue of the existing smallint short-read test).
+TEST(ProtocolMessage, IntegerShortReadFailsAndLeavesTargetUntouched) {
+    message m(query_tag);
+    m.write(static_cast<char>(0x00)); // one byte; integer needs four
+    m.reset_read();
+    integer sentinel = -98765;
+    EXPECT_FALSE(m.read(sentinel));
+    EXPECT_EQ(sentinel, -98765);
+}
+
+// read(string, n) asking for more bytes than remain fails.
+TEST(ProtocolMessage, ReadFixedStringInsufficientBytesFails) {
+    message m(query_tag);
+    m.write(std::string("ab"));
+    m.reset_read();
+    std::string s;
+    EXPECT_FALSE(m.read(s, 5)); // only 2 bytes available
+}
+
+// row_data bounds: a default row is empty and any index is out of range.
+TEST(ProtocolRowData, EmptyRowRejectsIndexAccess) {
+    row_data a;
+    EXPECT_TRUE(a.empty());
+    EXPECT_EQ(a.size(), 0u);
+    EXPECT_THROW(a.is_null(0), std::out_of_range);
+}
+
+// swap() exchanges row contents.
+TEST(ProtocolRowData, SwapExchangesContents) {
+    message m(data_row_tag);
+    m.write(static_cast<smallint>(1));
+    m.write(static_cast<integer>(2));
+    m.write('h');
+    m.write('i');
+    (void) m.buffer();
+    m.reset_read();
+    row_data populated;
+    ASSERT_TRUE(m.read(populated));
+    ASSERT_EQ(populated.size(), 1u);
+
+    row_data empty;
+    populated.swap(empty);
+    EXPECT_TRUE(populated.empty());  // contents moved out
+    EXPECT_EQ(empty.size(), 1u);     // contents moved in
+    EXPECT_FALSE(empty.is_null(0));
+}
+
+// notice_message::field() maps known single-byte codes to members and rejects
+// an unknown code.
+TEST(ProtocolNoticeMessage, FieldMapsKnownCodeAndRejectsUnknown) {
+    notice_message n;
+    n.field('S') = "ERROR"; // 'S' -> severity
+    EXPECT_EQ(n.severity, "ERROR");
+    EXPECT_THROW(n.field('Z'), std::runtime_error); // unknown code
+}
+
 // pack() appends the SECOND message's full wire bytes (tag + length + body) after the
 // first message's framed bytes. Was EXPECT_GE(n,10): now decode the embedded Sync
 // header — verifying both messages are present, in order, with correct framing.
