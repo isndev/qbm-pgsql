@@ -23,11 +23,11 @@
  */
 
 #include <chrono>
+#include <gtest/gtest.h>
 #include <string>
 #include <vector>
-#include <gtest/gtest.h>
-#include "../pgsql.h"
 #include "../../shared/pg_wire_ground_truth.hpp"
+#include "../pgsql.h"
 
 using namespace qb::pg;
 using namespace qb::pg::detail;
@@ -160,8 +160,8 @@ TEST(TypeConverterTemporalBinary, CalendarIntervalGroundTruth) {
     auto iv = TypeConverter<qb::calendar_interval>::from_binary(hex_to_bytes("00000002925553400000000200000001"));
     EXPECT_EQ(iv.months, 1);
     EXPECT_EQ(iv.days, 2);
-    EXPECT_EQ(iv.micros.count(), 11045000000LL);          // 03:04:05
-    EXPECT_EQ(iv.to_micros().count(), 2775845000000LL);   // == PG EXTRACT(EPOCH) * 1e6
+    EXPECT_EQ(iv.micros.count(), 11045000000LL);        // 03:04:05
+    EXPECT_EQ(iv.to_micros().count(), 2775845000000LL); // == PG EXTRACT(EPOCH) * 1e6
 }
 
 // Lossy std::chrono::seconds INTERVAL folds days+months into EXTRACT(EPOCH) seconds
@@ -242,12 +242,10 @@ TEST(TypeConverterTemporalText, TimeRoundTrips) {
     std::string     text = TypeConverter<qb::time_of_day>::to_text(t1);
     EXPECT_EQ(TypeConverter<qb::time_of_day>::from_text(text), t1);
 
-    EXPECT_EQ(TypeConverter<qb::time_of_day_tz>::to_text(qb::time_of_day_tz::from_hms_offset(18, 0, 0, 0, 7200)),
-              "18:00:00+02:00");
+    EXPECT_EQ(TypeConverter<qb::time_of_day_tz>::to_text(qb::time_of_day_tz::from_hms_offset(18, 0, 0, 0, 7200)), "18:00:00+02:00");
     EXPECT_EQ(TypeConverter<qb::time_of_day_tz>::to_text(qb::time_of_day_tz::from_hms_offset(14, 30, 45, 0, (5 * 3600) + (30 * 60))),
               "14:30:45+05:30");
-    EXPECT_EQ(TypeConverter<qb::time_of_day_tz>::to_text(qb::time_of_day_tz::from_hms_offset(8, 0, 0, 0, -8 * 3600)),
-              "08:00:00-08:00");
+    EXPECT_EQ(TypeConverter<qb::time_of_day_tz>::to_text(qb::time_of_day_tz::from_hms_offset(8, 0, 0, 0, -8 * 3600)), "08:00:00-08:00");
 }
 
 // DATE and INTERVAL inline to_text / from_text (the converter delegates to

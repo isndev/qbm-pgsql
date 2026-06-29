@@ -31,15 +31,15 @@
  * @ingroup Pgsql
  */
 #include <chrono>
+#include <gtest/gtest.h>
 #include <memory>
 #include <string>
-#include <gtest/gtest.h>
 #include <qb/io/async.h>
 #include <qb/io/async/coroutine.h>
 #include <qb/io/async/coroutine/utils.h>
-#include "../pgsql.h"
 #include "../../shared/pg_integration_fixture.hpp"
 #include "../../shared/test_config.hpp"
+#include "../pgsql.h"
 
 using namespace qb::pg;
 using namespace qb::pg::detail;
@@ -61,8 +61,7 @@ protected:
         qb::pg::test::PgIntegrationTest::SetUp(); // connect-or-skip
         if (IsSkipped())
             return;
-        ASSERT_TRUE(db_->execute(std::string("DROP TABLE IF EXISTS ") + std::string(kExtraTable), qb::pg::discard_query,
-                                 qb::pg::discard_error)
+        ASSERT_TRUE(db_->execute(std::string("DROP TABLE IF EXISTS ") + std::string(kExtraTable), qb::pg::discard_query, qb::pg::discard_error)
                         .await());
         ASSERT_TRUE(db_->execute(std::string("CREATE TEMP TABLE ") + std::string(kExtraTable) + " (id SERIAL PRIMARY KEY, v TEXT NOT NULL)",
                                  qb::pg::discard_query, qb::pg::discard_error)
@@ -153,12 +152,11 @@ TEST_F(PgsqlDbApiExtra, EnableKeepaliveKeepsConnectionUsable) {
 // with await() and the row it inserted is observable.
 TEST_F(PgsqlDbApiExtra, CallbackThenChainRunsAndCommits) {
     bool first_ran = false, then_ran = false;
-    auto st =
-        db_->execute(
-               std::string("INSERT INTO ") + std::string(kExtraTable) + " (v) VALUES ('then_a')",
-               [&](Transaction &, results) { first_ran = true; }, qb::pg::discard_error)
-            .then([&](Transaction &) { then_ran = true; })
-            .await();
+    auto st = db_->execute(
+                     std::string("INSERT INTO ") + std::string(kExtraTable) + " (v) VALUES ('then_a')",
+                     [&](Transaction &, results) { first_ran = true; }, qb::pg::discard_error)
+                  .then([&](Transaction &) { then_ran = true; })
+                  .await();
     EXPECT_TRUE(static_cast<bool>(st));
     EXPECT_TRUE(first_ran);
     EXPECT_TRUE(then_ran) << "then() success callback must run after the preceding execute";
@@ -177,10 +175,10 @@ TEST_F(PgsqlDbApiExtra, CallbackThenChainRunsAndCommits) {
 // queued work drains successfully.
 TEST_F(PgsqlDbApiExtra, CallbackSuccessRunsOnDrain) {
     bool success_ran = false;
-    auto st          = db_->execute(std::string("INSERT INTO ") + std::string(kExtraTable) + " (v) VALUES ('succ_b')",
-                                    qb::pg::discard_query, qb::pg::discard_error)
-                  .success([&](Transaction &) { success_ran = true; })
-                  .await();
+    auto st          = db_->execute(std::string("INSERT INTO ") + std::string(kExtraTable) + " (v) VALUES ('succ_b')", qb::pg::discard_query,
+                                    qb::pg::discard_error)
+                           .success([&](Transaction &) { success_ran = true; })
+                           .await();
     EXPECT_TRUE(static_cast<bool>(st));
     EXPECT_TRUE(success_ran) << "success() callback must run when the batch drains OK";
 }
@@ -191,11 +189,11 @@ TEST_F(PgsqlDbApiExtra, CallbackErrorRunsOnFailure) {
     bool           error_ran = false;
     sqlstate::code seen      = sqlstate::unknown_code;
     auto           st        = db_->execute("THIS IS NOT VALID SQL", qb::pg::discard_query, qb::pg::discard_error)
-                  .error([&](error::db_error const &e) {
+                                   .error([&](error::db_error const &e) {
                       error_ran = true;
                       seen      = e.sqlstate;
-                  })
-                  .await();
+                                   })
+                                   .await();
     EXPECT_FALSE(static_cast<bool>(st)) << "await() must report failure for the invalid SQL";
     EXPECT_TRUE(error_ran) << "error() callback must fire on the failed operation";
     EXPECT_EQ(seen, sqlstate::syntax_error); // 42601
@@ -219,13 +217,13 @@ TEST_F(PgsqlDbApiExtra, CallbackErrorRunsOnFailure) {
 TEST_F(PgsqlDbApiExtra, CallbackBeginExecuteCommitLifecycle) {
     bool insert_ran = false;
     auto st         = db_->begin(
-                       [&](Transaction &t) {
-                           t.execute(
-                               std::string("INSERT INTO ") + std::string(kExtraTable) + " (v) VALUES ('cb_commit')",
-                               [&](Transaction &, results) { insert_ran = true; }, qb::pg::discard_error);
-                       },
-                       [](error::db_error const &e) { ADD_FAILURE() << "begin failed: " << e.what(); })
-                  .await();
+                             [&](Transaction &t) {
+                         t.execute(
+                             std::string("INSERT INTO ") + std::string(kExtraTable) + " (v) VALUES ('cb_commit')",
+                             [&](Transaction &, results) { insert_ran = true; }, qb::pg::discard_error);
+                             },
+                             [](error::db_error const &e) { ADD_FAILURE() << "begin failed: " << e.what(); })
+                          .await();
     ASSERT_TRUE(static_cast<bool>(st));
     ASSERT_TRUE(insert_ran);
 
@@ -330,8 +328,7 @@ TEST_F(PgsqlDbApiExtra, QueryAfterDisconnectFailsFastInsteadOfHanging) {
     qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
         auto e = co_await db_->execute(std::string_view("SELECT 2"));
         EXPECT_FALSE(e.ok()) << "execute() after disconnect() must fail fast";
-        auto p =
-            co_await db_->prepare(std::string_view("p_dead"), std::string_view("SELECT $1::int"), type_oid_sequence{23});
+        auto p = co_await db_->prepare(std::string_view("p_dead"), std::string_view("SELECT $1::int"), type_oid_sequence{23});
         EXPECT_FALSE(p.ok()) << "prepare() after disconnect() must fail fast";
         // The prepared-name + params execute() coroutine overload guards on the
         // same not-connected predicate and must also fail fast (not hang).

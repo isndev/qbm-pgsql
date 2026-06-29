@@ -174,8 +174,8 @@ TypeConverter<qb::wall_time>::from_text(const std::string &text) {
     // (skipping leading whitespace, like %d), so the date/time separator space is
     // absorbed by the hour field's own whitespace skip; the '-'/':' separators are
     // matched literally. All six fields are required.
-    const std::string_view sv  = text;
-    std::size_t            pos = 0;
+    const std::string_view sv   = text;
+    std::size_t            pos  = 0;
     const auto             take = [&](int &out) noexcept -> bool {
         if (pos >= sv.size())
             return false;
@@ -193,8 +193,7 @@ TypeConverter<qb::wall_time>::from_text(const std::string &text) {
         ++pos;
         return true;
     };
-    if (!(take(year) && lit('-') && take(month) && lit('-') && take(day) && take(hour) && lit(':') && take(min) &&
-          lit(':') && take(sec))) {
+    if (!(take(year) && lit('-') && take(month) && lit('-') && take(day) && take(hour) && lit(':') && take(min) && lit(':') && take(sec))) {
         throw std::runtime_error("Invalid timestamp format");
     }
 

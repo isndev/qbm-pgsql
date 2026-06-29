@@ -59,8 +59,9 @@ pg_fail_void(error::db_error err) {
 template <typename T>
 [[nodiscard]] inline pg_reply_awaiter<T>
 pg_fail(error::db_error err) {
-    return pg_reply_awaiter<T>{
-        [e = std::move(err)](pg_coro_complete<T> complete) mutable { complete(::qb::pg::Reply<T>::failure(std::move(e))); }};
+    return pg_reply_awaiter<T>{[e = std::move(err)](pg_coro_complete<T> complete) mutable {
+        complete(::qb::pg::Reply<T>::failure(std::move(e)));
+    }};
 }
 
 /** Connection-down error used to fail a query/execute/prepare submitted on a closed handle. */

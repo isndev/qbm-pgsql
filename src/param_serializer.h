@@ -590,9 +590,8 @@ private:
         // companion now fails loudly here instead of emitting an invalid Bind.
         const oid array_oid = array_oid_for_element(static_cast<oid>(element_oid));
         if (array_oid == oid::invalid) {
-            throw std::invalid_argument(
-                "pgsql: cannot bind std::vector parameter - element type OID " +
-                std::to_string(element_oid) + " has no PostgreSQL array type mapping");
+            throw std::invalid_argument("pgsql: cannot bind std::vector parameter - element type OID " + std::to_string(element_oid)
+                                        + " has no PostgreSQL array type mapping");
         }
         param_types_.push_back(static_cast<integer>(array_oid));
 

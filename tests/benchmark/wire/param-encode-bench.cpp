@@ -29,10 +29,10 @@
  *
  * @ingroup Pgsql
  */
+#include <benchmark/benchmark.h>
 #include <cstdint>
 #include <string>
 #include <vector>
-#include <benchmark/benchmark.h>
 
 #include "../pgsql.h"
 

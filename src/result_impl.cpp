@@ -21,11 +21,11 @@
  * @ingroup Pgsql
  */
 #include "./result_impl.h"
-#include <qb/system/parse.h>
 #include <exception>
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <qb/system/parse.h>
 
 namespace qb {
 namespace pg {
@@ -44,8 +44,7 @@ result_impl::set_command_tag(std::string tag) {
         // The trailing token is an exact whole integer (no surrounding
         // whitespace by construction); a non-numeric/out-of-range tag
         // (e.g. "BEGIN") best-effort defaults to 0, as the old catch did.
-        rows_affected_ =
-            qb::to_number<long long>(command_tag_.substr(pos + 1)).value_or(0);
+        rows_affected_ = qb::to_number<long long>(command_tag_.substr(pos + 1)).value_or(0);
     }
 }
 

@@ -21,9 +21,9 @@
  */
 
 #include <chrono>
+#include <gtest/gtest.h>
 #include <memory>
 #include <string>
-#include <gtest/gtest.h>
 #include <qb/io/async.h>
 #include "../pgsql.h"
 
@@ -61,18 +61,15 @@ assert_connect_times_out() {
     }
     ASSERT_FALSE(result) << "connect to an unreachable host must fail";
 
-    const auto elapsed =
-        std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
 
     // The attempt must respect the configured deadline: it must not return so fast that the
     // timeout was ignored entirely... (allow generous lower slack — a connection-refused or
     // immediate routing error legitimately returns early), and must not blow far past it.
-    const auto configured_ms =
-        std::chrono::duration_cast<std::chrono::milliseconds>(kConfiguredTimeout);
+    const auto configured_ms = std::chrono::duration_cast<std::chrono::milliseconds>(kConfiguredTimeout);
     // Upper bound: configured deadline + generous scheduling/teardown slack (NOT a magic 13s).
     EXPECT_LT(elapsed.count(), configured_ms.count() + 4000)
-        << "connect overshot the configured " << configured_ms.count()
-        << "ms deadline by too much (elapsed=" << elapsed.count() << "ms)";
+        << "connect overshot the configured " << configured_ms.count() << "ms deadline by too much (elapsed=" << elapsed.count() << "ms)";
 }
 
 } // namespace

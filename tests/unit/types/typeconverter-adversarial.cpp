@@ -41,14 +41,14 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <gtest/gtest.h>
 #include <limits>
 #include <optional>
 #include <span>
 #include <string>
 #include <vector>
-#include <gtest/gtest.h>
-#include "../pgsql.h"
 #include "../../shared/pg_wire_ground_truth.hpp"
+#include "../pgsql.h"
 
 using namespace qb::pg;
 using namespace qb::pg::detail;
@@ -192,8 +192,8 @@ TEST(TCAdversarialFromText, ByteaStdByteHexGraceful) {
     using SB = std::vector<std::byte>;
     // The std::byte specialization rejects malformed hex by yielding an EMPTY vector
     // (qb::crypto::hex_to_string returns "" on odd-length / non-hex), never throwing.
-    EXPECT_TRUE(TypeConverter<SB>::from_text("\\xZZ").empty());   // non-hex
-    EXPECT_TRUE(TypeConverter<SB>::from_text("\\xabc").empty());  // odd length
+    EXPECT_TRUE(TypeConverter<SB>::from_text("\\xZZ").empty());  // non-hex
+    EXPECT_TRUE(TypeConverter<SB>::from_text("\\xabc").empty()); // odd length
     // Uppercase hex with and without the "\\x" marker both decode.
     SB expect{std::byte{0xDE}, std::byte{0xAD}};
     EXPECT_EQ(TypeConverter<SB>::from_text("\\xDEAD"), expect);
@@ -230,11 +230,11 @@ TEST(TCAdversarialNumeric, EncoderNormalisesValidDegenerateText) {
         const char *decoded; // decode_pg_numeric(encode_pg_numeric(in))
     };
     const C cases[] = {
-        {"-0", "0"},            // negative zero normalises to "0"
-        {"007", "7"},           // leading zeros stripped (PG-correct)
-        {"5.", "5"},            // trailing dot, no fraction
-        {"12.", "12"},          // ditto
-        {"+.5", "0.5"},         // leading '+' and bare fraction
+        {"-0", "0"},    // negative zero normalises to "0"
+        {"007", "7"},   // leading zeros stripped (PG-correct)
+        {"5.", "5"},    // trailing dot, no fraction
+        {"12.", "12"},  // ditto
+        {"+.5", "0.5"}, // leading '+' and bare fraction
         {"-.5", "-0.5"},
         {"0.0", "0.0"},         // exact zero KEEPS dscale=1
         {"00.50", "0.50"},      // leading-zero int part + trailing-zero fraction (dscale=2)
@@ -476,7 +476,7 @@ TEST(TCAdversarialUuid, BinarySizeEdges) {
 TEST(TCAdversarialUuid, TextMalformedThrows) {
     // The live specialization throws std::runtime_error on any non-UUID text.
     EXPECT_THROW(TypeConverter<qb::uuid>::from_text(""), std::runtime_error);
-    EXPECT_THROW(TypeConverter<qb::uuid>::from_text("550e8400-e29b-41d4-a716"), std::runtime_error);      // truncated
+    EXPECT_THROW(TypeConverter<qb::uuid>::from_text("550e8400-e29b-41d4-a716"), std::runtime_error);              // truncated
     EXPECT_THROW(TypeConverter<qb::uuid>::from_text("zzzzzzzz-e29b-41d4-a716-446655440000"), std::runtime_error); // non-hex
 }
 
@@ -534,13 +534,15 @@ TEST(TCAdversarialArray, TextArrayWithNullElement) {
     h += "00000019"; // text OID
     h += "00000003"; // size 3
     h += "00000001"; // lb 1
-    h += "00000001" "61";  // "a"
-    h += "ffffffff";       // NULL
-    h += "00000001" "63";  // "c"
+    h += "00000001"
+         "61";       // "a"
+    h += "ffffffff"; // NULL
+    h += "00000001"
+         "63"; // "c"
     auto plain = TypeConverter<std::vector<std::string>>::from_binary(hex_to_bytes(h));
     ASSERT_EQ(plain.size(), 3u);
     EXPECT_EQ(plain[0], "a");
-    EXPECT_EQ(plain[1], "");   // NULL -> default-constructed empty string
+    EXPECT_EQ(plain[1], ""); // NULL -> default-constructed empty string
     EXPECT_EQ(plain[2], "c");
 
     auto opt = decode_pg_array<std::optional<std::string>>(hex_to_bytes(h));
@@ -561,9 +563,12 @@ TEST(TCAdversarialArray, FloatArrayNonFiniteElements) {
     h += "000002bd"; // float8 OID (701)
     h += "00000003"; // size 3
     h += "00000001"; // lb 1
-    h += "00000008" "7ff8000000000000"; // NaN
-    h += "00000008" "7ff0000000000000"; // +Inf
-    h += "00000008" "fff0000000000000"; // -Inf
+    h += "00000008"
+         "7ff8000000000000"; // NaN
+    h += "00000008"
+         "7ff0000000000000"; // +Inf
+    h += "00000008"
+         "fff0000000000000"; // -Inf
     auto v = TypeConverter<std::vector<double>>::from_binary(hex_to_bytes(h));
     ASSERT_EQ(v.size(), 3u);
     EXPECT_TRUE(std::isnan(v[0]));
@@ -587,15 +592,11 @@ TEST(TCAdversarialArray, MalformedDimsAndOverrunGuards) {
     // dim size negative -> empty.
     EXPECT_TRUE(TypeConverter<IV>::from_binary(hex_to_bytes("000000010000000000000017ffffffff00000001")).empty());
     // claims 2 elements, only one present -> partial {10}, no OOB.
-    EXPECT_EQ(TypeConverter<IV>::from_binary(
-                  hex_to_bytes("0000000100000000000000170000000200000001000000040000000a")),
-              (IV{10}));
+    EXPECT_EQ(TypeConverter<IV>::from_binary(hex_to_bytes("0000000100000000000000170000000200000001000000040000000a")), (IV{10}));
     // element length 0x10 (16) but only 4 value bytes follow -> stop before the overrun (empty).
-    EXPECT_TRUE(TypeConverter<IV>::from_binary(
-                    hex_to_bytes("00000001000000000000001700000001000000010000001000000001")).empty());
+    EXPECT_TRUE(TypeConverter<IV>::from_binary(hex_to_bytes("00000001000000000000001700000001000000010000001000000001")).empty());
     // a non-(-1) negative element length (here -2 = 0xfffffffe) -> break (empty).
-    EXPECT_TRUE(TypeConverter<IV>::from_binary(
-                    hex_to_bytes("0000000100000000000000170000000100000001fffffffe")).empty());
+    EXPECT_TRUE(TypeConverter<IV>::from_binary(hex_to_bytes("0000000100000000000000170000000100000001fffffffe")).empty());
 }
 
 // ============================================================================
@@ -604,7 +605,9 @@ TEST(TCAdversarialArray, MalformedDimsAndOverrunGuards) {
 
 TEST(TCAdversarialJson, JsonBinaryInvalidThrows) {
     // json from_binary parses the value bytes AS JSON text; invalid JSON -> throw.
-    auto vb = [](std::string_view s) { return std::vector<byte>(s.data(), s.data() + s.size()); };
+    auto vb = [](std::string_view s) {
+        return std::vector<byte>(s.data(), s.data() + s.size());
+    };
     EXPECT_THROW(TypeConverter<qb::json>::from_binary(vb("{not json")), std::runtime_error);
     EXPECT_THROW(TypeConverter<qb::json>::from_binary(std::vector<byte>{}), std::runtime_error); // empty
     // A valid scalar payload decodes.
@@ -618,12 +621,14 @@ TEST(TCAdversarialJson, JsonbVersionAndTruncationGuards) {
     // version 1 but the JSON body is invalid -> parse throws.
     std::vector<byte> badbody;
     badbody.push_back(byte{1});
-    for (char c : std::string("{bad")) badbody.push_back(static_cast<byte>(c));
+    for (char c : std::string("{bad"))
+        badbody.push_back(static_cast<byte>(c));
     EXPECT_THROW(TypeConverter<qb::jsonb>::from_binary(badbody), std::runtime_error);
     // version 1 + valid body decodes.
     std::vector<byte> ok;
     ok.push_back(byte{1});
-    for (char c : std::string(R"({"k":1})")) ok.push_back(static_cast<byte>(c));
+    for (char c : std::string(R"({"k":1})"))
+        ok.push_back(static_cast<byte>(c));
     EXPECT_EQ(TypeConverter<qb::jsonb>::from_binary(ok)["k"].get<int>(), 1);
 }
 
@@ -634,8 +639,7 @@ TEST(TCAdversarialJson, JsonbVersionAndTruncationGuards) {
 
 TEST(TCAdversarialString, FromBinaryVerbatimIncludingLeadingNuls) {
     // Leading NULs preserved (NOT mistaken for a 4-byte length prefix and stripped).
-    EXPECT_EQ(TypeConverter<std::string>::from_binary(hex_to_bytes("0000000568656c6c6f")),
-              std::string("\0\0\0\x05hello", 9));
+    EXPECT_EQ(TypeConverter<std::string>::from_binary(hex_to_bytes("0000000568656c6c6f")), std::string("\0\0\0\x05hello", 9));
     // All-NUL value bytes -> a 4-char NUL string, not "".
     EXPECT_EQ(TypeConverter<std::string>::from_binary(hex_to_bytes("00000000")), std::string("\0\0\0\0", 4));
     // Embedded high bytes survive (no UTF-8 validation at this layer).

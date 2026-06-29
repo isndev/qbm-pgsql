@@ -28,16 +28,16 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <gtest/gtest.h>
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <gtest/gtest.h>
 #include <qb/io/async.h>
 #include <qb/io/async/coroutine.h>
 #include <qb/io/async/coroutine/utils.h>
-#include "../pgsql.h"
 #include "../../shared/pg_integration_fixture.hpp"
 #include "../../shared/test_config.hpp"
+#include "../pgsql.h"
 
 using namespace qb::pg;
 using namespace qb::pg::detail;
@@ -63,11 +63,10 @@ protected:
         qb::pg::test::PgIntegrationTest::SetUp(); // connect-or-skip
         if (IsSkipped())
             return;
-        ASSERT_TRUE(db_->execute(std::string("DROP TABLE IF EXISTS ") + std::string(kCoroApiTable), qb::pg::discard_query,
-                                 qb::pg::discard_error)
-                        .await());
-        ASSERT_TRUE(db_->execute(std::string("CREATE TEMP TABLE ") + std::string(kCoroApiTable)
-                                     + " (id SERIAL PRIMARY KEY, v TEXT NOT NULL)",
+        ASSERT_TRUE(
+            db_->execute(std::string("DROP TABLE IF EXISTS ") + std::string(kCoroApiTable), qb::pg::discard_query, qb::pg::discard_error)
+                .await());
+        ASSERT_TRUE(db_->execute(std::string("CREATE TEMP TABLE ") + std::string(kCoroApiTable) + " (id SERIAL PRIMARY KEY, v TEXT NOT NULL)",
                                  qb::pg::discard_query, qb::pg::discard_error)
                         .await());
     }
@@ -1053,10 +1052,10 @@ TEST_F(PgsqlCoroApiTest, CoroSavepointEmptyNameRejectedClientSide) {
         auto b = co_await db_->begin();
         if (!b)
             co_return;
-        auto sp   = co_await db_->savepoint("");
-        sp_failed = !sp.ok();
-        auto rb   = co_await db_->rollback_savepoint("");
-        rb_failed = !rb.ok();
+        auto sp    = co_await db_->savepoint("");
+        sp_failed  = !sp.ok();
+        auto rb    = co_await db_->rollback_savepoint("");
+        rb_failed  = !rb.ok();
         auto rel   = co_await db_->release_savepoint("");
         rel_failed = !rel.ok();
         (void) co_await db_->rollback();
@@ -1093,8 +1092,8 @@ TEST_F(PgsqlCoroApiTest, CoroRollbackAndReleaseSavepointInvalidNameRejected) {
         auto b = co_await db_->begin();
         if (!b)
             co_return;
-        auto rb   = co_await db_->rollback_savepoint("bad name!");
-        rb_failed = !rb.ok();
+        auto rb    = co_await db_->rollback_savepoint("bad name!");
+        rb_failed  = !rb.ok();
         auto rel   = co_await db_->release_savepoint("also bad!");
         rel_failed = !rel.ok();
         (void) co_await db_->rollback();
@@ -1114,9 +1113,8 @@ TEST_F(PgsqlCoroApiTest, CoroRollbackAndReleaseSavepointInvalidNameRejected) {
 // A non-existent path makes coro execute_file resolve with a failed Reply (the
 // std::filesystem::exists()==false branch) — not throw, not hang.
 TEST_F(PgsqlCoroApiTest, CoroExecuteFileMissingFileFails) {
-    std::filesystem::path const missing =
-        std::filesystem::temp_directory_path() / "qb_pgsql_no_such_execute_file_zzz.sql";
-    std::error_code ec;
+    std::filesystem::path const missing = std::filesystem::temp_directory_path() / "qb_pgsql_no_such_execute_file_zzz.sql";
+    std::error_code             ec;
     std::filesystem::remove(missing, ec); // ensure absent
     bool failed = false, survived = false;
     qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
@@ -1132,9 +1130,8 @@ TEST_F(PgsqlCoroApiTest, CoroExecuteFileMissingFileFails) {
 
 // A non-existent path makes coro prepare_file resolve with a failed Reply.
 TEST_F(PgsqlCoroApiTest, CoroPrepareFileMissingFileFails) {
-    std::filesystem::path const missing =
-        std::filesystem::temp_directory_path() / "qb_pgsql_no_such_prepare_file_zzz.sql";
-    std::error_code ec;
+    std::filesystem::path const missing = std::filesystem::temp_directory_path() / "qb_pgsql_no_such_prepare_file_zzz.sql";
+    std::error_code             ec;
     std::filesystem::remove(missing, ec);
     bool failed = false, survived = false;
     qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
@@ -1159,13 +1156,12 @@ TEST_F(PgsqlCoroApiTest, CoroPrepareFileMissingFileFails) {
 TEST_F(PgsqlCoroApiTest, WithTransaction_CommitFailureRollsBackValuePath) {
     constexpr char const *kDeferT = "qb_pgsql_coro_defer_commit";
     ASSERT_TRUE(db_->execute(std::string("DROP TABLE IF EXISTS ") + kDeferT, qb::pg::discard_query, qb::pg::discard_error).await());
-    ASSERT_TRUE(db_->execute(std::string("CREATE TABLE ") + kDeferT +
-                                 " (id int, UNIQUE(id) DEFERRABLE INITIALLY DEFERRED)",
+    ASSERT_TRUE(db_->execute(std::string("CREATE TABLE ") + kDeferT + " (id int, UNIQUE(id) DEFERRABLE INITIALLY DEFERRED)",
                              qb::pg::discard_query, qb::pg::discard_error)
                     .await());
     bool failed = false, survived = false;
     qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
-        auto r = co_await with_transaction(*db_, [](Transaction &tr) -> qb::io::async::task<int> {
+        auto r   = co_await with_transaction(*db_, [](Transaction &tr) -> qb::io::async::task<int> {
             auto a = co_await tr.execute(std::string("INSERT INTO ") + kDeferT + " VALUES (1)");
             if (!a)
                 throw transaction_abort{a.error()};
@@ -1189,13 +1185,12 @@ TEST_F(PgsqlCoroApiTest, WithTransaction_CommitFailureRollsBackValuePath) {
 TEST_F(PgsqlCoroApiTest, WithTransaction_CommitFailureRollsBackVoidPath) {
     constexpr char const *kDeferT = "qb_pgsql_coro_defer_commit_void";
     ASSERT_TRUE(db_->execute(std::string("DROP TABLE IF EXISTS ") + kDeferT, qb::pg::discard_query, qb::pg::discard_error).await());
-    ASSERT_TRUE(db_->execute(std::string("CREATE TABLE ") + kDeferT +
-                                 " (id int, UNIQUE(id) DEFERRABLE INITIALLY DEFERRED)",
+    ASSERT_TRUE(db_->execute(std::string("CREATE TABLE ") + kDeferT + " (id int, UNIQUE(id) DEFERRABLE INITIALLY DEFERRED)",
                              qb::pg::discard_query, qb::pg::discard_error)
                     .await());
     bool failed = false, survived = false;
     qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
-        auto r = co_await with_transaction(*db_, [](Transaction &tr) -> qb::io::async::task<void> {
+        auto r   = co_await with_transaction(*db_, [](Transaction &tr) -> qb::io::async::task<void> {
             auto a = co_await tr.execute(std::string("INSERT INTO ") + kDeferT + " VALUES (1)");
             if (!a)
                 throw transaction_abort{a.error()};
@@ -1231,7 +1226,7 @@ TEST_F(PgsqlCoroApiTest, WithTransaction_RepeatableReadIsolationApplied) {
                 throw transaction_abort{q.error()};
             co_return q.result()[0][0].as<std::string>();
         });
-        ok = r.ok();
+        ok             = r.ok();
         if (ok)
             seen = r.result();
         co_return;
@@ -1255,7 +1250,7 @@ TEST_F(PgsqlCoroApiTest, WithTransaction_SerializableReadOnlyDeferrableApplied) 
                 throw transaction_abort{a.ok() ? b.error() : a.error()};
             co_return a.result()[0][0].as<std::string>() + "|" + b.result()[0][0].as<std::string>();
         });
-        ok = r.ok();
+        ok                 = r.ok();
         if (ok) {
             auto const &v   = r.result();
             auto        bar = v.find('|');
@@ -1279,9 +1274,9 @@ TEST_F(PgsqlCoroApiTest, CoroBeginDeferrableOnly) {
         auto b          = co_await db_->begin(mode);
         if (!b.ok())
             co_return;
-        auto q  = co_await db_->query("SELECT 1");
-        auto c  = co_await db_->commit();
-        ok      = q.ok() && c.ok();
+        auto q = co_await db_->query("SELECT 1");
+        auto c = co_await db_->commit();
+        ok     = q.ok() && c.ok();
         co_return;
     }());
     EXPECT_TRUE(ok) << "BEGIN ... DEFERRABLE (no isolation change) must succeed";
@@ -1294,9 +1289,9 @@ TEST_F(PgsqlCoroApiTest, CoroBeginDeferrableOnly) {
 // The connect(connection_options) overload (carries connect_timeout / ssl_verify) connects
 // and the session is usable. A fresh database is used so its options are pristine.
 TEST_F(PgsqlCoroApiTest, ConnectWithOptionsStruct) {
-    auto opts          = connection_options::parse(qb::pg::test::dsn_tcp_string());
+    auto opts            = connection_options::parse(qb::pg::test::dsn_tcp_string());
     opts.connect_timeout = std::chrono::seconds(5);
-    auto db            = std::make_unique<qb::pg::tcp::database>();
+    auto db              = std::make_unique<qb::pg::tcp::database>();
     bool ok = false, queried = false;
     qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
         ok = static_cast<bool>(co_await db->connect(opts));

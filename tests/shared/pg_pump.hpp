@@ -52,8 +52,7 @@ namespace qb::pg::test {
  */
 template <typename Predicate>
 [[nodiscard]] inline bool
-pump_until(Predicate &&predicate,
-           qb::duration deadline = std::chrono::seconds(5)) {
+pump_until(Predicate &&predicate, qb::duration deadline = std::chrono::seconds(5)) {
     const auto start = std::chrono::steady_clock::now();
     const auto limit = std::chrono::nanoseconds(deadline.count());
     while (true) {

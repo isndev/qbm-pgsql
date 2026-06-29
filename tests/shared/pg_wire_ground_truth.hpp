@@ -100,36 +100,30 @@ inline constexpr Case specials[] = {
 namespace gt::array {
 
 // int4[] {10,20,30,40}
-inline constexpr const char *int4_10_20_30_40 =
-    "0000000100000000000000170000000400000001"
-    "000000040000000a0000000400000014000000040000001e0000000400000028";
+inline constexpr const char *int4_10_20_30_40 = "0000000100000000000000170000000400000001"
+                                                "000000040000000a0000000400000014000000040000001e0000000400000028";
 // text[] {apple,banana}
-inline constexpr const char *text_apple_banana =
-    "0000000100000000000000190000000200000001000000056170706c650000000662616e616e61";
+inline constexpr const char *text_apple_banana = "0000000100000000000000190000000200000001000000056170706c650000000662616e616e61";
 // int4[] {1,NULL,3} — NULL element decodes to default-constructed 0
-inline constexpr const char *int4_1_null_3 =
-    "00000001000000010000001700000003000000010000000400000001ffffffff0000000400000003";
+inline constexpr const char *int4_1_null_3 = "00000001000000010000001700000003000000010000000400000001ffffffff0000000400000003";
 // empty int4[]
 inline constexpr const char *int4_empty = "000000000000000000000017";
 // int8[] {1,2,3}
-inline constexpr const char *int8_1_2_3 =
-    "00000001000000000000001400000003000000010000000800000000000000010000"
-    "00080000000000000002000000080000000000000003";
+inline constexpr const char *int8_1_2_3 = "00000001000000000000001400000003000000010000000800000000000000010000"
+                                          "00080000000000000002000000080000000000000003";
 // int2[] {7,8}
 inline constexpr const char *int2_7_8 = "0000000100000000000000150000000200000001000000020007000000020008";
 // float8[] {1.5,2.5}
-inline constexpr const char *float8_1_5_2_5 =
-    "0000000100000000000002bd0000000200000001000000083ff80000000000000000"
-    "00084004000000000000";
+inline constexpr const char *float8_1_5_2_5 = "0000000100000000000002bd0000000200000001000000083ff80000000000000000"
+                                              "00084004000000000000";
 // float4[] {1.5,-2.5}
 inline constexpr const char *float4_1_5_n2_5 = "0000000100000000000002bc0000000200000001000000043fc0000000000004c0200000";
 // bool[] {true,false,true}
 inline constexpr const char *bool_t_f_t = "0000000100000000000000100000000300000001000000010100000001000000000101";
 // 2-D int4[][] {{1,2,3},{4,5,6}} — ndim=2, dims 2x3, row-major. decode_pg_array
 // flattens to {1,2,3,4,5,6}.
-inline constexpr const char *int4_2d_2x3 =
-    "0000000200000000000000170000000200000001000000030000000100000004"
-    "0000000100000004000000020000000400000003000000040000000400000004000000050000000400000006";
+inline constexpr const char *int4_2d_2x3 = "0000000200000000000000170000000200000001000000030000000100000004"
+                                           "0000000100000004000000020000000400000003000000040000000400000004000000050000000400000006";
 
 } // namespace gt::array
 
@@ -162,12 +156,12 @@ inline constexpr Case cases[] = {
 namespace gt::temporal {
 
 // timestamptz '2024-03-15 14:30:45.123456+00' => 1710513045123456 us since Unix epoch.
-inline constexpr const char *ts_2024_03_15 = "0002b6b29f385180";
+inline constexpr const char *ts_2024_03_15             = "0002b6b29f385180";
 inline constexpr long long   ts_2024_03_15_unix_micros = 1710513045123456LL;
 // The RAW big-endian int8 those bytes carry is micros since the PostgreSQL epoch
 // (2000-01-01 UTC), i.e. unix_micros - 946684800000000. read_bigint() returns this raw
 // value (the unix conversion happens one layer up, in the timestamptz TypeConverter).
-inline constexpr long long   ts_2024_03_15_pg_micros = 763828245123456LL;
+inline constexpr long long ts_2024_03_15_pg_micros = 763828245123456LL;
 
 // date '2024-03-15' => 8840 days since 2000-01-01 (19797 since Unix epoch).
 inline constexpr const char *date_2024_03_15 = "00002288";

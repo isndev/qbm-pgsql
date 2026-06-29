@@ -35,17 +35,17 @@
  *
  * @ingroup Pgsql
  */
+#include <gtest/gtest.h>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
-#include <gtest/gtest.h>
 #include <qb/io/async.h>
 #include <qb/io/async/coroutine.h>
 #include <qb/io/async/coroutine/utils.h>
-#include "../pgsql.h"
 #include "../../shared/pg_integration_fixture.hpp"
 #include "../../shared/test_config.hpp"
+#include "../pgsql.h"
 
 using namespace qb::pg;
 using namespace qb::pg::detail;
@@ -83,7 +83,7 @@ TEST_F(PgsqlParamRoundTrip, NullAndOptionalBindings) {
         auto p1 = co_await db_->prepare("", "SELECT ($1::int) IS NULL AS is_null", type_oid_sequence{oid::int4});
         if (!p1)
             co_return;
-        auto r1     = co_await db_->execute("", params{nullptr});
+        auto r1      = co_await db_->execute("", params{nullptr});
         null_is_null = r1.ok() && r1.result().size() == 1 && r1.result()[0][0].as<bool>();
 
         // std::optional<int> with a value -> 5; without -> NULL.
@@ -121,10 +121,10 @@ TEST_F(PgsqlParamRoundTrip, EmptyIntArrayBindsEmptyArrayNotNull) {
         auto r = co_await db_->execute("", params{std::vector<int>{}});
         ok     = r.ok() && r.result().size() == 1;
         if (ok) {
-            const auto &row    = r.result()[0];
-            is_empty_not_null = row[0].as<bool>()         // = '{}'
-                                && row[1].as<int>() == 0  // cardinality 0
-                                && !row[2].as<bool>();    // NOT NULL
+            const auto &row   = r.result()[0];
+            is_empty_not_null = row[0].as<bool>()        // = '{}'
+                                && row[1].as<int>() == 0 // cardinality 0
+                                && !row[2].as<bool>();   // NOT NULL
         }
         co_return;
     }());
@@ -168,17 +168,17 @@ TEST_F(PgsqlParamRoundTrip, StringVectorExpandsToMultiRowInsert) {
             co_return;
 
         // Three text params expanded from one vector<string>.
-        auto p = co_await db_->prepare("qb_str_vec_batch",
-                                       std::string("INSERT INTO ") + std::string(kBatchTable) + " (v) VALUES ($1),($2),($3)",
-                                       type_oid_sequence{oid::text, oid::text, oid::text});
+        auto p =
+            co_await db_->prepare("qb_str_vec_batch", std::string("INSERT INTO ") + std::string(kBatchTable) + " (v) VALUES ($1),($2),($3)",
+                                  type_oid_sequence{oid::text, oid::text, oid::text});
         if (!p)
             co_return;
         auto ins = co_await db_->execute("qb_str_vec_batch", params{std::vector<std::string>{"sv_a", "sv_b", "sv_c"}});
         if (!ins)
             co_return;
-        auto cnt = co_await db_->query(std::string("SELECT COUNT(*)::int FROM ") + std::string(kBatchTable)
-                                       + " WHERE v IN ('sv_a','sv_b','sv_c')");
-        ok       = cnt.ok() && cnt.result().size() == 1;
+        auto cnt =
+            co_await db_->query(std::string("SELECT COUNT(*)::int FROM ") + std::string(kBatchTable) + " WHERE v IN ('sv_a','sv_b','sv_c')");
+        ok = cnt.ok() && cnt.result().size() == 1;
         if (ok)
             n = cnt.result()[0][0].as<int>();
         co_return;
@@ -195,8 +195,7 @@ TEST_F(PgsqlParamRoundTrip, StringVectorExpandsToMultiRowInsert) {
 TEST_F(PgsqlParamRoundTrip, MixedScalarArrayScalarBind) {
     bool ok = false, correct = false;
     qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
-        auto p = co_await db_->prepare("",
-                                       "SELECT $1::text AS t, cardinality($2::int[]) AS card, $3::int AS n",
+        auto p = co_await db_->prepare("", "SELECT $1::text AS t, cardinality($2::int[]) AS card, $3::int AS n",
                                        type_oid_sequence{oid::text, oid::int4_array, oid::int4});
         if (!p)
             co_return;
@@ -225,8 +224,7 @@ TEST(PgsqlParamSerializerThrows, TooManyParamsThrowsLengthError) {
     // overflow as a string-vector: each element expands to its own text param via
     // add_string_vector, giving param_count() = 32768 > MAX_PARAMS (32767).
     std::vector<std::string> overflow(ParamSerializer::MAX_PARAMS + 1, "x");
-    EXPECT_THROW(s.serialize_params(overflow), std::length_error)
-        << "binding > MAX_PARAMS params must throw, not wrap the int16 count";
+    EXPECT_THROW(s.serialize_params(overflow), std::length_error) << "binding > MAX_PARAMS params must throw, not wrap the int16 count";
 }
 
 // finalize_params_buffer() also enforces the cap (the callback-side twin of the check):

@@ -26,9 +26,9 @@
  */
 
 #include <cstdlib>
+#include <gtest/gtest.h>
 #include <memory>
 #include <vector>
-#include <gtest/gtest.h>
 
 #ifdef QB_HAS_SSL
 
@@ -39,9 +39,9 @@
 #include <qb/io/async.h>
 #include <qb/io/async/coroutine.h>
 #include <qb/io/async/coroutine/utils.h>
-#include "../pgsql.h"
 #include "../../shared/pg_pump.hpp"
 #include "../../shared/test_config.hpp"
+#include "../pgsql.h"
 
 using namespace qb::pg;
 using qb::pg::test::dsn_ssl_string;
@@ -161,16 +161,16 @@ ssl_pool_callback(int n) {
         conns.push_back(std::move(c));
     }
     for (std::size_t i = 0; i < conns.size(); ++i) {
-        int decoded = -1;
-        auto status = conns[i]
-                          ->execute(
-                              "SELECT 1",
-                              [&](transaction &, results res) {
+        int  decoded = -1;
+        auto status  = conns[i]
+                           ->execute(
+                               "SELECT 1",
+                               [&](transaction &, results res) {
                                   ASSERT_EQ(res.size(), 1u);
                                   decoded = res[0][0].as<int>();
-                              },
-                              discard_error)
-                          .await();
+                               },
+                               discard_error)
+                           .await();
         ASSERT_TRUE(status);
         EXPECT_EQ(decoded, 1) << "pool connection " << i;
     }
@@ -193,13 +193,11 @@ TEST_F(SslConnection, ConnectionPool) {
             if (!co_await conn->connect(dsn_ssl_string()))
                 co_return;
             auto reply = co_await conn->query("SELECT 1");
-            if (reply.ok() && reply.result().size() == 1 &&
-                reply.result()[0][0].as<int>() == 1)
+            if (reply.ok() && reply.result().size() == 1 && reply.result()[0][0].as<int>() == 1)
                 ++ok_count;
         }
     }());
-    EXPECT_EQ(ok_count, num_connections)
-        << "coroutine TLS pool: only " << ok_count << "/" << num_connections << " returned 1";
+    EXPECT_EQ(ok_count, num_connections) << "coroutine TLS pool: only " << ok_count << "/" << num_connections << " returned 1";
 }
 
 // --------------------------------------------------------------------------------------
@@ -219,8 +217,7 @@ TEST_F(SslConnection, SslVerifyFullRejectsUntrustedCert) {
     opts.ssl_verify = qb::pg::ssl_verify_mode::full;
 
     auto db = std::make_unique<qb::pg::tcp::ssl::database>();
-    EXPECT_FALSE(qb::io::async::run_sync(db->connect(opts)))
-        << "verify-full accepted an untrusted self-signed certificate (active-MITM hole)";
+    EXPECT_FALSE(qb::io::async::run_sync(db->connect(opts))) << "verify-full accepted an untrusted self-signed certificate (active-MITM hole)";
 }
 
 /**
@@ -242,9 +239,8 @@ TEST_F(SslConnection, ScramChannelBindingNegotiatedOverTls) {
         GTEST_SKIP() << "no SCRAM-SHA-256-PLUS channel binding negotiated (server uses "
                         "trust/cleartext auth, or QB_PG_SSL_DSN is unset); set QB_PG_SSL_DSN "
                         "to a SCRAM role over TLS to exercise channel binding.";
-    EXPECT_TRUE(db_->used_channel_binding())
-        << "SCRAM-SHA-256-PLUS (tls-server-end-point) channel binding was not negotiated over "
-           "TLS against the pinned SCRAM role";
+    EXPECT_TRUE(db_->used_channel_binding()) << "SCRAM-SHA-256-PLUS (tls-server-end-point) channel binding was not negotiated over "
+                                                "TLS against the pinned SCRAM role";
 }
 
 // ======================================================================================
@@ -301,15 +297,14 @@ protected:
 TEST_F(SslWorkload, MultiRowSelectDecodesOverTls) {
     // Callback transport: decode a 3-row, 2-column result through the SSL data-row handler.
     std::vector<std::pair<int, std::string>> rows;
-    auto status =
-        db_->execute(
-               "SELECT g AS n, ('v' || g) AS v FROM generate_series(1,3) g ORDER BY g",
-               [&](transaction &, results res) {
-                   for (const auto &r : res)
-                       rows.emplace_back(r[0].as<int>(), r[1].as<std::string>());
-               },
-               discard_error)
-            .await();
+    auto                                     status = db_->execute(
+                                                             "SELECT g AS n, ('v' || g) AS v FROM generate_series(1,3) g ORDER BY g",
+                                                             [&](transaction &, results res) {
+                             for (const auto &r : res)
+                                 rows.emplace_back(r[0].as<int>(), r[1].as<std::string>());
+                                                             },
+                                                             discard_error)
+                                                          .await();
     ASSERT_TRUE(status) << "multi-row SELECT over TLS failed";
     ASSERT_EQ(rows.size(), 3u);
     EXPECT_EQ(rows[0], (std::pair<int, std::string>{1, "v1"}));
@@ -317,11 +312,10 @@ TEST_F(SslWorkload, MultiRowSelectDecodesOverTls) {
     EXPECT_EQ(rows[2], (std::pair<int, std::string>{3, "v3"}));
 
     // Coroutine transport: same handlers via co_await query(); confirm column metadata too.
-    int    n_rows = 0, n_cols = 0;
-    bool   ok = false;
+    int  n_rows = 0, n_cols = 0;
+    bool ok = false;
     qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
-        auto q = co_await db_->query(
-            "SELECT g AS n, ('v' || g) AS v FROM generate_series(1,3) g ORDER BY g");
+        auto q = co_await db_->query("SELECT g AS n, ('v' || g) AS v FROM generate_series(1,3) g ORDER BY g");
         if (q.ok()) {
             n_rows = static_cast<int>(q.result().size());
             n_cols = static_cast<int>(q.result().columns_size());
@@ -373,8 +367,8 @@ TEST_F(SslWorkload, TransactionCommitAndRollbackOverTls) {
         if (!(co_await db_->rollback()).ok())
             co_return;
 
-        auto kept    = co_await db_->query("SELECT count(*)::int FROM ssl_txn WHERE v='keep'");
-        auto dropped = co_await db_->query("SELECT count(*)::int FROM ssl_txn WHERE v='drop'");
+        auto kept         = co_await db_->query("SELECT count(*)::int FROM ssl_txn WHERE v='keep'");
+        auto dropped      = co_await db_->query("SELECT count(*)::int FROM ssl_txn WHERE v='drop'");
         committed_visible = kept.ok() && kept.result()[0][0].as<int>() == 1;
         rolled_invisible  = dropped.ok() && dropped.result()[0][0].as<int>() == 0;
         co_return;
@@ -409,11 +403,10 @@ TEST_F(SslWorkload, SavepointRollbackOverTls) {
 // --------------------------------------------------------------------------------------
 
 TEST_F(SslWorkload, PreparedStatementOverTls) {
-    int  sum = -1;
+    int  sum     = -1;
     bool text_ok = false;
     qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
-        if (!co_await db_->prepare("ssl_add", "SELECT $1::int + $2::int AS s",
-                                   type_oid_sequence{oid::int4, oid::int4}))
+        if (!co_await db_->prepare("ssl_add", "SELECT $1::int + $2::int AS s", type_oid_sequence{oid::int4, oid::int4}))
             co_return;
         auto r = co_await db_->execute("ssl_add", params{7, 35});
         if (r.ok() && r.result().size() == 1)
@@ -423,8 +416,7 @@ TEST_F(SslWorkload, PreparedStatementOverTls) {
         if (!co_await db_->prepare("", "SELECT $1::text AS t", type_oid_sequence{oid::text}))
             co_return;
         auto t  = co_await db_->execute("", params{std::string("tls-prepared")});
-        text_ok = t.ok() && t.result().size() == 1 &&
-                  t.result()[0][0].as<std::string>() == "tls-prepared";
+        text_ok = t.ok() && t.result().size() == 1 && t.result()[0][0].as<std::string>() == "tls-prepared";
         co_return;
     }());
     EXPECT_EQ(sum, 42) << "prepared statement Bind/Execute over TLS";
@@ -441,14 +433,11 @@ TEST_F(SslWorkload, CopyOutStreamsOverTls) {
     bool        ok_text = false, ok_csv = false;
     qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
         (void) co_await db_->query("CREATE TEMP TABLE ssl_copyt (id int, v text)");
-        (void) co_await db_->query(
-            "INSERT INTO ssl_copyt VALUES (1,'alpha'),(2,'beta'),(3,'gamma')");
-        auto rt = co_await db_->copy_out("COPY ssl_copyt TO STDOUT",
-                                         [&](std::string_view c) { text_out.append(c); });
+        (void) co_await db_->query("INSERT INTO ssl_copyt VALUES (1,'alpha'),(2,'beta'),(3,'gamma')");
+        auto rt = co_await db_->copy_out("COPY ssl_copyt TO STDOUT", [&](std::string_view c) { text_out.append(c); });
         ok_text = rt.ok();
-        auto rc = co_await db_->copy_out("COPY ssl_copyt TO STDOUT (FORMAT csv)",
-                                         [&](std::string_view c) { csv_out.append(c); });
-        ok_csv = rc.ok();
+        auto rc = co_await db_->copy_out("COPY ssl_copyt TO STDOUT (FORMAT csv)", [&](std::string_view c) { csv_out.append(c); });
+        ok_csv  = rc.ok();
         co_return;
     }());
     EXPECT_TRUE(ok_text);
@@ -465,14 +454,13 @@ TEST_F(SslWorkload, CopyInRoundTripOverTls) {
     qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
         (void) co_await db_->query("CREATE TEMP TABLE ssl_cprt (id int, v text)");
         // One-shot whole-payload overload (drives copy_in source + CopyData/CopyDone).
-        auto ri = co_await db_->copy_in("COPY ssl_cprt FROM STDIN", payload);
-        ok_in   = ri.ok();
+        auto ri  = co_await db_->copy_in("COPY ssl_cprt FROM STDIN", payload);
+        ok_in    = ri.ok();
         auto cnt = co_await db_->query("SELECT count(*)::int FROM ssl_cprt");
         if (cnt.ok())
             loaded = cnt.result()[0][0].as<int>();
-        auto ro = co_await db_->copy_out("COPY ssl_cprt TO STDOUT",
-                                         [&](std::string_view c) { out.append(c); });
-        ok_out = ro.ok();
+        auto ro = co_await db_->copy_out("COPY ssl_cprt TO STDOUT", [&](std::string_view c) { out.append(c); });
+        ok_out  = ro.ok();
         co_return;
     }());
     EXPECT_TRUE(ok_in);
@@ -487,14 +475,13 @@ TEST_F(SslWorkload, CopyInStreamingSourceOverTls) {
     qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
         (void) co_await db_->query("CREATE TEMP TABLE ssl_cins (id int)");
         int  next = 0;
-        auto ri   = co_await db_->copy_in(
-            "COPY ssl_cins FROM STDIN", [&next]() -> std::optional<std::string> {
-                if (next >= 500)
-                    return std::nullopt;
-                return std::to_string(next++) + "\n";
-            });
-        ok_in    = ri.ok();
-        auto sel = co_await db_->query("SELECT count(*)::int FROM ssl_cins");
+        auto ri   = co_await db_->copy_in("COPY ssl_cins FROM STDIN", [&next]() -> std::optional<std::string> {
+            if (next >= 500)
+                return std::nullopt;
+            return std::to_string(next++) + "\n";
+        });
+        ok_in     = ri.ok();
+        auto sel  = co_await db_->query("SELECT count(*)::int FROM ssl_cins");
         if (sel.ok())
             loaded = sel.result()[0][0].as<int>();
         co_return;
@@ -508,14 +495,12 @@ TEST_F(SslWorkload, CopyInStreamingSourceOverTls) {
 TEST_F(SslWorkload, CopyErrorsResolveOverTls) {
     bool out_failed = false, in_failed = false, survived = false;
     qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
-        auto ro    = co_await db_->copy_out("COPY ssl_no_such_table TO STDOUT",
-                                            [](std::string_view) {});
+        auto ro    = co_await db_->copy_out("COPY ssl_no_such_table TO STDOUT", [](std::string_view) {});
         out_failed = !ro.ok();
 
         (void) co_await db_->query("CREATE TEMP TABLE ssl_cerr (id int)");
-        auto ri = co_await db_->copy_in(
-            "COPY ssl_cerr FROM STDIN",
-            []() -> std::optional<std::string> { throw std::runtime_error("ssl source boom"); });
+        auto ri   = co_await db_->copy_in("COPY ssl_cerr FROM STDIN",
+                                          []() -> std::optional<std::string> { throw std::runtime_error("ssl source boom"); });
         in_failed = !ri.ok();
 
         auto ok  = co_await db_->query("SELECT 1 AS one");
@@ -536,12 +521,11 @@ TEST_F(SslWorkload, QueryStreamCursorOverTls) {
     std::uint64_t n = 0, sum = 0;
     bool          ok = false;
     qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
-        auto r = co_await db_->query_stream(
-            "SELECT g FROM generate_series(1, 2500) g", 137, [&](auto row) {
-                ++n;
-                sum += static_cast<std::uint64_t>(row[0].template as<int>());
-            });
-        ok = r.ok();
+        auto r = co_await db_->query_stream("SELECT g FROM generate_series(1, 2500) g", 137, [&](auto row) {
+            ++n;
+            sum += static_cast<std::uint64_t>(row[0].template as<int>());
+        });
+        ok     = r.ok();
         co_return;
     }());
     EXPECT_TRUE(ok) << "query_stream over TLS failed";
@@ -555,8 +539,7 @@ TEST_F(SslWorkload, QueryStreamInExistingTxnOverTls) {
     qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
         if (!(co_await db_->begin()).ok())
             co_return;
-        auto r   = co_await db_->query_stream(
-            "SELECT g FROM generate_series(1, 100) g", 10, [&](auto) { ++count; });
+        auto r   = co_await db_->query_stream("SELECT g FROM generate_series(1, 100) g", 10, [&](auto) { ++count; });
         streamed = r.ok();
         // query_stream must NOT have closed the outer transaction; commit must still work.
         committed = (co_await db_->commit()).ok();
@@ -584,14 +567,12 @@ TEST_F(SslWorkload, NotificationOverTls) {
         }
     });
     // LISTEN on the encrypted link.
-    ASSERT_TRUE(db_->listen(std::string(kChan), discard_query, discard_error).await())
-        << "LISTEN over TLS failed";
+    ASSERT_TRUE(db_->listen(std::string(kChan), discard_query, discard_error).await()) << "LISTEN over TLS failed";
 
     // Publish from a SECOND TLS connection so delivery is a genuine async NotificationResponse.
     auto pub = std::make_unique<qb::pg::tcp::ssl::database>();
     ASSERT_TRUE(ssl_connect(*pub));
-    ASSERT_TRUE(pub->notify(std::string(kChan), "tls-notify-payload", discard_query, discard_error)
-                    .await());
+    ASSERT_TRUE(pub->notify(std::string(kChan), "tls-notify-payload", discard_query, discard_error).await());
 
     EXPECT_TRUE(pump_until([&] { return hits >= 1; }, std::chrono::seconds(5)))
         << "NOTIFY over TLS never delivered to the LISTENing connection";

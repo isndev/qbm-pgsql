@@ -17,13 +17,13 @@
 
 #include <cstdint>
 #include <cstring>
+#include <gtest/gtest.h>
 #include <optional>
 #include <span>
 #include <string>
 #include <vector>
-#include <gtest/gtest.h>
-#include "../pgsql.h"
 #include "../../shared/pg_wire_ground_truth.hpp"
+#include "../pgsql.h"
 
 using namespace qb::pg;
 using namespace qb::pg::detail;
@@ -51,9 +51,9 @@ TEST(TypeConverterArrayOid, KnownArrayOids) {
 
 TEST(TypeConverterArrayBinary, IntAndTextAgainstPostgresGroundTruth) {
     // int4[] {10,20,30,40}
-    auto ints = TypeConverter<std::vector<integer>>::from_binary(
-        hex_to_bytes("0000000100000000000000170000000400000001"
-                     "000000040000000a0000000400000014000000040000001e0000000400000028"));
+    auto ints =
+        TypeConverter<std::vector<integer>>::from_binary(hex_to_bytes("0000000100000000000000170000000400000001"
+                                                                      "000000040000000a0000000400000014000000040000001e0000000400000028"));
     EXPECT_EQ(ints, (std::vector<integer>{10, 20, 30, 40}));
 
     // text[] {apple,banana}
@@ -69,30 +69,25 @@ TEST(TypeConverterArrayBinary, IntAndTextAgainstPostgresGroundTruth) {
 // Scalar element types (bigint/smallint/double/float/bool) against ground truth.
 TEST(TypeConverterArrayBinary, ScalarElementTypesAgainstPostgresGroundTruth) {
     EXPECT_EQ(
-        TypeConverter<std::vector<bigint>>::from_binary(
-            hex_to_bytes("00000001000000000000001400000003000000010000000800000000000000010000"
-                         "00080000000000000002000000080000000000000003")),
+        TypeConverter<std::vector<bigint>>::from_binary(hex_to_bytes("00000001000000000000001400000003000000010000000800000000000000010000"
+                                                                     "00080000000000000002000000080000000000000003")),
         (std::vector<bigint>{1, 2, 3}));
 
     EXPECT_EQ(
-        TypeConverter<std::vector<smallint>>::from_binary(
-            hex_to_bytes("0000000100000000000000150000000200000001000000020007000000020008")),
+        TypeConverter<std::vector<smallint>>::from_binary(hex_to_bytes("0000000100000000000000150000000200000001000000020007000000020008")),
         (std::vector<smallint>{7, 8}));
 
     EXPECT_EQ(
-        TypeConverter<std::vector<double>>::from_binary(
-            hex_to_bytes("0000000100000000000002bd0000000200000001000000083ff80000000000000000"
-                         "00084004000000000000")),
+        TypeConverter<std::vector<double>>::from_binary(hex_to_bytes("0000000100000000000002bd0000000200000001000000083ff80000000000000000"
+                                                                     "00084004000000000000")),
         (std::vector<double>{1.5, 2.5}));
 
-    EXPECT_EQ(
-        TypeConverter<std::vector<float>>::from_binary(
-            hex_to_bytes("0000000100000000000002bc0000000200000001000000043fc0000000000004c0200000")),
-        (std::vector<float>{1.5f, -2.5f}));
+    EXPECT_EQ(TypeConverter<std::vector<float>>::from_binary(
+                  hex_to_bytes("0000000100000000000002bc0000000200000001000000043fc0000000000004c0200000")),
+              (std::vector<float>{1.5f, -2.5f}));
 
     EXPECT_EQ(
-        TypeConverter<std::vector<bool>>::from_binary(
-            hex_to_bytes("0000000100000000000000100000000300000001000000010100000001000000000101")),
+        TypeConverter<std::vector<bool>>::from_binary(hex_to_bytes("0000000100000000000000100000000300000001000000010100000001000000000101")),
         (std::vector<bool>{true, false, true}));
 }
 
@@ -112,13 +107,10 @@ TEST(TypeConverterArrayBinary, MalformedBuffersDecodeGracefullyWithoutOob) {
     // a bogus huge dimension (dim_size = 0x7fffffff) whose count exceeds the buffer -> empty.
     EXPECT_TRUE(TypeConverter<IV>::from_binary(hex_to_bytes("0000000100000000000000177fffffff00000001")).empty());
     // header claims 3 elements but the buffer holds only one (10) -> partial {10}, no OOB.
-    EXPECT_EQ(TypeConverter<IV>::from_binary(
-                  hex_to_bytes("0000000100000000000000170000000300000001000000040000000a")),
-              (IV{10}));
+    EXPECT_EQ(TypeConverter<IV>::from_binary(hex_to_bytes("0000000100000000000000170000000300000001000000040000000a")), (IV{10}));
     // a negative element length that is NOT the -1 NULL sentinel (here -2) -> break (empty).
     // header: ndim=1, flags, elem_oid, dim_size=1, lower_bound, then elem_len=0xfffffffe.
-    EXPECT_TRUE(
-        TypeConverter<IV>::from_binary(hex_to_bytes("0000000100000000000000170000000100000001fffffffe")).empty());
+    EXPECT_TRUE(TypeConverter<IV>::from_binary(hex_to_bytes("0000000100000000000000170000000100000001fffffffe")).empty());
 }
 
 // ----------------------------------------------------------------------------
@@ -149,9 +141,8 @@ TEST(TypeConverterArrayBinary, OptionalElementNullDecode) {
 
     // A genuine int4 -1 value (elem length 4, bytes 0xFFFFFFFF) is a real -1, NOT a
     // NULL marker (NULL is encoded by elem length == -1, decoded before the value).
-    auto withMinusOne = decode_pg_array<std::optional<integer>>(
-        hex_to_bytes("0000000100000000000000170000000200000001"
-                     "00000004ffffffff0000000400000007"));
+    auto withMinusOne = decode_pg_array<std::optional<integer>>(hex_to_bytes("0000000100000000000000170000000200000001"
+                                                                             "00000004ffffffff0000000400000007"));
     ASSERT_EQ(withMinusOne.size(), 2u);
     ASSERT_TRUE(withMinusOne[0].has_value());
     EXPECT_EQ(*withMinusOne[0], -1);
@@ -175,10 +166,14 @@ TEST(TypeConverterArrayBinary, MultiDimensionalFlattens) {
     h += "00000001"; // dim0 lower bound = 1
     h += "00000002"; // dim1 size = 2
     h += "00000001"; // dim1 lower bound = 1
-    h += "00000004" "00000001"; // elem len 4, value 1
-    h += "00000004" "00000002"; // 2
-    h += "00000004" "00000003"; // 3
-    h += "00000004" "00000004"; // 4
+    h += "00000004"
+         "00000001"; // elem len 4, value 1
+    h += "00000004"
+         "00000002"; // 2
+    h += "00000004"
+         "00000003"; // 3
+    h += "00000004"
+         "00000004"; // 4
     auto twoD = TypeConverter<std::vector<integer>>::from_binary(hex_to_bytes(h));
     EXPECT_EQ(twoD, (std::vector<integer>{1, 2, 3, 4}));
 }

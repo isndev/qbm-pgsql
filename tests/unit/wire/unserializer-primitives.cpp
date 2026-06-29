@@ -135,15 +135,13 @@ TEST_F(UnserializerPrimitives, ScalarBoundaryValuesRoundTrip) {
 
 TEST_F(UnserializerPrimitives, ScalarReadersThrowOnUndersizedBuffer) {
     struct R {
-        const char *name;
+        const char                                *name;
         std::function<void(std::span<const byte>)> call;
-        std::size_t need;
+        std::size_t                                need;
     };
     const R rows[] = {
-        {"smallint", [&](auto b) { u.read_smallint(b); }, sizeof(smallint)},
-        {"integer", [&](auto b) { u.read_integer(b); }, sizeof(integer)},
-        {"bigint", [&](auto b) { u.read_bigint(b); }, sizeof(bigint)},
-        {"float", [&](auto b) { u.read_float(b); }, sizeof(float)},
+        {"smallint", [&](auto b) { u.read_smallint(b); }, sizeof(smallint)}, {"integer", [&](auto b) { u.read_integer(b); }, sizeof(integer)},
+        {"bigint", [&](auto b) { u.read_bigint(b); }, sizeof(bigint)},       {"float", [&](auto b) { u.read_float(b); }, sizeof(float)},
         {"double", [&](auto b) { u.read_double(b); }, sizeof(double)},
     };
     for (const auto &r : rows) {
@@ -177,8 +175,8 @@ TEST_F(UnserializerPrimitives, ReadStringEmptyBufferIsEmpty) {
 }
 
 TEST_F(UnserializerPrimitives, ReadBinaryStringStripsLengthPrefix) {
-    const std::string s = "Binary PG Format Test";
-    const auto framed = pg_binary_string(s);
+    const std::string s      = "Binary PG Format Test";
+    const auto        framed = pg_binary_string(s);
     // read_binary_string consumes the 4-byte prefix itself.
     EXPECT_EQ(u.read_binary_string(framed), s);
 }
@@ -187,7 +185,7 @@ TEST_F(UnserializerPrimitives, ReadStringPreservesUnicodeAndEmbeddedNuls) {
     const std::string unicode = "Unicode: \xC3\xA4\xC3\xB6\xC3\xBC \xE4\xBD\xA0\xE5\xA5\xBD";
     EXPECT_EQ(u.read_string({reinterpret_cast<const byte *>(unicode.data()), unicode.size()}), unicode);
 
-    std::string with_nul("a\0b\0c", 5);
+    std::string       with_nul("a\0b\0c", 5);
     std::vector<byte> buf(with_nul.begin(), with_nul.end());
     const std::string out = u.read_string(buf);
     EXPECT_EQ(out.size(), 5u);
@@ -227,8 +225,7 @@ TEST_F(UnserializerPrimitives, HeuristicMisfiresOnLengthPrefixShapedBytea) {
     const integer parsed_len = u.read_integer({buf.data(), 4});
     EXPECT_EQ(parsed_len, 0x00010203);
     ASSERT_EQ(result.size(), static_cast<std::size_t>(parsed_len));
-    EXPECT_EQ(static_cast<unsigned char>(result[0]), 0x04u)
-        << "If the read_string heuristic was fixed to return raw BYTEA, update this test.";
+    EXPECT_EQ(static_cast<unsigned char>(result[0]), 0x04u) << "If the read_string heuristic was fixed to return raw BYTEA, update this test.";
 }
 
 TEST_F(UnserializerPrimitives, TextShapedByteaIsReturnedRaw) {
@@ -254,7 +251,7 @@ TEST_F(UnserializerPrimitives, ReadBoolEmptyBufferThrows) {
 
 TEST_F(UnserializerPrimitives, ReadBoolBinaryLengthPrefixedForm) {
     // Formal binary bool: [int32 length == 1][value byte]. length==1 path.
-    auto framed_true  = big_endian_bytes<integer>(1);
+    auto framed_true = big_endian_bytes<integer>(1);
     framed_true.push_back(static_cast<byte>(1));
     auto framed_false = big_endian_bytes<integer>(1);
     framed_false.push_back(static_cast<byte>(0));
@@ -319,8 +316,9 @@ TEST_F(UnserializerPrimitives, ReadStringBinaryDetectionFallsBackToTextOnInvalid
     // Leading zero triggers the binary path, but the declared length (0x00FFFFFF)
     // exceeds the buffer, so read_binary_string throws and read_string recovers by
     // returning the raw bytes as text.
-    std::vector<byte> buf{static_cast<byte>(0x00), static_cast<byte>(0xFF), static_cast<byte>(0xFF), static_cast<byte>(0xFF),
-                          static_cast<byte>('x')};
+    std::vector<byte> buf{
+        static_cast<byte>(0x00), static_cast<byte>(0xFF), static_cast<byte>(0xFF), static_cast<byte>(0xFF), static_cast<byte>('x')
+    };
     const std::string out = u.read_string(buf);
     ASSERT_EQ(out.size(), buf.size());
     EXPECT_EQ(std::memcmp(out.data(), buf.data(), buf.size()), 0);

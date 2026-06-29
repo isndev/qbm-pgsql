@@ -63,8 +63,7 @@ TEST(TypeConverterNumeric, DecodeSpecialSignWords) {
 TEST(TypeConverterNumeric, RoundTripThroughRealBinary) {
     // to_binary emits real PG binary (length-prefixed); from_binary detects and
     // strips that prefix. Canonical text must survive the round trip exactly.
-    for (const char *v :
-         {"0", "1", "-1", "12345.678", "-999.99", "123456789.0123456789", "0.0001", "1000000", "100.00", "0.10"}) {
+    for (const char *v : {"0", "1", "-1", "12345.678", "-999.99", "123456789.0123456789", "0.0001", "1000000", "100.00", "0.10"}) {
         std::vector<byte> buf;
         TypeConverter<numeric>::to_binary(numeric(v), buf);
         EXPECT_EQ(TypeConverter<numeric>::from_binary(buf).str(), v) << "value=" << v;
@@ -90,11 +89,11 @@ TEST(TypeConverterDate, DecodeAgainstGroundTruth) {
 TEST(TypeConverterDate, DecodeUnixEpochAndBeforeEpoch) {
     // PG day 0 == 2000-01-01; -10957 == 1970-01-01.
     std::vector<byte> day0;
-    int32_t be0 = qb::endian::to_big_endian<int32_t>(0);
+    int32_t           be0 = qb::endian::to_big_endian<int32_t>(0);
     day0.insert(day0.end(), reinterpret_cast<byte *>(&be0), reinterpret_cast<byte *>(&be0) + 4);
     EXPECT_EQ(TypeConverter<qb::date>::from_binary(day0).to_string(), "2000-01-01");
 
-    int32_t be_epoch = qb::endian::to_big_endian<int32_t>(-10957);
+    int32_t           be_epoch = qb::endian::to_big_endian<int32_t>(-10957);
     std::vector<byte> epoch(reinterpret_cast<byte *>(&be_epoch), reinterpret_cast<byte *>(&be_epoch) + 4);
     EXPECT_EQ(TypeConverter<qb::date>::from_binary(epoch).to_string(), "1970-01-01");
 }
@@ -112,8 +111,7 @@ TEST(TypeConverterDate, InfinitySentinelsAreNotSpecialCasedButDecodeLosslesslyDi
     const qb::date neg_inf = TypeConverter<qb::date>::from_binary(hex_to_bytes("80000000"));
     EXPECT_NE(pos_inf, neg_inf);
     // A normal in-range date still decodes correctly (the lossy path is only the sentinels).
-    EXPECT_EQ(TypeConverter<qb::date>::from_binary(hex_to_bytes(gt::temporal::date_2024_03_15)).to_string(),
-              "2024-03-15");
+    EXPECT_EQ(TypeConverter<qb::date>::from_binary(hex_to_bytes(gt::temporal::date_2024_03_15)).to_string(), "2024-03-15");
 }
 
 // ===========================================================================
@@ -156,9 +154,9 @@ TEST(TypeConverterTimestamp, DecodeAgainstGroundTruth) {
 // ===========================================================================
 
 TEST(TypeConverterInteger, SizeDispatchAndOverflow) {
-    EXPECT_EQ(TypeConverter<integer>::from_binary(hex_to_bytes("0064")), 100);             // int2 widened
-    EXPECT_EQ(TypeConverter<integer>::from_binary(hex_to_bytes("0000002a")), 42);          // int4
-    EXPECT_EQ(TypeConverter<integer>::from_binary(hex_to_bytes("000000000000002a")), 42);  // int8 (e.g. COUNT)
+    EXPECT_EQ(TypeConverter<integer>::from_binary(hex_to_bytes("0064")), 100);            // int2 widened
+    EXPECT_EQ(TypeConverter<integer>::from_binary(hex_to_bytes("0000002a")), 42);         // int4
+    EXPECT_EQ(TypeConverter<integer>::from_binary(hex_to_bytes("000000000000002a")), 42); // int8 (e.g. COUNT)
     // int8 value out of int32 range -> throw, not silent truncation.
     EXPECT_THROW(TypeConverter<integer>::from_binary(hex_to_bytes("0000000080000000")), std::runtime_error);
     EXPECT_THROW(TypeConverter<integer>::from_binary(hex_to_bytes("ffffffff7fffffff")), std::runtime_error);
@@ -170,7 +168,7 @@ TEST(TypeConverterInteger, SizeDispatchAndOverflow) {
 
 TEST(TypeConverterOptional, DecodesValueIncludingMinusOne) {
     std::vector<byte> minus_one(4, static_cast<byte>(0xFF)); // int4 -1, NOT SQL NULL
-    auto neg = TypeConverter<std::optional<integer>>::from_binary(minus_one);
+    auto              neg = TypeConverter<std::optional<integer>>::from_binary(minus_one);
     ASSERT_TRUE(neg.has_value());
     EXPECT_EQ(*neg, -1);
 
@@ -193,8 +191,8 @@ jsonb_payload(const std::string &json) {
 }
 
 TEST(TypeConverterJsonb, DecodeVersion1Payload) {
-    const std::string json = R"({"active":true,"id":12345,"name":"Test JSON","tags":["a","b","c"]})";
-    const qb::jsonb result = TypeConverter<qb::jsonb>::from_binary(jsonb_payload(json));
+    const std::string json   = R"({"active":true,"id":12345,"name":"Test JSON","tags":["a","b","c"]})";
+    const qb::jsonb   result = TypeConverter<qb::jsonb>::from_binary(jsonb_payload(json));
     ASSERT_TRUE(result.contains("id"));
     EXPECT_EQ(result["id"].get<int>(), 12345);
     EXPECT_EQ(result["name"].get<std::string>(), "Test JSON");
@@ -206,9 +204,9 @@ TEST(TypeConverterJsonb, DecodeVersion1Payload) {
 
 TEST(TypeConverterJsonb, AcceptsVarlenaPrefixedPayload) {
     // Some stacks prefix a 4-byte varlena header before the version byte.
-    const std::string json = R"({"k":1})";
-    std::vector<byte> buf = {0, 0, 0, 0};
-    auto vardata = jsonb_payload(json);
+    const std::string json    = R"({"k":1})";
+    std::vector<byte> buf     = {0, 0, 0, 0};
+    auto              vardata = jsonb_payload(json);
     buf.insert(buf.end(), vardata.begin(), vardata.end());
     const qb::jsonb result = TypeConverter<qb::jsonb>::from_binary(buf);
     EXPECT_EQ(result["k"].get<int>(), 1);
@@ -218,7 +216,7 @@ TEST(TypeConverterJsonb, RejectsUnsupportedVersion) {
     // Version byte 2 (and not a varlena-prefixed v1) must be rejected.
     EXPECT_THROW(TypeConverter<qb::jsonb>::from_binary(hex_to_bytes("0203")), std::runtime_error);
     auto bad = jsonb_payload(R"({"k":1})");
-    bad[0] = static_cast<byte>(2);
+    bad[0]   = static_cast<byte>(2);
     EXPECT_THROW(TypeConverter<qb::jsonb>::from_binary(bad), std::runtime_error);
 }
 
@@ -231,12 +229,7 @@ TEST(TypeConverterJsonb, RejectsTruncatedAfterVersion) {
 
 TEST(TypeConverterJson, DecodeFromTextValidAndInvalid) {
     const char *valid[] = {
-        R"({"id": 123, "name": "test"})",
-        R"(["apple", "banana", "cherry"])",
-        R"(42)",
-        R"("simple string")",
-        R"(true)",
-        R"(null)",
+        R"({"id": 123, "name": "test"})", R"(["apple", "banana", "cherry"])", R"(42)", R"("simple string")", R"(true)", R"(null)",
     };
     for (const char *tc : valid) {
         const qb::json expected = qb::json::parse(tc);
@@ -263,8 +256,8 @@ TEST(TypeConverterJson, DecodeBinaryReadsValueBytesAsJsonText) {
 TEST(TypeConverterCodecs, FromBinaryStringReadsValueBytesVerbatimIncludingLeadingNuls) {
     const std::vector<byte> value{byte(0), byte(0), byte(1), byte(2), byte('h'), byte('i')};
     const std::string       s = TypeConverter<std::string>::from_binary(value);
-    EXPECT_EQ(s.size(), 6u);                          // not 2 (old read_string stripped 4)
-    EXPECT_EQ(s, std::string("\0\0\x01\x02hi", 6));   // exact bytes, NULs preserved
+    EXPECT_EQ(s.size(), 6u);                        // not 2 (old read_string stripped 4)
+    EXPECT_EQ(s, std::string("\0\0\x01\x02hi", 6)); // exact bytes, NULs preserved
     // An empty value decodes to an empty string (not a throw).
     EXPECT_TRUE(TypeConverter<std::string>::from_binary(std::vector<byte>{}).empty());
 }

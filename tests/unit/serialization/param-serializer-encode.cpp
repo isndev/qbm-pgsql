@@ -41,13 +41,13 @@
 
 #include <qb/system/endian.h>
 
-#include "../pgsql.h"
 #include "../../shared/pg_wire_ground_truth.hpp"
+#include "../pgsql.h"
 
 using namespace qb::pg;
 using namespace qb::pg::detail;
-using qb::pg::test::gt::numeric::Case;
 using qb::pg::test::hex_to_bytes;
+using qb::pg::test::gt::numeric::Case;
 
 namespace {
 
@@ -342,8 +342,7 @@ TEST_P(ByteaEncodeTest, EncodesByteaOidLengthAndExactBytes) {
     EXPECT_EQ(s.param_types()[0], 17); // bytea
     EXPECT_EQ(read_be<integer>(buf, 0), static_cast<integer>(n));
     for (std::size_t i = 0; i < n; ++i)
-        ASSERT_EQ(static_cast<unsigned char>(buf[sizeof(integer) + i]), static_cast<unsigned char>(i & 0xFF))
-            << "byte mismatch at " << i;
+        ASSERT_EQ(static_cast<unsigned char>(buf[sizeof(integer) + i]), static_cast<unsigned char>(i & 0xFF)) << "byte mismatch at " << i;
 }
 
 INSTANTIATE_TEST_SUITE_P(Sizes, ByteaEncodeTest, ::testing::Values<std::size_t>(0, 1, 16, 256, 512));
@@ -389,17 +388,17 @@ TEST_F(ParamSerializerTest, IntVectorEncodesArrayHeaderAndElements) {
     EXPECT_EQ(serializer->param_types()[0], 1007); // int4[]
 
     // [int16 param_count][int32 array_len][array body...]
-    std::size_t off = sizeof(smallint);
+    std::size_t   off       = sizeof(smallint);
     const integer array_len = read_be<integer>(buf, off);
     ASSERT_GT(array_len, 0);
     off += sizeof(integer);
 
     // 1-D array header (20 bytes): ndim, has-null, elem OID, dim size, lower bound.
-    EXPECT_EQ(read_be<integer>(buf, off + 0), 1);   // ndim
-    EXPECT_EQ(read_be<integer>(buf, off + 4), 0);   // has-null
-    EXPECT_EQ(read_be<integer>(buf, off + 8), 23);  // int4 elem OID
-    EXPECT_EQ(read_be<integer>(buf, off + 12), 5);  // dim size
-    EXPECT_EQ(read_be<integer>(buf, off + 16), 1);  // lower bound
+    EXPECT_EQ(read_be<integer>(buf, off + 0), 1);  // ndim
+    EXPECT_EQ(read_be<integer>(buf, off + 4), 0);  // has-null
+    EXPECT_EQ(read_be<integer>(buf, off + 8), 23); // int4 elem OID
+    EXPECT_EQ(read_be<integer>(buf, off + 12), 5); // dim size
+    EXPECT_EQ(read_be<integer>(buf, off + 16), 1); // lower bound
 
     // First element: [int32 len=4][int32 value=1].
     std::size_t e0 = off + 20;
@@ -421,9 +420,9 @@ TEST_F(ParamSerializerTest, DoubleVectorEncodesArrayHeaderAndElements) {
     EXPECT_EQ(serializer->param_types()[0], 1022); // float8[]
 
     std::size_t off = sizeof(smallint) + sizeof(integer); // skip param-count + array-len
-    EXPECT_EQ(read_be<integer>(buf, off + 0), 1);    // ndim
-    EXPECT_EQ(read_be<integer>(buf, off + 8), 701);  // float8 elem OID
-    EXPECT_EQ(read_be<integer>(buf, off + 12), 3);   // dim size
+    EXPECT_EQ(read_be<integer>(buf, off + 0), 1);         // ndim
+    EXPECT_EQ(read_be<integer>(buf, off + 8), 701);       // float8 elem OID
+    EXPECT_EQ(read_be<integer>(buf, off + 12), 3);        // dim size
 
     std::size_t e0 = off + 20;
     EXPECT_EQ(read_be<integer>(buf, e0), 8);
@@ -442,9 +441,9 @@ TEST_F(ParamSerializerTest, BoolVectorEncodesArrayHeaderAndElements) {
     EXPECT_EQ(serializer->param_types()[0], 1000); // boolean[]
 
     std::size_t off = sizeof(smallint) + sizeof(integer);
-    EXPECT_EQ(read_be<integer>(buf, off + 0), 1);   // ndim
-    EXPECT_EQ(read_be<integer>(buf, off + 8), 16);  // boolean elem OID
-    EXPECT_EQ(read_be<integer>(buf, off + 12), 3);  // dim size
+    EXPECT_EQ(read_be<integer>(buf, off + 0), 1);  // ndim
+    EXPECT_EQ(read_be<integer>(buf, off + 8), 16); // boolean elem OID
+    EXPECT_EQ(read_be<integer>(buf, off + 12), 3); // dim size
 
     // Each bool element: [int32 len=1][1 byte]. Element stride = 5.
     std::size_t e0 = off + 20;
@@ -465,14 +464,14 @@ TEST_F(ParamSerializerTest, EmptyVectorEncodesEmptyArrayNotNull) {
     serializer->serialize_params(empty);
     const auto &buf = serializer->params_buffer();
     ASSERT_EQ(serializer->param_count(), 1);
-    EXPECT_EQ(serializer->param_types()[0], 1007);                 // int4[]
-    EXPECT_EQ(read_be<integer>(buf, sizeof(smallint)), 20);        // value length = 20 (NOT -1/NULL)
+    EXPECT_EQ(serializer->param_types()[0], 1007);          // int4[]
+    EXPECT_EQ(read_be<integer>(buf, sizeof(smallint)), 20); // value length = 20 (NOT -1/NULL)
     const std::size_t body = sizeof(smallint) + sizeof(integer);
-    EXPECT_EQ(read_be<integer>(buf, body + 0), 1);                 // ndim = 1
-    EXPECT_EQ(read_be<integer>(buf, body + 4), 0);                 // has-nulls = 0
-    EXPECT_EQ(read_be<integer>(buf, body + 8), 23);                // element OID = int4
-    EXPECT_EQ(read_be<integer>(buf, body + 12), 0);               // dimension size = 0
-    EXPECT_EQ(read_be<integer>(buf, body + 16), 1);               // lower bound = 1
+    EXPECT_EQ(read_be<integer>(buf, body + 0), 1);  // ndim = 1
+    EXPECT_EQ(read_be<integer>(buf, body + 4), 0);  // has-nulls = 0
+    EXPECT_EQ(read_be<integer>(buf, body + 8), 23); // element OID = int4
+    EXPECT_EQ(read_be<integer>(buf, body + 12), 0); // dimension size = 0
+    EXPECT_EQ(read_be<integer>(buf, body + 16), 1); // lower bound = 1
 }
 
 TEST_F(ParamSerializerTest, DifferentNumericVectorTypesGetCorrectArrayOids) {
@@ -672,8 +671,8 @@ TEST_F(ParamSerializerTest, JsonbEncodesVersionByteAndParsableContent) {
     EXPECT_EQ(static_cast<unsigned char>(buf[sizeof(integer)]), 1u); // jsonb version 1
 
     const std::string content = read_str(buf, sizeof(integer) + 1, buf.size() - sizeof(integer) - 1);
-    auto parsed = qb::json::parse(content); // the encoder emits an array of [key,value] pairs
-    bool saw_id = false;
+    auto              parsed  = qb::json::parse(content); // the encoder emits an array of [key,value] pairs
+    bool              saw_id  = false;
     for (const auto &pair : parsed) {
         ASSERT_TRUE(pair.is_array());
         ASSERT_EQ(pair.size(), 2u);

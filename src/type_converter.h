@@ -28,9 +28,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>   // errno / ERANGE — distinguish float overflow from subnormal underflow
 #include <charconv> // std::to_chars / std::from_chars (locale-independent, round-trip exact)
 #include <chrono>
-#include <cerrno> // errno / ERANGE — distinguish float overflow from subnormal underflow
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -301,7 +301,7 @@ public:
             // std::to_chars gives the SHORTEST round-trip-exact decimal. std::to_string
             // is fixed at 6 fractional digits, which both loses precision (1234.56789012
             // -> "1234.567890") and pads trailing zeros — wrong for a value sent to the DB.
-            char        buf[64];
+            char buf[64];
             const auto [ptr, ec] = std::to_chars(buf, buf + sizeof(buf), value);
             if (ec != std::errc())
                 throw error::client_error("failed to format floating-point value as text");
@@ -1482,7 +1482,7 @@ encode_pg_array(const std::vector<Elem> &vec) {
             integer                 len  = static_cast<integer>(body.size()); \
             buffer.resize(buffer.size() + sizeof(integer));                   \
             byte   *dest = &buffer[buffer.size() - sizeof(integer)];          \
-            integer nbo  = qb::endian::to_big_endian(len);                                        \
+            integer nbo  = qb::endian::to_big_endian(len);                    \
             std::memcpy(dest, &nbo, sizeof(integer));                         \
             buffer.insert(buffer.end(), body.begin(), body.end());            \
         }                                                                     \

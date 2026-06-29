@@ -12,9 +12,9 @@
  * Licensed under the Apache License, Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0)
  * @ingroup Pgsql
  */
+#include <gtest/gtest.h>
 #include <sstream>
 #include <string>
-#include <gtest/gtest.h>
 
 #include "../pgsql.h"
 
@@ -82,10 +82,9 @@ TEST(OidStream, UnknownNameSetsFailbit) {
 
 // Round-trip oid -> name -> oid is the identity for every mapped representative.
 TEST(OidStream, RoundTripIdentity) {
-    const oid samples[] = {oid::boolean, oid::int2,        oid::int4, oid::int8,    oid::float4,
-                           oid::float8,  oid::text,        oid::bytea, oid::numeric, oid::uuid,
-                           oid::json,    oid::jsonb,       oid::date, oid::time,    oid::timestamp,
-                           oid::timestamptz, oid::interval, oid::varchar};
+    const oid samples[] = {oid::boolean, oid::int2,  oid::int4,      oid::int8,        oid::float4,   oid::float8,
+                           oid::text,    oid::bytea, oid::numeric,   oid::uuid,        oid::json,     oid::jsonb,
+                           oid::date,    oid::time,  oid::timestamp, oid::timestamptz, oid::interval, oid::varchar};
     for (oid o : samples) {
         std::istringstream iss{to_str(o)};
         oid                back{};

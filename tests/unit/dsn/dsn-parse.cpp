@@ -22,10 +22,10 @@
  */
 
 #include <chrono>
+#include <gtest/gtest.h>
 #include <sstream>
 #include <stdexcept>
 #include <string>
-#include <gtest/gtest.h>
 #include "../pgsql.h"
 
 using namespace qb::pg;
@@ -134,7 +134,7 @@ TEST(DsnParse, PreservesHighBitBytesInPassword) {
 
 /// A high-bit byte in the *database* name survives too (same UB surface, different field).
 TEST(DsnParse, PreservesHighBitBytesInDatabaseName) {
-    const std::string db  = std::string("caf\xC3\xA9"); // "café"
+    const std::string db   = std::string("caf\xC3\xA9"); // "café"
     const auto        opts = parse("tcp://u:p@localhost:5432[" + db + "]");
 
     EXPECT_EQ(opts.database, db);
