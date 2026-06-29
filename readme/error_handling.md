@@ -1,6 +1,6 @@
 # Error handling
 
-> **Audience:** Adopter · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 2.0.0 (C++20 default, C++23
+> **Audience:** Adopter · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 2.6.0 (C++20 default, C++23
 > supported)
 
 How `qbm-pgsql` reports failures: the `qb::pg::error::db_error` hierarchy, SQLSTATE codes, the coroutine error-result
@@ -40,6 +40,14 @@ dropped cleanly, and every pending operation resumes with a failure instead of h
 A `qb::pg::error::db_error` carries the PostgreSQL severity, the raw `code` string, the `detail` text, and a decoded
 `sqlstate::code` enumerator. You branch on the enumerator, not on five-character strings.
 
+The three channels at a glance:
+
+| Channel | Used by | Fires on | How you read it | Throws? |
+|---|---|---|---|---|
+| `Reply<T>` result | coroutine API (`co_await db.execute(...)`) | SQL + protocol errors | `r.ok()` / `if (r)`, then `r.error()` | no |
+| `on_error` callback | fluent API (`db.execute(sql, on_ok, on_err)`) | SQL + protocol errors | `db_error const&` argument | no |
+| C++ exception | `field.as<T>()` decode + `with_transaction` body | NULL / type-mismatch decode; `throw transaction_abort{...}` | `try`/`catch` (or `std::optional<T>` to avoid) | yes |
+
 ---
 
 ## Concepts
@@ -63,7 +71,19 @@ public:
 }
 ```
 
-The subclasses narrow the cause:
+The subclasses narrow the cause (base at the top; arrows point to derived types):
+
+```mermaid
+flowchart TD
+    RE["std::runtime_error"] --> DE["db_error"]
+    DE --> CE["connection_error"]
+    DE --> QE["query_error"]
+    QE --> TC["transaction_closed"]
+    DE --> CL["client_error"]
+    DE --> VN["value_is_null"]
+    VN --> FN["field_is_null"]
+    DE --> FT["field_type_mismatch"]
+```
 
 | Type                             | Role                                                                                                                                       |
 |:---------------------------------|:-------------------------------------------------------------------------------------------------------------------------------------------|
@@ -133,7 +153,7 @@ the I/O loop.
 
 ### Handle a failed coroutine operation
 
-<!-- src: qbm/pgsql/tests/test-error-handling.cpp -->
+<!-- src: qbm/pgsql/tests/integration/errors/errors-sqlstate.cpp:101-105 -->
 
 ```cpp
 #include <pgsql/pgsql.h>
@@ -164,7 +184,7 @@ default-constructed and meaningless. Read `error()` instead.
 
 ### Handle a failure on the fluent (callback) API
 
-<!-- src: qbm/pgsql/tests/test-error-handling.cpp -->
+<!-- src: qbm/pgsql/tests/integration/errors/errors-sqlstate.cpp:82-90 -->
 
 ```cpp
 #include <pgsql/pgsql.h>

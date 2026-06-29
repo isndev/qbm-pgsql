@@ -1,6 +1,6 @@
 # qbm-pgsql — asynchronous PostgreSQL client
 
-> **Audience:** Adopter · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 2.0.0 (C++20 default, C++23
+> **Audience:** Adopter · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 2.6.0 (C++20 default, C++23
 > supported)
 
 A non-blocking PostgreSQL wire-protocol client built on qb-io: connect, run simple and prepared SQL, drive transactions
@@ -27,7 +27,7 @@ needs:
 #include <pgsql/pgsql.h>   // brings in <qb/io/async.h> transitively
 ```
 
-`qbm-pgsql` is a **compiled library** (12 translation units), aliased `qbm::pgsql` — static by default, or shared when
+`qbm-pgsql` is a **compiled library** (17 translation units), aliased `qbm::pgsql` — static by default, or shared when
 `BUILD_SHARED_LIBS`/`QB_BUILD_SHARED_LIBS` is on. It is **not** header-only — link it; including the header alone will
 not resolve the protocol, type, and error symbols.
 
@@ -82,7 +82,7 @@ in [readme/queries.md](./readme/queries.md).
 A self-contained program. It connects, runs one simple query, and commits an insert inside a coroutine transaction.
 Build it as a normal executable linked against `qbm::pgsql`.
 
-<!-- src: qbm/pgsql/tests/test-pgsql-coro-api.cpp (connect / with_transaction / query shapes) -->
+<!-- src: qbm/pgsql/tests/integration/api/coro-api.cpp (connect / with_transaction / query shapes) -->
 
 ```cpp
 #include <pgsql/pgsql.h>
@@ -146,7 +146,7 @@ and the client negotiates the upgrade. See [readme/connection.md](./readme/conne
 The same operations are available without coroutines. Callback overloads enqueue work and return immediately; the loop
 runs it. Use `await()` when you need a synchronous drain — common in tests and one-shot init:
 
-<!-- src: qbm/pgsql/tests/test-pgsql-coro-api.cpp (callback drain via .await()) -->
+<!-- src: qbm/pgsql/tests/integration/api/coro-api.cpp (callback drain via .await()) -->
 
 ```cpp
 #include <pgsql/pgsql.h>
@@ -223,9 +223,9 @@ available.
   `set_timeout(qb::duration)` arms a server-side `SET LOCAL statement_timeout` on the next `BEGIN` and is cleared at
   `COMMIT` / `ROLLBACK`.
 - **Timestamps map to `qb::wall_time`.** PostgreSQL `timestamptz` (OID 1184) round-trips as integer microseconds and
-  maps to `qb::wall_time` — not `qb::duration`, and never the retired `qb::Timestamp` / `qb::UtcTimestamp` /
-  `to_timestamp(...)` names. The wire epoch (microseconds since 2000-01-01, day counts, tz offsets) is an internal
-  native encoding, not a `qb::duration`. See [readme/types.md](./readme/types.md).
+  maps to `qb::wall_time` — not `qb::duration`. The retired `qb::Timestamp` / `qb::UtcTimestamp` / `to_timestamp(...)` names no longer exist.
+  The wire epoch (microseconds since 2000-01-01, day counts, tz offsets) is an internal native encoding, not a `qb::duration`.
+  See [readme/types.md](./readme/types.md).
 - **Read NULL with `std::optional`.** Extracting a NULL column into a non-nullable `T` via `field::as<T>()` or
   `field::to(T&)` throws `error::value_is_null` (the field-handler path throws its subclass `error::field_is_null`).
   Extract into `std::optional<T>` instead — `as<std::optional<T>>()` / `to(std::optional<T>&)` returns an empty optional
@@ -238,5 +238,5 @@ available.
 
 - [qb/README.md](../../qb/README.md) — framework overview (qb-core actors, qb-io async).
 - [readme/README.md](./readme/README.md) — the long-form technical index for this module.
-- `qbm/pgsql/tests/` — integration tests are executable documentation; start with `test-pgsql-coro-api.cpp` (coroutines,
-  `with_transaction`, `run_sync`) and `test-transaction.cpp` (callback `begin`, savepoints, `await()`).
+- `qbm/pgsql/tests/` — integration tests are executable documentation; start with `integration/api/coro-api.cpp` (coroutines,
+  `with_transaction`, `run_sync`) and `integration/transaction/transaction-basic.cpp` (callback `begin`, savepoints, `await()`).

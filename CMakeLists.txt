@@ -31,7 +31,7 @@ endif ()
 # Register the PostgreSQL module using the new framework functions
 qb_register_module(
         NAME pgsql
-        VERSION 2.0.0
+        VERSION 2.6.0
         DEPENDS qb-core
         SOURCES
         src/sqlstates.cpp
@@ -52,7 +52,7 @@ qb_register_module(
         src/pg_notify_sql.cpp
         pgsql.cpp
         DEFINES
-        QBM_PGSQL_VERSION="2.0.0"
+        QBM_PGSQL_VERSION="2.6.0"
 )
 
 # Add tests if enabled

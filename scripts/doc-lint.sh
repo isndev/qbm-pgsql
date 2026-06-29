@@ -22,7 +22,7 @@ echo "== 1. Forbidden token scan =="
 # Retired identifiers must not be USED in examples. A line is allowed to NAME them
 # when it is removal-guidance ("retired/removed/no longer/do not use/...") — that
 # steers readers away and is not a usage hazard.
-FORBIDDEN='qb::Timestamp|qb::Duration|qb::TimePoint|to_timestamp\(|to_time_point\('
+FORBIDDEN='qb::Timestamp|qb::Duration|qb::TimePoint|to_timestamp\(|to_time_point\(|PgReply|qb::pg::detail::pgdate|qb::pg::detail::pgtime|qb::pg::detail::pgtimetz|tls_verify_peer'
 RMCTX='retired|removed|no longer|never|do not|don'\''t|must not|forbidden|gone|replaced|not the'
 is_allowed(){ case "$1" in CHANGELOG.md|CONTRIBUTING.md) return 0;; *) return 1;; esac; }
 hits=0
@@ -35,6 +35,13 @@ while read -r f; do
   fi
 done < <(doc_files)
 [ "$hits" -eq 0 ] && grn "  no forbidden tokens (usage)" || fail=1
+
+echo "== 1b. Citation integrity (src: file + line ranges) =="
+if command -v python3 >/dev/null 2>&1; then
+  python3 "${SCRIPT_DIR}/cite-check.py" || fail=1
+else
+  ylw "  python3 not found — skipping citation check"
+fi
 
 echo "== 2. Internal link check =="
 while read -r f; do

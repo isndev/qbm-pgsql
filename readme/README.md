@@ -1,6 +1,6 @@
 # qbm-pgsql documentation map
 
-> **Audience:** Adopter · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 2.0.0 (C++20 default, C++23
+> **Audience:** Adopter · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 2.6.0 (C++20 default, C++23
 > supported)
 
 This is the table of contents for the qbm-pgsql narrative documentation: seven topic pages covering connection
@@ -19,7 +19,7 @@ decoding, type mapping, and LISTEN/NOTIFY — over a single non-blocking TCP (or
 the `qb::pg` namespace; `qb::pg::detail` holds the implementation. The umbrella header is `<pgsql/pgsql.h>`.
 
 The module is a **compiled static library**, not header-only. The build registers it through `qb_register_module` with a
-`SOURCES` list of twelve translation units (`qbm/pgsql/CMakeLists.txt:32-50`), so consuming it links a real archive
+`SOURCES` list of seventeen translation units (`qbm/pgsql/CMakeLists.txt:32-56`), so consuming it links a real archive
 under the alias `qbm::pgsql`. It compiles at C++20 by default and C++23 when `QB_CXX_STANDARD=23`; the standard is
 governed by the framework, not the module, and propagates to consumers as a compile feature.
 
@@ -108,12 +108,12 @@ If you only need to issue one-shot queries, read pages 1, 2, and 4. If you are w
 The integration tests under [`../tests/`](../tests/) are executable documentation. When a signature or behavior is
 unclear, grep a test name and read it:
 
-- `test-pgsql-coro-api.cpp` — coroutines, `with_transaction`, savepoints, `run_sync`.
-- `test-transaction.cpp` — callback `begin`, nested savepoints, `await()`.
-- `test-notify.cpp` — LISTEN/NOTIFY, `notify_co_consumer`, and pump ordering.
-- `test-transaction-advanced.cpp` — timeouts, constraints, cursors, `set_timeout`.
-- `test-prepared-statements.cpp` — the prepared-statement LRU, eviction, and large results.
-- `test-protocol-integration.cpp` — COPY edges, binary columns, and end-to-end protocol coverage.
+- `integration/api/coro-api.cpp` — coroutines, `with_transaction`, savepoints, `run_sync`.
+- `integration/transaction/transaction-basic.cpp` — callback `begin`, nested savepoints, `await()`.
+- `integration/notify/listen-notify.cpp` — LISTEN/NOTIFY, `notify_co_consumer`, and pump ordering.
+- `integration/transaction/transaction-advanced.cpp` — timeouts, constraints, cursors, `set_timeout`.
+- `integration/prepared/prepared-statements.cpp` — the prepared-statement LRU, eviction, and large results.
+- `integration/protocol/wire-formats.cpp` — COPY edges, binary columns, and end-to-end protocol coverage.
 
 ## See also
 
