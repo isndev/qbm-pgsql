@@ -68,7 +68,7 @@ sequenceDiagram
         S-->>C: DataRow
     end
     S-->>C: CommandComplete · ReadyForQuery
-    Note over C: decoded into qb::pg::results<br/>field.as&lt;T&gt;() · std::optional&lt;T&gt; for NULL
+    Note over C: decoded into qb::pg::results<br/>field.as<T>() · std::optional<T> for NULL
 ```
 
 ---
