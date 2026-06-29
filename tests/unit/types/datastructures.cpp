@@ -230,6 +230,30 @@ TEST(ResultsetPopulated, FieldIterationForward) {
     EXPECT_TRUE(row.begin() != row.end());
 }
 
+// Reverse row iteration drives resultset::rbegin()/rend() (const_reverse_iterator).
+TEST(ResultsetPopulated, RowIterationReverse) {
+    PopulatedResult pr({"id"}, {{"a"}, {"b"}, {"c"}});
+    resultset       rs = pr.rs();
+
+    std::string rev;
+    for (auto it = rs.rbegin(); it != rs.rend(); ++it)
+        rev += (*it)[0].as<std::string>();
+    EXPECT_EQ(rev, "cba");
+    EXPECT_EQ(std::distance(rs.rbegin(), rs.rend()), 3);
+}
+
+// Reverse field iteration drives row::rbegin()/rend().
+TEST(ResultsetPopulated, FieldIterationReverse) {
+    PopulatedResult pr({"a", "b", "c"}, {{"1", "2", "3"}});
+    resultset       rs  = pr.rs();
+    resultset::row  row = rs[0];
+
+    std::string rev;
+    for (auto it = row.rbegin(); it != row.rend(); ++it)
+        rev += (*it).as<std::string>();
+    EXPECT_EQ(rev, "321");
+}
+
 // resultset::field(name) linear search: found returns the description, missing throws.
 TEST(ResultsetPopulated, FieldDescriptionByNameAndMissingThrows) {
     PopulatedResult pr({"alpha", "beta"}, {{"1", "2"}});

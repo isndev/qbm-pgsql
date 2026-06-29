@@ -323,4 +323,6 @@ TEST(TypeConverterTemporalBinary, MalformedShortSpanBehavior) {
     // Contrast: the lossy std::chrono::seconds interval converter throws on a short
     // span (neither 16 nor >= 20 bytes).
     EXPECT_THROW(TypeConverter<std::chrono::seconds>::from_binary(three), std::runtime_error);
+    // wall_time (TIMESTAMP) likewise requires >= 8 bytes and rejects a short span.
+    EXPECT_THROW(TypeConverter<qb::wall_time>::from_binary(three), std::runtime_error);
 }

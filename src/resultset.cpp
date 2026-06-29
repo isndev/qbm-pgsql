@@ -59,12 +59,14 @@ resultset::row::end() const {
 
 resultset::row::const_reverse_iterator
 resultset::row::rbegin() const {
-    return const_reverse_iterator(const_iterator(result_, row_index_, size() - 1));
+    // std::reverse_iterator(it) dereferences *(it - 1), so it must wrap end()/begin()
+    // (not size()-1 / npos): rbegin() == reverse_iterator(end()).
+    return const_reverse_iterator(end());
 }
 
 resultset::row::const_reverse_iterator
 resultset::row::rend() const {
-    return const_reverse_iterator(const_iterator(result_, row_index_, npos));
+    return const_reverse_iterator(begin());
 }
 
 resultset::row::reference
@@ -255,12 +257,14 @@ resultset::end() const {
 
 resultset::const_reverse_iterator
 resultset::rbegin() const {
-    return const_reverse_iterator(const_iterator(this, size() - 1));
+    // std::reverse_iterator(it) dereferences *(it - 1), so it must wrap end()/begin()
+    // (not size()-1 / npos): rbegin() == reverse_iterator(end()).
+    return const_reverse_iterator(end());
 }
 
 resultset::const_reverse_iterator
 resultset::rend() const {
-    return const_reverse_iterator(const_iterator(this, npos));
+    return const_reverse_iterator(begin());
 }
 
 resultset::reference
