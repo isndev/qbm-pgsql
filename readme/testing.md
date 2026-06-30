@@ -19,7 +19,8 @@ govern how you run them:
 - **Tests are opt-in at configure time.** Nothing under `tests/` is built unless `QB_BUILD_TESTS` is on. The framework
   option defaults to `ON` (<!-- src: qb/cmake/qbConfig.cmake:59 -->), and the qb-dev super-project forces it
   on (<!-- src: CMakeLists.txt:14 -->), so a default build already produces the binaries.
-- **Integration suites need a live server.** Six suites are pure unit tests with no socket. The rest connect to
+- **Integration suites need a live server.** Sixteen unit suites have no socket, and one system suite
+  (`connect-timeout`) connects to a dead host with no daemon; the integration suites connect to
   PostgreSQL; each gates its fixture on a successful connect and calls `GTEST_SKIP()` when the server is unreachable, so
   the suite passes (as skipped) rather than failing on a machine with no database.
 
@@ -51,11 +52,8 @@ up?" probe; the skip is per fixture.
 // src: qbm/pgsql/tests/shared/pg_integration_fixture.hpp:62-67
 void SetUp() override {
     db_ = std::make_unique<qb::pg::tcp::database>();
-    if (!qb::io::async::run_sync(db_->connect(qb::pg::test::dsn_tcp_string()))) {
-        GTEST_SKIP() << "PostgreSQL not reachable";
-        return;
-    }
-    // ... create temp tables, etc.
+    if (!pg_try_connect(*db_))
+        GTEST_SKIP() << kDaemonUnreachableSentinel << " (postgres at " << dsn_tcp_string() << " not reachable)";
 }
 ```
 
@@ -69,9 +67,16 @@ The integration suites share one database at `localhost:5432`, so running them i
 drop the same temp objects at once. The build serializes them with a CTest resource lock:
 
 ```cmake
-# src: qbm/pgsql/tests/CMakeLists.txt:48-53
-set_tests_properties(${_qbm_pgsql_ctest_names}
-    PROPERTIES RESOURCE_LOCK qb_pgsql_integration)
+# src: qbm/pgsql/tests/CMakeLists.txt:39-48
+# Every integration suite is registered through qpg_itest, which forwards the lock:
+function(qpg_itest NAME RELPATH)
+    qb_register_module_test(
+            MODULE_NAME pgsql TIER integration TEST_NAME ${NAME}
+            # ...
+            RESOURCE_LOCK qb_pgsql_integration)
+endfunction()
+# qb_register_module_test then applies it via
+# set_tests_properties(... PROPERTIES RESOURCE_LOCK ...) (src: qb/cmake/qbFunctions.cmake:526-528).
 ```
 
 `connection-ssl` joins the same lock when it is built. CTest will not run two `qb_pgsql_integration` holders
@@ -89,9 +94,9 @@ directory (<!-- src: qb/cmake/qbFunctions.cmake:514-516 -->). Each test carries 
 (<!-- src: qb/cmake/qbFunctions.cmake:306-388 -->). Each binary links `GTest::gtest_main`, so it
 accepts the usual `--gtest_filter`, `--gtest_list_tests`, and `--gtest_repeat` flags.
 
-`connection-ssl` is the one conditional suite: it is commented out of the main `QB_PGSQL_TESTS` list and registered
-separately only when `QB_HAS_SSL` is set, because it links the `qb::pg::tcp::ssl::database` alias that exists only with
-OpenSSL (<!-- src: qbm/pgsql/tests/CMakeLists.txt:23,55-62 -->).
+`connection-ssl` is the one conditional suite: it is registered inside an `if (QB_HAS_SSL)` guard, only when
+`QB_HAS_SSL` is set, because it links the `qb::pg::tcp::ssl::database` alias that exists only with
+OpenSSL (<!-- src: qbm/pgsql/tests/CMakeLists.txt:101-103 -->).
 
 ## Configuring the server
 
@@ -114,7 +119,7 @@ in [connection.md](./connection.md); the test config only wraps it.
 
 ### The invalid-auth case
 
-`PostgreSQLConnectionTest.ConnectInvalidCredentials` connects with `QB_PG_INVALID_DSN` and asserts the attempt is
+`ConnectionLifecycle.ConnectWithInvalidCredentials` connects with `QB_PG_INVALID_DSN` and asserts the attempt is
 *rejected*. If your `pg_hba.conf` uses `trust` for local connections, the wrong password is accepted anyway; the test
 detects this and skips rather than fail, but only when you have not set `QB_PG_INVALID_DSN` yourself:
 
@@ -164,10 +169,10 @@ Run one suite through CTest, or invoke its binary directly for `--gtest_filter`:
 
 ```bash
 # One suite via CTest.
-ctest --test-dir build -R '^qbm-pgsql-test-pgsql-coro-api$' --output-on-failure
+ctest --test-dir build -R '^qbm-pgsql-test-integration-coro-api$' --output-on-failure
 
 # One test via the binary (path is generator-dependent).
-./build/bin/tests/qbm-pgsql-test-pgsql-coro-api --gtest_filter='*WithTransaction*'
+./build/bin/tests/qbm-pgsql-test-integration-coro-api --gtest_filter='*WithTransaction*'
 ```
 
 ### Run only the unit suites
@@ -175,7 +180,7 @@ ctest --test-dir build -R '^qbm-pgsql-test-pgsql-coro-api$' --output-on-failure
 To validate encoding and protocol framing on a host with no database, select the no-server suites:
 
 ```bash
-ctest --test-dir build -R 'qbm-pgsql-test-(param-|protocol-message|data-types$|params$)' --output-on-failure
+ctest --test-dir build -R '^qbm-pgsql-test-unit-' --output-on-failure
 ```
 
 ## What is covered

@@ -306,7 +306,7 @@ PID **`server_backend_pid`**. The handler runs on the I/O thread when a `Notific
 
 **`notify_co_consumer`:** optional **`on_notify`**, **`on_notify_dropped`**, **`co_await receive()`** —
 **`notify_cb_consumer`** is an alias of the same class ([`pgsql.h`](../pgsql.h)). See
-[`tests/integration/notify/listen-notify.cpp`](../tests/integration/notify/listen-notify.cpp) for the `io_pump` and ordering patterns.
+[`tests/integration/notify/listen-notify.cpp`](../tests/integration/notify/listen-notify.cpp) for the `pump_until` and ordering patterns.
 
 ---
 
