@@ -66,7 +66,7 @@ flowchart TB
 ```
 
 A command (lifecycle unit) pushes one or more queries (wire units). `Transaction` is **non-copyable and non-movable** —
-the default, copy, and move constructors and assignment operators are all deleted (`src/transaction.h:91-99`). Hold it
+the default, copy, and move constructors and assignment operators are all deleted (`src/transaction.h:81-89`). Hold it
 by reference or pointer; never by value.
 
 ### The loop drives completion
@@ -145,7 +145,7 @@ path.
 
 **Error routing.** A failed `BeginQuery` routes to the `on_error` you passed to `begin`; commit/rollback failures route
 to the same `End` error callback. If your `on_success` body **throws**, `Begin` catches it, marks the block failed, and
-forwards a `qb::pg::error::client_error` carrying `what()` to `End`'s error callback (`src/commands.h:124-132`).
+forwards a `qb::pg::error::client_error` carrying `what()` to `End`'s error callback (`src/commands.h:108-119`).
 
 ```cpp
 #include <pgsql/pgsql.h>
@@ -170,7 +170,7 @@ A two-argument `begin(on_success, mode)` overload exists; it installs an empty e
 
 ### `then` / `success` / `error` chaining
 
-<!-- src: src/transaction.h:597-618, src/commands.h:450-540 -->
+<!-- src: src/transaction.h:668-689, src/commands.h:450-540 -->
 
 - `then(cb)` and `success(cb)` (aliases) push a `Then` command. When it is popped, if the parent's result is still
   success, `cb(*parent())` runs with the same `Transaction&` you chained from.
@@ -347,7 +347,7 @@ objects.
 
 ## Statement timeout
 
-<!-- src: src/transaction.h:594-608, src/transaction_coro.inl:22-31, src/queries.h:455-484 -->
+<!-- src: src/transaction.h:634-659, src/transaction_coro.inl:22-31, src/queries.h:374-407 -->
 
 `set_timeout(qb::duration)` arms a PostgreSQL `statement_timeout` for the **next** `BEGIN` on this connection. The
 following `begin()` (callback *or* coroutine) appends `; SET LOCAL statement_timeout = N` to the same simple-query
@@ -382,7 +382,7 @@ Key facts to get right:
 
 ## LISTEN / NOTIFY
 
-<!-- src: src/transaction.h:359-396, src/pg_notify_sql.h:51-80, qbm/pgsql/pgsql.h:492-500,1921-2008 -->
+<!-- src: src/transaction.h:420-477, src/pg_notify_sql.h:51-80, qbm/pgsql/pgsql.h:384-388,1717,2293-2378 -->
 
 ### Publishing (NOTIFY)
 
@@ -451,7 +451,7 @@ resolves to `std::nullopt`.
   `End`/`with_transaction` do it) before sending new commands.
 - **A lost connection fails every pending query automatically.** You do **not** write a disconnect handler. The built-in
   `Database::on(qb::io::async::event::disconnected)` handler calls `fail_all_pending(...)` on the root transaction (
-  `qbm/pgsql/pgsql.h:2232`), which drains every queued query and pending sub-transaction so suspended `co_await`
+  `qbm/pgsql/pgsql.h:2195`), which drains every queued query and pending sub-transaction so suspended `co_await`
   awaiters resume with `client_error("database disconnected")` instead of hanging forever.
   See [connection.md](./connection.md) (Fail-all-on-disconnect).
 - **Statement timeout below 1 ms vanishes.** A sub-millisecond `set_timeout` truncates to 0 and emits no `SET LOCAL`.

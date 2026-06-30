@@ -37,7 +37,7 @@ conventions" note in `pgsql.h`.
 
 You consume qbm-pgsql through the qb module loader, not `find_package`:
 
-<!-- src: qbm/pgsql/README.md:149-151 -->
+<!-- src: qbm/pgsql/README.md:185-187 -->
 
 ```cmake
 add_subdirectory(qb)                                   # the framework first
@@ -80,7 +80,7 @@ Read top to bottom for a first pass. Each row links the page and gives its one-l
 | 4 | [Result sets and row access](./results.md)          | `results`, `row`, and `field`; `as<T>()` and tuple extraction; `std::optional<T>` for NULL; the deep-snapshot ownership of coroutine replies; and `results.json()`.                                                                              |
 | 5 | [Data types and wire formats](./types.md)           | The OID and `TypeConverter` model; scalars, `qb::wall_time` (`timestamptz`), `qb::uuid`, JSON/JSONB, BYTEA, NUMERIC, DATE/TIME; `type_mapping`, `nullable<T>`, and binary versus text formats.                                                   |
 | 6 | [Error handling](./error_handling.md)               | `Reply<T>` success/failure, `error::db_error`, SQLSTATE codes, `error::client_error` and `value_is_null`, and the callback `status` snapshot after `await()`.                                                                                    |
-| 7 | [Integration testing](./testing.md)                 | The `QB_PG_*` environment variables (`QB_PG_SSL_DSN`, `QB_PG_INVALID_DSN`, `QB_PG_ASSERT_SSL_CONNECTED`), running the suite under CTest, and the test-to-feature map.                                                                            |
+| 7 | [Integration testing](./testing.md)                 | The `QB_PG_*` environment variables (`QB_PG_DSN`, `QB_PG_SSL_DSN`, `QB_PG_INVALID_DSN`), running the suite under CTest, and the test-to-feature map.                                                                                             |
 
 ## Suggested learning order
 

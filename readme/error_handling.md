@@ -100,8 +100,10 @@ failures. See [results.md](./results.md) for how `as<T>()` raises them and how `
 entirely.
 
 When you receive a `db_error` (in a callback, on a `Reply`, or as a caught exception), the four fields are fully
-populated for the `query_error` path; for the `client_error` / `connection_error` paths only `what()` is meaningful and
-`sqlstate` stays `sqlstate::unknown_code`.
+populated for the `query_error` path. On the `connection_error` path only `what()` is meaningful and `sqlstate` stays
+`sqlstate::unknown_code`. A `client_error` is different: it carries a fixed `severity` of `"ERROR"`, `code` `"00000"`,
+`detail` `"client error"`, and a `sqlstate` of `sqlstate::successful_completion` (the decode of `"00000"`) — so do
+**not** test `sqlstate == sqlstate::unknown_code` to detect a `client_error`.
 
 ### SQLSTATE codes
 
@@ -153,7 +155,7 @@ the I/O loop.
 
 ### Handle a failed coroutine operation
 
-<!-- src: qbm/pgsql/tests/integration/errors/errors-sqlstate.cpp:101-105 -->
+<!-- src: qbm/pgsql/tests/integration/errors/errors-sqlstate.cpp:133-147 -->
 
 ```cpp
 #include <pgsql/pgsql.h>
@@ -184,7 +186,7 @@ default-constructed and meaningless. Read `error()` instead.
 
 ### Handle a failure on the fluent (callback) API
 
-<!-- src: qbm/pgsql/tests/integration/errors/errors-sqlstate.cpp:82-90 -->
+<!-- src: qbm/pgsql/tests/integration/errors/errors-sqlstate.cpp:114-130 -->
 
 ```cpp
 #include <pgsql/pgsql.h>
@@ -282,7 +284,7 @@ them tells you what to expect when a connection misbehaves.
 
 ### The `noexcept` `onMessage` boundary (pre-auth DoS containment)
 
-<!-- src: qbm/pgsql/pgsql.h (onMessage, ~line 448) -->
+<!-- src: qbm/pgsql/pgsql.h (onMessage, ~line 336) -->
 
 `qb::protocol::pgsql<IO_>::onMessage` is declared `noexcept final` — it is the qb-io seam that hands each decoded frame
 to the message handler. Because it is `noexcept`, any exception thrown by a handler would call `std::terminate` and kill
@@ -318,7 +320,7 @@ pending `connect()` awaiter with an error** rather than crashing. The supported 
 
 ### Malformed-frame drop via `not_ok()`
 
-<!-- src: qbm/pgsql/pgsql.h (getMessageSize, ~line 397) -->
+<!-- src: qbm/pgsql/pgsql.h (getMessageSize, ~line 264) -->
 
 The frame-length check is the other containment point. `getMessageSize` reads the wire length from the message header
 and validates it against the protocol bounds — the decoded length must satisfy

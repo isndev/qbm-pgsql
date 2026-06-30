@@ -156,7 +156,7 @@ using namespace qb::pg;
 qb::jsonb doc = result[0][0].as<qb::jsonb>(); // jsonb column, binary on the wire
 ```
 
-`qb::json` / `qb::jsonb` are `nlohmann::json` (see [`qb/json.h`]). Both decoders fold PostgreSQL's `[[key, value], ...]`
+`qb::json` / `qb::jsonb` are `nlohmann::json` (see [`qb/json.h`](../../../qb/include/qb/json.h)). Both decoders fold PostgreSQL's `[[key, value], ...]`
 array form back into a JSON object when they detect it.
 
 ### UUID
@@ -201,8 +201,9 @@ Limits:
 
 - **1-D only.** A `decode_pg_array` flattens any multi-dimensional array row-major into a single `std::vector<T>`, but
   the send path declares a 1-D array.
-- **Only the element types above.** A vector of any other element type falls back to the `anyarray` OID (2277) on send
-  and has no `as<std::vector<T>>()` decoder.
+- **Only the element types above.** A vector of any other element type throws `std::invalid_argument` at bind time (no
+  `anyarray` fallback) and has no `as<std::vector<T>>()` decoder. Bind a supported element type or add an array
+  converter.
 - **`std::vector<char>` / `std::vector<unsigned char>` / `std::vector<std::byte>` stay on the `bytea` path**, not the
   array path (see [Text and binary blobs](#text-and-binary-blobs)).
 - **A SQL NULL element decodes to a default-constructed `T`** — the vector cannot represent SQL `NULL` for an
@@ -232,9 +233,9 @@ auto r = co_await db.execute("ins", params{42, std::optional<std::string>{}});
 std::optional<std::string> label = row[1].as<std::optional<std::string>>();
 ```
 
-`std::optional<T>` inherits `T`'s OID, so an `std::optional<int32_t>` parameter is still declared as `int4` (23). NULL
-detection in `from_binary` reads the length sentinel with `std::memcpy` (avoiding an unaligned load), so an aligned `-1`
-prefix is recognized reliably. <!-- src: src/type_mapping.h:171-174; src/type_converter.h:447-463 -->
+`std::optional<T>` inherits `T`'s OID, so an `std::optional<int32_t>` parameter is still declared as `int4` (23). SQL
+NULL is detected by the caller via `field.is_null()` before any converter runs (decode receives the value bytes
+only). <!-- src: src/type_mapping.h:171-174; src/type_converter.h:464-472 -->
 
 ---
 
@@ -268,7 +269,7 @@ safer for overloaded operators and for `NULL` parameters whose type the server c
 
 ## Binary versus text on the wire
 
-- **Parameters:** always binary (format code 1, applied uniformly). <!-- src: factbook line 296 -->
+- **Parameters:** always binary (format code 1, applied uniformly). <!-- src: src/queries.h:736-745 -->
 - **Result columns:** chosen per column by `type_oid_prefers_binary_result_format(oid)` ([
   `src/common.h`](../src/common.h)). After `Bind`, the client patches each `RowDescription` column's `format_code` to
   match what it requested, via `sync_field_format_codes_with_extended_query_bind` (because `Describe('S')` always
@@ -368,7 +369,8 @@ The handler walks columns by index, converting each per its declared type. <!-- 
 - **Arrays do round-trip.** A `std::vector<T>` parameter is sent as the matching PG array and
   `field.as<std::vector<T>>()` decodes one (1-D, element types `bool`/`int2`/`int4`/`int8`/`float4`/`float8`/`text`);
   NULL elements decode to a default-constructed element.
-- **`numeric::operator+` does not add.** It string-concatenates; never use it as arithmetic.
+- **`numeric` is value-equality-only (`operator==`).** It is not arithmetic — there is no `operator+`. Do arithmetic in
+  your domain layer or in SQL.
 - **`bool` / `int4` binary widths are flexible on decode.** `int4` accepts `int2`/`int8` fields (handy for `COUNT(*)`),
   but an out-of-range `int8` throws.
 - **Out-of-range timestamp text formatting throws.** Formatting a `wall_time` outside `gmtime`'s range raises
