@@ -8,14 +8,16 @@
  * refused — the client's own proof leaks nothing, so without this gate the client would trust a peer
  * that never demonstrated knowledge of the password.
  *
- * This runs entirely in-process: a tiny fake PostgreSQL backend on a background thread (raw POSIX
- * sockets, ephemeral loopback port) speaks just enough of the wire protocol —
+ * This runs entirely in-process: a tiny fake PostgreSQL backend on a background thread (qb's own
+ * cross-platform `qb::io::tcp` sockets, ephemeral loopback port) speaks just enough of the wire
+ * protocol —
  *   Startup  ->  AuthenticationSASL(10, "SCRAM-SHA-256")
  *            <-  SASLInitialResponse (client-first: n,,n=user,r=<clientNonce>)
  *   AuthenticationSASLContinue(11, r=<clientNonce+serverNonce>,s=<salt>,i=4096)
  *            <-  SASLResponse       (client-final with client proof)
  *   AuthenticationOk(0)   <-- the malicious step: SASLFinal(12) is SKIPPED
- * — and the test asserts `connect()` returns false. No live daemon; POSIX sockets (macOS/Linux).
+ * — and the test asserts `connect()` returns false. No live daemon; portable (qb::io::tcp — the
+ * timeout guard uses handle_read_ready() rather than the POSIX-only SO_RCVTIMEO/timeval).
  *
  * @author qb - C++ Actor Framework
  * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
@@ -23,20 +25,17 @@
  */
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <string>
 #include <thread>
 #include <vector>
 
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <sys/time.h>
-#include <unistd.h>
-
 #include <gtest/gtest.h>
 #include <qb/io/async.h>
+#include <qb/io/tcp/listener.h>
+#include <qb/io/tcp/socket.h>
 
 #include "../pgsql.h"
 
@@ -60,23 +59,34 @@ get_i32(const uint8_t *p) {
            | static_cast<uint32_t>(p[3]);
 }
 
+using namespace std::chrono_literals;
+
+// Bounded exact recv over a (blocking) qb socket: gate every read on handle_read_ready() so a
+// stuck peer can never hang the server thread. Cross-platform replacement for the SO_RCVTIMEO the
+// original set — handle_read_ready() is qb's portable select() wrapper (works on Windows too).
 bool
-recv_exact(int fd, uint8_t *buf, size_t n) {
-    size_t got = 0;
+recv_exact(qb::io::tcp::socket &s, uint8_t *buf, size_t n, qb::duration timeout = std::chrono::seconds(5)) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    size_t     got      = 0;
     while (got < n) {
-        ssize_t r = ::recv(fd, buf + got, n - got, 0);
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline)
+            return false;
+        if (qb::io::socket::handle_read_ready(s.native_handle(), std::chrono::duration_cast<qb::duration>(deadline - now)) <= 0)
+            return false; // timeout or error
+        const int r = s.read(buf + got, n - got);
         if (r <= 0)
-            return false; // EOF, timeout (SO_RCVTIMEO), or error
+            return false; // EOF or error
         got += static_cast<size_t>(r);
     }
     return true;
 }
 
 bool
-send_all(int fd, const std::vector<uint8_t> &m) {
+send_all(qb::io::tcp::socket &s, const std::vector<uint8_t> &m) {
     size_t sent = 0;
     while (sent < m.size()) {
-        ssize_t r = ::send(fd, m.data() + sent, m.size() - sent, 0);
+        const int r = s.write(m.data() + sent, m.size() - sent);
         if (r <= 0)
             return false;
         sent += static_cast<size_t>(r);
@@ -94,18 +104,11 @@ backend_msg(char type, const std::vector<uint8_t> &payload) {
     return m;
 }
 
-void
-set_rcv_timeout(int fd, int seconds) {
-    timeval tv{};
-    tv.tv_sec = seconds;
-    ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-}
-
 // Read one frontend message that has a type byte ('p' for SASL responses): returns its body.
 bool
-read_typed(int fd, char expected_type, std::vector<uint8_t> &body_out) {
+read_typed(qb::io::tcp::socket &s, char expected_type, std::vector<uint8_t> &body_out) {
     uint8_t hdr[5];
-    if (!recv_exact(fd, hdr, 5))
+    if (!recv_exact(s, hdr, 5))
         return false;
     if (static_cast<char>(hdr[0]) != expected_type)
         return false;
@@ -113,7 +116,7 @@ read_typed(int fd, char expected_type, std::vector<uint8_t> &body_out) {
     if (mlen < 4 || mlen > 65536)
         return false;
     body_out.assign(mlen - 4, 0);
-    return recv_exact(fd, body_out.data(), body_out.size());
+    return recv_exact(s, body_out.data(), body_out.size());
 }
 
 struct FakeResult {
@@ -125,26 +128,29 @@ struct FakeResult {
 
 // The malicious/broken backend. Accepts one connection and runs the truncated SCRAM dance above.
 void
-run_fake_server(int listen_fd, FakeResult *res) {
-    int fd = ::accept(listen_fd, nullptr, nullptr);
-    if (fd < 0)
+run_fake_server(qb::io::tcp::listener &listener, FakeResult *res) {
+    // Bound the accept so a failed client connect can't hang the join(): handle_read_ready() on a
+    // listening socket reports a pending connection — the portable stand-in for the old SO_RCVTIMEO.
+    if (qb::io::socket::handle_read_ready(listener.native_handle(), std::chrono::seconds(10)) <= 0)
         return;
-    set_rcv_timeout(fd, 5); // never let a stuck client hang the join()
+    qb::io::tcp::socket client;
+    if (listener.accept(client) != qb::io::SocketStatus::Done)
+        return;
 
     // 1. Startup message: [int32 length][body]. Read length, then body; discard.
     uint8_t lenbuf[4];
-    if (!recv_exact(fd, lenbuf, 4)) {
-        ::close(fd);
+    if (!recv_exact(client, lenbuf, 4)) {
+        client.disconnect();
         return;
     }
     const uint32_t slen = get_i32(lenbuf);
     if (slen < 8 || slen > 65536) {
-        ::close(fd);
+        client.disconnect();
         return;
     }
     std::vector<uint8_t> sbody(slen - 4);
-    if (!recv_exact(fd, sbody.data(), sbody.size())) {
-        ::close(fd);
+    if (!recv_exact(client, sbody.data(), sbody.size())) {
+        client.disconnect();
         return;
     }
     res->got_startup = true;
@@ -156,8 +162,8 @@ run_fake_server(int listen_fd, FakeResult *res) {
         static const char kMech[] = "SCRAM-SHA-256";
         p.insert(p.end(), kMech, kMech + sizeof(kMech)); // includes the trailing NUL
         p.push_back(0);                                  // empty string terminates the list
-        if (!send_all(fd, backend_msg('R', p))) {
-            ::close(fd);
+        if (!send_all(client, backend_msg('R', p))) {
+            client.disconnect();
             return;
         }
     }
@@ -168,14 +174,14 @@ run_fake_server(int listen_fd, FakeResult *res) {
     std::string client_nonce;
     {
         std::vector<uint8_t> body;
-        if (!read_typed(fd, 'p', body)) {
-            ::close(fd);
+        if (!read_typed(client, 'p', body)) {
+            client.disconnect();
             return;
         }
         const std::string s(reinterpret_cast<char *>(body.data()), body.size());
         const auto        rpos = s.find("r="); // first lowercase r= is the client nonce (SCRAM-SHA-256/n=user have none)
         if (rpos == std::string::npos) {
-            ::close(fd);
+            client.disconnect();
             return;
         }
         for (size_t i = rpos + 2; i < s.size(); ++i) {
@@ -186,7 +192,7 @@ run_fake_server(int listen_fd, FakeResult *res) {
                 break;
         }
         if (client_nonce.empty()) {
-            ::close(fd);
+            client.disconnect();
             return;
         }
         res->got_client_first = true;
@@ -199,8 +205,8 @@ run_fake_server(int listen_fd, FakeResult *res) {
         std::vector<uint8_t> p;
         put_i32(p, 11);
         p.insert(p.end(), server_first.begin(), server_first.end());
-        if (!send_all(fd, backend_msg('R', p))) {
-            ::close(fd);
+        if (!send_all(client, backend_msg('R', p))) {
+            client.disconnect();
             return;
         }
     }
@@ -209,8 +215,8 @@ run_fake_server(int listen_fd, FakeResult *res) {
     //    would verify it, but the whole point is that THIS server does not, and skips SASLFinal.
     {
         std::vector<uint8_t> body;
-        if (!read_typed(fd, 'p', body)) {
-            ::close(fd);
+        if (!read_typed(client, 'p', body)) {
+            client.disconnect();
             return;
         }
         res->got_client_final = true;
@@ -220,37 +226,30 @@ run_fake_server(int listen_fd, FakeResult *res) {
     {
         std::vector<uint8_t> p;
         put_i32(p, 0);
-        send_all(fd, backend_msg('R', p));
+        send_all(client, backend_msg('R', p));
         res->sent_ok = true;
     }
 
-    // 7. Block until the client (which must refuse) tears the connection down, bounded by SO_RCVTIMEO.
-    uint8_t drain[64];
-    (void) ::recv(fd, drain, sizeof(drain), 0);
-    ::close(fd);
+    // 7. Block until the client (which must refuse) tears the connection down, bounded by the
+    //    handle_read_ready() timeout so a misbehaving client can never hang the join().
+    if (qb::io::socket::handle_read_ready(client.native_handle(), std::chrono::seconds(5)) > 0) {
+        uint8_t drain[64];
+        (void) client.read(drain, sizeof(drain));
+    }
+    client.disconnect();
 }
 
 } // namespace
 
 TEST(PgsqlScramMitm, ClientRefusesAuthenticationOkWithoutVerifiedServerSignature) {
     // Ephemeral loopback listener (OS-assigned port -> no clashes, no hard-coded port).
-    const int listen_fd = ::socket(AF_INET, SOCK_STREAM, 0);
-    ASSERT_GE(listen_fd, 0);
-    int one = 1;
-    ::setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
-    sockaddr_in addr{};
-    addr.sin_family      = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    addr.sin_port        = 0;
-    ASSERT_EQ(::bind(listen_fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)), 0);
-    ASSERT_EQ(::listen(listen_fd, 1), 0);
-    socklen_t alen = sizeof(addr);
-    ASSERT_EQ(::getsockname(listen_fd, reinterpret_cast<sockaddr *>(&addr), &alen), 0);
-    const uint16_t port = ntohs(addr.sin_port);
-    set_rcv_timeout(listen_fd, 10); // bound accept() so a failed client connect can't hang the thread
+    qb::io::tcp::listener listener;
+    ASSERT_EQ(listener.listen_v4(0, "127.0.0.1"), qb::io::SocketStatus::Done);
+    const uint16_t port = listener.local_endpoint().port();
+    ASSERT_NE(port, 0);
 
     FakeResult  res;
-    std::thread server(run_fake_server, listen_fd, &res);
+    std::thread server(run_fake_server, std::ref(listener), &res);
 
     const std::string dsn = "tcp://test:test@127.0.0.1:" + std::to_string(port) + "[test]";
     bool              connected = true; // must be flipped to false by the gate
@@ -261,7 +260,7 @@ TEST(PgsqlScramMitm, ClientRefusesAuthenticationOkWithoutVerifiedServerSignature
     }
 
     server.join();
-    ::close(listen_fd);
+    listener.disconnect();
 
     // The server must have driven the handshake all the way to the bogus AuthenticationOk — otherwise
     // the refusal below would be vacuous (e.g. a TCP-level failure would also yield connected==false).
