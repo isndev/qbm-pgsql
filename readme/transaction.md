@@ -261,7 +261,11 @@ To put a statement timeout on a `with_transaction` block, call `db.set_timeout(.
 it has no effect on autocommit statements run outside a block.
 
 > **Nesting.** Do not issue a second `BEGIN` on the same connection inside an open block — PostgreSQL does not support
-> nested transaction blocks. Use savepoints for nested units of work.
+> nested transaction blocks. `with_transaction` now **rejects** this up front: called on a connection already in a
+> transaction (`in_transaction()`), it fails fast with a `client_error` rather than sending a second `BEGIN` that
+> PostgreSQL would warn `25001` on and silently flatten (the inner scope's COMMIT/ROLLBACK would end the *outer*
+> transaction, losing isolation). Use savepoints for nested units of work.
+<!-- src: src/with_transaction.h:84-92, src/transaction.h:167-170 -->
 
 ---
 
@@ -281,7 +285,11 @@ tr.savepoint("sp1",
 ```
 
 `savepoint` mirrors `begin`: it pushes a `SavePoint`/`EndSavePoint` pair that issues `SAVEPOINT name` and, on the way
-out, `RELEASE SAVEPOINT name` (success) or `ROLLBACK TO SAVEPOINT name` (failure).
+out, `RELEASE SAVEPOINT name` (success) or `ROLLBACK TO SAVEPOINT name` (failure). The `name` is **quoted as a SQL
+identifier** (double-quoted, embedded `"` doubled, matching libpq's `PQescapeIdentifier`) before it enters the
+simple-query string — on **both** the callback (`SavePointQuery` / `EndSavePointQuery`) and coroutine paths — so a name
+can never inject a second statement.
+<!-- src: src/queries.h:483-500,538-541,576-579,614-617 -->
 
 **Coroutine — explicit control:**
 
@@ -297,6 +305,8 @@ else
 **Name validation.** The coroutine `savepoint`, `release_savepoint`, and `rollback_savepoint` reject names that are
 empty, longer than 63 characters, or contain anything other than alphanumerics and underscore. An invalid name returns a
 pre-failed awaiter carrying `qb::pg::error::client_error` — no SQL is sent (`src/transaction_coro.inl:33-43,159-187`).
+This pre-check is defense-in-depth on top of the identifier quoting above: even the callback path, which does *not*
+pre-validate, cannot be made to inject SQL because the name is always quoted into a single literal identifier.
 
 **API gap.** There are **no** callback overloads for `release_savepoint` / `rollback_savepoint` — only the `co_await`
 forms. Inside a callback block, issue `RELEASE SAVEPOINT` / `ROLLBACK TO SAVEPOINT` through `execute` if you need them
@@ -457,7 +467,9 @@ resolves to `std::nullopt`.
 - **Statement timeout below 1 ms vanishes.** A sub-millisecond `set_timeout` truncates to 0 and emits no `SET LOCAL`.
   Use whole-millisecond durations.
 - **Savepoint names are validated only on the coroutine path.** Callback `savepoint` does not pre-validate the name; an
-  illegal identifier surfaces as a server error from PostgreSQL instead of a client-side `client_error`.
+  illegal identifier surfaces as a server error from PostgreSQL instead of a client-side `client_error`. It is still
+  **injection-safe** either way — the name is quoted as a SQL identifier on both paths (see *Savepoints* above), so an
+  unvalidated name is at worst a rejected identifier, never a second statement.
 - **Coroutine results are snapshots.** `Reply<resultset>` owns a `deep_snapshot()`; do not assume it aliases the
   transaction's live buffers, and conversely do not hold a `resultset&` from a callback past the callback's return.
 
