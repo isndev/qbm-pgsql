@@ -262,6 +262,11 @@ The parameter count and the declared-type count must each fit in a signed 16-bit
 declared types and `params` serialization throws `std::length_error` past 32767 values, because a wrapped `int16` count
 would desynchronize the wire stream. <!-- src: src/queries.h:655-664; src/param_serializer.h:91-106 -->
 
+Each individual bind value is also framed as `[int32 byte-length][payload]`, so a **single parameter ≥ 2 GiB** is
+rejected — `checked_param_length` throws `std::length_error` rather than let the signed `int32` length wrap while the
+true bytes are still appended (which would desynchronize the Bind message). This one guard covers every variable-length
+bind write: scalar strings, `bytea`, arrays, and `json`/`jsonb`. <!-- src: src/pg_types.h:63-70; src/param_serializer.cpp:45,149,164,182,194; src/param_serializer.h:603 -->
+
 If you omit a type (`type_oid_sequence{}` or fewer entries than parameters), the server infers it. Explicit OIDs are
 safer for overloaded operators and for `NULL` parameters whose type the server cannot infer.
 

@@ -234,11 +234,20 @@ The server then drives one of the supported authentication exchanges, handled in
 SCRAM-SHA-256 is the modern PostgreSQL default and is fully implemented, with **both** mutual-authentication checks RFC
 5802 requires: (1) the server's combined nonce must begin with the exact client nonce and extend it (rejected before any
 proof is derived — guards against a man-in-the-middle or replay that does not faithfully continue our exchange), and (2)
-the server signature in the final message is recomputed and compared. GSS/SSPI/Kerberos and other schemes are **not**
-implemented: they hit the `default:` throw. That throw is contained at the `noexcept` `onMessage` boundary, which drops
-the connection and resumes the pending `connect` awaiter with an error — it does **not** call `std::terminate`. The same
-containment applies to a malformed SCRAM server message (including a mismatched nonce). You therefore see an unsupported
-or hostile auth method as a failed connect, not a descriptive auth-method error.
+the server signature (`v=`) in the `AuthenticationSASLFinal` message is recomputed and compared **constant-time** on the
+raw HMAC bytes. This second check is **enforced**: once a SCRAM exchange has started, `AuthenticationOk` is **refused**
+unless that server signature verified — an impersonating server or active MITM that skips (or fails) `SASLFinal` and
+sends a bare `AuthenticationOk` is rejected, not trusted, because the client's own proof leaks nothing that would stop
+it. The gate is re-armed at the start of every handshake (in `on_transport_ready`, the single choke point all connect
+paths funnel through), so a bare reconnect cannot carry a stale "verified" flag across connections. GSS/SSPI/Kerberos and
+other schemes are **not** implemented: they hit the `default:` throw. That throw is contained at the `noexcept`
+`onMessage` boundary, which drops the connection and resumes the pending `connect` awaiter with an error — it does
+**not** call `std::terminate`. The same containment applies to a malformed SCRAM server message (including a mismatched
+nonce). You therefore see an unsupported or hostile auth method as a failed connect, not a descriptive auth-method error.
+<!-- src: qbm/pgsql/pgsql.h:954-965,1130-1137 -->
+
+The `AuthenticationOk` row in the table above is therefore conditional: it marks the connection ready *only after* the
+mutual-auth gate is satisfied for a SCRAM handshake.
 
 **Channel binding (SCRAM-SHA-256-PLUS).** Over TLS, the client parses the mechanisms the server offers and, when it sees
 `SCRAM-SHA-256-PLUS`, negotiates **`tls-server-end-point` channel binding** (RFC 5929): a hash of the server certificate
@@ -291,13 +300,16 @@ bool ok = qb::io::async::run_sync(db.connect("tcp://user:secret@db.internal:5432
 <!-- src: qbm/pgsql/tests/integration/connection/connection-ssl.cpp:106-118 -->
 
 > **Server-certificate verification is OFF by default.** `ssl_verify` defaults to `ssl_verify_mode::none` (≈ libpq
-`sslmode=require`): the link is encrypted but the server's certificate chain and hostname are **not** validated. Set
+`sslmode=require`): the link is encrypted but the server's certificate chain and hostname are **not** validated, and the
+client logs a one-time `LOG_WARN` so an unverified secure connection is never silent. Note the scope: SCRAM-SHA-256
+mutual auth (enforced — see [Startup and authentication](#startup-and-authentication)) still authenticates the *server*
+even here; it is the TLS channel itself and any non-SCRAM auth that stay unprotected against an active MITM. Set
 `ssl_verify = ssl_verify_mode::full` (≈ libpq `verify-full`) on the options before connecting to enable qb-io's chain +
 > hostname verification — checked during the handshake, before any data flows, so a verification failure aborts the
 > connect. libpq's intermediate `verify-ca` (chain without hostname) is intentionally not offered: it accepts a valid
 > certificate issued for a *different* host, leaving an active-MITM window. `disable`/`prefer` map to the transport
 > choice — `tcp::database` never sends an SSLRequest; `tcp::ssl::database` requires TLS.
-<!-- src: qbm/pgsql/src/common.h:160-169 -->
+<!-- src: qbm/pgsql/src/common.h:160-169; qbm/pgsql/pgsql.h:634-644 -->
 
 ---
 
