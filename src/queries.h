@@ -481,6 +481,31 @@ public:
 };
 
 /**
+ * @brief Quote a value as a PostgreSQL SQL identifier: wrap in double quotes and double any
+ *        embedded double quote (per SQL identifier syntax, matching libpq's PQescapeIdentifier).
+ *
+ * SECURITY: savepoint names are the ONE user-supplied value the module injects into a
+ * simple-query string (`savepoint <name>`) rather than binding out-of-band. Without quoting, a
+ * name like `s; DROP TABLE users; --` executes a second statement. Quoting turns any name into a
+ * single literal identifier, so injection is impossible regardless of which API (callback or
+ * co_await) supplied it. The co_await path additionally rejects non-alnum names early; this is
+ * the belt-and-suspenders that also covers the callback path.
+ */
+[[nodiscard]] inline std::string
+pg_quote_identifier(std::string const &ident) {
+    std::string out;
+    out.reserve(ident.size() + 2);
+    out.push_back('"');
+    for (char const c : ident) {
+        if (c == '"')
+            out.push_back('"'); // double an embedded quote
+        out.push_back(c);
+    }
+    out.push_back('"');
+    return out;
+}
+
+/**
  * @brief Query for creating a savepoint
  *
  * Creates a SAVEPOINT statement within a transaction.
@@ -513,7 +538,7 @@ public:
     get() const final {
         LOG_DEBUG("[pgsql] Send SAVEPOINT " << _name);
         message m(query_tag);
-        m.write("savepoint " + _name);
+        m.write("savepoint " + pg_quote_identifier(_name));
         return m;
     }
 };
@@ -551,7 +576,7 @@ public:
     get() const final {
         LOG_DEBUG("[pgsql] Send RELEASE SAVEPOINT " << _name);
         message m(query_tag);
-        m.write("release savepoint " + _name);
+        m.write("release savepoint " + pg_quote_identifier(_name));
         return m;
     }
 };
@@ -589,7 +614,7 @@ public:
     get() const final {
         LOG_DEBUG("[pgsql] Send ROLLBACK TO SAVEPOINT " << _name);
         message m(query_tag);
-        m.write("rollback to savepoint " + _name);
+        m.write("rollback to savepoint " + pg_quote_identifier(_name));
         return m;
     }
 };

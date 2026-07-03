@@ -82,8 +82,16 @@ resultset::row::operator[](size_type col_index) const {
 
 resultset::row::reference
 resultset::row::operator[](std::string const &name) const {
-    size_type col_index = result_->index_of_name(name);
-    return (*this)[col_index];
+    // index_of_name returns the FULL-WIDTH resultset::size_type (uint32_t); its miss sentinel is
+    // npos (0xFFFFFFFF). Assigning that straight into the row's int16_t size_type narrows it to -1,
+    // which then slips past `col_index >= col_count` (-1 >= N is false) and returns a bogus field
+    // whose misuse only throws a misleading garbage-index error later. Check the miss at full width
+    // and raise a clear no-such-column error here instead.
+    resultset::size_type const idx = result_->index_of_name(name);
+    if (idx == resultset::npos) {
+        throw std::out_of_range("No column named '" + name + "' in result set");
+    }
+    return (*this)[static_cast<size_type>(idx)];
 }
 
 //----------------------------------------------------------------------------

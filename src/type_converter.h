@@ -165,7 +165,7 @@ public:
     to_binary(const value_type &value, std::vector<byte> &buffer) {
         if constexpr (std::is_same_v<value_type, std::string> || std::is_same_v<value_type, std::string_view>) {
             // Write length
-            integer len = static_cast<integer>(value.size());
+            integer len = checked_param_length(value.size());
             write_integer(buffer, len);
 
             // Write raw data (without null terminator)
@@ -214,7 +214,7 @@ public:
             buffer.insert(buffer.end(), bytes, bytes + sizeof(double));
         } else if constexpr (std::is_same_v<value_type, bytea> || std::is_same_v<value_type, std::vector<byte>>) {
             // PostgreSQL bytea: length + raw bytes
-            integer len = static_cast<integer>(value.size());
+            integer len = checked_param_length(value.size());
             write_integer(buffer, len);
 
             if (!value.empty()) {
@@ -1479,7 +1479,7 @@ encode_pg_array(const std::vector<Elem> &vec) {
         static void                                                           \
         to_binary(const value_type &vec, std::vector<byte> &buffer) {         \
             const std::vector<byte> body = encode_pg_array<ELEM>(vec);        \
-            integer                 len  = static_cast<integer>(body.size()); \
+            integer                 len  = checked_param_length(body.size()); \
             buffer.resize(buffer.size() + sizeof(integer));                   \
             byte   *dest = &buffer[buffer.size() - sizeof(integer)];          \
             integer nbo  = qb::endian::to_big_endian(len);                    \

@@ -22,7 +22,10 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 #include <iosfwd>
+#include <limits>
+#include <stdexcept>
 #include <qb/json.h>
 #include <qb/uuid.h>
 
@@ -46,6 +49,25 @@ using integer = int32_t;
  * @brief 4-byte unsigned integer
  */
 using uinteger = uint32_t;
+
+/**
+ * @brief Narrow a byte length to the PostgreSQL wire's signed int32 length prefix, rejecting an
+ *        oversize value instead of truncating it.
+ *
+ * Every variable-length bind value is framed as `[int32 byte-length][payload]`. A value ≥ 2 GiB
+ * would wrap (or go negative) in the int32 length while its true bytes are still appended,
+ * desynchronizing the Bind message and the whole connection stream. This is the single choke point
+ * used by EVERY length-prefix write (scalar strings, arrays, json/jsonb, bytea, param serializer)
+ * so the invariant cannot be bypassed on any bind path. A parameter this large is realistic on a
+ * 64-bit host, so the check is real defense, not just theoretical.
+ */
+[[nodiscard]] inline integer
+checked_param_length(std::size_t size) {
+    if (size > static_cast<std::size_t>(std::numeric_limits<integer>::max())) {
+        throw std::length_error("qb::pg: parameter value exceeds the 2 GiB PostgreSQL wire length limit");
+    }
+    return static_cast<integer>(size);
+}
 /**
  * @brief 8-byte integer, to match PostgreSQL `bigint` and `bigserial` types
  */

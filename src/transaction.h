@@ -154,6 +154,22 @@ public:
     }
 
     /**
+     * @brief Whether the underlying connection is currently inside a SQL transaction block.
+     *
+     * The root `Database` overrides this with its live `_txn_status`; a sub-transaction delegates
+     * up. `with_transaction` uses it to fail FAST rather than send a second `BEGIN` on a
+     * connection already in a transaction — PostgreSQL warns 25001 and flattens the nesting into
+     * one session-level transaction, so the inner scope's COMMIT/ROLLBACK would silently end the
+     * outer one and the other scope's writes would run outside any transaction (lost isolation).
+     * Use SAVEPOINTs for nesting, not nested `with_transaction`.
+     */
+    [[nodiscard]] virtual bool
+    in_transaction() const noexcept {
+        const Transaction *p = parent();
+        return p != nullptr && p->in_transaction();
+    }
+
+    /**
      * @brief Adds a sub-transaction to the queue
      *
      * @param cmd Pointer to the sub-transaction

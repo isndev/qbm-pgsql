@@ -81,6 +81,7 @@ qpg_test(unit prepared-storage-lru unit/prepared/prepared-storage-lru.cpp EXTRA_
 # SYSTEM — no daemon (network-timing dependent → slow)
 # -----------------------------------------------------------------------------
 qpg_test(system connect-timeout system/connection/connect-timeout.cpp EXTRA_LABELS slow)
+qpg_test(system scram-mitm-refuse system/auth/scram-mitm-refuse.cpp EXTRA_LABELS auth)
 
 # -----------------------------------------------------------------------------
 # INTEGRATION — live postgres:5432 (REQUIRES live, RESOURCE_LOCK)

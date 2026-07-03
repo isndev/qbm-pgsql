@@ -600,7 +600,7 @@ private:
         // size=0), NOT SQL NULL — binding NULL would be a different value and break
         // `col = ANY($1)` / array_length / cardinality semantics.
         const std::vector<byte> body = encode_pg_array<element_type>(vector);
-        write_integer(params_buffer_, static_cast<integer>(body.size()));
+        write_integer(params_buffer_, checked_param_length(body.size()));
         params_buffer_.insert(params_buffer_.end(), body.begin(), body.end());
     }
 };

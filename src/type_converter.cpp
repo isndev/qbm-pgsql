@@ -263,7 +263,7 @@ TypeConverter<qb::json>::to_binary(const qb::json &value, std::vector<byte> &buf
     buffer.reserve(4 + json_str.size());
 
     // 1. Write length of JSON string
-    write_integer(buffer, static_cast<integer>(json_str.size()));
+    write_integer(buffer, checked_param_length(json_str.size()));
 
     // 2. Write JSON content as string
     buffer.insert(buffer.end(), json_str.begin(), json_str.end());
@@ -342,7 +342,8 @@ TypeConverter<qb::jsonb>::to_binary(const qb::jsonb &value, std::vector<byte> &b
     // then jsonb_recv payload: version 1 + UTF-8 JSON text (see jsonb_send/recv).
     std::string json_str = value.dump();
     buffer.reserve(sizeof(integer) + 1 + json_str.size());
-    write_integer(buffer, static_cast<integer>(1 + json_str.size()));
+    // +1 for the jsonb version byte; guard the full payload length against the int32 wire prefix.
+    write_integer(buffer, checked_param_length(1 + json_str.size()));
     buffer.push_back(static_cast<byte>(1));
     buffer.insert(buffer.end(), json_str.begin(), json_str.end());
 }
@@ -424,7 +425,7 @@ TypeConverter<qb::jsonb>::from_text(const std::string &text) {
 void
 TypeConverter<std::string>::to_binary(const value_type &value, std::vector<byte> &buffer) {
     // Bind framing for a text value: [int32 byte-length][raw bytes], no NUL terminator.
-    integer len = static_cast<integer>(value.size());
+    integer len = checked_param_length(value.size());
     buffer.resize(buffer.size() + sizeof(integer));
     byte   *dest = &buffer[buffer.size() - sizeof(integer)];
     integer nbo  = qb::endian::to_big_endian(len);
@@ -632,7 +633,7 @@ TypeConverter<numeric>::to_binary(const value_type &num, std::vector<byte> &buff
     // ExecuteQuery). The previous implementation sent the decimal text bytes,
     // which PostgreSQL then mis-parsed as binary.
     const std::vector<byte> body = encode_pg_numeric(num.str());
-    const integer           len  = static_cast<integer>(body.size());
+    const integer           len  = checked_param_length(body.size());
     buffer.resize(buffer.size() + sizeof(integer));
     byte   *dest = &buffer[buffer.size() - sizeof(integer)];
     integer nbo  = qb::endian::to_big_endian(len);
@@ -827,7 +828,7 @@ TypeConverter<qb::calendar_interval>::from_text(const std::string &) {
 
 void
 TypeConverter<std::vector<std::byte>>::to_binary(const value_type &v, std::vector<byte> &buffer) {
-    const integer len = static_cast<integer>(v.size());
+    const integer len = checked_param_length(v.size());
     buffer.resize(buffer.size() + sizeof(integer));
     byte   *dest = &buffer[buffer.size() - sizeof(integer)];
     integer nbo  = qb::endian::to_big_endian(len);
