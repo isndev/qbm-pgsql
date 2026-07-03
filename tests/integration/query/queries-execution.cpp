@@ -154,6 +154,26 @@ TEST_F(QueryExecutionTest, BasicSelect) {
 }
 
 /**
+ * @brief row["missing_column"] must raise a clear no-such-column error at the `[]`.
+ *
+ * P4 regression: index_of_name returns the full-width uint32 miss sentinel (npos), which used to
+ * be narrowed into the row's int16 size_type as -1, slip past the `col_index >= col_count` bounds
+ * check, and only surface later as a misleading garbage-index (65535) out_of_range on first use.
+ */
+TEST_F(QueryExecutionTest, MissingColumnByNameThrowsClearError) {
+    run_select("SELECT id, name FROM test_users ORDER BY id LIMIT 1", [](results r) {
+        ASSERT_EQ(r.size(), 1u);
+        EXPECT_NO_THROW((void) r[0]["name"].template as<std::string>()); // present column resolves
+        try {
+            (void) r[0]["does_not_exist"];
+            ADD_FAILURE() << "expected out_of_range for a missing column name";
+        } catch (const std::out_of_range &ex) {
+            EXPECT_NE(std::string(ex.what()).find("does_not_exist"), std::string::npos) << ex.what();
+        }
+    });
+}
+
+/**
  * @brief `field::to(T&)` and `row::to(vals...)` must WRITE the destination.
  *
  * Regression guard: `field::to_impl()` once read the buffer but never assigned the

@@ -631,6 +631,20 @@ private:
             // ssl_verify_mode::full -> verify the chain + host (the connector passes the
             // remote host to ssl::socket::init_client); ::none -> encrypt only (set_insecure).
             const bool verify = (conn_opts_.ssl_verify == qb::pg::ssl_verify_mode::full);
+            if (!verify) {
+                // P2: encrypt-only (ssl_verify=none, the documented libpq-matching default) does NOT
+                // check the server certificate chain or hostname, leaving an active-MITM window on an
+                // untrusted network. SCRAM-SHA-256 mutual auth (enforced since the P1 fix) still
+                // authenticates the server, but non-SCRAM auth and the TLS channel itself are
+                // unprotected. Surface it ONCE so an unverified secure connection is never silent.
+                static bool warned_unverified_tls = false;
+                if (!warned_unverified_tls) {
+                    warned_unverified_tls = true;
+                    LOG_WARN("[pgsql] TLS WITHOUT certificate verification (ssl_verify=none): the server "
+                             "certificate chain/hostname is NOT verified. Set ssl_verify_mode::full to "
+                             "authenticate the server (or rely on SCRAM-SHA-256 mutual auth).");
+                }
+            }
             qb::io::async::tcp::starttls_connect<transport_sock, postgres_ssl_negotiator>(connect_uri, std::move(cb),
                                                                                           qb::detail::from_ev_seconds(t_out), verify);
 #else
@@ -701,6 +715,19 @@ private:
         }
         this->clear_protocols(); // idempotent: drops any prior protocol, resets to the NoProtocol sentinel
         this->transport() = std::forward<Sock_>(sock);
+        // Re-arm the SCRAM mutual-auth gate at the START of every handshake. These flags gate
+        // AuthenticationOk in on_authentication; they are also cleared in prepare_reconnect(), but a
+        // *bare* reconnect — connect() after disconnect() with no prepare_reconnect(), a supported and
+        // tested path (ReconnectWithoutPrepareReconnectIsUsable) — would otherwise carry a stale
+        // _scram_server_verified=true from a prior successful SCRAM login into the new handshake. An
+        // impersonating server on the second connection could then skip SASL entirely and send a bare
+        // AuthenticationOk to a client that never re-authenticated. on_transport_ready is the single
+        // choke point every connect path funnels through immediately before send_startup_message(), so
+        // resetting here (not only in prepare_reconnect) closes the reuse bypass on ALL connect paths.
+        _scram_pending         = false;
+        _scram_server_verified = false;
+        _password_salt.clear();
+        _auth_message.clear();
         attach_pg_protocol_and_handshake_timer(timer_gen, t_out);
     }
 
@@ -884,6 +911,13 @@ private:
     std::string                _nonce;           ///< Client nonce for SCRAM authentication
     std::vector<uint8_t>       _password_salt;   ///< Salted password for SCRAM authentication
     std::string                _auth_message;    ///< Authentication message for SCRAM protocol
+    /// SECURITY (SCRAM mutual auth): true once a SCRAM-SHA-256 exchange has started. While set,
+    /// AuthenticationOk MUST NOT be accepted unless _scram_server_verified is also true — otherwise
+    /// an impersonating server / active MITM that does not know the password can skip
+    /// AuthenticationSASLFinal and send AuthenticationOk to be trusted (defeats SCRAM mutual auth).
+    bool                       _scram_pending         = false;
+    /// Set only when the server's SASLFinal ServerSignature (`v=`) verified successfully.
+    bool                       _scram_server_verified = false;
     std::string                _gs2_header;      ///< SCRAM gs2-header chosen at SASL init (`n,,` / `y,,` / `p=tls-server-end-point,,`)
     std::vector<unsigned char> _channel_binding; ///< SCRAM-SHA-256-PLUS channel-binding data (tls-server-end-point); empty when unbound
     std::function<void(std::string_view)>
@@ -918,6 +952,18 @@ public:
         LOG_DEBUG("[pgsql] Handle auth_event");
         switch (auth_state) {
             case OK: {
+                // SCRAM mutual auth: if a SCRAM-SHA-256 exchange is in flight, the server MUST have
+                // proved knowledge of the password via a verified SASLFinal ServerSignature before
+                // we accept AuthenticationOk. Without this gate an impersonating server / active
+                // MITM that never sent (or failed) AuthenticationSASLFinal would be trusted — the
+                // client's own SCRAM proof leaks nothing, so nothing else stops it.
+                if (_scram_pending && !_scram_server_verified) {
+                    LOG_CRIT("[pgsql] AuthenticationOk without a verified SCRAM server signature — refusing (possible MITM/impersonation)");
+                    connect_handshake_failed_ = true;
+                    is_connected_             = false;
+                    try_resume_connect_wait();
+                    break;
+                }
                 LOG_INFO("[pgsql] Authenticated with server");
                 is_connected_ = true;
                 // Apply keepalive settings if configured (P1-1)
@@ -949,6 +995,8 @@ public:
             } break;
             case SCRAM_SHA256: {
                 LOG_INFO("[pgsql] SCRAM-SHA-256 authentication requested");
+                _scram_pending         = true;  // gate AuthenticationOk until SASLFinal verifies (mutual auth)
+                _scram_server_verified = false;
 
                 // AuthenticationSASL body: the NUL-terminated mechanism names the
                 // server offers, ended by an empty string.
@@ -1079,13 +1127,14 @@ public:
                     std::vector<unsigned char> serverKey = qb::crypto::hmac_sha256(_password_salt, "Server Key");
                     // Compute the ServerSignature: HMAC(serverKey, authMessage)
                     std::vector<unsigned char> computedServerSignature = qb::crypto::hmac_sha256(serverKey, _auth_message);
-                    // Encode the computed server signature in Base64
-                    std::string computedServerSignatureBase64 =
-                        qb::crypto::base64_encode(computedServerSignature.data(), computedServerSignature.size());
-                    // Compare the computed server signature with the received one
-                    if (computedServerSignatureBase64 != receivedServerSignatureBase64) {
+                    // Constant-time compare of the raw 32-byte HMAC values (base64-decode the
+                    // received `v=`) rather than the base64 strings, whose operator!= short-circuits.
+                    // This value is the SCRAM mutual-auth linchpin, so it must not leak via timing.
+                    std::vector<unsigned char> receivedServerSignature = qb::crypto::base64_decode(receivedServerSignatureBase64);
+                    if (!qb::crypto::constant_time_compare(computedServerSignature, receivedServerSignature)) {
                         throw std::runtime_error("server signature does not match. Authentication failed");
                     }
+                    _scram_server_verified = true; // mutual auth satisfied — AuthenticationOk may now be accepted
                     LOG_INFO("[pgsql] SCRAM-SHA-256 Authentication successful: server "
                              "signature verified");
                     break;
@@ -1808,7 +1857,7 @@ public:
      *         block); false when idle (`I`). Reflects real server state.
      */
     [[nodiscard]] bool
-    in_transaction() const noexcept {
+    in_transaction() const noexcept override {
         return _txn_status == 'T' || _txn_status == 'E';
     }
 
@@ -2233,6 +2282,17 @@ public:
         serverPid_    = 0;
         serverSecret_ = 0;
         server_params_.clear(); // server ParameterStatus is per-backend; drop the stale cache
+        // P7: prepared statements are per-backend. After reconnecting to a NEW backend PID, a cached
+        // statement name no longer exists server-side, so a later execute(name,...) would Bind to a
+        // Parse the backend never saw (SQLSTATE 26000 invalid_sql_statement_name). Drop the cache so
+        // callers re-Parse rather than trusting a name the fresh backend does not know.
+        storage_.clear();
+        // P9: transaction status is per-session; a handle dropped mid-block must not keep reporting
+        // a stale 'T'/'E' from in_transaction() until the next ReadyForQuery.
+        _txn_status = 'I';
+        // P1: the next handshake renegotiates SCRAM from scratch; clear the mutual-auth gate.
+        _scram_pending         = false;
+        _scram_server_verified = false;
         _error           = error::db_error{"unknown error"};
         _current_command = root_transaction();
         _current_query   = nullptr;

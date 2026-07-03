@@ -313,6 +313,29 @@ TEST_F(PgsqlCoroApiTest, WithTransaction_VoidBodyCommits) {
     ASSERT_TRUE(ok);
 }
 
+/**
+ * @brief P8: a nested with_transaction must FAIL FAST, not silently flatten.
+ *
+ * PostgreSQL has one transaction per session; a second BEGIN inside a live block warns 25001 and
+ * flattens, so the inner scope's COMMIT/ROLLBACK would end the OUTER transaction and lose
+ * isolation. The busy-guard rejects the nested begin (use a SAVEPOINT to nest); the outer
+ * transaction still completes normally.
+ */
+TEST_F(PgsqlCoroApiTest, WithTransaction_NestedIsRejectedNotFlattened) {
+    bool nested_rejected = false, outer_ok = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        auto r = co_await with_transaction(*db_, [&](Transaction &) -> qb::io::async::task<void> {
+            // Inside the live transaction, in_transaction() is now true → the nested begin is refused.
+            auto nested     = co_await with_transaction(*db_, [](Transaction &) -> qb::io::async::task<void> { co_return; });
+            nested_rejected = !nested.ok();
+            co_return;
+        });
+        outer_ok = r.ok();
+    }());
+    EXPECT_TRUE(nested_rejected) << "a nested with_transaction must be rejected, not flattened";
+    EXPECT_TRUE(outer_ok) << "the outer transaction still completes";
+}
+
 TEST_F(PgsqlCoroApiTest, WithTransaction_TransactionAbortNoCommit) {
     bool ok = false;
     qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
@@ -612,6 +635,33 @@ TEST_F(PgsqlCoroApiTest, WithTransaction_SavepointReleaseInsideScope) {
         if (!r.ok())
             co_return;
         auto q = co_await db_->query(std::string("SELECT COUNT(*) FROM ") + std::string(kCoroApiTable) + " WHERE v = 'in_sp'");
+        ok     = q.ok() && q.result()[0][0].as<int>() == 1;
+    }());
+    ASSERT_TRUE(ok);
+}
+
+// A savepoint name that passes pg_savepoint_name_ok (alphanumeric/underscore) but is BOTH
+// digit-leading AND mixed-case: unquoted it is a syntax error (`SAVEPOINT 1Pt_Mix`) — and even a
+// non-digit mixed-case name would silently case-fold, diverging from the quoted callback API. The
+// co_await path now quotes the identifier exactly like SavePointQuery, so create + release round-trip
+// under the same name. This is the regression guard for that cross-API quoting fix.
+TEST_F(PgsqlCoroApiTest, Savepoint_DigitLeadingMixedCaseNameIsQuoted) {
+    bool ok = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        auto r = co_await with_transaction(*db_, [](Transaction &tr) -> qb::io::async::task<void> {
+            auto sp = co_await tr.savepoint("1Pt_Mix"); // pre-fix: `SAVEPOINT 1Pt_Mix` -> 42601 syntax error
+            if (!sp)
+                throw transaction_abort{sp.error()};
+            auto ins = co_await tr.execute(std::string("INSERT INTO ") + std::string(kCoroApiTable) + " (v) VALUES ('mixsp')");
+            if (!ins)
+                throw transaction_abort{ins.error()};
+            auto rel = co_await tr.release_savepoint("1Pt_Mix"); // must resolve the SAME savepoint
+            if (!rel)
+                throw transaction_abort{rel.error()};
+        });
+        if (!r.ok())
+            co_return;
+        auto q = co_await db_->query(std::string("SELECT COUNT(*) FROM ") + std::string(kCoroApiTable) + " WHERE v = 'mixsp'");
         ok     = q.ok() && q.result()[0][0].as<int>() == 1;
     }());
     ASSERT_TRUE(ok);

@@ -161,8 +161,12 @@ inline pg_reply_awaiter<resultset>
 Transaction::savepoint(std::string_view name) {
     if (!pg_savepoint_name_ok(name))
         return pg_fail_resultset(error::client_error{"invalid savepoint name (use non-empty alphanumeric/underscore, max 63)"});
-    std::string sql = "SAVEPOINT ";
-    sql.append(name);
+    // Quote the identifier exactly like the callback SavePointQuery path (queries.h) so a name means
+    // the SAME savepoint through either API: unquoted, PostgreSQL case-folds "MyPoint" to mypoint and
+    // rejects a digit-leading name outright, while the quoted callback path preserves it — mixing the
+    // APIs on one name would then silently miss. Quoting also keeps injection impossible on its own
+    // (the validator above is belt-and-suspenders).
+    std::string sql = "SAVEPOINT " + pg_quote_identifier(std::string(name));
     return execute(std::string_view(sql));
 }
 
@@ -170,8 +174,7 @@ inline pg_reply_awaiter<resultset>
 Transaction::rollback_savepoint(std::string_view name) {
     if (!pg_savepoint_name_ok(name))
         return pg_fail_resultset(error::client_error{"invalid savepoint name (use non-empty alphanumeric/underscore, max 63)"});
-    std::string sql = "ROLLBACK TO SAVEPOINT ";
-    sql.append(name);
+    std::string sql = "ROLLBACK TO SAVEPOINT " + pg_quote_identifier(std::string(name));
     return execute(std::string_view(sql));
 }
 
@@ -179,8 +182,7 @@ inline pg_reply_awaiter<resultset>
 Transaction::release_savepoint(std::string_view name) {
     if (!pg_savepoint_name_ok(name))
         return pg_fail_resultset(error::client_error{"invalid savepoint name (use non-empty alphanumeric/underscore, max 63)"});
-    std::string sql = "RELEASE SAVEPOINT ";
-    sql.append(name);
+    std::string sql = "RELEASE SAVEPOINT " + pg_quote_identifier(std::string(name));
     return execute(std::string_view(sql));
 }
 

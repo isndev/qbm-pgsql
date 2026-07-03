@@ -13,9 +13,16 @@
  * Licensed under the Apache License, Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0)
  * @ingroup Pgsql
  */
+#include <limits>
+#include <stdexcept>
+
 #include "./param_serializer.h"
 
 namespace qb::pg::detail {
+
+// checked_param_length(...) is the shared length-prefix guard defined in pg_types.h (qb::pg scope,
+// found here via enclosing-namespace lookup) — used at every var-length write so the invariant holds
+// uniformly across the param serializer AND the TypeConverter binary encoders.
 
 void
 ParamSerializer::add_string_vector(const std::vector<std::string> &values) {
@@ -35,7 +42,7 @@ ParamSerializer::add_string_vector(const std::vector<std::string> &values) {
         param_types_.push_back(25); // text (was oid::text)
 
         // Write the parameter length (4 bytes)
-        integer len = static_cast<integer>(value.size());
+        integer len = checked_param_length(value.size());
         write_integer(params_buffer_, len);
 
         // Write the string data without terminator
@@ -139,7 +146,7 @@ ParamSerializer::write_string(const std::string &value) {
     // PostgreSQL binary format: length (int32) + raw bytes (NO null terminators)
 
     // 1. Write the 4-byte length
-    integer len = static_cast<integer>(value.size());
+    integer len = checked_param_length(value.size());
     write_integer(params_buffer_, len);
 
     // 2. Write the raw data WITHOUT null terminator
@@ -154,7 +161,7 @@ ParamSerializer::write_string_view(std::string_view value) {
     // PostgreSQL binary format: length (int32) + raw bytes (NO null terminators)
 
     // 1. Write the 4-byte length
-    integer len = static_cast<integer>(value.size());
+    integer len = checked_param_length(value.size());
     write_integer(params_buffer_, len);
 
     // 2. Write the raw data WITHOUT null terminator
@@ -172,7 +179,7 @@ ParamSerializer::write_cstring(const char *value) {
     // PostgreSQL binary format: length (int32) + raw bytes (NO null terminators)
 
     // 1. Write the 4-byte length
-    write_integer(params_buffer_, static_cast<integer>(len));
+    write_integer(params_buffer_, checked_param_length(len));
 
     // 2. Write the raw data WITHOUT null terminator
     if (len > 0) {
@@ -184,7 +191,7 @@ ParamSerializer::write_cstring(const char *value) {
 void
 ParamSerializer::write_byte_array(const byte *data, size_t size) {
     // Write length
-    write_integer(params_buffer_, static_cast<integer>(size));
+    write_integer(params_buffer_, checked_param_length(size));
 
     // Write byte array data
     params_buffer_.insert(params_buffer_.end(), data, data + size);
