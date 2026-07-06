@@ -172,6 +172,19 @@ struct connection_options {
      */
     ssl_verify_mode ssl_verify{ssl_verify_mode::none};
 
+    /**
+     * @brief Optional TLS material for `ssl://` connections — set programmatically (like `ssl_verify`),
+     *        NOT part of the DSN string.
+     * @details Empty by default (system trust store, no client certificate):
+     *          - `ssl_root_cert` — PEM CA file or directory trusted IN ADDITION to the system store
+     *            (libpq `sslrootcert`); lets `ssl_verify_mode::full` validate against a private CA.
+     *          - `ssl_cert` + `ssl_key` — PEM client certificate + private key for mutual TLS (libpq
+     *            `sslcert`/`sslkey`); BOTH must be set to take effect. Paths are resolved cwd-then-exe-dir.
+     */
+    std::string ssl_root_cert; ///< Private CA (PEM file or dir) added to the trust store. Empty = system store only.
+    std::string ssl_cert;      ///< Client certificate (PEM) for mTLS. Empty = no client certificate.
+    std::string ssl_key;       ///< Client private key (PEM) for mTLS. Pairs with ssl_cert.
+
     // P1-1: Connection health check / keepalive settings
     int keepalive_interval{0}; /**< TCP keepalive interval in seconds (0 = disabled) */
     int keepalive_probes{3};   /**< Number of keepalive probes before considering dead */

@@ -628,8 +628,9 @@ private:
             // loop (no blocking send/recv/handshake). A server that declines SSL fails the
             // connect — a secure database requires TLS; use the plain tcp::database for
             // cleartext.
-            // ssl_verify_mode::full -> verify the chain + host (the connector passes the
-            // remote host to ssl::socket::init_client); ::none -> encrypt only (set_insecure).
+            // ssl_verify_mode::full -> verify the chain + host (the connector passes the remote host to
+            // ssl::socket::init_client); ::none -> encrypt only. The socket's ssl::Context (built below)
+            // governs verification, so the STARTTLS connector is handed a ready socket, not a verify bool.
             const bool verify = (conn_opts_.ssl_verify == qb::pg::ssl_verify_mode::full);
             if (!verify) {
                 // P2: encrypt-only (ssl_verify=none, the documented libpq-matching default) does NOT
@@ -645,8 +646,28 @@ private:
                              "authenticate the server (or rely on SCRAM-SHA-256 mutual auth).");
                 }
             }
-            qb::io::async::tcp::starttls_connect<transport_sock, postgres_ssl_negotiator>(connect_uri, std::move(cb),
-                                                                                          qb::detail::from_ev_seconds(t_out), verify);
+            // Build the value-semantic client TLS context from the connection options:
+            //   default        -> Context::client() (TLS 1.2+, system trust store, verify chain + host);
+            //   ssl_verify=none -> verification off (encrypt only);
+            //   ssl_root_cert   -> trust a private CA IN ADDITION to the system store (libpq sslrootcert);
+            //   ssl_cert+ssl_key -> present a client certificate (mutual TLS; libpq sslcert/sslkey).
+            auto tls = qb::io::ssl::Context::client();
+            if (!verify)
+                tls.verify(qb::io::ssl::VerifyMode::none);
+            if (!conn_opts_.ssl_root_cert.empty())
+                tls.trust(conn_opts_.ssl_root_cert);
+            if (!conn_opts_.ssl_cert.empty() && !conn_opts_.ssl_key.empty())
+                tls.identity(conn_opts_.ssl_cert, conn_opts_.ssl_key);
+            if (!tls.ok()) {
+                // Fail CLOSED on a bad CA/cert/key path rather than silently connecting without it.
+                connect_handshake_failed_ = true;
+                _error                    = error::connection_error{"pgsql: TLS context configuration failed: " + tls.error()};
+                try_resume_connect_wait();
+                return;
+            }
+            transport_sock sock{std::move(tls)};
+            qb::io::async::tcp::starttls_connect<transport_sock, postgres_ssl_negotiator>(
+                std::move(sock), connect_uri, std::move(cb), qb::detail::from_ev_seconds(t_out));
 #else
             connect_handshake_failed_ = true;
             _error                    = error::connection_error{"ssl transport requires QB_HAS_SSL"};
