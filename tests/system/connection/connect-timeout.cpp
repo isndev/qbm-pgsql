@@ -86,6 +86,23 @@ TEST(ConnectTimeout, SslDeadHostHonorsConfiguredDeadline) {
     qb::io::async::init();
     assert_connect_times_out<qb::pg::tcp::ssl::database>();
 }
+
+/// The `ssl://` database builds a value-semantic `qb::io::ssl::Context` from the connection options; a bad
+/// private-CA / client-certificate path makes that Context `!ok()`, so the connect fails CLOSED — it never
+/// silently connects WITHOUT the requested TLS material. Covers the `ssl_root_cert` / `ssl_cert` / `ssl_key`
+/// branches (the timeout cases above leave them empty) and the fail-closed integration. No live server: the
+/// broken Context is rejected before any TCP/TLS, so this returns fast (well under the connect deadline).
+TEST(ConnectTimeout, SslBadTlsMaterialFailsClosed) {
+    qb::io::async::init();
+    auto db              = std::make_unique<qb::pg::tcp::ssl::database>();
+    auto opts            = connection_options::parse(std::string{kUnreachableDsn});
+    opts.connect_timeout = kConfiguredTimeout;
+    opts.ssl_verify      = ssl_verify_mode::full;
+    opts.ssl_root_cert   = "qb-nonexistent-private-ca.pem"; // Context::trust() fails -> Context !ok()
+    opts.ssl_cert        = "qb-nonexistent-client.pem";     // (identity() is on the same fail-closed path)
+    opts.ssl_key         = "qb-nonexistent-client.key";
+    EXPECT_FALSE(qb::io::async::run_sync(db->connect(opts))) << "a bad TLS material path must fail the connect closed";
+}
 #endif
 
 int

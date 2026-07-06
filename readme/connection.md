@@ -103,11 +103,13 @@ rarely build it by hand — a connection string is parsed into it — but these 
 | `password`           | `std::string`     | secret for cleartext / MD5 / SCRAM auth                                                                           |
 | `connect_timeout`    | `qb::duration`    | handshake deadline; **default 10 s**                                                                              |
 | `ssl_verify`         | `ssl_verify_mode` | TLS certificate verification level: `none` (encrypt only, **default**) or `full` (verify chain + host); see below |
+| `ssl_root_cert`      | `std::string`     | PEM CA file/dir trusted IN ADDITION to the system store (libpq `sslrootcert`); lets `full` validate a private CA    |
+| `ssl_cert`, `ssl_key`| `std::string`     | PEM client certificate + private key for mutual TLS (libpq `sslcert`/`sslkey`); **both** required to take effect    |
 | `keepalive_interval` | `int`             | seconds between TCP keepalive probes; **0 = disabled (default)**                                                  |
 | `keepalive_probes`   | `int`             | unanswered probes before the socket is considered dead; default 3                                                 |
 | `keepalive_idle`     | `int`             | idle seconds before the first probe; default 60                                                                   |
 
-<!-- src: qbm/pgsql/src/common.h:149-174 -->
+<!-- src: qbm/pgsql/src/common.h:149-186 -->
 
 `connect_timeout` is a `qb::duration` (the framework's `std::chrono`-based duration). A non-positive value falls back to
 the 10 s default. Internally the deadline is converted to libev seconds via `qb::detail::to_ev_seconds`; you never deal
@@ -122,9 +124,17 @@ with that conversion.
 >
 > ```cpp
 > auto opts = qb::pg::connection_options::parse("tcp://user:secret@db:5432[app]");
-> opts.ssl_verify = qb::pg::ssl_verify_mode::full;   // verify chain + hostname
-> co_await db.connect(opts);
+> opts.ssl_verify    = qb::pg::ssl_verify_mode::full;   // verify chain + hostname
+> opts.ssl_root_cert = "certs/internal-ca.pem";         // OPTIONAL: validate against a PRIVATE CA
+> opts.ssl_cert      = "certs/client.pem";              // OPTIONAL: client certificate for mutual TLS
+> opts.ssl_key       = "certs/client.key";              //           (ssl_cert + ssl_key together)
+> co_await db.connect(opts);   // ssl:// database; a bad CA/cert/key path fails the connect CLOSED
 > ```
+>
+> Under the hood the `ssl://` database builds a value-semantic `qb::io::ssl::Context` from these options
+> (system trust by default; `ssl_root_cert` adds a private CA; `ssl_cert`+`ssl_key` present a client
+> certificate) and hands it to the async STARTTLS connector — so custom-CA and client-certificate (mTLS)
+> auth now work over PostgreSQL's `SSLRequest` upgrade.
 
 ### Connection string and user-defined literals
 
