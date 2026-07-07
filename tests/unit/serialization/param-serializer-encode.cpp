@@ -113,6 +113,51 @@ TEST_F(ParamSerializerTest, SmallIntEncodesOidLengthAndBigEndianValue) {
     EXPECT_EQ(read_be<smallint>(buf, sizeof(integer)), 12345);
 }
 
+// add_smallint emits the 2-byte big-endian value bytes after the int32 length prefix.
+// (SmallIntEncodesOidLengthAndBigEndianValue decodes the value; this pins the RAW bytes,
+// including a negative value's two's-complement big-endian layout.)
+TEST_F(ParamSerializerTest, SmallIntEmitsExactBigEndianValueBytes) {
+    serializer->add_smallint(static_cast<smallint>(0x3039)); // 12345
+    {
+        const auto &buf = serializer->params_buffer();
+        ASSERT_GE(buf.size(), sizeof(integer) + sizeof(smallint));
+        EXPECT_EQ(read_be<integer>(buf, 0), sizeof(smallint)); // length prefix = 2
+        EXPECT_EQ(static_cast<unsigned char>(buf[sizeof(integer) + 0]), 0x30u);
+        EXPECT_EQ(static_cast<unsigned char>(buf[sizeof(integer) + 1]), 0x39u);
+    }
+    serializer->reset();
+    serializer->add_smallint(static_cast<smallint>(-2)); // 0xFFFE two's-complement
+    {
+        const auto &buf = serializer->params_buffer();
+        ASSERT_GE(buf.size(), sizeof(integer) + sizeof(smallint));
+        EXPECT_EQ(static_cast<unsigned char>(buf[sizeof(integer) + 0]), 0xFFu);
+        EXPECT_EQ(static_cast<unsigned char>(buf[sizeof(integer) + 1]), 0xFEu);
+    }
+}
+
+// finalize_params_buffer() overwrites the 2-byte count placeholder at the FRONT of the
+// buffer with the actual big-endian param_count. Built exactly like the extended-query
+// callback path (mirrors the FinalizeEnforcesMaxParams integration test): serialize_params()
+// lays down the placeholder, add_* appends params, then finalize stamps the real count.
+TEST_F(ParamSerializerTest, FinalizeParamsBufferStampsBigEndianCountAtFront) {
+    serializer->serialize_params(); // 2-byte count placeholder (count currently 0)
+    serializer->add_smallint(12345);
+    serializer->add_integer(7);
+    ASSERT_EQ(serializer->param_count(), 2);
+
+    serializer->finalize_params_buffer();
+    const auto &buf = serializer->params_buffer();
+
+    // Front 2 bytes are the big-endian param count (2), not the first param's data.
+    EXPECT_EQ(read_be<smallint>(buf, 0), 2);
+    EXPECT_EQ(static_cast<unsigned char>(buf[0]), 0x00u);
+    EXPECT_EQ(static_cast<unsigned char>(buf[1]), 0x02u);
+
+    // Param bodies follow the count prefix: [int32 len=2][int16 12345][int32 len=4][int32 7].
+    EXPECT_EQ(read_be<integer>(buf, sizeof(smallint)), sizeof(smallint));         // smallint length
+    EXPECT_EQ(read_be<smallint>(buf, sizeof(smallint) + sizeof(integer)), 12345); // smallint value
+}
+
 TEST_F(ParamSerializerTest, IntegerEncodesOidLengthAndBigEndianValue) {
     serializer->add_integer(987654321);
     const auto &buf = serializer->params_buffer();
