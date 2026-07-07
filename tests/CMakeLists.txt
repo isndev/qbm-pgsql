@@ -76,6 +76,7 @@ qpg_test(unit protocol-message-codec unit/protocol/protocol-message-codec.cpp EX
 qpg_test(unit dsn-parse unit/dsn/dsn-parse.cpp EXTRA_LABELS dsn)
 qpg_test(unit scram-and-cancel unit/auth/scram-and-cancel.cpp EXTRA_LABELS auth)
 qpg_test(unit prepared-storage-lru unit/prepared/prepared-storage-lru.cpp EXTRA_LABELS prepared)
+qpg_test(unit module-surface unit/misc/module-surface.cpp)
 
 # -----------------------------------------------------------------------------
 # SYSTEM — no daemon (network-timing dependent → slow)

@@ -320,6 +320,38 @@ TEST(DsnParse, AtSignInUrlIsLiteral) {
     EXPECT_EQ(opts.database, "db");
 }
 
+// ---------------------------------------------------------------------------
+// Delimiter push_back arms taken while past their primary split (common.cpp
+// 209 / 226 / 244): a ':' at state url, and a second '@' / '[' after the first
+// consumed one, are all retained as literal token bytes, not state transitions.
+// ---------------------------------------------------------------------------
+
+/// A ':' seen while parsing the host (state == url, after `user@`) is a literal token
+/// byte (common.cpp:209 `case url:` push_back), not a user/password split.
+TEST(DsnParse, ColonInUrlStateIsLiteral) {
+    const auto opts = parse("tcp://user@a:b[db]");
+    EXPECT_EQ(opts.user, "user");
+    EXPECT_EQ(opts.uri, "a:b"); // the ':' after the '@' stays inside the uri token
+    EXPECT_EQ(opts.database, "db");
+}
+
+/// A second '@' (the first already split user/url, so state == url) hits the '@' default
+/// arm (common.cpp:226) and is kept verbatim in the uri token.
+TEST(DsnParse, SecondAtSignInUrlStateIsLiteral) {
+    const auto opts = parse("tcp://user@a@b[db]");
+    EXPECT_EQ(opts.user, "user");
+    EXPECT_EQ(opts.uri, "a@b"); // second '@' pushed into current -> uri
+    EXPECT_EQ(opts.database, "db");
+}
+
+/// A '[' seen while already parsing the database (state == database, after the first '['
+/// opened it) hits the '[' default arm (common.cpp:244) and is a literal byte.
+TEST(DsnParse, OpenBracketInDatabaseStateIsLiteral) {
+    const auto opts = parse("tcp://u@host[d[b]");
+    EXPECT_EQ(opts.uri, "host");
+    EXPECT_EQ(opts.database, "d[b"); // second '[' kept inside the database name
+}
+
 int
 main(int argc, char **argv) {
     testing::InitGoogleTest(&argc, argv);

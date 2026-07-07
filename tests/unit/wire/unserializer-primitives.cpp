@@ -181,6 +181,27 @@ TEST_F(UnserializerPrimitives, ReadBinaryStringStripsLengthPrefix) {
     EXPECT_EQ(u.read_binary_string(framed), s);
 }
 
+// read_binary_string needs the full 4-byte length prefix; anything shorter cannot even
+// read the length and throws (param_unserializer.cpp:220).
+TEST_F(UnserializerPrimitives, ReadBinaryStringThrowsOnBufferShorterThanLengthPrefix) {
+    for (std::size_t n = 0; n < 4; ++n) {
+        std::vector<byte> buf(n);
+        EXPECT_THROW(u.read_binary_string(buf), std::runtime_error) << "size=" << n;
+    }
+}
+
+// A 0xFFFFFFFF big-endian length prefix decodes to -1 (negative), which read_binary_string
+// treats as SQL NULL and returns "" — any trailing payload bytes are ignored
+// (param_unserializer.cpp:228).
+TEST_F(UnserializerPrimitives, ReadBinaryStringNegativeLengthIsSqlNull) {
+    std::vector<byte> null_prefix{byte(0xFF), byte(0xFF), byte(0xFF), byte(0xFF)};
+    EXPECT_EQ(u.read_binary_string(null_prefix), "");
+
+    // Same NULL sentinel followed by data: still empty (the negative length short-circuits).
+    std::vector<byte> null_with_tail{byte(0xFF), byte(0xFF), byte(0xFF), byte(0xFF), byte('x'), byte('y')};
+    EXPECT_EQ(u.read_binary_string(null_with_tail), "");
+}
+
 TEST_F(UnserializerPrimitives, ReadStringPreservesUnicodeAndEmbeddedNuls) {
     const std::string unicode = "Unicode: \xC3\xA4\xC3\xB6\xC3\xBC \xE4\xBD\xA0\xE5\xA5\xBD";
     EXPECT_EQ(u.read_string({reinterpret_cast<const byte *>(unicode.data()), unicode.size()}), unicode);
