@@ -65,11 +65,18 @@ protected:
 
     void
     TearDown() override {
-        if (db_) {
+        // `&& !IsSkipped()`: when SetUp skipped because no PostgreSQL was reachable, `db_` is
+        // still a live object that was never connected. Issuing a statement on it and .await()ing
+        // the reply waits for a response that can never arrive — the binary spins its event loop
+        // until ctest kills it (measured: 300.01 s wall, ~117 s CPU), instead of the ~20 s clean
+        // skip every sibling suite reports. The same guard is already on the TearDowns of
+        // transaction-advanced.cpp and prepared-statements.cpp, the other two integration suites
+        // that issue a statement here; this one was the odd member out.
+        if (db_ && !IsSkipped()) {
             (void) db_->execute("DROP TABLE IF EXISTS test_errors", discard_query, discard_error).await();
             db_->disconnect();
-            db_.reset();
         }
+        db_.reset();
     }
 };
 
