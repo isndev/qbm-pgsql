@@ -1362,3 +1362,103 @@ main(int argc, char **argv) {
     testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }
+
+// ===========================================================================
+// Two query_streams overlapping on ONE connection. Both halves of that were once broken:
+//
+//  * the cursor NAME used to be the fixed literal `qb_stream_cursor`, so the second DECLARE asked
+//    for a name that already existed and PostgreSQL refused it ("cursor already exists");
+//  * transaction OWNERSHIP used to be decided by `!in_transaction()`, which mirrors the last
+//    ReadyForQuery. The second stream evaluated it while the first was still suspended on its own
+//    BEGIN, read "idle", and opened a second transaction — PostgreSQL warns 25001 and keeps the ONE
+//    session transaction, so whichever stream reached COMMIT first ended the block under the other,
+//    whose next FETCH died with "cursor ... does not exist".
+//
+// `when_all` is the way to express the overlap: it suspends each branch at its `co_await` points,
+// so the second DECLARE is issued while the first cursor is provably still open. (Nesting via
+// `run_sync` inside `on_row` is NOT: the framework refuses re-entrant `run_sync`, so that path is
+// unreachable by construction. Sequential streams prove nothing — CLOSE and COMMIT have both
+// already run by the time the second DECLARE goes out.)
+// ===========================================================================
+
+TEST_F(PgsqlCoroApiTest, ConcurrentQueryStreamsDoNotCollideOnTheCursorName) {
+    // The two lengths are deliberately lopsided: the short stream is finished after 2 FETCH round
+    // trips while the long one still has ~98 of its 101 to go, so a stream that wrongly ends the
+    // shared block kills its sibling every time. Balanced lengths do NOT test that — the earlier
+    // 60-rows/batch-9 vs 35-rows/batch-6 pairing finished within one FETCH round of each other, so
+    // the short stream's COMMIT happened to land after the long one's LAST FETCH and the test
+    // passed on arithmetic rather than on behaviour.
+    std::uint64_t long_rows = 0, short_rows = 0;
+    bool          in_txn_after = true;
+
+    const bool ok = qb::io::async::run_sync([&]() -> qb::io::async::task<bool> {
+        auto [r_long, r_short] = co_await qb::io::async::when_all(
+            [&]() -> qb::io::async::task<bool> {
+                auto r = co_await db_->query_stream("SELECT g FROM generate_series(1, 800) g", 8, [&](auto) { ++long_rows; });
+                co_return r.ok();
+            }(),
+            [&]() -> qb::io::async::task<bool> {
+                auto r = co_await db_->query_stream("SELECT g FROM generate_series(1, 5) g", 3, [&](auto) { ++short_rows; });
+                co_return r.ok();
+            }());
+        // Both streams are done, so the block they shared must be closed — exactly once.
+        in_txn_after = db_->in_transaction();
+        co_return r_long && r_short;
+    }());
+
+    EXPECT_TRUE(ok) << "two overlapping query_stream calls on one connection failed: either both asked for the same "
+                       "cursor name ('cursor already exists'), or one of them ended the transaction they share "
+                       "('cursor \"qb_stream_cursor_N\" does not exist')";
+    EXPECT_EQ(long_rows, 800u) << "the long stream lost its cursor before draining — the short one ended the shared transaction";
+    EXPECT_EQ(short_rows, 5u);
+    EXPECT_FALSE(in_txn_after) << "the transaction query_stream opened for its cursors was never closed";
+}
+
+// Same overlap, but inside a CALLER-opened transaction: query_stream only opens (and ends) a block
+// when it finds none, so here neither stream may commit — the caller's COMMIT must still be the one
+// that ends it. Guards the other side of the ownership decision.
+TEST_F(PgsqlCoroApiTest, ConcurrentQueryStreamsInsideCallerTransactionLeaveItOpen) {
+    std::uint64_t a_rows = 0, b_rows = 0;
+    bool          still_in_txn = false, committed = false;
+
+    const bool ok = qb::io::async::run_sync([&]() -> qb::io::async::task<bool> {
+        auto begun = co_await db_->begin();
+        if (!begun.ok())
+            co_return false;
+        auto [ra, rb] = co_await qb::io::async::when_all(
+            [&]() -> qb::io::async::task<bool> {
+                auto r = co_await db_->query_stream("SELECT g FROM generate_series(1, 400) g", 8, [&](auto) { ++a_rows; });
+                co_return r.ok();
+            }(),
+            [&]() -> qb::io::async::task<bool> {
+                auto r = co_await db_->query_stream("SELECT g FROM generate_series(1, 5) g", 3, [&](auto) { ++b_rows; });
+                co_return r.ok();
+            }());
+        still_in_txn = db_->in_transaction();
+        auto c       = co_await db_->commit();
+        committed    = c.ok();
+        co_return ra && rb;
+    }());
+
+    EXPECT_TRUE(ok);
+    EXPECT_EQ(a_rows, 400u);
+    EXPECT_EQ(b_rows, 5u);
+    EXPECT_TRUE(still_in_txn) << "a query_stream ended the caller's transaction instead of leaving it to the caller";
+    EXPECT_TRUE(committed);
+}
+
+TEST_F(PgsqlCoroApiTest, SequentialQueryStreamsEachGetTheirOwnCursor) {
+    std::uint64_t first = 0, second = 0;
+
+    const bool ok = qb::io::async::run_sync([&]() -> qb::io::async::task<bool> {
+        auto a = co_await db_->query_stream("SELECT g FROM generate_series(1, 30) g", 8, [&](auto) { ++first; });
+        if (!a.ok())
+            co_return false;
+        auto b = co_await db_->query_stream("SELECT g FROM generate_series(1, 12) g", 5, [&](auto) { ++second; });
+        co_return b.ok();
+    }());
+
+    EXPECT_TRUE(ok);
+    EXPECT_EQ(first, 30u);
+    EXPECT_EQ(second, 12u) << "a second stream after the first closed must still work — the counter must not break reuse";
+}

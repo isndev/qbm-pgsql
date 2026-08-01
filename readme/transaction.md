@@ -392,7 +392,7 @@ Key facts to get right:
 
 ## LISTEN / NOTIFY
 
-<!-- src: src/transaction.h:420-477, src/pg_notify_sql.h:51-80, qbm/pgsql/pgsql.h:384-388,1717,2293-2378 -->
+<!-- src: src/transaction.h:420-477, src/pg_notify_sql.h:51-80, qbm/pgsql/pgsql.h:378-388 (notification), 1780-1791 (on_incoming_notify), 2461-2573 (notify_consumer / notify_co_consumer / notify_cb_consumer) -->
 
 ### Publishing (NOTIFY)
 
@@ -461,7 +461,7 @@ resolves to `std::nullopt`.
   `End`/`with_transaction` do it) before sending new commands.
 - **A lost connection fails every pending query automatically.** You do **not** write a disconnect handler. The built-in
   `Database::on(qb::io::async::event::disconnected)` handler calls `fail_all_pending(...)` on the root transaction (
-  `qbm/pgsql/pgsql.h:2195`), which drains every queued query and pending sub-transaction so suspended `co_await`
+  `qbm/pgsql/pgsql.h:2374`), which drains every queued query and pending sub-transaction so suspended `co_await`
   awaiters resume with `client_error("database disconnected")` instead of hanging forever.
   See [connection.md](./connection.md) (Fail-all-on-disconnect).
 - **Statement timeout below 1 ms vanishes.** A sub-millisecond `set_timeout` truncates to 0 and emits no `SET LOCAL`.
@@ -472,6 +472,11 @@ resolves to `std::nullopt`.
   unvalidated name is at worst a rejected identifier, never a second statement.
 - **Coroutine results are snapshots.** `Reply<resultset>` owns a `deep_snapshot()`; do not assume it aliases the
   transaction's live buffers, and conversely do not hold a `resultset&` from a callback past the callback's return.
+- **Overlapping `query_stream` calls share one transaction.** A session has a single transaction, so streams that
+  overlap on one connection do **not** each open one: the first `BEGIN`s, later ones join, and the last one out commits
+  — or rolls back if *any* of them failed. A caller-opened transaction is never joined and never ended, but it counts as
+  caller-owned only once its `BEGIN` has **completed**, so never start a stream while your own `begin()` is still in
+  flight. See [queries.md](./queries.md) (`query_stream`).
 
 ---
 

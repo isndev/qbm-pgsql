@@ -360,12 +360,16 @@ message::read(field_description &fd) {
  */
 bool
 message::read(row_data &row) {
-    size_t len = length();
+    const size_t len = length();
     assert(len == size() && "Invalid message length");
-    if (len < sizeof(integer) + sizeof(smallint)) {
-        std::cerr << "Size of invalid data row message is " << len << "\n";
-        assert(len >= sizeof(integer) + sizeof(smallint) && "Invalid data row message");
-    }
+    // A DataRow body must at least carry its 4-byte length plus the 2-byte column count. Reject a
+    // shorter one HERE, at runtime: the guard used to be an `assert` (compiled out by the release
+    // preset) preceded by a raw `std::cerr` write, so in release a malformed row neither stopped
+    // here nor was reported — it fell through to be rejected later by read(col_count), while every
+    // occurrence wrote synchronously to unbuffered stderr from the I/O thread. A hostile or buggy
+    // server could drive that at will, and this was the module's only raw stderr write.
+    if (len < sizeof(integer) + sizeof(smallint))
+        return false;
     smallint col_count(0);
     if (read(col_count)) {
         // The column count is a signed 16-bit wire value: a malformed/hostile
