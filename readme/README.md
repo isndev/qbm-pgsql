@@ -7,8 +7,8 @@ This is the table of contents for the qbm-pgsql narrative documentation: seven t
 management, query execution, transactions, result sets, type mapping, error handling, and integration testing, ordered
 as a learning path.
 
-**Prerequisites:** working knowledge of the qb framework — see [`qb/README.md`](../../../qb/README.md) and the qb [
-`readme/`](../../../qb/readme/) docs for `qb-io` async, coroutines, and `run_sync`. **See also:** the module front
+**Prerequisites:** working knowledge of the qb framework — see [`qb/README.md`](https://github.com/isndev/cube/blob/c++23/README.md) and the qb [
+`readme/`](https://github.com/isndev/cube/tree/c++23/readme/) docs for `qb-io` async, coroutines, and `run_sync`. **See also:** the module front
 door [`../README.md`](../README.md) for positioning, the build matrix, and a quickstart.
 
 ## What this module is
@@ -118,5 +118,5 @@ unclear, grep a test name and read it:
 ## See also
 
 - [`../README.md`](../README.md) — module positioning, build matrix, and quickstart.
-- [`qb/README.md`](../../../qb/README.md) — the qb framework this module builds on.
-- The qb framework [`readme/`](../../../qb/readme/) — `qb-io` async, coroutines, and `run_sync`.
+- [`qb/README.md`](https://github.com/isndev/cube/blob/c++23/README.md) — the qb framework this module builds on.
+- The qb framework [`readme/`](https://github.com/isndev/cube/tree/c++23/readme/) — `qb-io` async, coroutines, and `run_sync`.
