@@ -26,7 +26,7 @@ here so you can navigate the implementation — application code never includes 
 - **`type_oid_sequence`.** `using type_oid_sequence = std::vector<oid>` ([`src/common.h`](../src/common.h)). You pass
   one to `prepare()` to declare each parameter's type. <!-- src: src/common.h:519 -->
 - **`params`.** `using params = detail::QueryParams` ([`pgsql.h`](../pgsql.h)). A heterogeneous container of bind values
-  serialized to PostgreSQL **binary** wire form. <!-- src: pgsql.h:2422 -->
+  serialized to PostgreSQL **binary** wire form. <!-- src: pgsql.h:2612 -->
 - **`type_mapping<T>`.** Compile-time C++-type → OID lookup ([`src/type_mapping.h`](../src/type_mapping.h)). Drives
   `get_type_oid<T>()` and `fill_types<T...>()`. The primary template is **intentionally ill-formed** (a `static_assert`):
   a C++ type with no mapping is a **hard compile error**, not a silent fallback to OID `705` (unknown). Add a

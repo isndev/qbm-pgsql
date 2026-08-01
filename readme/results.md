@@ -15,7 +15,7 @@ mismatches), [transaction.md](./transaction.md) (the `status` / `await()` path).
 
 ## Summary
 
-A query returns a `qb::pg::results` object. `results` is a public alias (`pgsql.h:2414`) for the result-set class, which
+A query returns a `qb::pg::results` object. `results` is a public alias (`pgsql.h:2604`) for the result-set class, which
 is defined as `qb::pg::resultset` (`resultset.h:104`). The form `detail::resultset` resolves to the same type via a
 `using namespace qb::pg;` directive (`pgsql.h:392`). Either spelling (`qb::pg::results`, `qb::pg::resultset`) is valid;
 `results` is the recommended public name. You reach a result set through three paths:

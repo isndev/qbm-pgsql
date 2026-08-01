@@ -2025,11 +2025,18 @@ public:
      * is ever held in memory, so an arbitrarily large result set is processed in constant
      * memory (a plain `query()` buffers the whole result set).
      *
-     * Cursors require a transaction: when the connection is idle this opens its own
-     * (`BEGIN` … `COMMIT`, or `ROLLBACK` on failure); when it is already inside a
-     * transaction the cursor is declared there and only the cursor is closed. If @p on_row
-     * throws, the cursor is closed (and a self-opened transaction rolled back) and the
-     * exception is rethrown.
+     * Cursors require a transaction. Inside a caller-opened transaction the cursor is simply
+     * declared there and only the cursor is closed; otherwise `query_stream` opens its own
+     * (`BEGIN` … `COMMIT`, or `ROLLBACK` on failure). PostgreSQL has a single transaction per
+     * session, so streams that overlap on one connection **share** that self-opened block: the
+     * first opens it, the last one to finish ends it, and it is rolled back if any of them
+     * failed (see `_stream_txn_users`). Sharing one block also means a *server* error in one
+     * stream aborts it for the overlapping others. If @p on_row throws, the cursor is closed
+     * and the exception is rethrown.
+     *
+     * @note A caller-opened transaction is only recognised once its `BEGIN` has completed —
+     *       `in_transaction()` mirrors the last ReadyForQuery. Do not start a stream while your
+     *       own `begin()` is still in flight.
      *
      * @param sql        The query to stream (a `SELECT`, typically).
      * @param batch_size Rows per `FETCH` (clamped to ≥ 1).
@@ -2046,56 +2053,113 @@ public:
     query_stream(std::string sql, std::size_t batch_size, RowFn on_row) {
         if (batch_size == 0)
             batch_size = 1;
-        const bool        owns_txn    = !in_transaction();
-        const std::string declare_sql = "DECLARE qb_stream_cursor CURSOR FOR " + sql;
-        const std::string fetch_sql   = "FETCH " + std::to_string(batch_size) + " FROM qb_stream_cursor";
-        const std::string close_sql   = "CLOSE qb_stream_cursor";
 
-        if (owns_txn) {
+        // Who owns the transaction is decided HERE, synchronously, before the first co_await.
+        // `in_transaction()` alone cannot decide it — it mirrors the last ReadyForQuery, so a
+        // second stream starting while the first is still suspended on its own BEGIN reads 'I'
+        // (idle) and emits a second BEGIN: PostgreSQL warns 25001 and keeps the one session
+        // transaction, then the first stream to reach COMMIT ends it under the other, whose next
+        // FETCH dies with "cursor does not exist". `_stream_txn_users` is the synchronous mirror
+        // of that block (commands are enqueued in co_await order), so a non-zero count means a
+        // BEGIN of ours is already ahead of us in the queue and this stream must only join.
+        const bool caller_owns_txn = _stream_txn_users == 0 && !_stream_txn_closing && in_transaction();
+        const bool opens_txn       = !caller_owns_txn && _stream_txn_users == 0;
+        bool       registered      = !caller_owns_txn; // holds a seat in the self-opened block
+        bool       closing         = false;            // this stream is the one ending that block
+        if (registered) {
+            if (opens_txn)
+                _stream_txn_failed = false;
+            ++_stream_txn_users;
+        }
+        // Release whatever this stream still holds even if its frame is destroyed mid-co_await
+        // (cancellation / task drop — e.g. a when_all branch torn down): a leaked seat would make
+        // every later stream believe a block is open and declare its cursor outside one. The
+        // normal paths below clear both flags first, leaving this a no-op.
+        auto txn_guard = qb::scope_guard([this, &registered, &closing] {
+            if (registered)
+                --_stream_txn_users;
+            if (closing)
+                _stream_txn_closing = false;
+        });
+
+        // Unique per stream on this connection — see `_stream_cursor_seq`. The name is built from
+        // an internal counter only (never from caller input), so it stays a valid, unquoted SQL
+        // identifier and carries no injection surface.
+        const std::string cursor      = "qb_stream_cursor_" + std::to_string(_stream_cursor_seq++);
+        const std::string declare_sql = "DECLARE " + cursor + " CURSOR FOR " + sql;
+        const std::string fetch_sql   = "FETCH " + std::to_string(batch_size) + " FROM " + cursor;
+        const std::string close_sql   = "CLOSE " + cursor;
+
+        if (opens_txn) {
             auto b = co_await this->begin();
-            if (!b.ok())
+            if (!b.ok()) {
+                // No block was opened, so there is nothing to end here — the guard drops the seat.
+                // Mark the failure for any stream that joined behind us: it will ROLLBACK rather
+                // than COMMIT (both only warn when no block is in progress).
+                _stream_txn_failed = true;
                 co_return qb::pg::Reply<void>::failure(b.error());
-        }
-        auto declared = co_await this->execute(std::string_view{declare_sql});
-        if (!declared.ok()) {
-            if (owns_txn)
-                (void) co_await this->rollback();
-            co_return qb::pg::Reply<void>::failure(declared.error());
+            }
         }
 
-        bool                    failed = false;
+        bool                    failed   = false;
+        bool                    declared = false;
         qb::pg::error::db_error err{"unknown error"};
         std::exception_ptr      user_exc;
-        for (;;) {
-            auto batch = co_await this->execute(std::string_view{fetch_sql});
-            if (!batch.ok()) {
-                err    = batch.error();
-                failed = true;
-                break;
-            }
-            const auto       &rs = batch.result();
-            const std::size_t n  = rs.size();
-            try {
-                for (const auto &r : rs)
-                    on_row(r);
-            } catch (...) {
-                user_exc = std::current_exception();
-                failed   = true;
-            }
-            if (user_exc || n < batch_size)
-                break; // user threw, or short batch -> cursor exhausted
+
+        auto declare_reply = co_await this->execute(std::string_view{declare_sql});
+        if (declare_reply.ok()) {
+            declared = true;
+        } else {
+            err    = declare_reply.error();
+            failed = true;
         }
 
-        (void) co_await this->execute(std::string_view{close_sql}); // best-effort
-        if (owns_txn) {
-            if (failed) {
-                (void) co_await this->rollback();
-            } else {
-                auto c = co_await this->commit();
-                if (!c.ok()) {
+        if (declared) {
+            for (;;) {
+                auto batch = co_await this->execute(std::string_view{fetch_sql});
+                if (!batch.ok()) {
+                    err    = batch.error();
                     failed = true;
-                    err    = c.error();
+                    break;
                 }
+                const auto       &rs = batch.result();
+                const std::size_t n  = rs.size();
+                try {
+                    for (const auto &r : rs)
+                        on_row(r);
+                } catch (...) {
+                    user_exc = std::current_exception();
+                    failed   = true;
+                }
+                if (user_exc || n < batch_size)
+                    break; // user threw, or short batch -> cursor exhausted
+            }
+            (void) co_await this->execute(std::string_view{close_sql}); // best-effort
+        }
+
+        if (registered) {
+            registered = false;
+            if (failed)
+                _stream_txn_failed = true;
+            if (--_stream_txn_users == 0) {
+                // Last one out ends the shared block. The seat is dropped BEFORE the COMMIT /
+                // ROLLBACK is enqueued and `_stream_txn_closing` is raised for exactly as long as
+                // it is in flight, so a stream starting in that window opens a FRESH block — whose
+                // BEGIN queues behind this COMMIT — instead of declaring its cursor into a block
+                // that is already being closed (`in_transaction()` still reports the stale 'T').
+                closing             = true;
+                _stream_txn_closing = true;
+                if (_stream_txn_failed) {
+                    (void) co_await this->rollback();
+                } else {
+                    auto c = co_await this->commit();
+                    if (!c.ok()) {
+                        failed = true;
+                        err    = c.error();
+                    }
+                }
+                closing             = false;
+                _stream_txn_closing = false;
             }
         }
 
@@ -2167,6 +2231,51 @@ public:
     }
 
 private:
+    /**
+     * @brief Serial number handed to the next `query_stream()` cursor on this connection.
+     * @details The cursor name used to be the fixed literal `qb_stream_cursor`, which silently made
+     *          `query_stream` a once-at-a-time API: two streams interleaving on the same `Database`
+     *          — or one started from inside another's `on_row` — issued a second
+     *          `DECLARE qb_stream_cursor`, and PostgreSQL rejected it with an opaque
+     *          "cursor already exists". Nothing documented that restriction. Naming each cursor
+     *          after this counter removes it; the single-stream case is byte-identical apart from
+     *          the suffix. Per-connection and only touched from the connection's own thread, so no
+     *          synchronisation is needed (and none of the rest of `Database` has any).
+     */
+    std::uint64_t _stream_cursor_seq{0};
+
+    /**
+     * @brief Bookkeeping for the transaction `query_stream()` opens to hold its cursors.
+     * @details A server-side cursor only lives inside a transaction, so a stream started on an idle
+     *          connection issues its own `BEGIN` … `COMMIT`. `in_transaction()` cannot decide who
+     *          owns that block: it mirrors the last ReadyForQuery, so a stream starting while
+     *          another is still suspended on its `BEGIN` reads 'I' and opens a *second* one —
+     *          PostgreSQL warns 25001 and keeps the single session transaction, and then the first
+     *          COMMIT to run ends it under every other stream, killing their cursors.
+     *
+     *          These members are the synchronous mirror of that block, which is exact because
+     *          commands are enqueued on this connection in `co_await` order:
+     *          - `_stream_txn_users` counts the streams sharing the block; 0 means none is ours, so
+     *            a live `in_transaction()` there really is a caller-opened transaction (guest mode:
+     *            declare the cursor, close only the cursor).
+     *          - `_stream_txn_closing` covers the window where the last stream's COMMIT/ROLLBACK is
+     *            enqueued but not yet reflected in `_txn_status`; a stream starting there must open
+     *            a fresh block rather than join the one being closed.
+     *          - `_stream_txn_failed` makes that COMMIT a ROLLBACK when any sharing stream failed.
+     *
+     *          Per-connection and only touched from the connection's own thread, like
+     *          `_stream_cursor_seq`, so no synchronisation is needed. Every registered stream gives
+     *          its seat back as it unwinds — including a coroutine frame destroyed mid-`co_await`,
+     *          via the scope guard in `query_stream()` — and a lost connection fails every pending
+     *          query, which unwinds those frames too. Deliberately NOT reset in
+     *          `prepare_reconnect()` (unlike `_txn_status`): a frame that has been failed but has
+     *          not run its unwind yet still owes one decrement, and zeroing the count under it would
+     *          wrap `_stream_txn_users` and wedge every later stream.
+     */
+    std::uint32_t _stream_txn_users{0};
+    bool          _stream_txn_closing{false};
+    bool          _stream_txn_failed{false};
+
     /**
      * @brief Apply keepalive settings to the socket (P1-1)
      */

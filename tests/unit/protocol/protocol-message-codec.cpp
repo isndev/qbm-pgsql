@@ -28,6 +28,9 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <iostream>
+#include <sstream>
+#include <streambuf>
 #include <string>
 #include <vector>
 
@@ -327,6 +330,103 @@ TEST(ProtocolMessage, DataRowRejectsNegativeColumnCount) {
     m.reset_read();
     row_data row;
     EXPECT_FALSE(m.read(row));
+}
+
+// ===========================================================================
+// DataRow short-body guard — the 4-byte length field + 2-byte column count minimum.
+// ===========================================================================
+
+namespace {
+/// Redirects `std::cerr` into a buffer for its lifetime, so a test can assert that a parse
+/// wrote nothing to it. gtest reports its own failures on stdout, which stays untouched.
+class cerr_capture {
+    std::ostringstream _sink;
+    std::streambuf    *_saved;
+
+public:
+    cerr_capture()
+        : _saved(std::cerr.rdbuf(_sink.rdbuf())) {}
+    ~cerr_capture() {
+        std::cerr.rdbuf(_saved);
+    }
+    cerr_capture(cerr_capture const &)            = delete;
+    cerr_capture &operator=(cerr_capture const &) = delete;
+
+    /// Everything written to `std::cerr` since construction.
+    [[nodiscard]] std::string
+    str() const {
+        return _sink.str();
+    }
+};
+} // namespace
+
+// A DataRow body that cannot even hold its own 4-byte length field plus the 2-byte column count
+// is malformed and must be rejected — SILENTLY. Both bodies below are also caught downstream by
+// the column-count read, so the stderr silence is what this test uniquely pins: the guard replaced
+// an `assert` (compiled out of release builds) preceded by an unconditional `std::cerr` write, i.e.
+// a synchronous unbuffered write from the I/O thread that a hostile or buggy server could drive at
+// will, and which in release was the only trace a malformed row left.
+TEST(ProtocolMessage, DataRowRejectsBodyShorterThanColumnCountSilently) {
+    for (const std::size_t body : {std::size_t{4}, std::size_t{5}}) {
+        message m(data_row_tag);
+        if (body == 5)
+            m.write(static_cast<char>(0x00)); // one stray byte: still one short of the column count
+        (void) m.buffer();
+        ASSERT_EQ(static_cast<std::size_t>(m.length()), body);
+        ASSERT_EQ(m.size(), body); // fully-buffered message: declared length == bytes present
+        m.reset_read();
+
+        row_data    row;
+        bool        accepted = true;
+        std::string noise;
+        {
+            cerr_capture captured;
+            accepted = m.read(row);
+            noise    = captured.str();
+        }
+        EXPECT_FALSE(accepted) << "a " << body << "-byte DataRow body was accepted";
+        EXPECT_TRUE(noise.empty()) << "parsing a " << body << "-byte DataRow wrote to stderr: " << noise;
+        EXPECT_TRUE(row.empty());
+    }
+}
+
+// The rejected parse must leave the caller's row untouched: `read()` swaps its temporary in only
+// on success, so a malformed message cannot clobber the row already held.
+TEST(ProtocolMessage, DataRowShortBodyLeavesDestinationRowUntouched) {
+    message good(data_row_tag);
+    good.write(static_cast<smallint>(1)); // 1 column
+    good.write(static_cast<integer>(2));  // 2 bytes
+    good.write('h');
+    good.write('i');
+    (void) good.buffer();
+    good.reset_read();
+    row_data row;
+    ASSERT_TRUE(good.read(row));
+    ASSERT_EQ(row.size(), 1u);
+
+    message truncated(data_row_tag);
+    truncated.write(static_cast<char>(0x00)); // 5-byte body, one short of the column count
+    (void) truncated.buffer();
+    truncated.reset_read();
+    EXPECT_FALSE(truncated.read(row));
+    EXPECT_EQ(row.size(), 1u) << "the rejected DataRow clobbered the row the caller already held";
+    EXPECT_FALSE(row.is_null(0));
+}
+
+// Positive control for the guard's boundary. `len == 6` — the 4-byte length field plus an Int16
+// column count of zero — is the SMALLEST LEGAL DataRow body and must be ACCEPTED: without this,
+// the rejection test above cannot tell a correct bound from an off-by-one that eats valid rows.
+TEST(ProtocolMessage, DataRowAcceptsMinimalZeroColumnBody) {
+    message m(data_row_tag);
+    m.write(static_cast<smallint>(0)); // zero columns
+    (void) m.buffer();
+    ASSERT_EQ(static_cast<std::size_t>(m.length()), sizeof(integer) + sizeof(smallint));
+    m.reset_read();
+
+    row_data row;
+    EXPECT_TRUE(m.read(row));
+    EXPECT_EQ(row.size(), 0u);
+    EXPECT_TRUE(row.empty());
 }
 
 // A well-formed DataRow still round-trips: one NULL column and one value.

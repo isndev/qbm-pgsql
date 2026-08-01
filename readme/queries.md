@@ -227,7 +227,19 @@ only closed — the caller's transaction is untouched. It returns `Reply<void>` 
 else the server error), and the connection stays usable after a failure. If `on_row` throws, the cursor is closed (and a
 self-opened transaction rolled back) and the exception is **rethrown**. The `row` passed to `on_row` is a view valid
 only for that call — copy out anything you keep.
-<!-- src: qbm/pgsql/pgsql.h (query_stream, in_transaction) -->
+
+**Overlapping streams share the self-opened block.** Each stream names its own cursor (`qb_stream_cursor_<n>`, from a
+per-connection counter), so two `query_stream` calls may be in flight on the same `database` at once. A PostgreSQL
+session has only **one** transaction, so they do not each open one: the first stream issues the `BEGIN`, later ones only
+**join** it, and the **last one to finish** ends it — `COMMIT` normally, `ROLLBACK` if *any* participant failed. Sharing
+one block also means a *server* error in one stream aborts it for the others that overlap it. A caller-opened
+transaction is never joined and never ended by `query_stream`.
+
+> **Do not start a stream while your own `begin()` is still in flight.** A caller-opened transaction is recognised as
+> caller-owned only once its `BEGIN` has **completed** — `in_transaction()` mirrors the last `ReadyForQuery`. Started
+> before that, the stream reads the session as idle and opens (and later ends) a block of its own. `co_await` the
+> `begin()` first.
+<!-- src: qbm/pgsql/pgsql.h:2020-2171 (query_stream), 2234-2277 (cursor-name + shared-block bookkeeping), 1875-1883 (in_transaction) -->
 
 ---
 
