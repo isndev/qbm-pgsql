@@ -6,7 +6,7 @@
 A non-blocking PostgreSQL wire-protocol client built on qb-io: connect, run simple and prepared SQL, drive transactions
 and savepoints, and consume LISTEN/NOTIFY — with the same method names for `co_await` and callback styles.
 
-**Prerequisites:** a working qb framework checkout (see [qb/README.md](../../qb/README.md)) and a reachable PostgreSQL
+**Prerequisites:** a working qb framework checkout (see [qb/README.md](https://github.com/isndev/cube/blob/c++23/README.md)) and a reachable PostgreSQL
 server — **See also:** [readme/README.md](./readme/README.md) (technical
 index), [readme/connection.md](./readme/connection.md), [readme/transaction.md](./readme/transaction.md)
 
@@ -236,7 +236,7 @@ available.
 
 ## See also
 
-- [qb/README.md](../../qb/README.md) — framework overview (qb-core actors, qb-io async).
+- [qb/README.md](https://github.com/isndev/cube/blob/c++23/README.md) — framework overview (qb-core actors, qb-io async).
 - [readme/README.md](./readme/README.md) — the long-form technical index for this module.
 - `qbm/pgsql/tests/` — integration tests are executable documentation; start with `integration/api/coro-api.cpp` (coroutines,
   `with_transaction`, `run_sync`) and `integration/transaction/transaction-basic.cpp` (callback `begin`, savepoints, `await()`).

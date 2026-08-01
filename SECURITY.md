@@ -3,7 +3,7 @@
 # Security policy
 
 qbm-pgsql is a module of the qb actor framework. Vulnerability reporting and disclosure follow the
-framework's process — see the qb [SECURITY policy](../../qb/SECURITY.md). **Do not report security issues
+framework's process — see the qb [SECURITY policy](https://github.com/isndev/cube/blob/c++23/SECURITY.md). **Do not report security issues
 through public GitHub issues, pull requests, or discussions.**
 
 ## Supported versions
