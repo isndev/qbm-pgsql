@@ -178,8 +178,10 @@ root `database`).
 
 ## Integrate in CMake
 
-Add the framework, load the modules, and link the alias. Requires CMake 3.24+ (the qb framework's
-`cmake_minimum_required`).
+Two supported modes, both giving the same target (`qbm::pgsql`) and the same header spelling (`<pgsql/pgsql.h>`).
+Requires CMake 3.24+ (the qb framework's `cmake_minimum_required`).
+
+**Embedded** — add the framework, load the modules, link the alias:
 
 ```cmake
 add_subdirectory(qb)                                # the qb framework tree
@@ -187,8 +189,21 @@ qb_load_modules("${CMAKE_CURRENT_SOURCE_DIR}/qbm")  # discovers and registers qb
 target_link_libraries(your_target PRIVATE qbm::pgsql)
 ```
 
+**Installed** — consume a `cmake --install`ed tree. No `find_package(qb)` line is needed; the module's package
+config resolves qb itself:
+
+```cmake
+find_package(qbm-pgsql CONFIG REQUIRED)             # find_dependency(qb) happens inside
+target_link_libraries(your_target PRIVATE qbm::pgsql)
+```
+
+Headers land under `<prefix>/include/qbm/pgsql/...` and the CMake files under `<prefix>/lib/cmake/qbm-pgsql/`;
+`<prefix>/include/qbm` is the installed spelling of the source tree's `qbm/` root, so the include line is identical in
+both modes. `qbm-pgsqlConfig.cmake` fails at configure time if the installed qb is a different version than the one
+this module was compiled against, or disagrees with it about `QB_HAS_SSL`.
+
 `qb_load_modules` adds each module subdirectory; `qbm-pgsql`'s own `CMakeLists.txt` guards on `QB_FOUND` and skips
-itself if the framework is absent. Do not `find_package` the module directly. The include path exposes `pgsql/pgsql.h`.
+itself if the framework is absent. The include path exposes `pgsql/pgsql.h`.
 
 The C++ standard is inherited from the framework cache variable `QB_CXX_STANDARD` (default `20`, optionally `23`); it is
 not set per module. TLS support is inherited too: when the framework finds OpenSSL it defines `QB_HAS_SSL=1` and the
