@@ -11,7 +11,7 @@ that keep a hostile or misconfigured server from crashing your actor.
 **Prerequisites:** [connection.md](./connection.md) (you need a connected `database`), [queries.md](./queries.md) (how
 operations run) — **See also:** [transaction.md](./transaction.md), [results.md](./results.md), [types.md](./types.md)
 
-**Include:** `#include <pgsql/pgsql.h>` — the error surface lives in namespace `qb::pg` and `qb::pg::error`.
+**Include:** `#include <qbm/pgsql/pgsql.h>` — the error surface lives in namespace `qb::pg` and `qb::pg::error`.
 
 `qbm-pgsql` is a compiled library (`qbm::pgsql`) — static by default, shared when `BUILD_SHARED_LIBS`/
 `QB_BUILD_SHARED_LIBS` is on; link it with `target_link_libraries(app PRIVATE qbm::pgsql)`. It is not header-only.
@@ -54,7 +54,7 @@ The three channels at a glance:
 
 ### The `db_error` hierarchy
 
-<!-- src: qbm/pgsql/src/error.h -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/error.h -->
 
 All errors derive from `qb::pg::error::db_error`, which extends `std::runtime_error` with four PostgreSQL-specific
 fields:
@@ -107,7 +107,7 @@ populated for the `query_error` path. On the `connection_error` path only `what(
 
 ### SQLSTATE codes
 
-<!-- src: qbm/pgsql/src/sqlstates.h -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/sqlstates.h -->
 
 `qb::pg::sqlstate` is a namespace containing an unscoped `enum code` with one enumerator per PostgreSQL SQLSTATE in
 the [errcodes appendix](https://www.postgresql.org/docs/current/errcodes-appendix.html), plus a leading `unknown_code`
@@ -123,7 +123,7 @@ if (err.sqlstate == qb::pg::sqlstate::query_canceled) { /* statement timeout */ 
 
 Enumerators you will reach for in practice include `undefined_table` (42P01), `unique_violation` (23505),
 `foreign_key_violation` (23503), `serialization_failure` (40001), and `query_canceled` (57014). The full list is in
-`src/sqlstates.h`, grouped by SQL-state class.
+`src/qbm/pgsql/sqlstates.h`, grouped by SQL-state class.
 
 The only conversion helper is `qb::pg::sqlstate::code_to_state(std::string const&)`, which maps a raw five-character
 code to the enumerator (the driver calls it internally). There is **no** `sqlstate::to_string` — an older error.h
@@ -158,7 +158,7 @@ the I/O loop.
 <!-- src: qbm/pgsql/tests/integration/errors/errors-sqlstate.cpp:133-147 -->
 
 ```cpp
-#include <pgsql/pgsql.h>
+#include <qbm/pgsql/pgsql.h>
 #include <qb/io/async/coroutine.h>
 
 using namespace qb::pg;
@@ -189,7 +189,7 @@ default-constructed and meaningless. Read `error()` instead.
 <!-- src: qbm/pgsql/tests/integration/errors/errors-sqlstate.cpp:114-130 -->
 
 ```cpp
-#include <pgsql/pgsql.h>
+#include <qbm/pgsql/pgsql.h>
 
 using namespace qb::pg;
 
@@ -209,13 +209,13 @@ single `.error([](error::db_error const& e){ ... })` node. The driver runs it wh
 
 ### Abort a `with_transaction` scope
 
-<!-- src: qbm/pgsql/src/with_transaction.h -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/with_transaction.h -->
 
 Inside a `with_transaction` body, a failed step is still a `Reply`, not an exception. To stop the block and force a
 `ROLLBACK`, convert that `Reply` failure into a `transaction_abort`:
 
 ```cpp
-#include <pgsql/pgsql.h>
+#include <qbm/pgsql/pgsql.h>
 
 using namespace qb::pg;
 
@@ -249,7 +249,7 @@ short-circuits to `Reply::failure` without running the body; a failed `commit` r
 
 ### Drain a fluent batch and inspect the final status
 
-<!-- src: qbm/pgsql/src/transaction.h -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/transaction.h -->
 
 If you drive the fluent API and want one aggregate verdict at the end, call `Transaction::await()`, which drains the
 queued work and returns a `status`:
@@ -284,7 +284,7 @@ them tells you what to expect when a connection misbehaves.
 
 ### The `noexcept` `onMessage` boundary (pre-auth DoS containment)
 
-<!-- src: qbm/pgsql/pgsql.h (onMessage, ~line 336) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h (onMessage, ~line 336) -->
 
 `qb::protocol::pgsql<IO_>::onMessage` is declared `noexcept final` — it is the qb-io seam that hands each decoded frame
 to the message handler. Because it is `noexcept`, any exception thrown by a handler would call `std::terminate` and kill
@@ -320,7 +320,7 @@ pending `connect()` awaiter with an error** rather than crashing. The supported 
 
 ### Malformed-frame drop via `not_ok()`
 
-<!-- src: qbm/pgsql/pgsql.h (getMessageSize, ~line 264) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h (getMessageSize, ~line 264) -->
 
 The frame-length check is the other containment point. `getMessageSize` reads the wire length from the message header
 and validates it against the protocol bounds — the decoded length must satisfy

@@ -26,7 +26,7 @@ Two API styles sit on top of those queues:
 - **Coroutine (`co_await`):** `db.begin()`, `db.execute(sql)`, `db.commit()`, and friends return an awaiter; `co_await`
   -ing it yields a `qb::pg::Reply<T>`. Check `r.ok()` (or `if (r)`) before reading `r.result()`.
 
-The public include is `#include <pgsql/pgsql.h>`; the public namespace is `qb::pg` (`qb::pg::detail` for the
+The public include is `#include <qbm/pgsql/pgsql.h>`; the public namespace is `qb::pg` (`qb::pg::detail` for the
 `Transaction` base itself). The aliases you use day to day are `qb::pg::transaction` (the callback parameter type),
 `qb::pg::params` (prepared-statement arguments), and `qb::pg::Reply<T>` (coroutine results).
 
@@ -47,7 +47,7 @@ stateDiagram-v2
 
 ### One object, two queues
 
-<!-- src: src/transaction.h:77-99, src/transaction.cpp:81-116 -->
+<!-- src: src/qbm/pgsql/transaction.h:77-99, src/qbm/pgsql/transaction.cpp:81-116 -->
 
 `Transaction` holds:
 
@@ -66,7 +66,7 @@ flowchart TB
 ```
 
 A command (lifecycle unit) pushes one or more queries (wire units). `Transaction` is **non-copyable and non-movable** —
-the default, copy, and move constructors and assignment operators are all deleted (`src/transaction.h:81-89`). Hold it
+the default, copy, and move constructors and assignment operators are all deleted (`src/qbm/pgsql/transaction.h:81-89`). Hold it
 by reference or pointer; never by value.
 
 ### The loop drives completion
@@ -78,7 +78,7 @@ normal case inside an actor), you do **not** call `await` after every statement.
 
 ### Status and `await`
 
-<!-- src: src/transaction.cpp:176-213, src/transaction.h:712-781 -->
+<!-- src: src/qbm/pgsql/transaction.cpp:176-213, src/qbm/pgsql/transaction.h:712-781 -->
 
 `Transaction::await()` is a **blocking drain on the current thread**: it pumps
 `qb::io::async::listener::current.run(EVRUN_ONCE)` until both queues are empty, then returns a `status` snapshot. It is
@@ -103,7 +103,7 @@ into the snapshot instead of reporting a false success. `qb::pg::await(db)` is a
 
 ### `Reply<T>` (coroutine results)
 
-<!-- src: src/pg_reply.h:19-104 -->
+<!-- src: src/qbm/pgsql/pg_reply.h:19-104 -->
 
 Coroutine overloads return `pg_reply_awaiter<T>`; awaiting one yields `qb::pg::Reply<T>`:
 
@@ -125,7 +125,7 @@ stays valid after the transaction's transient buffers are reused.
 
 ## The callback transaction block: `begin` / `End`
 
-<!-- src: src/transaction.inl:68-95, src/commands.h:49-158 -->
+<!-- src: src/qbm/pgsql/transaction.inl:68-95, src/qbm/pgsql/commands.h:49-158 -->
 
 `begin` does **not** take a `commit` callback. It pushes a `Begin` command, which itself queues an `End` command:
 
@@ -145,10 +145,10 @@ path.
 
 **Error routing.** A failed `BeginQuery` routes to the `on_error` you passed to `begin`; commit/rollback failures route
 to the same `End` error callback. If your `on_success` body **throws**, `Begin` catches it, marks the block failed, and
-forwards a `qb::pg::error::client_error` carrying `what()` to `End`'s error callback (`src/commands.h:108-119`).
+forwards a `qb::pg::error::client_error` carrying `what()` to `End`'s error callback (`src/qbm/pgsql/commands.h:108-119`).
 
 ```cpp
-#include <pgsql/pgsql.h>
+#include <qbm/pgsql/pgsql.h>
 
 void run(qb::pg::tcp::database& db) {
     db.begin(
@@ -170,7 +170,7 @@ A two-argument `begin(on_success, mode)` overload exists; it installs an empty e
 
 ### `then` / `success` / `error` chaining
 
-<!-- src: src/transaction.h:668-689, src/commands.h:450-540 -->
+<!-- src: src/qbm/pgsql/transaction.h:668-689, src/qbm/pgsql/commands.h:450-540 -->
 
 - `then(cb)` and `success(cb)` (aliases) push a `Then` command. When it is popped, if the parent's result is still
   success, `cb(*parent())` runs with the same `Transaction&` you chained from.
@@ -190,12 +190,12 @@ There is no separate "next" type: `then` passes `*parent()`, the parent transact
 
 ## The coroutine transaction block
 
-<!-- src: src/transaction_coro.inl:136-157, tests/integration/api/coro-api.cpp:221-245 -->
+<!-- src: src/qbm/pgsql/transaction_coro.inl:136-157, tests/integration/api/coro-api.cpp:221-245 -->
 
 The coroutine path is imperative: `begin` / `execute` / `commit` (or `rollback`) are explicit, and you branch on `ok()`.
 
 ```cpp
-#include <pgsql/pgsql.h>
+#include <qbm/pgsql/pgsql.h>
 #include <qb/io/async.h>
 
 qb::io::async::task<void> transfer(qb::pg::tcp::database& db) {
@@ -221,7 +221,7 @@ qb::io::async::task<void> transfer(qb::pg::tcp::database& db) {
 
 ### `with_transaction` (coroutine sugar)
 
-<!-- src: src/with_transaction.h:103-139, tests/integration/api/coro-api.cpp:286-323 -->
+<!-- src: src/qbm/pgsql/with_transaction.h:103-139, tests/integration/api/coro-api.cpp:286-323 -->
 
 `qb::pg::with_transaction(db, body)` wraps the begin → body → commit/rollback dance. It runs `BEGIN`, awaits your
 `body(tr)` (which must return `qb::io::async::task<T>`), then `COMMIT`. On `begin` failure, `commit` failure, a thrown
@@ -232,7 +232,7 @@ To abort a block from a statement failure without a noisy throw, raise `transact
 rolls back and you get a failed `Reply` instead of an attempted `COMMIT` on an aborted transaction:
 
 ```cpp
-#include <pgsql/pgsql.h>
+#include <qbm/pgsql/pgsql.h>
 #include <qb/io/async.h>
 
 qb::io::async::task<int>
@@ -265,13 +265,13 @@ it has no effect on autocommit statements run outside a block.
 > transaction (`in_transaction()`), it fails fast with a `client_error` rather than sending a second `BEGIN` that
 > PostgreSQL would warn `25001` on and silently flatten (the inner scope's COMMIT/ROLLBACK would end the *outer*
 > transaction, losing isolation). Use savepoints for nested units of work.
-<!-- src: src/with_transaction.h:84-92, src/transaction.h:167-170 -->
+<!-- src: src/qbm/pgsql/with_transaction.h:84-92, src/qbm/pgsql/transaction.h:167-170 -->
 
 ---
 
 ## Savepoints
 
-<!-- src: src/transaction.inl:113-136, src/transaction_coro.inl:159-187, src/commands.h:169-300 -->
+<!-- src: src/qbm/pgsql/transaction.inl:113-136, src/qbm/pgsql/transaction_coro.inl:159-187, src/qbm/pgsql/commands.h:169-300 -->
 
 **Callback — open a savepoint sub-block:**
 
@@ -289,7 +289,7 @@ out, `RELEASE SAVEPOINT name` (success) or `ROLLBACK TO SAVEPOINT name` (failure
 identifier** (double-quoted, embedded `"` doubled, matching libpq's `PQescapeIdentifier`) before it enters the
 simple-query string — on **both** the callback (`SavePointQuery` / `EndSavePointQuery`) and coroutine paths — so a name
 can never inject a second statement.
-<!-- src: src/queries.h:483-500,538-541,576-579,614-617 -->
+<!-- src: src/qbm/pgsql/queries.h:483-500,538-541,576-579,614-617 -->
 
 **Coroutine — explicit control:**
 
@@ -304,7 +304,7 @@ else
 
 **Name validation.** The coroutine `savepoint`, `release_savepoint`, and `rollback_savepoint` reject names that are
 empty, longer than 63 characters, or contain anything other than alphanumerics and underscore. An invalid name returns a
-pre-failed awaiter carrying `qb::pg::error::client_error` — no SQL is sent (`src/transaction_coro.inl:33-43,159-187`).
+pre-failed awaiter carrying `qb::pg::error::client_error` — no SQL is sent (`src/qbm/pgsql/transaction_coro.inl:33-43,159-187`).
 This pre-check is defense-in-depth on top of the identifier quoting above: even the callback path, which does *not*
 pre-validate, cannot be made to inject SQL because the name is always quoted into a single literal identifier.
 
@@ -316,7 +316,7 @@ on the fluent path.
 
 ## Isolation and transaction modes
 
-<!-- src: src/common.h:221-291, src/common.cpp:108-137 -->
+<!-- src: src/qbm/pgsql/common.h:221-291, src/qbm/pgsql/common.cpp:108-137 -->
 
 `qb::pg::transaction_mode` selects the isolation level and access flags rendered into the `BEGIN` statement:
 
@@ -357,7 +357,7 @@ objects.
 
 ## Statement timeout
 
-<!-- src: src/transaction.h:634-659, src/transaction_coro.inl:22-31, src/queries.h:374-407 -->
+<!-- src: src/qbm/pgsql/transaction.h:634-659, src/qbm/pgsql/transaction_coro.inl:22-31, src/qbm/pgsql/queries.h:374-407 -->
 
 `set_timeout(qb::duration)` arms a PostgreSQL `statement_timeout` for the **next** `BEGIN` on this connection. The
 following `begin()` (callback *or* coroutine) appends `; SET LOCAL statement_timeout = N` to the same simple-query
@@ -392,7 +392,7 @@ Key facts to get right:
 
 ## LISTEN / NOTIFY
 
-<!-- src: src/transaction.h:420-477, src/pg_notify_sql.h:51-80, qbm/pgsql/pgsql.h:378-388 (notification), 1780-1791 (on_incoming_notify), 2461-2573 (notify_consumer / notify_co_consumer / notify_cb_consumer) -->
+<!-- src: src/qbm/pgsql/transaction.h:420-477, src/qbm/pgsql/pg_notify_sql.h:51-80, qbm/pgsql/src/qbm/pgsql/pgsql.h:378-388 (notification), 1780-1791 (on_incoming_notify), 2461-2573 (notify_consumer / notify_co_consumer / notify_cb_consumer) -->
 
 ### Publishing (NOTIFY)
 
@@ -426,7 +426,7 @@ alone is not enough — you must give the connection somewhere to deliver inboun
 A delivered `qb::pg::notification` carries `server_backend_pid`, `channel`, and `payload`.
 
 ```cpp
-#include <pgsql/pgsql.h>
+#include <qbm/pgsql/pgsql.h>
 
 qb::io::async::task<void> consume() {
     qb::pg::tcp::notify_co_consumer sub{/* dsn */};
@@ -461,7 +461,7 @@ resolves to `std::nullopt`.
   `End`/`with_transaction` do it) before sending new commands.
 - **A lost connection fails every pending query automatically.** You do **not** write a disconnect handler. The built-in
   `Database::on(qb::io::async::event::disconnected)` handler calls `fail_all_pending(...)` on the root transaction (
-  `qbm/pgsql/pgsql.h:2374`), which drains every queued query and pending sub-transaction so suspended `co_await`
+  `qbm/pgsql/src/qbm/pgsql/pgsql.h:2374`), which drains every queued query and pending sub-transaction so suspended `co_await`
   awaiters resume with `client_error("database disconnected")` instead of hanging forever.
   See [connection.md](./connection.md) (Fail-all-on-disconnect).
 - **Statement timeout below 1 ms vanishes.** A sub-millisecond `set_timeout` truncates to 0 and emits no `SET LOCAL`.

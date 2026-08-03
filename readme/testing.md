@@ -87,7 +87,7 @@ or across machines — point each runner at its own database, or run them sequen
 
 `qb_register_module_test` names each CTest entry and binary
 `qbm-pgsql-test-<tier>-<name>` — for example `qbm-pgsql-test-integration-connection-lifecycle`
-(<!-- src: qb/cmake/qbFunctions.cmake:812-818 -->) — and places the executable in
+(<!-- src: qb/cmake/qbFunctions.cmake:1108-1114 -->) — and places the executable in
 `${CMAKE_BINARY_DIR}/bin/tests` with that directory as its working
 directory (<!-- src: qb/cmake/qbFunctions.cmake:514-516 -->). Each test carries `tier:<tier>` and
 `module:qbm-pgsql` CTest labels plus a per-tier timeout (unit 60 s, integration 300 s)

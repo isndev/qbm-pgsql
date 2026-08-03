@@ -28,7 +28,7 @@ is defined as `qb::pg::resultset` (`resultset.h:104`). The form `detail::results
 are non-owning views into the parent `results` — they hold a pointer plus indices and own no buffer, so they must not
 outlive the `results` object that vended them (`resultset.h:317-319`).
 
-You include nothing extra: `#include <pgsql/pgsql.h>` pulls `resultset.h` through the transaction stack.
+You include nothing extra: `#include <qbm/pgsql/pgsql.h>` pulls `resultset.h` through the transaction stack.
 
 ---
 
@@ -49,13 +49,13 @@ This matters when you hand rows off past the synchronous callback's return: call
 copy first (`resultset.h:161`).
 
 ```cpp
-<!-- src: qbm/pgsql/src/resultset.h:161 -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/resultset.h:161 -->
 qb::pg::results owned = borrowed.deep_snapshot();   // safe to keep after the callback returns
 ```
 
 The coroutine path does this for you: a successful `co_await` delivers `rs.deep_snapshot()`, so the `Reply<resultset>`
 owns a deep copy and stays valid after the transaction's transient buffers are reused (
-`src/transaction_coro.inl:96,128,211`).
+`src/qbm/pgsql/transaction_coro.inl:96,128,211`).
 
 ### `operator bool` reflects rows, not DML success
 
@@ -84,7 +84,7 @@ The `&&` overload (`std::move(reply).result()`) moves the value out; the `&` ove
 
 ```cpp
 <!-- src: qbm/pgsql/tests/integration/api/coro-api.cpp:104-118 -->
-#include <pgsql/pgsql.h>
+#include <qbm/pgsql/pgsql.h>
 
 auto reply = co_await db->query("SELECT id, name FROM users LIMIT 3");
 if (!reply.ok())
@@ -105,7 +105,7 @@ The success callback receives the result set by value as its second argument. Th
 
 ```cpp
 <!-- src: qbm/pgsql/tests/integration/transaction/transaction-basic.cpp:58-64 -->
-#include <pgsql/pgsql.h>
+#include <qbm/pgsql/pgsql.h>
 
 db.execute(
     "SELECT id, name FROM users",
@@ -127,8 +127,8 @@ For a blocking drain, pass the discard sentinels and call `await()`. The returne
 `status.results()` returns the result set for that drain (`transaction.h:760`).
 
 ```cpp
-<!-- src: qbm/pgsql/src/transaction.h:760 -->
-#include <pgsql/pgsql.h>
+<!-- src: qbm/pgsql/src/qbm/pgsql/transaction.h:760 -->
+#include <qbm/pgsql/pgsql.h>
 
 auto st = db.execute("SELECT 1 AS x", qb::pg::discard_query, qb::pg::discard_error).await();
 if (st) {
@@ -202,7 +202,7 @@ A `results::row` is a non-owning, index-based container of fields.
 `row::to(...)` fills several typed targets at once. There are positional and named forms (`resultset.h:389-404`):
 
 ```cpp
-<!-- src: qbm/pgsql/src/resultset.h:389 -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/resultset.h:389 -->
 // positional: columns 0,1,2 in order
 int         id;
 std::string name;
@@ -293,7 +293,7 @@ A direct `as<T>()` (or `to(T&)`) on a NULL cell, where `T` is not nullable, thro
 `resultset.h:562`, `resultset.h:652`). To read a possibly-NULL cell without exceptions, extract into `std::optional<U>`:
 
 ```cpp
-<!-- src: qbm/pgsql/src/resultset.h:551 -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/resultset.h:551 -->
 // as<optional> — empty when NULL
 std::optional<std::string> maybe = field.as<std::optional<std::string>>();
 if (maybe)
@@ -325,7 +325,7 @@ See [error_handling.md](./error_handling.md).
 with NULL rendered as JSON null:
 
 ```cpp
-<!-- src: qbm/pgsql/src/resultset.cpp:362 -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/resultset.cpp:362 -->
 qb::json j = rows.json();   // e.g. [{"id":1,"name":"ada"}, ...]
 ```
 

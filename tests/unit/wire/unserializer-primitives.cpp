@@ -34,7 +34,7 @@
 
 #include <qb/system/endian.h>
 
-#include "../pgsql.h"
+#include <qbm/pgsql/pgsql.h>
 
 #include "../../shared/pg_wire_ground_truth.hpp"
 

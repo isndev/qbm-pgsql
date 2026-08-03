@@ -41,7 +41,7 @@
 #include <qb/io/async/coroutine/utils.h>
 #include "../../shared/pg_pump.hpp"
 #include "../../shared/test_config.hpp"
-#include "../pgsql.h"
+#include <qbm/pgsql/pgsql.h>
 
 using namespace qb::pg;
 using qb::pg::test::dsn_ssl_string;

@@ -36,7 +36,7 @@
 
 #include <gtest/gtest.h>
 #include <string>
-#include "../../../src/queries.h"
+#include <qbm/pgsql/queries.h>
 
 using qb::pg::detail::pg_quote_identifier;
 

@@ -16,7 +16,7 @@
 #include <stdexcept>
 #include <string>
 #include <gtest/gtest.h>
-#include "../pgsql.h"
+#include <qbm/pgsql/pgsql.h>
 
 using namespace qb::pg;
 

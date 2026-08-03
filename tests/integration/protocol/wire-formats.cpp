@@ -33,7 +33,7 @@
 #include <qb/uuid.h>
 #include "../../shared/pg_integration_fixture.hpp"
 #include "../../shared/test_config.hpp"
-#include "../pgsql.h"
+#include <qbm/pgsql/pgsql.h>
 
 using namespace qb::pg;
 using qb::pg::detail::numeric; // exact-decimal marker type (lives in detail)

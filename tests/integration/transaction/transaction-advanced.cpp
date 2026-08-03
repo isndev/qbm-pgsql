@@ -30,7 +30,7 @@
 #include <string>
 #include "../../shared/pg_integration_fixture.hpp"
 #include "../../shared/test_config.hpp"
-#include "../pgsql.h"
+#include <qbm/pgsql/pgsql.h>
 
 using namespace qb::pg;
 using namespace qb::pg::detail;
