@@ -17,10 +17,12 @@ executable specification: when this documentation and the code disagree, prefer 
 govern how you run them:
 
 - **Tests are opt-in at configure time.** Nothing under `tests/` is built unless `QB_BUILD_TESTS` is on. The framework
-  option defaults to `ON` (<!-- src: qb/cmake/qbConfig.cmake:59 -->), and the qb-dev super-project forces it
-  on (<!-- src: CMakeLists.txt:14 -->), so a default build already produces the binaries.
-- **Integration suites need a live server.** Sixteen unit suites have no socket, and one system suite
-  (`connect-timeout`) connects to a dead host with no daemon; the integration suites connect to
+  option defaults to `ON` (<!-- src: qb/cmake/qbConfig.cmake:85 -->), and the qb-dev super-project forces it
+  on at its own root `CMakeLists.txt:14` — named in prose rather than as a `src:` citation, because a
+  bare `CMakeLists.txt` token resolves against THIS module and would silently range-check
+  `qbm/pgsql/CMakeLists.txt` instead — so a default build already produces the binaries.
+- **Integration suites need a live server.** Eighteen unit suites have no socket, and two system suites
+  (`connect-timeout`, `scram-mitm-refuse`) run with no daemon; the integration suites connect to
   PostgreSQL; each gates its fixture on a successful connect and calls `GTEST_SKIP()` when the server is unreachable, so
   the suite passes (as skipped) rather than failing on a machine with no database.
 
@@ -33,15 +35,15 @@ daemon (a connect-to-dead-host timeout), and `integration/` needs a live server.
 
 | Tier        | Suites                                                                                                                                                                                                                                                                              | Server required |
 |-------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------|
-| Unit        | `unserializer-primitives`, `typeconverter-codecs`, `result-format-routing`, `param-serializer-encode`, `typeconverter-{scalar,numeric,temporal,array,json,adversarial}`, `datastructures`, `oid-stream`, `protocol-message-codec`, `dsn-parse`, `scram-and-cancel`, `prepared-storage-lru` | No              |
-| System      | `connect-timeout` (connects to a dead host — no daemon, network-timing dependent)                                                                                                                                                                                                  | No              |
+| Unit        | `unserializer-primitives`, `typeconverter-codecs`, `result-format-routing`, `param-serializer-encode`, `typeconverter-{scalar,numeric,temporal,array,json,adversarial}`, `datastructures`, `oid-stream`, `protocol-message-codec`, `identifier-quoting`, `dsn-parse`, `scram-and-cancel`, `prepared-storage-lru`, `module-surface` | No              |
+| System      | `connect-timeout` (connects to a dead host — no daemon, network-timing dependent), `scram-mitm-refuse` (SCRAM mutual-auth refusal, no daemon)                                                                                                                                      | No              |
 | Integration | `connection-lifecycle`, `queries`, `prepared-statements`, `transaction-basic`, `transaction-advanced`, `datatypes-roundtrip`, `wire-formats`, `listen-notify`, `coro-api`, `errors-sqlstate`, `database-api-extra`, `param-roundtrip`, and `connection-ssl` (TLS only)              | Yes             |
 
 The unit suites exercise wire-format encoding and decoding, parameter serialization, type conversion, and
 protocol-message framing in isolation — they pass on any host. The integration suites drive a real wire
 handshake, prepared statements, transactions, type round-trips, and asynchronous NOTIFY delivery against a server.
 
-<!-- src: qbm/pgsql/tests/CMakeLists.txt:60-110 -->
+<!-- src: qbm/pgsql/tests/CMakeLists.txt:60-113 -->
 
 ### How a missing server is handled
 
@@ -76,7 +78,7 @@ function(qpg_itest NAME RELPATH)
             RESOURCE_LOCK qb_pgsql_integration)
 endfunction()
 # qb_register_module_test then applies it via
-# set_tests_properties(... PROPERTIES RESOURCE_LOCK ...) (src: qb/cmake/qbFunctions.cmake:529-531).
+# set_tests_properties(... PROPERTIES RESOURCE_LOCK ...) (src: qb/cmake/qbFunctions.cmake:565-567).
 ```
 
 `connection-ssl` joins the same lock when it is built. CTest will not run two `qb_pgsql_integration` holders
@@ -89,14 +91,14 @@ or across machines — point each runner at its own database, or run them sequen
 `qbm-pgsql-test-<tier>-<name>` — for example `qbm-pgsql-test-integration-connection-lifecycle`
 (<!-- src: qb/cmake/qbFunctions.cmake:979-985 -->) — and places the executable in
 `${CMAKE_BINARY_DIR}/bin/tests` with that directory as its working
-directory (<!-- src: qb/cmake/qbFunctions.cmake:517-519 -->). Each test carries `tier:<tier>` and
+directory (<!-- src: qb/cmake/qbFunctions.cmake:511-514, qb/cmake/qbFunctions.cmake:553-555 -->). Each test carries `tier:<tier>` and
 `module:qbm-pgsql` CTest labels plus a per-tier timeout (unit 60 s, integration 300 s)
-(<!-- src: qb/cmake/qbFunctions.cmake:309-391 -->). Each binary links `GTest::gtest_main`, so it
+(<!-- src: qb/cmake/qbFunctions.cmake:345-359 -->). Each binary links `GTest::gtest_main`, so it
 accepts the usual `--gtest_filter`, `--gtest_list_tests`, and `--gtest_repeat` flags.
 
 `connection-ssl` is the one conditional suite: it is registered inside an `if (QB_HAS_SSL)` guard, only when
 `QB_HAS_SSL` is set, because it links the `qb::pg::tcp::ssl::database` alias that exists only with
-OpenSSL (<!-- src: qbm/pgsql/tests/CMakeLists.txt:101-103 -->).
+OpenSSL (<!-- src: qbm/pgsql/tests/CMakeLists.txt:104-106 -->).
 
 ## Configuring the server
 
@@ -109,7 +111,7 @@ is the single source of truth for the defaults. Set these before running CTest t
 | `QB_PG_SSL_DSN`     | DSN for `qb::pg::tcp::ssl::database` (only read when `QB_HAS_SSL`). `tcp://` is valid — the client sends a PostgreSQL `SSLRequest` and upgrades when the server answers `S`. | same as `QB_PG_DSN`                                       |
 | `QB_PG_INVALID_DSN` | DSN that must *fail* authentication; used by negative connection tests.                                                                                                      | `tcp://test:__qb_invalid_password__@localhost:5432[test]` |
 
-<!-- src: qbm/pgsql/tests/shared/test_config.hpp:33-52 -->
+<!-- src: qbm/pgsql/tests/shared/test_config.hpp:33-53 -->
 
 The default fixture is a role `test` with password `test` owning a database `test`. Create that, or override
 `QB_PG_DSN`, before expecting the integration suites to do anything but skip.
@@ -125,10 +127,14 @@ detects this and skips rather than fail, but only when you have not set `QB_PG_I
 
 ```cpp
 // src: qbm/pgsql/tests/integration/connection/connection-lifecycle.cpp:104-113
-const bool connected =
-    qb::io::async::run_sync(invalid_db->connect(qb::pg::test::dsn_invalid_auth_string()));
-if (connected && std::getenv("QB_PG_INVALID_DSN") == nullptr) {
-    GTEST_SKIP() << "Server accepted default wrong-password DSN (e.g. trust in pg_hba)";
+const bool connected = qb::io::async::run_sync(invalid_db->connect(qb::pg::test::dsn_invalid_auth_string()));
+
+if (connected) {
+    if (std::getenv("QB_PG_INVALID_DSN") == nullptr) {
+        GTEST_SKIP() << "Server accepted the default wrong-password DSN (likely `trust` "
+                        "in pg_hba). Set QB_PG_INVALID_DSN to a DSN that must fail auth.";
+    }
+    FAIL() << "QB_PG_INVALID_DSN was accepted; it must fail authentication.";
 }
 ASSERT_FALSE(connected);
 ```
