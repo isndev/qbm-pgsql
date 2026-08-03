@@ -15,7 +15,7 @@
 #         limitations under the License.
 #
 
-project(qbm-pgsql)
+project(qbm-pgsql VERSION 2.6.0)
 
 # Check if qb framework is available
 if (NOT QB_FOUND)
@@ -38,7 +38,7 @@ endif ()
 # Register the PostgreSQL module using the new framework functions
 qb_register_module(
         NAME pgsql
-        VERSION 2.6.0
+        VERSION ${PROJECT_VERSION}
         DEPENDS qb-core
         SOURCES
         src/sqlstates.cpp
@@ -59,8 +59,13 @@ qb_register_module(
         src/pg_notify_sql.cpp
         pgsql.cpp
         DEFINES
-        QBM_PGSQL_VERSION="2.6.0"
+        QBM_PGSQL_VERSION="${PROJECT_VERSION}"
 )
+
+# No CONFIG_DEPENDENCIES / INSTALL_CMAKE_FILES: this module's only consume-time dependency is
+# qb::core, which the generated qbm-pgsqlConfig.cmake already resolves with find_dependency(qb).
+# There is no libpq here -- the PostgreSQL wire protocol (src/protocol.cpp) and SCRAM are
+# implemented in-tree.
 
 # Add tests if enabled
 if (QB_BUILD_TESTS)
