@@ -1,6 +1,6 @@
 # qbm-pgsql — asynchronous PostgreSQL client
 
-> **Audience:** Adopter · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 2.6.0 (C++20 default, C++23
+> **Audience:** Adopter · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 3.0.0 (C++20 default, C++23
 > supported)
 
 A non-blocking PostgreSQL wire-protocol client built on qb-io: connect, run simple and prepared SQL, drive transactions

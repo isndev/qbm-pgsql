@@ -1,6 +1,6 @@
 # Integration testing
 
-> **Audience:** Contributor · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 2.6.0 (C++20 default, C++23
+> **Audience:** Contributor · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 3.0.0 (C++20 default, C++23
 > supported)
 
 Build and run the qbm-pgsql test suite under CTest: pure-unit suites run anywhere, while the integration suites need a
