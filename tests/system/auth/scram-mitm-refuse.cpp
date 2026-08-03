@@ -37,7 +37,7 @@
 #include <qb/io/tcp/listener.h>
 #include <qb/io/tcp/socket.h>
 
-#include "../pgsql.h"
+#include <qbm/pgsql/pgsql.h>
 
 using namespace qb::pg;
 

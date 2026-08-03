@@ -114,9 +114,9 @@
 #include <sys/socket.h>
 #endif
 
-#include "./src/commands.h"
-#include "./src/pg_reply.h"
-#include "./src/transaction.h"
+#include "./commands.h"
+#include "./pg_reply.h"
+#include "./transaction.h"
 
 /**
  * @brief Maximum length for attribute names in PostgreSQL protocol
@@ -2740,7 +2740,7 @@ struct tcp {
 
 } // namespace qb::pg
 
-#include "./src/with_transaction.h"
+#include "./with_transaction.h"
 
 namespace qb::allocator {
 

@@ -10,7 +10,7 @@ SQL-facing operation.
 **Prerequisites:** [connection.md](./connection.md) (open a connection first) — **See also:
 ** [transaction.md](./transaction.md), [results.md](./results.md), [types.md](./types.md), [error_handling.md](./error_handling.md)
 
-**Include:** `#include <pgsql/pgsql.h>` — public surface is in namespace `qb::pg`.
+**Include:** `#include <qbm/pgsql/pgsql.h>` — public surface is in namespace `qb::pg`.
 
 `qbm-pgsql` is a compiled static library (`qbm::pgsql`); link it with `target_link_libraries(app PRIVATE qbm::pgsql)`.
 It is not header-only.
@@ -27,7 +27,7 @@ only when you need a synchronous drain on the current thread. See [transaction.m
 
 ## `execute` callback SFINAE
 
-From [`src/transaction.inl`](../src/transaction.inl) **`Transaction::execute(expr, on_success, on_error)`**:
+From [`src/qbm/pgsql/transaction.inl`](../src/qbm/pgsql/transaction.inl) **`Transaction::execute(expr, on_success, on_error)`**:
 
 | Your success lambda           | Command object    | Use case                                                                |
 |:------------------------------|:------------------|:------------------------------------------------------------------------|
@@ -35,7 +35,7 @@ From [`src/transaction.inl`](../src/transaction.inl) **`Transaction::execute(exp
 | **`(Transaction&)`** only     | **`Query`**       | Fire-and-forget or you read side effects elsewhere                      |
 
 The overload selects the command type from your lambda's arity via `if constexpr (std::is_invocable_v<...>)`
-([`transaction.inl`](../src/transaction.inl)). Only these two arities are valid; any other success
+([`transaction.inl`](../src/qbm/pgsql/transaction.inl)). Only these two arities are valid; any other success
 signature stops compilation when the selected command instantiates against your callback.
 
 **Coroutine:** only **`co_await execute(expr)`** → **`Reply<resultset>`**; no SFINAE split (always a resultset
@@ -49,9 +49,9 @@ payload, possibly empty). Check **`reply.ok()`** before **`reply.result()`**.
 |:----------------------------------------|:------------------------------|:-------------------------------------------------------------------------|
 | **`execute("SELECT …")`**               | Simple query (**Q**)          | Server often returns **text** columns — [types.md](./types.md).          |
 | **`prepare` + `execute(name, params)`** | Parse / Bind / Execute / Sync | Parameters **binary**; result formats from OID heuristics.               |
-| **`LISTEN` / `NOTIFY` / `UNLISTEN`**    | Simple query                  | Payload/channel safety: [`src/pg_notify_sql.h`](../src/pg_notify_sql.h). |
+| **`LISTEN` / `NOTIFY` / `UNLISTEN`**    | Simple query                  | Payload/channel safety: [`src/qbm/pgsql/pg_notify_sql.h`](../src/qbm/pgsql/pg_notify_sql.h). |
 
-One connection = **one serial** stream ([`transaction.cpp`](../src/transaction.cpp) **`_queries`** queue).
+One connection = **one serial** stream ([`transaction.cpp`](../src/qbm/pgsql/transaction.cpp) **`_queries`** queue).
 
 The extended (prepared) path on the wire:
 
@@ -104,7 +104,7 @@ db.execute("NOTIFY chan, 'x'", [](qb::pg::transaction&) {}, [](qb::pg::error::db
 ```
 
 **`query(sql)`** is the coroutine simple-query entry point — it returns the same
-**`pg_reply_awaiter<resultset>`** as **`co_await execute(sql)`** ([`transaction.h`](../src/transaction.h)). There is no
+**`pg_reply_awaiter<resultset>`** as **`co_await execute(sql)`** ([`transaction.h`](../src/qbm/pgsql/transaction.h)). There is no
 callback
 **`query`** overload; use **`execute(sql, cb, err)`** for the callback path.
 
@@ -114,7 +114,7 @@ callback
 
 ## Prepared statements
 
-**Storage:** **`PreparedQueryStorage`** LRU in [`src/queries.h`](../src/queries.h).
+**Storage:** **`PreparedQueryStorage`** LRU in [`src/qbm/pgsql/queries.h`](../src/qbm/pgsql/queries.h).
 
 **Coroutine — prepare + execute**
 
@@ -140,7 +140,7 @@ db.execute("by_email", qb::pg::params{email},
     [](qb::pg::error::db_error const&) {});
 ```
 
-**Alternate argument order:** **`execute(name, on_success, params)`** ([`transaction.h`](../src/transaction.h)).
+**Alternate argument order:** **`execute(name, on_success, params)`** ([`transaction.h`](../src/qbm/pgsql/transaction.h)).
 
 ---
 
@@ -204,7 +204,7 @@ the protocol stream.
 > force-disconnected — so size your input (or your own external batching of separate `copy_in` calls) accordingly. A
 `source` callback that lazily reads a row at a time bounds your *application* memory, but the bytes still pile up in the
 > pipe; it does not make the transfer constant-memory. Only `copy_out` and `query_stream` stream in constant memory.
-<!-- src: qbm/pgsql/pgsql.h (copy_out, copy_in, on_copy_data, on_copy_in_response) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h (copy_out, copy_in, on_copy_data, on_copy_in_response) -->
 
 ---
 
@@ -239,7 +239,7 @@ transaction is never joined and never ended by `query_stream`.
 > caller-owned only once its `BEGIN` has **completed** — `in_transaction()` mirrors the last `ReadyForQuery`. Started
 > before that, the stream reads the session as idle and opens (and later ends) a block of its own. `co_await` the
 > `begin()` first.
-<!-- src: qbm/pgsql/pgsql.h:2020-2171 (query_stream), 2234-2277 (cursor-name + shared-block bookkeeping), 1875-1883 (in_transaction) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2020-2171 (query_stream), 2234-2277 (cursor-name + shared-block bookkeeping), 1875-1883 (in_transaction) -->
 
 ---
 
@@ -247,10 +247,10 @@ transaction is never joined and never ended by `query_stream`.
 
 Both read the file then delegate to **`execute` / `prepare`**. The two paths report a file error differently:
 
-- **Callback overloads** ([`transaction.inl`](../src/transaction.inl)) invoke **`on_error`** with an
+- **Callback overloads** ([`transaction.inl`](../src/qbm/pgsql/transaction.inl)) invoke **`on_error`** with an
   **`error::query_error`**, then **rethrow** it — wrap the call in `try`/`catch` if a missing or unreadable file
   must not propagate.
-- **Coroutine overloads** ([`transaction_coro.inl`](../src/transaction_coro.inl)) do not throw; they surface the
+- **Coroutine overloads** ([`transaction_coro.inl`](../src/qbm/pgsql/transaction_coro.inl)) do not throw; they surface the
   file error as a failed **`Reply`** (check **`reply.ok()`**). The coroutine **`prepare_file`** yields
   **`Reply<PreparedQuery>`**, matching **`co_await prepare`**.
 
@@ -313,11 +313,11 @@ db.unlisten_all(qb::pg::discard_query, qb::pg::discard_error);
 ```
 
 **Delivery:** register **`db.on_incoming_notify([](qb::pg::notification&& n) { … })`** on a plain **`tcp::database`** ([
-`pgsql.h`](../pgsql.h)). **`qb::pg::notification`** holds **`channel`**, **`payload`**, and the originating backend
+`pgsql.h`](../src/qbm/pgsql/pgsql.h)). **`qb::pg::notification`** holds **`channel`**, **`payload`**, and the originating backend
 PID **`server_backend_pid`**. The handler runs on the I/O thread when a `NotificationResponse` arrives.
 
 **`notify_co_consumer`:** optional **`on_notify`**, **`on_notify_dropped`**, **`co_await receive()`** —
-**`notify_cb_consumer`** is an alias of the same class ([`pgsql.h`](../pgsql.h)). See
+**`notify_cb_consumer`** is an alias of the same class ([`pgsql.h`](../src/qbm/pgsql/pgsql.h)). See
 [`tests/integration/notify/listen-notify.cpp`](../tests/integration/notify/listen-notify.cpp) for the `pump_until` and ordering patterns.
 
 ---

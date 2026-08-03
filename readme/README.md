@@ -16,7 +16,7 @@ door [`../README.md`](../README.md) for positioning, the build matrix, and a qui
 qbm-pgsql is an asynchronous PostgreSQL client built on the qb-io event loop. It implements the PostgreSQL wire protocol
 directly — connection handshake and authentication, simple and prepared statements, transactions and savepoints, result
 decoding, type mapping, and LISTEN/NOTIFY — over a single non-blocking TCP (or TLS) session. The public surface lives in
-the `qb::pg` namespace; `qb::pg::detail` holds the implementation. The umbrella header is `<pgsql/pgsql.h>`.
+the `qb::pg` namespace; `qb::pg::detail` holds the implementation. The umbrella header is `<qbm/pgsql/pgsql.h>`.
 
 The module is a **compiled static library**, not header-only. The build registers it through `qb_register_module` with a
 `SOURCES` list of seventeen translation units (`qbm/pgsql/CMakeLists.txt:32-56`), so consuming it links a real archive
@@ -47,7 +47,7 @@ target_link_libraries(your_app PRIVATE qbm::pgsql)     # links qb::core PUBLIC, 
 ```
 
 ```cpp
-#include <pgsql/pgsql.h>   // connection, transactions, Reply, with_transaction, types, discards
+#include <qbm/pgsql/pgsql.h>   // connection, transactions, Reply, with_transaction, types, discards
 ```
 
 `DEPENDS qb-core` in the module's `CMakeLists.txt` is build wiring: it links `qb::core` `PUBLIC`, which brings in

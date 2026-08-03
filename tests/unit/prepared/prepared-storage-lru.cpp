@@ -19,7 +19,7 @@
 #include <gtest/gtest.h>
 #include <stdexcept>
 #include <string>
-#include "../pgsql.h"
+#include <qbm/pgsql/pgsql.h>
 
 using namespace qb::pg;
 using namespace qb::pg::detail;

@@ -24,7 +24,7 @@ The public surface lives in `qb::pg` (internals in `qb::pg::detail`). A single h
 needs:
 
 ```cpp
-#include <pgsql/pgsql.h>   // brings in <qb/io/async.h> transitively
+#include <qbm/pgsql/pgsql.h>   // brings in <qb/io/async.h> transitively
 ```
 
 `qbm-pgsql` is a **compiled library** (17 translation units), aliased `qbm::pgsql` — static by default, or shared when
@@ -85,7 +85,7 @@ Build it as a normal executable linked against `qbm::pgsql`.
 <!-- src: qbm/pgsql/tests/integration/api/coro-api.cpp (connect / with_transaction / query shapes) -->
 
 ```cpp
-#include <pgsql/pgsql.h>
+#include <qbm/pgsql/pgsql.h>
 #include <qb/io/async.h>
 #include <iostream>
 
@@ -149,7 +149,7 @@ runs it. Use `await()` when you need a synchronous drain — common in tests and
 <!-- src: qbm/pgsql/tests/integration/api/coro-api.cpp (callback drain via .await()) -->
 
 ```cpp
-#include <pgsql/pgsql.h>
+#include <qbm/pgsql/pgsql.h>
 #include <qb/io/async.h>
 
 using namespace qb::pg;
@@ -178,7 +178,7 @@ root `database`).
 
 ## Integrate in CMake
 
-Two supported modes, both giving the same target (`qbm::pgsql`) and the same header spelling (`<pgsql/pgsql.h>`).
+Two supported modes, both giving the same target (`qbm::pgsql`) and the same header spelling (`<qbm/pgsql/pgsql.h>`).
 Requires CMake 3.24+ (the qb framework's `cmake_minimum_required`).
 
 **Embedded** — add the framework, load the modules, link the alias:

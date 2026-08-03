@@ -38,7 +38,7 @@
 #include <qb/io/async/coroutine.h>
 #include <qb/io/async/coroutine/utils.h>
 #include "../../shared/test_config.hpp"
-#include "../pgsql.h"
+#include <qbm/pgsql/pgsql.h>
 
 using namespace qb::pg;
 using namespace qb::pg::detail;

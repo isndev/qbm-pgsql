@@ -25,7 +25,7 @@
 #include <memory>
 #include <string>
 #include <qb/io/async.h>
-#include "../pgsql.h"
+#include <qbm/pgsql/pgsql.h>
 
 using namespace qb::pg;
 

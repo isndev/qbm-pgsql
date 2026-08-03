@@ -26,7 +26,7 @@
 #include <string>
 #include <vector>
 
-#include "../pgsql.h"
+#include <qbm/pgsql/pgsql.h>
 
 namespace qb::pg::test {
 

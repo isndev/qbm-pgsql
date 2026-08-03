@@ -19,7 +19,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
-#include "../pgsql.h"
+#include <qbm/pgsql/pgsql.h>
 
 using namespace qb::pg;
 using namespace qb::pg::detail;

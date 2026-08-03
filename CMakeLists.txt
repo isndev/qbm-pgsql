@@ -41,30 +41,30 @@ qb_register_module(
         VERSION ${PROJECT_VERSION}
         DEPENDS qb-core
         SOURCES
-        src/sqlstates.cpp
-        src/error.cpp
-        src/pg_types.cpp
-        src/common.cpp
-        src/protocol.cpp
-        src/protocol_io_traits.cpp
-        src/result_impl.cpp
-        src/resultset.cpp
-        src/transaction.cpp
-        src/field_reader_integration.cpp
-        src/param_unserializer.cpp
-        src/type_converter.cpp
-        src/param_serializer.cpp
-        src/field_reader.cpp
-        src/queries.cpp
-        src/pg_notify_sql.cpp
-        pgsql.cpp
+        src/qbm/pgsql/sqlstates.cpp
+        src/qbm/pgsql/error.cpp
+        src/qbm/pgsql/pg_types.cpp
+        src/qbm/pgsql/common.cpp
+        src/qbm/pgsql/protocol.cpp
+        src/qbm/pgsql/protocol_io_traits.cpp
+        src/qbm/pgsql/result_impl.cpp
+        src/qbm/pgsql/resultset.cpp
+        src/qbm/pgsql/transaction.cpp
+        src/qbm/pgsql/field_reader_integration.cpp
+        src/qbm/pgsql/param_unserializer.cpp
+        src/qbm/pgsql/type_converter.cpp
+        src/qbm/pgsql/param_serializer.cpp
+        src/qbm/pgsql/field_reader.cpp
+        src/qbm/pgsql/queries.cpp
+        src/qbm/pgsql/pg_notify_sql.cpp
+        src/qbm/pgsql/pgsql.cpp
         DEFINES
         QBM_PGSQL_VERSION="${PROJECT_VERSION}"
 )
 
 # No CONFIG_DEPENDENCIES / INSTALL_CMAKE_FILES: this module's only consume-time dependency is
 # qb::core, which the generated qbm-pgsqlConfig.cmake already resolves with find_dependency(qb).
-# There is no libpq here -- the PostgreSQL wire protocol (src/protocol.cpp) and SCRAM are
+# There is no libpq here -- the PostgreSQL wire protocol (src/qbm/pgsql/protocol.cpp) and SCRAM are
 # implemented in-tree.
 
 # Add tests if enabled

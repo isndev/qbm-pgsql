@@ -30,7 +30,7 @@
 #include <string>
 #include <vector>
 
-#include "../pgsql.h"
+#include <qbm/pgsql/pgsql.h>
 
 #include "../../shared/pg_wire_ground_truth.hpp"
 

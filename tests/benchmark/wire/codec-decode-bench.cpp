@@ -39,7 +39,7 @@
 #include <vector>
 
 #include "../../shared/pg_wire_ground_truth.hpp"
-#include "../pgsql.h"
+#include <qbm/pgsql/pgsql.h>
 
 using namespace qb::pg;
 using namespace qb::pg::detail;
