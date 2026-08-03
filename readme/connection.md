@@ -1,6 +1,6 @@
 # Connecting to PostgreSQL
 
-> **Audience:** Adopter · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 2.6.0 (C++20 default, C++23
+> **Audience:** Adopter · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 3.0.0 (C++20 default, C++23
 > supported)
 
 How `qb::pg::tcp::database` (and, under `QB_HAS_SSL`, `qb::pg::tcp::ssl::database`) parses a connection string, opens an

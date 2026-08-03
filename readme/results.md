@@ -1,6 +1,6 @@
 # Result sets and field access
 
-> **Audience:** Adopter · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 2.6.0 (C++20 default, C++23
+> **Audience:** Adopter · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 3.0.0 (C++20 default, C++23
 > supported)
 
 How to read rows and columns from `qb::pg::results` — the container a query hands back — using container iteration,

@@ -1,6 +1,6 @@
 # Query execution
 
-> **Audience:** Adopter · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 2.6.0 (C++20 default, C++23
+> **Audience:** Adopter · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 3.0.0 (C++20 default, C++23
 > supported)
 
 Run simple queries, extended (prepared) queries, SQL files, and `LISTEN`/`NOTIFY` against a `qb::pg::tcp::database` (or
