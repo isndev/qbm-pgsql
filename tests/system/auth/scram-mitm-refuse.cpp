@@ -126,6 +126,8 @@ struct FakeResult {
     std::atomic<bool> sent_ok{false};
 };
 
+#ifdef QB_HAS_SSL
+
 // The malicious/broken backend. Accepts one connection and runs the truncated SCRAM dance above.
 void
 run_fake_server(qb::io::tcp::listener &listener, FakeResult *res) {
@@ -239,7 +241,81 @@ run_fake_server(qb::io::tcp::listener &listener, FakeResult *res) {
     client.disconnect();
 }
 
+#else // !QB_HAS_SSL
+
+/**
+ * @brief Backend that offers ONE crypto-requiring auth method and records whether the client bit.
+ *
+ * Without OpenSSL there is no md5(), no CSPRNG nonce and no PBKDF2/HMAC, so pgsql.h compiles
+ * `refuse_auth_without_ssl()` in place of the MD5 and SCRAM handlers. The observable contract is
+ * "the client answers NOTHING and fails the connect", which is exactly what this backend measures:
+ * it sends the Authentication request and then waits for a password/SASL message that must never
+ * arrive.
+ *
+ * @param auth_code 5 = AuthenticationMD5Password (payload: 4-byte salt), 10 = AuthenticationSASL.
+ */
+void
+run_nossl_auth_server(qb::io::tcp::listener &listener, FakeResult *res, uint32_t auth_code) {
+    if (qb::io::socket::handle_read_ready(listener.native_handle(), std::chrono::seconds(10)) <= 0)
+        return;
+    qb::io::tcp::socket client;
+    if (listener.accept(client) != qb::io::SocketStatus::Done)
+        return;
+
+    // 1. Startup message: [int32 length][body].
+    uint8_t lenbuf[4];
+    if (!recv_exact(client, lenbuf, 4)) {
+        client.disconnect();
+        return;
+    }
+    const uint32_t slen = get_i32(lenbuf);
+    if (slen < 8 || slen > 65536) {
+        client.disconnect();
+        return;
+    }
+    std::vector<uint8_t> sbody(slen - 4);
+    if (!recv_exact(client, sbody.data(), sbody.size())) {
+        client.disconnect();
+        return;
+    }
+    res->got_startup = true;
+
+    // 2. The Authentication request the client cannot satisfy.
+    {
+        std::vector<uint8_t> p;
+        put_i32(p, auth_code);
+        if (auth_code == 5) {
+            const uint8_t salt[4] = {0x01, 0x02, 0x03, 0x04}; // AuthenticationMD5Password salt
+            p.insert(p.end(), salt, salt + 4);
+        } else {
+            static const char kMech[] = "SCRAM-SHA-256";
+            p.insert(p.end(), kMech, kMech + sizeof(kMech)); // includes the trailing NUL
+            p.push_back(0);                                  // empty string terminates the list
+        }
+        if (!send_all(client, backend_msg('R', p))) {
+            client.disconnect();
+            return;
+        }
+        res->sent_ok = true; // reused flag: "the auth request was actually delivered"
+    }
+
+    // 3. THE MEASUREMENT: a build with OpenSSL would answer here ('p' = PasswordMessage /
+    //    SASLInitialResponse). This one must not. read_typed returns false on the bounded
+    //    timeout, on EOF, and on a wrong type byte — all three mean "did not answer".
+    {
+        std::vector<uint8_t> body;
+        if (read_typed(client, 'p', body))
+            res->got_client_first = true; // regression: the client tried to authenticate
+    }
+
+    client.disconnect();
+}
+
+#endif // QB_HAS_SSL
+
 } // namespace
+
+#ifdef QB_HAS_SSL
 
 TEST(PgsqlScramMitm, ClientRefusesAuthenticationOkWithoutVerifiedServerSignature) {
     // Ephemeral loopback listener (OS-assigned port -> no clashes, no hard-coded port).
@@ -272,3 +348,83 @@ TEST(PgsqlScramMitm, ClientRefusesAuthenticationOkWithoutVerifiedServerSignature
     // THE GUARD: AuthenticationOk arrived without a verified SASLFinal -> the P1 gate must refuse.
     EXPECT_FALSE(connected) << "client accepted AuthenticationOk without a verified SCRAM server signature (P1 mutual-auth gate regression)";
 }
+
+#else // !QB_HAS_SSL
+
+namespace {
+
+/// Upper bound on how long the refusal may take. The backend's own read timeout is 5 s
+/// (recv_exact's default), so anything at or above that means the client said NOTHING and the
+/// connect merely died of the server hanging up — indistinguishable, on the `connected` flag
+/// alone, from a deliberate refusal. The real path takes single-digit milliseconds; this is a
+/// ~400x margin, not a latency assertion. Verified by injection: deleting the terminal-failure
+/// teardown from refuse_auth_without_ssl() takes the connect from ~6 ms to ~5006 ms.
+constexpr auto kRefusalDeadline = std::chrono::milliseconds(2500);
+
+/// Drives run_nossl_auth_server against a real qb::pg::tcp::database and reports what happened.
+void
+run_nossl_refusal_case(uint32_t auth_code, bool &connected, FakeResult &res, std::chrono::milliseconds &elapsed) {
+    qb::io::tcp::listener listener;
+    ASSERT_EQ(listener.listen_v4(0, "127.0.0.1"), qb::io::SocketStatus::Done);
+    const uint16_t port = listener.local_endpoint().port();
+    ASSERT_NE(port, 0);
+
+    std::thread server(run_nossl_auth_server, std::ref(listener), &res, auth_code);
+
+    const std::string dsn = "tcp://test:test@127.0.0.1:" + std::to_string(port) + "[test]";
+    connected             = true; // must be flipped to false by the refusal
+    {
+        qb::pg::tcp::database db{};
+        const auto            started = std::chrono::steady_clock::now();
+        connected                     = static_cast<bool>(qb::io::async::run_sync(db.connect(dsn)));
+        elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started);
+        db.disconnect();
+    }
+
+    server.join();
+    listener.disconnect();
+}
+
+} // namespace
+
+/**
+ * These two tests exist because the OpenSSL-free branch of `on_authentication` is otherwise dead
+ * code in every preset: `release`/`dev` do not compile it, and the pgsql *integration* tier needs a
+ * live daemon. They run under `feature-gates` on the fake backend above, with no daemon.
+ */
+TEST(PgsqlNoSslAuth, ClientRefusesScramWithoutOpenSsl) {
+    bool                      connected = true;
+    FakeResult                res;
+    std::chrono::milliseconds elapsed{};
+    run_nossl_refusal_case(/*AuthenticationSASL*/ 10, connected, res, elapsed);
+
+    // Non-vacuity: the handshake really did reach the AuthenticationSASL step.
+    EXPECT_TRUE(res.got_startup.load()) << "client never sent the startup message";
+    EXPECT_TRUE(res.sent_ok.load()) << "fake server never delivered AuthenticationSASL";
+
+    // THE GUARD: no CSPRNG nonce, no PBKDF2, no HMAC -> refuse instead of sending a bogus proof.
+    EXPECT_FALSE(res.got_client_first.load()) << "client answered a SCRAM challenge in a build without OpenSSL";
+    EXPECT_FALSE(connected) << "connect() reported success for an auth method this build cannot perform";
+    EXPECT_LT(elapsed, kRefusalDeadline) << "refusal took " << elapsed.count()
+                                         << " ms: the connect died of the backend timing out, not of a deliberate refusal "
+                                            "(refuse_auth_without_ssl must set the terminal-failure flags and resume the waiter)";
+}
+
+TEST(PgsqlNoSslAuth, ClientRefusesMd5WithoutOpenSsl) {
+    bool                      connected = true;
+    FakeResult                res;
+    std::chrono::milliseconds elapsed{};
+    run_nossl_refusal_case(/*AuthenticationMD5Password*/ 5, connected, res, elapsed);
+
+    EXPECT_TRUE(res.got_startup.load()) << "client never sent the startup message";
+    EXPECT_TRUE(res.sent_ok.load()) << "fake server never delivered AuthenticationMD5Password";
+
+    // THE GUARD: qb::crypto::md5 does not exist here -> refuse instead of sending a bogus digest.
+    EXPECT_FALSE(res.got_client_first.load()) << "client answered an MD5 challenge in a build without OpenSSL";
+    EXPECT_FALSE(connected) << "connect() reported success for an auth method this build cannot perform";
+    EXPECT_LT(elapsed, kRefusalDeadline) << "refusal took " << elapsed.count()
+                                         << " ms: the connect died of the backend timing out, not of a deliberate refusal "
+                                            "(refuse_auth_without_ssl must set the terminal-failure flags and resume the waiter)";
+}
+
+#endif // QB_HAS_SSL
