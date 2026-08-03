@@ -266,7 +266,7 @@ valid credentials cannot relay it onto another channel — the bound proof would
 RFC 5802: `p=tls-server-end-point` when bound; `y` over TLS when the server did *not* advertise `-PLUS` (so the server
 can detect a downgrade that stripped it); `n` on a cleartext link. Negotiation is automatic; check the result with
 `db.used_channel_binding()`.
-<!-- src: qbm/pgsql/pgsql.h (on_authentication, used_channel_binding); qb/source/io/src/tcp/ssl/socket.cpp (tls_server_end_point) -->
+<!-- src: qbm/pgsql/pgsql.h (on_authentication, used_channel_binding); qb/src/qb/io/tcp/ssl/socket.cpp (tls_server_end_point) -->
 <!-- src: qbm/pgsql/pgsql.h:1027-1050 (gs2 cbind-flag negotiation), 1101-1106 (cbind_input) -->
 
 ---
@@ -291,7 +291,7 @@ This runs through qb-io's generic opportunistic-TLS primitive,
 `qb::io::async::tcp::starttls_connect<Socket, Negotiator>()` — a first-class connector capability that any STARTTLS
 protocol can reuse (the pgsql side provides `qb::pg::detail::postgres_ssl_negotiator`). There is **no** blocking `send`/
 `recv`/`SSL_connect` on the connect path.
-<!-- src: qbm/pgsql/pgsql.h (start_connect_from_awaiter, postgres_ssl_negotiator); qb/include/qb/io/async/tcp/connector.h (starttls_connect) -->
+<!-- src: qbm/pgsql/pgsql.h (start_connect_from_awaiter, postgres_ssl_negotiator); qb/src/qb/io/async/tcp/connector.h (starttls_connect) -->
 
 > **A secure database requires TLS.** If the server declines SSL (`N`), the connect **fails** —
 `qb::pg::tcp::ssl::database` is encrypt-or-nothing (libpq `sslmode=require` semantics). For cleartext, use the plain
