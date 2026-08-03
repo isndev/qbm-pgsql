@@ -23,9 +23,16 @@ if (NOT QB_FOUND)
     return()
 endif ()
 
-# TCP/cleartext builds without OpenSSL; qb::pg::tcp::ssl::database requires QB_HAS_SSL
+# TCP/cleartext builds without OpenSSL; qb::pg::tcp::ssl::database requires QB_HAS_SSL.
+# Two things are lost, not one, and the second is easy to miss: besides the TLS transport
+# alias, the AUTHENTICATION methods that need real crypto are gone. MD5 needs qb::crypto::md5
+# and SCRAM-SHA-256 needs a CSPRNG nonce + PBKDF2-HMAC-SHA256 + HMAC, none of which exist
+# without OpenSSL, so pgsql.h compiles a refusal in their place (see refuse_auth_without_ssl:
+# LOG_CRIT + terminal connect failure). SCRAM is PostgreSQL's default password_encryption
+# since 14, so a stock server will refuse this client unless the role uses trust/password.
 if (NOT QB_HAS_SSL)
-    qb_status_message("PostgreSQL: building cleartext TCP only (QB_HAS_SSL off — TLS transport alias unavailable)")
+    qb_status_message("PostgreSQL: building cleartext TCP only (QB_HAS_SSL off — no TLS transport alias;")
+    qb_status_message("            auth limited to 'trust' and 'password' — MD5 and SCRAM-SHA-256 unavailable)")
 endif ()
 
 # Register the PostgreSQL module using the new framework functions

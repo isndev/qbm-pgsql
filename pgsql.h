@@ -577,6 +577,37 @@ private:
             qb::io::async::coro_scheduler().schedule_resume(h);
     }
 
+#ifndef QB_HAS_SSL
+    /**
+     * @brief Refuse a server-selected authentication method this build cannot perform.
+     *
+     * MD5 and SCRAM-SHA-256 both need real cryptography (MD5 / PBKDF2-HMAC-SHA256 /
+     * HMAC / CSPRNG nonce), which only OpenSSL provides. A `QB_WITH_SSL=OFF` build has
+     * none of it, so those code paths are not compiled at all — but the *server* picks
+     * the method, so the mismatch is only knowable at runtime, on receipt of the
+     * Authentication message. Fail here, loudly and specifically, rather than sending a
+     * bogus or empty password and letting the server report a generic auth failure.
+     *
+     * Uses the same terminal-failure shape as the SCRAM MITM refusal above (LOG_CRIT +
+     * flags + resume): this runs inside the protocol message handler on the event-loop
+     * thread, so an escaping exception would tear down the loop rather than the
+     * connection.
+     *
+     * @param method Human-readable name of the method the server asked for.
+     */
+    void
+    refuse_auth_without_ssl(const char *method) {
+        LOG_CRIT("[pgsql] Server requested "
+                 << method
+                 << " authentication, which this build cannot perform: qb was built without OpenSSL "
+                    "(QB_HAS_SSL undefined / QB_WITH_SSL=OFF). Rebuild qb with OpenSSL, or configure the "
+                    "PostgreSQL role for 'trust' or 'password' (cleartext) authentication.");
+        connect_handshake_failed_ = true;
+        is_connected_             = false;
+        try_resume_connect_wait();
+    }
+#endif // !QB_HAS_SSL
+
     /**
      * @brief Starts outbound TCP using the async framework (`qb::io::async::tcp::connect`).
      *
@@ -999,6 +1030,10 @@ public:
                 *this << pm;
             } break;
             case MD5Password: {
+#ifndef QB_HAS_SSL
+                // qb::crypto::md5 does not exist without OpenSSL.
+                refuse_auth_without_ssl("MD5");
+#else
                 LOG_INFO("[pgsql] MD5 authentication requested");
                 // Read salt
                 std::string salt;
@@ -1013,8 +1048,14 @@ public:
                 pm.write(md5digest);
 
                 *this << pm;
+#endif // QB_HAS_SSL
             } break;
             case SCRAM_SHA256: {
+#ifndef QB_HAS_SSL
+                // The client nonce needs a CSPRNG and the proof needs PBKDF2/HMAC —
+                // neither exists without OpenSSL.
+                refuse_auth_without_ssl("SCRAM-SHA-256");
+#else
                 LOG_INFO("[pgsql] SCRAM-SHA-256 authentication requested");
                 _scram_pending         = true;  // gate AuthenticationOk until SASLFinal verifies (mutual auth)
                 _scram_server_verified = false;
@@ -1060,8 +1101,14 @@ public:
                 pm.write(static_cast<qb::pg::integer>(data.size()));
                 pm.write_sv(data);
                 *this << pm;
+#endif // QB_HAS_SSL
             } break;
             case SCRAM_SHA256_CLIENT_PROOF: {
+#ifndef QB_HAS_SSL
+                // Unreachable against a well-behaved server (we refused the SASL start
+                // above), but a hostile/buggy peer can still send it unsolicited.
+                refuse_auth_without_ssl("SCRAM-SHA-256");
+#else
                 LOG_INFO("[pgsql] SCRAM-SHA-256 authentication client proof check");
                 std::string data;
                 msg.read(data);
@@ -1131,8 +1178,12 @@ public:
                 pm.write_sv(client_final_message);
                 *this << pm;
                 _password_salt = std::move(saltedPassword);
+#endif // QB_HAS_SSL
             } break;
             case SCRAM_SHA256_SERVER_CHECK: {
+#ifndef QB_HAS_SSL
+                refuse_auth_without_ssl("SCRAM-SHA-256");
+#else
                 try {
                     std::string serverFinalMessage;
 
@@ -1165,6 +1216,7 @@ public:
                     is_connected_             = false;
                     try_resume_connect_wait();
                 }
+#endif // QB_HAS_SSL
             } break;
             default: {
                 LOG_CRIT("[pgsql] Unsupported authentication scheme " << auth_state << "requested by server");
