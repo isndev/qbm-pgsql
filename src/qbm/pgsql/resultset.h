@@ -21,7 +21,7 @@
  * - Row-to-tuple conversion utilities
  * - Field metadata access
  *
- * @see resultset.inl
+ * @see the merged definitions at the tail of this file (was: resultset.inl)
  * @see field.h
  *
  * @author qb - C++ Actor Framework
@@ -836,4 +836,177 @@ operator-(resultset::row const &a, resultset::row const &b) {
 } // namespace pg
 } // namespace qb
 
-#include "resultset.inl"
+// ---------------------------------------------------------------------------
+// Template definitions for qb::pg::resultset, merged here from the retired
+// resultset.inl (3.0). They stand exactly where the `#include "resultset.inl"`
+// that used to occupy this line spliced them, so the preprocessed token stream
+// of this header is byte-identical to 2.6 -- which is how the merge was
+// verified. Only the merged file's own `#pragma once` and its self-include of
+// resultset.h were not carried over; both were no-ops here.
+//
+// They must follow the class -- they define members of resultset::row -- and are
+// left at the tail rather than tucked in just after it so that equality holds.
+// See dev/analysis/TEMPLATE-LINKAGE-AUDIT-3.0.md.
+// ---------------------------------------------------------------------------
+
+#include <qb/utility/type_traits.h>
+
+namespace qb {
+namespace pg {
+
+namespace detail {
+
+// Extensions for tuple conversion
+namespace resultset_ext {
+
+// Implementation of row to tuple conversion (value tuple)
+template <typename Tuple, std::size_t... I>
+inline void
+row_to_impl(resultset::row const &row, Tuple &t, std::index_sequence<I...>) {
+    ((std::get<I>(t) = row[I].template as<typename std::tuple_element<I, Tuple>::type>()), ...);
+}
+
+// Implementation for reference tuple. Defined BEFORE the row_to() overload that
+// calls it: this overload is found neither by ordinary lookup at the call site
+// (it is a dependent call) nor by ADL (it lives in the nested resultset_ext
+// namespace, which ADL on std::tuple / resultset::row does not reach), so it
+// must be declared before use or the reference-tuple row_to() fails to compile
+// when first instantiated (e.g. via row::to(T&...)).
+template <typename Tuple, std::size_t... Is>
+inline void
+row_to_impl(Tuple &t, resultset::row const &row, std::index_sequence<Is...>) {
+    ((std::get<Is>(t) = row[Is].template as<std::tuple_element_t<Is, std::remove_reference_t<Tuple>>>()), ...);
+}
+
+// Convert row to tuple
+template <typename... Ts>
+inline void
+row_to(resultset::row const &row, std::tuple<Ts...> &t) {
+    row_to_impl(row, t, std::index_sequence_for<Ts...>{});
+}
+
+// Convert row to reference tuple
+template <typename... Ts>
+inline void
+row_to(resultset::row const &row, std::tuple<Ts &...> t) {
+    row_to_impl(t, row, std::index_sequence_for<Ts...>{});
+}
+
+// Convert row to multiple parameters
+template <typename... Ts>
+inline void
+row_to_multi(resultset::row const &row, Ts &...args) {
+    std::tuple<Ts &...> tuple_refs(args...);
+    row_to(row, tuple_refs);
+}
+
+} // namespace resultset_ext
+
+template <size_t Index, typename T>
+struct nth_field {
+    enum { index = Index };
+    typedef T type;
+
+    nth_field(resultset::row const &r)
+        : row(r) {}
+
+    T
+    value() {
+        return row[index].template as<T>();
+    }
+
+    bool
+    to(T &val) {
+        return row[index].to(val);
+    }
+
+    resultset::row row;
+};
+
+template <typename IndexTuple, typename... T>
+struct row_data_extractor_base;
+
+template <size_t... Indexes, typename... T>
+struct row_data_extractor_base<qb::indexes_tuple<Indexes...>, T...> {
+    static constexpr ::std::size_t size = sizeof...(T);
+
+    static void
+    get_tuple(resultset::row const &row, std::tuple<T...> &val) {
+        resultset_ext::row_to(row, val);
+    }
+
+    static void
+    get_values(resultset::row const &row, T &...val) {
+        resultset_ext::row_to_multi(row, val...);
+    }
+};
+
+template <typename... T>
+struct row_data_extractor : row_data_extractor_base<typename qb::index_builder<sizeof...(T)>::type, T...> {};
+
+template <typename IndexTuple, typename... T>
+struct field_by_name_extractor;
+
+template <::std::size_t... Indexes, typename... T>
+struct field_by_name_extractor<qb::indexes_tuple<Indexes...>, T...> {
+    static constexpr ::std::size_t size = sizeof...(T);
+
+    static void
+    get_tuple(resultset::row const &row, ::std::initializer_list<::std::string> const &names, ::std::tuple<T...> &val) {
+        if (names.size() < size)
+            throw error::db_error{"Not enough names in row data extraction"};
+        ::std::tuple<T...> tmp(row[*(names.begin() + Indexes)].template as<T>()...);
+        tmp.swap(val);
+    }
+
+    static void
+    get_values(resultset::row const &row, ::std::initializer_list<::std::string> const &names, T &...val) {
+        qb::expand{row[*(names.begin() + Indexes)].to(val)...};
+    }
+};
+
+template <typename... T>
+struct row_data_by_name_extractor : field_by_name_extractor<typename qb::index_builder<sizeof...(T)>::type, T...> {};
+
+} // namespace detail
+
+template <typename... T>
+void
+resultset::row::to(std::tuple<T...> &val) const {
+    detail::row_data_extractor<T...>::get_tuple(*this, val);
+}
+
+template <typename... T>
+void
+resultset::row::to(std::tuple<T &...> val) const {
+    detail::resultset_ext::row_to(*this, val);
+}
+
+template <typename... T>
+void
+resultset::row::to(T &...val) const {
+    detail::row_data_extractor<T...>::get_values(*this, val...);
+}
+
+template <typename... T>
+void
+resultset::row::to(::std::initializer_list<::std::string> const &names, ::std::tuple<T...> &val) const {
+    detail::row_data_by_name_extractor<T...>::get_tuple(*this, names, val);
+}
+
+template <typename... T>
+void
+resultset::row::to(::std::initializer_list<::std::string> const &names, ::std::tuple<T &...> val) const {
+    std::tuple<T...> non_ref;
+    detail::row_data_by_name_extractor<T...>::get_tuple(*this, names, non_ref);
+    val = non_ref;
+}
+
+template <typename... T>
+void
+resultset::row::to(::std::initializer_list<::std::string> const &names, T &...val) const {
+    detail::row_data_by_name_extractor<T...>::get_values(*this, names, val...);
+}
+
+} // namespace pg
+} // namespace qb

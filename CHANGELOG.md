@@ -10,6 +10,54 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 Tracks changes on the development branch not yet part of a tagged release. The module version is
 **3.0.0**, in lockstep with the qb framework; see the qb CHANGELOG for what makes that release major.
 
+### Removed
+
+- **BREAKING — `resultset.inl`, `transaction.inl` and `transaction_coro.inl` no longer exist.**
+  Every definition moved verbatim into the header that already included it, at exactly the position
+  the `#include` occupied, so none changed and none was dropped. The counts are identical on both
+  axes before and after — 43 `template<…>` headers and 22 `inline` definitions in total:
+
+  | was | now | `template<` | `inline` |
+  |---|---|---|---|
+  | `resultset.inl` (204 L) | tail of `resultset.h` (was included from `resultset.h:839`) | 18 → 18 | 5 → 5 |
+  | `transaction.inl` (528 L) | tail of `commands.h` (was included from `commands.h:703`) | 25 → 25 | 17 → 17 |
+  | `transaction_coro.inl` (262 L) | tail of `commands.h`, inside `namespace qb::pg::detail` (was included from `transaction.inl:526`) | *(counted with `commands.h` above)* | |
+
+  (`transaction.inl` is 528 lines, not the 527 `wc -l` reports — it ships without a trailing
+  newline.)
+
+  The bodies land in `commands.h`, **not** `transaction.h`, because `commands.h` is the header that
+  closes the declaration cycle: `transaction.h` only declares `Transaction`, while the bodies need
+  the complete command types that `commands.h` defines (and `commands.h` includes `transaction.h`
+  at `:26`). This is the same structural constraint that put `qb::Actor`'s bodies at the tail of
+  `VirtualCore.h`. `transaction.cpp`, which used to include `transaction.inl` directly, now reaches
+  them through `commands.h`.
+
+  Verified by comparing the preprocessed token stream of `commands.h` and `resultset.h` before and
+  after: both are identical (`commands.h` differs by exactly one blank line and zero tokens). A
+  control confirmed the comparison can fail. `resultset.h:1-838` and `commands.h:1-702` are
+  unchanged, so existing citations into either class still land.
+
+  This only breaks a consumer who included a fragment **directly** — `#include
+  <qbm/pgsql/resultset.inl>` and friends. None was a supported spelling: two of the three could not
+  compile alone and qb's installed-header gate carried them as named "by-design fragment"
+  exclusions. Use `<qbm/pgsql/resultset.h>`, `<qbm/pgsql/commands.h>`, or the `<qbm/pgsql/pgsql.h>`
+  umbrella.
+
+### Fixed
+
+- **`transaction_coro.inl` ran seven `#include` directives inside `namespace qb::pg::detail`.**
+  It was spliced into `transaction.inl:526`, which is *between* that namespace's braces, so its own
+  `#include <cctype> <filesystem> <fstream> <sstream> <string>` and two local includes were
+  processed in there. They were harmless only because `transaction.inl`'s block, at namespace scope,
+  had already pulled the same headers in first — the fragment silently depended on its includer to
+  neutralise its own includes. Deleting `<fstream>` from that block was measured to reparse
+  `<fstream>` inside the namespace, declaring `qb::pg::detail::std` and producing 20 errors led by
+  `no template named 'basic_streambuf'; did you mean '::std::basic_streambuf'?`.
+
+  The merge hoists all seven to namespace scope, which makes that unreachable. Confirmed free: the
+  preprocessed token stream is unchanged, because the includes were no-ops at both positions.
+
 ### Changed
 
 - **Logging call sites use qb's prefixed `QB_LOG_*` macros** (65 sites). qb 3.0.0 renamed

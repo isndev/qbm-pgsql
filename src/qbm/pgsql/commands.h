@@ -700,4 +700,770 @@ public:
 
 } // namespace qb::pg::detail
 
-#include "./transaction.inl"
+// ---------------------------------------------------------------------------
+// Template + inline definitions for qb::pg::detail::Transaction, merged here
+// from the retired transaction.inl and transaction_coro.inl (3.0).
+//
+// They live at the tail of commands.h rather than transaction.h because
+// commands.h is the header that CLOSES the cycle: transaction.h (included at
+// :26 above) only declares Transaction, while the bodies below need the
+// complete command types defined above. This is byte-for-byte the position the
+// `#include "./transaction.inl"` that used to occupy this line spliced them
+// into, so the preprocessed token stream of commands.h is unchanged.
+//
+// The include block below is the UNION of the two retired files' blocks.
+// transaction_coro.inl's seven includes used to be spliced INSIDE
+// `namespace qb::pg::detail` and were no-ops only because transaction.inl's own
+// block had already pulled the same headers in first. That is a live trap, not
+// a style point: deleting <fstream> from this block was measured to reparse
+// <fstream> inside the namespace and emit 20 errors led by
+// "no template named 'basic_streambuf'; did you mean '::std::basic_streambuf'?".
+// Hoisting them here makes that unreachable.
+//
+// Not carried over: each merged file's own `#pragma once` and transaction.inl's
+// self-include of commands.h. Both were no-ops at this point.
+// See dev/analysis/TEMPLATE-LINKAGE-AUDIT-3.0.md.
+// ---------------------------------------------------------------------------
+
+#include <cctype>
+#include <filesystem>
+#include <fstream>
+#include <memory>
+#include <sstream>
+#include <string>
+#include <string_view>
+#include <type_traits>
+#include <utility>
+
+#include "./pg_awaiter.h"
+#include "./pg_notify_sql.h"
+#include "./transaction.h"
+
+namespace qb::pg::detail {
+
+/**
+ * @brief Begins a new transaction with success and error callbacks
+ *
+ * Initiates a new PostgreSQL transaction with the specified mode and callbacks.
+ * If the database is already in a transaction, the error callback is invoked.
+ *
+ * @tparam CB_SUCCESS Type of success callback function
+ * @tparam CB_ERROR Type of error callback function
+ * @tparam Dummy SFINAE enabler (not used in implementation)
+ * @param on_success Callback invoked when transaction begins successfully
+ * @param on_error Callback invoked if transaction fails to begin
+ * @param mode Transaction isolation mode
+ * @return Reference to this transaction for method chaining
+ */
+template <typename CB_SUCCESS, typename CB_ERROR>
+Transaction &
+Transaction::begin(CB_SUCCESS &&on_success, CB_ERROR &&on_error, transaction_mode mode) {
+    if (_parent) {
+        on_error((error::db_error) error::query_error("already in transaction"));
+    } else {
+        auto end = new End<CB_ERROR>(this, std::forward<CB_ERROR>(on_error));
+        push_transaction(std::unique_ptr<Transaction>(new Begin<CB_SUCCESS, CB_ERROR>(this, end, mode, std::forward<CB_SUCCESS>(on_success))));
+        push_transaction(std::unique_ptr<Transaction>(end));
+    }
+    return *this;
+}
+
+/**
+ * @brief Begins a new transaction with only success callback
+ *
+ * Simplified version that uses an empty error callback.
+ *
+ * @tparam CB_SUCCESS Type of success callback function
+ * @param on_success Callback invoked when transaction begins successfully
+ * @param mode Transaction isolation mode
+ * @return Reference to this transaction for method chaining
+ */
+template <typename CB_SUCCESS>
+Transaction &
+Transaction::begin(CB_SUCCESS &&on_success, transaction_mode mode) {
+    return begin(std::forward<CB_SUCCESS>(on_success), [](error::db_error const &) {}, mode);
+}
+
+/**
+ * @brief Creates a savepoint within a transaction
+ *
+ * Creates a named savepoint within the current transaction, allowing for
+ * partial rollback if needed.
+ *
+ * @tparam CB_SUCCESS Type of success callback function
+ * @tparam CB_ERROR Type of error callback function
+ * @tparam Dummy SFINAE enabler (not used in implementation)
+ * @param name Name of the savepoint to create
+ * @param on_success Callback invoked when savepoint is created successfully
+ * @param on_error Callback invoked if savepoint creation fails
+ * @return Reference to this transaction for method chaining
+ */
+template <typename CB_SUCCESS, typename CB_ERROR>
+Transaction &
+Transaction::savepoint(std::string_view name, CB_SUCCESS &&on_success, CB_ERROR &&on_error) {
+    auto end = new EndSavePoint<CB_ERROR>(this, std::string(name), std::forward<CB_ERROR>(on_error));
+    push_transaction(std::unique_ptr<Transaction>(new SavePoint<CB_SUCCESS, CB_ERROR>(this, end, std::forward<CB_SUCCESS>(on_success))));
+    push_transaction(std::unique_ptr<Transaction>(end));
+    return *this;
+}
+
+/**
+ * @brief Creates a savepoint with only success callback
+ *
+ * Simplified version that uses an empty error callback.
+ *
+ * @tparam CB_SUCCESS Type of success callback function
+ * @param name Name of the savepoint to create
+ * @param on_success Callback invoked when savepoint is created successfully
+ * @return Reference to this transaction for method chaining
+ */
+template <typename CB_SUCCESS>
+Transaction &
+Transaction::savepoint(std::string_view name, CB_SUCCESS &&on_success) {
+    return savepoint(name, std::forward<CB_SUCCESS>(on_success), [](error::db_error) {});
+}
+
+/**
+ * @brief Executes a SQL query with success and error callbacks
+ *
+ * Executes the specified SQL expression and invokes appropriate callbacks
+ * based on the result. Automatically detects callback signature to determine
+ * if result data should be returned.
+ *
+ * @tparam CB_SUCCESS Type of success callback function
+ * @tparam CB_ERROR Type of error callback function
+ * @tparam Dummy SFINAE enabler (not used in implementation)
+ * @param expr SQL expression to execute
+ * @param on_success Callback invoked when query succeeds
+ * @param on_error Callback invoked if query fails
+ * @return Reference to this transaction for method chaining
+ */
+template <typename CB_SUCCESS, typename CB_ERROR>
+Transaction &
+Transaction::execute(std::string_view expr, CB_SUCCESS &&on_success, CB_ERROR &&on_error) {
+    if constexpr (std::is_invocable_v<CB_SUCCESS, Transaction &, resultset>) {
+        push_transaction(std::unique_ptr<Transaction>(new ResultQuery<CB_SUCCESS, CB_ERROR>(
+            this, std::string(expr), std::forward<CB_SUCCESS>(on_success), std::forward<CB_ERROR>(on_error))));
+    } else if constexpr (std::is_invocable_v<CB_SUCCESS, Transaction &>) {
+        push_transaction(std::unique_ptr<Transaction>(
+            new Query<CB_SUCCESS, CB_ERROR>(this, std::string(expr), std::forward<CB_SUCCESS>(on_success), std::forward<CB_ERROR>(on_error))));
+    } else
+        static_assert("execute call_back requires -> [](qb::pg::transaction &tr, "
+                      "(optional) qb::pg::results res)");
+
+    return *this;
+}
+
+/**
+ * @brief Executes a SQL query with only success callback
+ *
+ * Simplified version that uses an empty error callback.
+ *
+ * @tparam CB_SUCCESS Type of success callback function
+ * @tparam Dummy SFINAE enabler (not used in implementation)
+ * @param expr SQL expression to execute
+ * @param on_success Callback invoked when query succeeds
+ * @return Reference to this transaction for method chaining
+ */
+template <typename CB_SUCCESS>
+Transaction &
+Transaction::execute(std::string_view expr, CB_SUCCESS &&on_success) {
+    return execute(std::string(expr), std::forward<CB_SUCCESS>(on_success), [](error::db_error const &) {});
+}
+
+/**
+ * @brief Prepares a statement with success and error callbacks
+ *
+ * Creates a prepared statement that can be reused with different parameters.
+ * Parameter types must be specified at preparation time.
+ *
+ * @tparam CB_SUCCESS Type of success callback function
+ * @tparam CB_ERROR Type of error callback function
+ * @tparam Dummy SFINAE enabler (not used in implementation)
+ * @param query_name Name to assign to the prepared statement
+ * @param expr SQL expression with parameter placeholders
+ * @param types Sequence of PostgreSQL OIDs for parameter types
+ * @param on_success Callback invoked when preparation succeeds
+ * @param on_error Callback invoked if preparation fails
+ * @return Reference to this transaction for method chaining
+ */
+template <typename CB_SUCCESS, typename CB_ERROR>
+Transaction &
+Transaction::prepare(std::string_view query_name, std::string_view expr, type_oid_sequence &&types, CB_SUCCESS &&on_success,
+                     CB_ERROR &&on_error) {
+    PreparedQuery query{std::string(query_name), std::string(expr), std::move(types), {}};
+
+    push_transaction(std::unique_ptr<Transaction>(
+        new Prepare<CB_SUCCESS, CB_ERROR>(this, std::move(query), std::forward<CB_SUCCESS>(on_success), std::forward<CB_ERROR>(on_error))));
+    return *this;
+}
+
+/**
+ * @brief Prepares a statement with only success callback
+ *
+ * Simplified version that uses an empty error callback.
+ *
+ * @tparam CB_SUCCESS Type of success callback function
+ * @tparam Dummy SFINAE enabler (not used in implementation)
+ * @param query_name Name to assign to the prepared statement
+ * @param expr SQL expression with parameter placeholders
+ * @param types Sequence of PostgreSQL OIDs for parameter types
+ * @param on_success Callback invoked when preparation succeeds
+ * @return Reference to this transaction for method chaining
+ */
+template <typename CB_SUCCESS>
+Transaction &
+Transaction::prepare(std::string_view query_name, std::string_view expr, type_oid_sequence &&types, CB_SUCCESS &&on_success) {
+    return prepare(query_name, expr, std::move(types), std::forward<CB_SUCCESS>(on_success), [](error::db_error const &) {});
+}
+
+/**
+ * @brief Executes a prepared statement with parameters and callbacks
+ *
+ * Executes a previously prepared statement with the given parameters.
+ * Automatically detects callback signature to determine if result data
+ * should be returned.
+ *
+ * @tparam CB_SUCCESS Type of success callback function
+ * @tparam CB_ERROR Type of error callback function
+ * @tparam Dummy SFINAE enabler (not used in implementation)
+ * @param query_name Name of the prepared statement to execute
+ * @param params Parameters to bind to the prepared statement
+ * @param on_success Callback invoked when execution succeeds
+ * @param on_error Callback invoked if execution fails
+ * @return Reference to this transaction for method chaining
+ */
+template <typename CB_SUCCESS, typename CB_ERROR>
+Transaction &
+Transaction::execute(std::string_view query_name, QueryParams &&params, CB_SUCCESS &&on_success, CB_ERROR &&on_error) {
+    if constexpr (std::is_invocable_v<CB_SUCCESS, Transaction &, resultset>) {
+        push_transaction(std::unique_ptr<Transaction>(new QueryPrepared<CB_SUCCESS, CB_ERROR>(
+            this, std::string(query_name), std::move(params), std::forward<CB_SUCCESS>(on_success), std::forward<CB_ERROR>(on_error))));
+    } else if constexpr (std::is_invocable_v<CB_SUCCESS, Transaction &>) {
+        push_transaction(std::unique_ptr<Transaction>(new ExecutePrepared<CB_SUCCESS, CB_ERROR>(
+            this, std::string(query_name), std::move(params), std::forward<CB_SUCCESS>(on_success), std::forward<CB_ERROR>(on_error))));
+    } else
+        static_assert("execute call_back requires -> [](qb::pg::transaction &tr, "
+                      "(optional) qb::pg::results res)");
+    return *this;
+}
+
+/**
+ * @brief Executes a prepared statement with only success callback
+ *
+ * Simplified version that uses an empty error callback.
+ *
+ * @tparam CB_SUCCESS Type of success callback function
+ * @tparam Dummy SFINAE enabler (not used in implementation)
+ * @param query_name Name of the prepared statement to execute
+ * @param params Parameters to bind to the prepared statement
+ * @param on_success Callback invoked when execution succeeds
+ * @return Reference to this transaction for method chaining
+ */
+template <typename CB_SUCCESS>
+Transaction &
+Transaction::execute(std::string_view query_name, QueryParams &&params, CB_SUCCESS &&on_success) {
+    return execute(query_name, std::move(params), std::forward<CB_SUCCESS>(on_success), [](error::db_error const &) {});
+}
+
+/**
+ * @brief Executes a prepared statement with parameters in different order
+ *
+ * Alternative overload with reordered parameters for convenience.
+ *
+ * @tparam CB_SUCCESS Type of success callback function
+ * @tparam Dummy SFINAE enabler (not used in implementation)
+ * @param query_name Name of the prepared statement to execute
+ * @param on_success Callback invoked when execution succeeds
+ * @param params Parameters to bind to the prepared statement
+ * @return Reference to this transaction for method chaining
+ */
+template <typename CB_SUCCESS>
+Transaction &
+Transaction::execute(std::string_view query_name, CB_SUCCESS &&on_success, QueryParams &&params) {
+    return execute(query_name, std::move(params), std::forward<CB_SUCCESS>(on_success), [](error::db_error const &) {});
+}
+
+/**
+ * @brief Registers a callback to be executed upon successful operation
+ *
+ * Adds a callback to be executed after the previous operation completes
+ * successfully. Used for chaining operations in a fluent API style.
+ *
+ * @tparam CB_SUCCESS Type of success callback function
+ * @param on_success Callback to execute on success
+ * @return Reference to this transaction for method chaining
+ */
+template <typename CB_SUCCESS>
+Transaction &
+Transaction::then(CB_SUCCESS &&on_success) {
+    push_transaction(std::unique_ptr<Transaction>(new Then<CB_SUCCESS>(this, std::forward<CB_SUCCESS>(on_success))));
+    return *this;
+}
+
+/**
+ * @brief Alias for then() - registers a success callback
+ *
+ * Alternative name for the then() method with identical functionality.
+ *
+ * @tparam CB_SUCCESS Type of success callback function
+ * @param on_success Callback to execute on success
+ * @return Reference to this transaction for method chaining
+ */
+template <typename CB_SUCCESS>
+Transaction &
+Transaction::success(CB_SUCCESS &&on_success) {
+    push_transaction(std::unique_ptr<Transaction>(new Then<CB_SUCCESS>(this, std::forward<CB_SUCCESS>(on_success))));
+    return *this;
+}
+
+/**
+ * @brief Registers a callback to be executed upon operation failure
+ *
+ * Adds a callback to be executed if the previous operation fails.
+ * Used for error handling in a fluent API style.
+ *
+ * @tparam CB_ERROR Type of error callback function
+ * @param on_error Callback to execute on error
+ * @return Reference to this transaction for method chaining
+ */
+template <typename CB_ERROR>
+Transaction &
+Transaction::error(CB_ERROR &&on_error) {
+    push_transaction(std::unique_ptr<Transaction>(new Error<CB_ERROR>(this, std::forward<CB_ERROR>(on_error))));
+    return *this;
+}
+
+/**
+ * @brief Prepares a SQL query from a file with success and error callbacks
+ *
+ * This method reads the SQL query from a file and prepares it with the specified
+ * parameter types. If the file cannot be read, the error callback is invoked
+ * and an exception is thrown.
+ *
+ * @tparam CB_SUCCESS Type of success callback function
+ * @tparam CB_ERROR Type of error callback function
+ * @tparam Dummy SFINAE enabler (not used in implementation)
+ * @param query_name Name to assign to the prepared statement
+ * @param file_path Path to the file containing the SQL query
+ * @param types Sequence of PostgreSQL OIDs for parameter types
+ * @param on_success Callback invoked when preparation succeeds
+ * @param on_error Callback invoked if preparation fails (called before exception is thrown)
+ * @return Reference to this transaction for method chaining
+ * @throws error::query_error If file doesn't exist, can't be opened, or there's an error reading it
+ */
+template <typename CB_SUCCESS, typename CB_ERROR>
+Transaction &
+Transaction::prepare_file(std::string_view query_name, const std::filesystem::path &file_path, type_oid_sequence &&types,
+                          CB_SUCCESS &&on_success, CB_ERROR &&on_error) {
+    try {
+        // Check if file exists
+        if (!std::filesystem::exists(file_path))
+            throw error::query_error("SQL file not found: " + file_path.string());
+
+        // Open and read the file
+        std::ifstream file(file_path);
+        if (!file.is_open())
+            throw error::query_error("Cannot open SQL file: " + file_path.string());
+
+        // Read the entire file content into a string
+        std::stringstream buffer;
+        buffer << file.rdbuf();
+        std::string sql_query = buffer.str();
+
+        // Call the regular prepare method with the file content
+        return prepare(query_name, sql_query, std::move(types), std::forward<CB_SUCCESS>(on_success), std::forward<CB_ERROR>(on_error));
+    } catch (const std::exception &e) {
+        auto err = error::query_error("Error reading SQL file: " + std::string(e.what()));
+        on_error(err);
+        throw err;
+    }
+}
+
+/**
+ * @brief Prepares a SQL query from a file with only success callback
+ *
+ * Simplified version that uses an empty error callback.
+ *
+ * @tparam CB_SUCCESS Type of success callback function
+ * @tparam Dummy SFINAE enabler (not used in implementation)
+ * @param query_name Name to assign to the prepared statement
+ * @param file_path Path to the file containing the SQL query
+ * @param types Sequence of PostgreSQL OIDs for parameter types
+ * @param on_success Callback invoked when preparation succeeds
+ * @return Reference to this transaction for method chaining
+ */
+template <typename CB_SUCCESS>
+Transaction &
+Transaction::prepare_file(std::string_view query_name, const std::filesystem::path &file_path, type_oid_sequence &&types,
+                          CB_SUCCESS &&on_success) {
+    return prepare_file(query_name, file_path, std::move(types), std::forward<CB_SUCCESS>(on_success), [](error::db_error const &) {});
+}
+
+/**
+ * @brief Executes a SQL query from a file with success and error callbacks
+ *
+ * This method reads the SQL query from a file and executes it.
+ * If the file cannot be read, the error callback is invoked
+ * and an exception is thrown.
+ *
+ * @tparam CB_SUCCESS Type of success callback function
+ * @tparam CB_ERROR Type of error callback function
+ * @tparam Dummy SFINAE enabler (not used in implementation)
+ * @param file_path Path to the file containing the SQL query
+ * @param on_success Callback invoked when execution succeeds
+ * @param on_error Callback invoked if execution fails (called before exception is thrown)
+ * @return Reference to this transaction for method chaining
+ * @throws error::query_error If file doesn't exist, can't be opened, or there's an error reading it
+ */
+template <typename CB_SUCCESS, typename CB_ERROR>
+Transaction &
+Transaction::execute_file(const std::filesystem::path &file_path, CB_SUCCESS &&on_success, CB_ERROR &&on_error) {
+    try {
+        // Check if file exists
+        if (!std::filesystem::exists(file_path))
+            throw error::query_error("SQL file not found: " + file_path.string());
+
+        // Open and read the file
+        std::ifstream file(file_path);
+        if (!file.is_open())
+            throw error::query_error("Cannot open SQL file: " + file_path.string());
+
+        // Read the entire file content into a string
+        std::stringstream buffer;
+        buffer << file.rdbuf();
+        std::string sql_query = buffer.str();
+
+        // Call the regular execute method with the file content
+        return execute(sql_query, std::forward<CB_SUCCESS>(on_success), std::forward<CB_ERROR>(on_error));
+    } catch (const std::exception &e) {
+        auto err = error::query_error("Error reading SQL file: " + std::string(e.what()));
+        on_error(err);
+        throw err;
+    }
+}
+
+/**
+ * @brief Executes a SQL query from a file with only success callback
+ *
+ * Simplified version that uses an empty error callback.
+ *
+ * @tparam CB_SUCCESS Type of success callback function
+ * @tparam Dummy SFINAE enabler (not used in implementation)
+ * @param file_path Path to the file containing the SQL query
+ * @param on_success Callback invoked when execution succeeds
+ * @return Reference to this transaction for method chaining
+ * @throws error::query_error If file doesn't exist, can't be opened, or there's an error reading it
+ */
+template <typename CB_SUCCESS>
+Transaction &
+Transaction::execute_file(const std::filesystem::path &file_path, CB_SUCCESS &&on_success) {
+    return execute_file(file_path, std::forward<CB_SUCCESS>(on_success), [](error::db_error const &) {});
+}
+
+template <typename CB_SUCCESS, typename CB_ERROR>
+Transaction &
+Transaction::notify(std::string_view channel, std::string_view payload, CB_SUCCESS &&on_success, CB_ERROR &&on_error) {
+    try {
+        std::string sql = build_notify_sql(channel, payload);
+        return execute(std::string_view(sql), std::forward<CB_SUCCESS>(on_success), std::forward<CB_ERROR>(on_error));
+    } catch (error::db_error const &e) {
+        on_error(e);
+        throw;
+    }
+}
+
+template <typename CB_SUCCESS, typename CB_ERROR>
+Transaction &
+Transaction::notify(std::string_view channel, CB_SUCCESS &&on_success, CB_ERROR &&on_error) {
+    try {
+        std::string sql = build_notify_sql(channel, {});
+        return execute(std::string_view(sql), std::forward<CB_SUCCESS>(on_success), std::forward<CB_ERROR>(on_error));
+    } catch (error::db_error const &e) {
+        on_error(e);
+        throw;
+    }
+}
+
+template <typename CB_SUCCESS, typename CB_ERROR>
+Transaction &
+Transaction::listen(std::string_view channel, CB_SUCCESS &&on_success, CB_ERROR &&on_error) {
+    try {
+        std::string sql = build_listen_sql(channel);
+        return execute(std::string_view(sql), std::forward<CB_SUCCESS>(on_success), std::forward<CB_ERROR>(on_error));
+    } catch (error::db_error const &e) {
+        on_error(e);
+        throw;
+    }
+}
+
+template <typename CB_SUCCESS, typename CB_ERROR>
+Transaction &
+Transaction::unlisten(std::string_view channel, CB_SUCCESS &&on_success, CB_ERROR &&on_error) {
+    try {
+        std::string sql = build_unlisten_sql(channel);
+        return execute(std::string_view(sql), std::forward<CB_SUCCESS>(on_success), std::forward<CB_ERROR>(on_error));
+    } catch (error::db_error const &e) {
+        on_error(e);
+        throw;
+    }
+}
+
+template <typename CB_SUCCESS, typename CB_ERROR>
+Transaction &
+Transaction::unlisten_all(CB_SUCCESS &&on_success, CB_ERROR &&on_error) {
+    return execute(std::string_view(build_unlisten_all_sql()), std::forward<CB_SUCCESS>(on_success), std::forward<CB_ERROR>(on_error));
+}
+
+// --- No-callback overloads: same names as the callback API, return awaiters ---
+// Merged from the retired transaction_coro.inl. These sit INSIDE
+// namespace qb::pg::detail on purpose -- the anonymous namespace below is
+// qb::pg::detail::{anonymous}, and the Transaction:: bodies are unqualified.
+// The include block that used to head this file has been hoisted out of the
+// namespace, into the block at the top of this merge site.
+
+namespace {
+
+/** Append `; SET LOCAL statement_timeout = N` (ms) when @p timeout_ms &gt; 0. */
+inline void
+pg_append_set_local_statement_timeout(std::string &sql, qb::duration timeout) {
+    const auto timeout_ms = std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count();
+    if (timeout_ms <= 0)
+        return;
+    sql += "; SET LOCAL statement_timeout = ";
+    sql += std::to_string(timeout_ms);
+}
+
+[[nodiscard]] inline bool
+pg_savepoint_name_ok(std::string_view name) noexcept {
+    if (name.empty() || name.size() > 63)
+        return false;
+    for (unsigned char const c : name) {
+        if (std::isalnum(c) != 0 || c == '_')
+            continue;
+        return false;
+    }
+    return true;
+}
+
+[[nodiscard]] inline pg_reply_awaiter<resultset>
+pg_fail_resultset(error::db_error err) {
+    return pg_reply_awaiter<resultset>{[e = std::move(err)](pg_coro_complete<resultset> complete) mutable {
+        complete(::qb::pg::Reply<resultset>::failure(std::move(e)));
+    }};
+}
+
+[[nodiscard]] inline pg_reply_awaiter<void>
+pg_fail_void(error::db_error err) {
+    return pg_reply_awaiter<void>{[e = std::move(err)](pg_coro_complete<void> complete) mutable {
+        complete(::qb::pg::Reply<void>::failure(std::move(e)));
+    }};
+}
+
+/** Awaiter that resolves immediately with a failure (any Reply<T>). */
+template <typename T>
+[[nodiscard]] inline pg_reply_awaiter<T>
+pg_fail(error::db_error err) {
+    return pg_reply_awaiter<T>{[e = std::move(err)](pg_coro_complete<T> complete) mutable {
+        complete(::qb::pg::Reply<T>::failure(std::move(e)));
+    }};
+}
+
+/** Connection-down error used to fail a query/execute/prepare submitted on a closed handle. */
+[[nodiscard]] inline error::connection_error
+pg_not_connected_error() {
+    return error::connection_error("connection is not established; query rejected (the handle is disconnected)");
+}
+
+/** Simple query that returns no meaningful rowset: completion → Reply<void>. */
+[[nodiscard]] inline pg_reply_awaiter<void>
+pg_execute_void_sql(Transaction *self, std::string sql) {
+    return pg_reply_awaiter<void>{[self, sql = std::move(sql)](pg_coro_complete<void> complete) mutable {
+        self->execute(
+            std::string_view(sql), [complete](Transaction &, resultset) mutable { complete(::qb::pg::Reply<void>::success()); },
+            [complete](error::db_error const &e) mutable { complete(::qb::pg::Reply<void>::failure(e)); });
+    }};
+}
+
+template <typename Build>
+[[nodiscard]] inline pg_reply_awaiter<void>
+pg_try_build_and_execute_void_sql(Transaction *self, Build &&build) {
+    std::string sql;
+    try {
+        sql = std::forward<Build>(build)();
+    } catch (error::db_error const &e) {
+        return pg_fail_void(e);
+    }
+    return pg_execute_void_sql(self, std::move(sql));
+}
+
+} // namespace
+
+inline pg_reply_awaiter<resultset>
+Transaction::execute(std::string_view expr) {
+    if (!is_connection_usable())
+        return pg_fail<resultset>(pg_not_connected_error());
+    return pg_reply_awaiter<resultset>{[this, sql = std::string(expr)](pg_coro_complete<resultset> complete) {
+        this->execute(
+            std::string_view(sql),
+            [complete](Transaction &, resultset rs) mutable { complete(::qb::pg::Reply<resultset>::success(rs.deep_snapshot())); },
+            [complete](error::db_error const &e) mutable { complete(::qb::pg::Reply<resultset>::failure(e)); });
+    }};
+}
+
+inline pg_reply_awaiter<PreparedQuery>
+Transaction::prepare(std::string_view query_name, std::string_view expr, type_oid_sequence types) {
+    if (!is_connection_usable())
+        return pg_fail<PreparedQuery>(pg_not_connected_error());
+    return pg_reply_awaiter<PreparedQuery>{[this, qn = std::string(query_name), ex = std::string(expr),
+                                            t = std::move(types)](pg_coro_complete<PreparedQuery> complete) mutable {
+        this->prepare(
+            std::string_view(qn), std::string_view(ex), std::move(t),
+            [complete](Transaction &, PreparedQuery const &pq) mutable {
+                complete(::qb::pg::Reply<PreparedQuery>::success(PreparedQuery{pq}));
+            },
+            [complete](error::db_error const &e) mutable { complete(::qb::pg::Reply<PreparedQuery>::failure(e)); });
+    }};
+}
+
+inline pg_reply_awaiter<resultset>
+Transaction::execute(std::string_view query_name, QueryParams &&params) {
+    if (!is_connection_usable())
+        return pg_fail<resultset>(pg_not_connected_error());
+    return pg_reply_awaiter<resultset>{[this, qn = std::string(query_name),
+                                        p = std::move(params)](pg_coro_complete<resultset> complete) mutable {
+        this->execute(
+            std::string_view(qn), std::move(p),
+            [complete](Transaction &, resultset rs) mutable { complete(::qb::pg::Reply<resultset>::success(rs.deep_snapshot())); },
+            [complete](error::db_error const &e) mutable { complete(::qb::pg::Reply<resultset>::failure(e)); });
+    }};
+}
+
+inline pg_reply_awaiter<resultset>
+Transaction::begin(transaction_mode mode) {
+    std::string sql = "BEGIN ";
+    sql += to_string(mode);
+    pg_append_set_local_statement_timeout(sql, get_timeout());
+    return execute(std::string_view(sql));
+}
+
+inline pg_reply_awaiter<resultset>
+Transaction::begin() {
+    return begin(transaction_mode{});
+}
+
+inline pg_reply_awaiter<resultset>
+Transaction::commit() {
+    return execute("COMMIT");
+}
+
+inline pg_reply_awaiter<resultset>
+Transaction::rollback() {
+    return execute("ROLLBACK");
+}
+
+inline pg_reply_awaiter<resultset>
+Transaction::savepoint(std::string_view name) {
+    if (!pg_savepoint_name_ok(name))
+        return pg_fail_resultset(error::client_error{"invalid savepoint name (use non-empty alphanumeric/underscore, max 63)"});
+    // Quote the identifier exactly like the callback SavePointQuery path (queries.h) so a name means
+    // the SAME savepoint through either API: unquoted, PostgreSQL case-folds "MyPoint" to mypoint and
+    // rejects a digit-leading name outright, while the quoted callback path preserves it — mixing the
+    // APIs on one name would then silently miss. Quoting also keeps injection impossible on its own
+    // (the validator above is belt-and-suspenders).
+    std::string sql = "SAVEPOINT " + pg_quote_identifier(std::string(name));
+    return execute(std::string_view(sql));
+}
+
+inline pg_reply_awaiter<resultset>
+Transaction::rollback_savepoint(std::string_view name) {
+    if (!pg_savepoint_name_ok(name))
+        return pg_fail_resultset(error::client_error{"invalid savepoint name (use non-empty alphanumeric/underscore, max 63)"});
+    std::string sql = "ROLLBACK TO SAVEPOINT " + pg_quote_identifier(std::string(name));
+    return execute(std::string_view(sql));
+}
+
+inline pg_reply_awaiter<resultset>
+Transaction::release_savepoint(std::string_view name) {
+    if (!pg_savepoint_name_ok(name))
+        return pg_fail_resultset(error::client_error{"invalid savepoint name (use non-empty alphanumeric/underscore, max 63)"});
+    std::string sql = "RELEASE SAVEPOINT " + pg_quote_identifier(std::string(name));
+    return execute(std::string_view(sql));
+}
+
+inline pg_reply_awaiter<resultset>
+Transaction::execute_file(const std::filesystem::path &file_path) {
+    return pg_reply_awaiter<resultset>{[this, path = file_path](pg_coro_complete<resultset> complete) mutable {
+        try {
+            if (!std::filesystem::exists(path)) {
+                complete(::qb::pg::Reply<resultset>::failure(error::query_error("SQL file not found: " + path.string())));
+                return;
+            }
+            std::ifstream file(path);
+            if (!file.is_open()) {
+                complete(::qb::pg::Reply<resultset>::failure(error::query_error("Cannot open SQL file: " + path.string())));
+                return;
+            }
+            std::stringstream buffer;
+            buffer << file.rdbuf();
+            std::string sql_query = buffer.str();
+            this->execute(
+                std::string_view(sql_query),
+                [complete](Transaction &, resultset rs) mutable { complete(::qb::pg::Reply<resultset>::success(rs.deep_snapshot())); },
+                [complete](error::db_error const &e) mutable { complete(::qb::pg::Reply<resultset>::failure(e)); });
+        } catch (std::exception const &e) {
+            complete(::qb::pg::Reply<resultset>::failure(error::query_error("Error reading SQL file: " + std::string(e.what()))));
+        }
+    }};
+}
+
+inline pg_reply_awaiter<PreparedQuery>
+Transaction::prepare_file(std::string_view query_name, const std::filesystem::path &file_path, type_oid_sequence types) {
+    return pg_reply_awaiter<PreparedQuery>{[this, qn = std::string(query_name), path = file_path,
+                                            t = std::move(types)](pg_coro_complete<PreparedQuery> complete) mutable {
+        try {
+            if (!std::filesystem::exists(path)) {
+                complete(::qb::pg::Reply<PreparedQuery>::failure(error::query_error("SQL file not found: " + path.string())));
+                return;
+            }
+            std::ifstream file(path);
+            if (!file.is_open()) {
+                complete(::qb::pg::Reply<PreparedQuery>::failure(error::query_error("Cannot open SQL file: " + path.string())));
+                return;
+            }
+            std::stringstream buffer;
+            buffer << file.rdbuf();
+            std::string sql_query = buffer.str();
+            this->prepare(
+                std::string_view(qn), std::string_view(sql_query), std::move(t),
+                [complete](Transaction &, PreparedQuery const &pq) mutable {
+                    complete(::qb::pg::Reply<PreparedQuery>::success(PreparedQuery{pq}));
+                },
+                [complete](error::db_error const &e) mutable { complete(::qb::pg::Reply<PreparedQuery>::failure(e)); });
+        } catch (std::exception const &e) {
+            complete(::qb::pg::Reply<PreparedQuery>::failure(error::query_error("Error reading SQL file: " + std::string(e.what()))));
+        }
+    }};
+}
+
+inline pg_reply_awaiter<void>
+Transaction::notify(std::string_view channel, std::string_view payload) {
+    return pg_try_build_and_execute_void_sql(this, [channel, payload] { return build_notify_sql(channel, payload); });
+}
+
+inline pg_reply_awaiter<void>
+Transaction::listen(std::string_view channel) {
+    return pg_try_build_and_execute_void_sql(this, [channel] { return build_listen_sql(channel); });
+}
+
+inline pg_reply_awaiter<void>
+Transaction::unlisten(std::string_view channel) {
+    return pg_try_build_and_execute_void_sql(this, [channel] { return build_unlisten_sql(channel); });
+}
+
+inline pg_reply_awaiter<void>
+Transaction::unlisten_all() {
+    return pg_execute_void_sql(this, std::string(build_unlisten_all_sql()));
+}
+
+} // namespace qb::pg::detail

@@ -55,7 +55,7 @@ qb::pg::results owned = borrowed.deep_snapshot();   // safe to keep after the ca
 
 The coroutine path does this for you: a successful `co_await` delivers `rs.deep_snapshot()`, so the `Reply<resultset>`
 owns a deep copy and stays valid after the transaction's transient buffers are reused (
-`src/qbm/pgsql/transaction_coro.inl:96,128,211`).
+`src/qbm/pgsql/commands.h:1309,1337,1412`).
 
 ### `operator bool` reflects rows, not DML success
 
@@ -218,7 +218,7 @@ row.to({"id", "name", "active"}, id, name, active);
 ```
 
 The named form requires at least as many names as targets, or it throws `error::db_error` with message
-`"Not enough names in row data extraction"` (`resultset.inl:149`). Each target decodes through the same path as
+`"Not enough names in row data extraction"` (`resultset.h:956`). Each target decodes through the same path as
 `field::as<T>()`, so a NULL into a non-`std::optional` target throws `value_is_null` (see below).
 
 ### Typed tuples & structured bindings

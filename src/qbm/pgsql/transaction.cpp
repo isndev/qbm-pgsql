@@ -27,7 +27,11 @@
 #include <utility>
 
 #include "./transaction.h"
-#include "./transaction.inl"
+// The Transaction template bodies used to live in transaction.inl and were pulled in
+// here directly. They now sit at the tail of commands.h -- the header that closes the
+// declaration cycle -- so this TU reaches them through it. Not interchangeable with
+// transaction.h: that one only declares Transaction.
+#include "./commands.h"
 
 namespace qb::pg::detail {
 
