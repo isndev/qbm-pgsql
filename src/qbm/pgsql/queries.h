@@ -405,7 +405,7 @@ public:
             sql += "; SET LOCAL statement_timeout = ";
             sql += std::to_string(_statement_timeout_ms);
         }
-        LOG_DEBUG("[pgsql] Send BEGIN: \"" << sql << "\"");
+        QB_LOG_DEBUG("[pgsql] Send BEGIN: \"" << sql << "\"");
         message m(query_tag);
         m.write(sql);
         return m;
@@ -439,7 +439,7 @@ public:
      */
     message
     get() const final {
-        LOG_DEBUG("[pgsql] Send COMMIT");
+        QB_LOG_DEBUG("[pgsql] Send COMMIT");
         message m(query_tag);
         m.write("commit");
         return m;
@@ -473,7 +473,7 @@ public:
      */
     message
     get() const final {
-        LOG_DEBUG("[pgsql] Send ROLLBACK");
+        QB_LOG_DEBUG("[pgsql] Send ROLLBACK");
         message m(query_tag);
         m.write("rollback");
         return m;
@@ -536,7 +536,7 @@ public:
      */
     message
     get() const final {
-        LOG_DEBUG("[pgsql] Send SAVEPOINT " << _name);
+        QB_LOG_DEBUG("[pgsql] Send SAVEPOINT " << _name);
         message m(query_tag);
         m.write("savepoint " + pg_quote_identifier(_name));
         return m;
@@ -574,7 +574,7 @@ public:
      */
     message
     get() const final {
-        LOG_DEBUG("[pgsql] Send RELEASE SAVEPOINT " << _name);
+        QB_LOG_DEBUG("[pgsql] Send RELEASE SAVEPOINT " << _name);
         message m(query_tag);
         m.write("release savepoint " + pg_quote_identifier(_name));
         return m;
@@ -612,7 +612,7 @@ public:
      */
     message
     get() const final {
-        LOG_DEBUG("[pgsql] Send ROLLBACK TO SAVEPOINT " << _name);
+        QB_LOG_DEBUG("[pgsql] Send ROLLBACK TO SAVEPOINT " << _name);
         message m(query_tag);
         m.write("rollback to savepoint " + pg_quote_identifier(_name));
         return m;
@@ -650,7 +650,7 @@ public:
      */
     message
     get() const final {
-        LOG_DEBUG("[pgsql] Send QUERY \"" << _expression << "\"");
+        QB_LOG_DEBUG("[pgsql] Send QUERY \"" << _expression << "\"");
         message m(query_tag);
         m.write(_expression);
 
@@ -685,13 +685,13 @@ public:
         // the Parse-side twin of the Bind guard ParamSerializer::ensure_param_count_fits().
         if (qb::likely(_query.param_types.size() <= static_cast<std::size_t>(std::numeric_limits<smallint>::max())))
             return true;
-        LOG_CRIT("[pgsql] PARSE rejected: " << _query.param_types.size() << " parameter types exceed protocol max 32767");
+        QB_LOG_CRIT("[pgsql] PARSE rejected: " << _query.param_types.size() << " parameter types exceed protocol max 32767");
         return false;
     }
 
     [[nodiscard]] message
     get() const final {
-        LOG_DEBUG("[pgsql] Send PARSE QUERY \"" << _query.expression << "\"");
+        QB_LOG_DEBUG("[pgsql] Send PARSE QUERY \"" << _query.expression << "\"");
         message cmd(parse_tag);
         cmd.write(_query.name);
         cmd.write(_query.expression);
@@ -742,7 +742,7 @@ public:
     is_valid() const final {
         if (qb::likely(_storage.has(_query_name)))
             return true;
-        LOG_CRIT("[pgsql] Error prepared query " << _query_name << " not registered");
+        QB_LOG_CRIT("[pgsql] Error prepared query " << _query_name << " not registered");
         return false;
     }
 
@@ -781,13 +781,13 @@ public:
                 size_t      data_size = param_buffer.size() - sizeof(smallint);
 
                 if (data_size == 0) {
-                    LOG_WARN("[pgsql] Bind: param_count=" << param_count << " but serialized payload is empty");
+                    QB_LOG_WARN("[pgsql] Bind: param_count=" << param_count << " but serialized payload is empty");
                 }
                 // Copy the raw data
                 auto out = cmd.output();
                 std::copy(data, data + data_size, out);
             } else {
-                LOG_WARN("[pgsql] Bind: param_count=" << param_count << " but parameter buffer missing payload");
+                QB_LOG_WARN("[pgsql] Bind: param_count=" << param_count << " but parameter buffer missing payload");
             }
         }
 

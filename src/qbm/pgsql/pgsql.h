@@ -283,7 +283,7 @@ public:
 
             const qb::pg::uinteger wire_len = static_cast<qb::pg::uinteger>(message_->length());
             if (wire_len < 4u || wire_len > qb::pg::PG_PROTOCOL_MAX_MESSAGE_BYTES) {
-                LOG_CRIT("[pgsql] Invalid wire message length " << wire_len << " (must be 4.." << qb::pg::PG_PROTOCOL_MAX_MESSAGE_BYTES
+                QB_LOG_CRIT("[pgsql] Invalid wire message length " << wire_len << " (must be 4.." << qb::pg::PG_PROTOCOL_MAX_MESSAGE_BYTES
                                                                 << "); dropping connection");
                 message_.reset();
                 offset_ = 0;
@@ -349,10 +349,10 @@ public:
         try {
             this->_io.on(std::move(message_));
         } catch (std::exception const &e) {
-            LOG_CRIT("[pgsql] exception in message handler, dropping connection: " << e.what());
+            QB_LOG_CRIT("[pgsql] exception in message handler, dropping connection: " << e.what());
             this->not_ok();
         } catch (...) {
-            LOG_CRIT("[pgsql] unknown exception in message handler, dropping connection");
+            QB_LOG_CRIT("[pgsql] unknown exception in message handler, dropping connection");
             this->not_ok();
         }
         reset();
@@ -588,7 +588,7 @@ private:
      * Authentication message. Fail here, loudly and specifically, rather than sending a
      * bogus or empty password and letting the server report a generic auth failure.
      *
-     * Uses the same terminal-failure shape as the SCRAM MITM refusal above (LOG_CRIT +
+     * Uses the same terminal-failure shape as the SCRAM MITM refusal above (QB_LOG_CRIT +
      * flags + resume): this runs inside the protocol message handler on the event-loop
      * thread, so an escaping exception would tear down the loop rather than the
      * connection.
@@ -597,7 +597,7 @@ private:
      */
     void
     refuse_auth_without_ssl(const char *method) {
-        LOG_CRIT("[pgsql] Server requested "
+        QB_LOG_CRIT("[pgsql] Server requested "
                  << method
                  << " authentication, which this build cannot perform: qb was built without OpenSSL "
                     "(QB_HAS_SSL undefined / QB_WITH_SSL=OFF). Rebuild qb with OpenSSL, or configure the "
@@ -672,7 +672,7 @@ private:
                 static bool warned_unverified_tls = false;
                 if (!warned_unverified_tls) {
                     warned_unverified_tls = true;
-                    LOG_WARN("[pgsql] TLS WITHOUT certificate verification (ssl_verify=none): the server "
+                    QB_LOG_WARN("[pgsql] TLS WITHOUT certificate verification (ssl_verify=none): the server "
                              "certificate chain/hostname is NOT verified. Set ssl_verify_mode::full to "
                              "authenticate the server (or rely on SCRAM-SHA-256 mutual auth).");
                 }
@@ -732,7 +732,7 @@ private:
                                                                          return;
                                                                      if (!connect_coroutine_pending_ || is_connected_)
                                                                          return;
-                                                                     LOG_WARN("[pgsql] Connection timed out after " << t_out << "s");
+                                                                     QB_LOG_WARN("[pgsql] Connection timed out after " << t_out << "s");
                                                                      _error                    = error::db_error{"connection timeout"};
                                                                      connect_handshake_failed_ = true;
                                                                      try_resume_connect_wait();
@@ -897,7 +897,7 @@ private:
                 *this << _current_query->get();
                 return true;
             } else {
-                LOG_DEBUG("[pgsql] error processing query not valid");
+                QB_LOG_DEBUG("[pgsql] error processing query not valid");
                 _error = error::client_error{"query couldn't be processed check logs for more infos"};
                 on_error_query(error());
                 return process_query(_current_command) || (_ready_for_query = true);
@@ -1001,7 +1001,7 @@ public:
         integer auth_state(-1);
         msg.read(auth_state);
 
-        LOG_DEBUG("[pgsql] Handle auth_event");
+        QB_LOG_DEBUG("[pgsql] Handle auth_event");
         switch (auth_state) {
             case OK: {
                 // SCRAM mutual auth: if a SCRAM-SHA-256 exchange is in flight, the server MUST have
@@ -1010,20 +1010,20 @@ public:
                 // MITM that never sent (or failed) AuthenticationSASLFinal would be trusted — the
                 // client's own SCRAM proof leaks nothing, so nothing else stops it.
                 if (_scram_pending && !_scram_server_verified) {
-                    LOG_CRIT("[pgsql] AuthenticationOk without a verified SCRAM server signature — refusing (possible MITM/impersonation)");
+                    QB_LOG_CRIT("[pgsql] AuthenticationOk without a verified SCRAM server signature — refusing (possible MITM/impersonation)");
                     connect_handshake_failed_ = true;
                     is_connected_             = false;
                     try_resume_connect_wait();
                     break;
                 }
-                LOG_INFO("[pgsql] Authenticated with server");
+                QB_LOG_INFO("[pgsql] Authenticated with server");
                 is_connected_ = true;
                 // Apply keepalive settings if configured (P1-1)
                 apply_keepalive_settings();
                 try_resume_connect_wait();
             } break;
             case Cleartext: {
-                LOG_INFO("[pgsql] Clear text authentication requested");
+                QB_LOG_INFO("[pgsql] Clear text authentication requested");
                 message pm(password_message_tag);
                 pm.write(conn_opts_.password);
 
@@ -1034,7 +1034,7 @@ public:
                 // qb::crypto::md5 does not exist without OpenSSL.
                 refuse_auth_without_ssl("MD5");
 #else
-                LOG_INFO("[pgsql] MD5 authentication requested");
+                QB_LOG_INFO("[pgsql] MD5 authentication requested");
                 // Read salt
                 std::string salt;
                 msg.read(salt, 4);
@@ -1056,7 +1056,7 @@ public:
                 // neither exists without OpenSSL.
                 refuse_auth_without_ssl("SCRAM-SHA-256");
 #else
-                LOG_INFO("[pgsql] SCRAM-SHA-256 authentication requested");
+                QB_LOG_INFO("[pgsql] SCRAM-SHA-256 authentication requested");
                 _scram_pending         = true;  // gate AuthenticationOk until SASLFinal verifies (mutual auth)
                 _scram_server_verified = false;
 
@@ -1109,7 +1109,7 @@ public:
                 // above), but a hostile/buggy peer can still send it unsolicited.
                 refuse_auth_without_ssl("SCRAM-SHA-256");
 #else
-                LOG_INFO("[pgsql] SCRAM-SHA-256 authentication client proof check");
+                QB_LOG_INFO("[pgsql] SCRAM-SHA-256 authentication client proof check");
                 std::string data;
                 msg.read(data);
                 auto params = parse_header_attributes(data.c_str(), data.size());
@@ -1207,11 +1207,11 @@ public:
                         throw std::runtime_error("server signature does not match. Authentication failed");
                     }
                     _scram_server_verified = true; // mutual auth satisfied — AuthenticationOk may now be accepted
-                    LOG_INFO("[pgsql] SCRAM-SHA-256 Authentication successful: server "
+                    QB_LOG_INFO("[pgsql] SCRAM-SHA-256 Authentication successful: server "
                              "signature verified");
                     break;
                 } catch (std::exception &ex) {
-                    LOG_CRIT("[pgsql] SCRAM-SHA-256 Failed verifying server signature: " << ex.what());
+                    QB_LOG_CRIT("[pgsql] SCRAM-SHA-256 Failed verifying server signature: " << ex.what());
                     connect_handshake_failed_ = true;
                     is_connected_             = false;
                     try_resume_connect_wait();
@@ -1219,7 +1219,7 @@ public:
 #endif // QB_HAS_SSL
             } break;
             default: {
-                LOG_CRIT("[pgsql] Unsupported authentication scheme " << auth_state << "requested by server");
+                QB_LOG_CRIT("[pgsql] Unsupported authentication scheme " << auth_state << "requested by server");
                 throw std::runtime_error("[pgsql] fatal error: check logs");
             }
         }
@@ -1240,7 +1240,7 @@ public:
     on_command_complete(message &msg) {
         command_complete cmpl;
         msg.read(cmpl.command_tag);
-        LOG_DEBUG("[pgsql] Command complete (" << cmpl.command_tag << ")");
+        QB_LOG_DEBUG("[pgsql] Command complete (" << cmpl.command_tag << ")");
         if (_current_command)
             _current_command->on_command_complete(cmpl.command_tag);
     }
@@ -1254,7 +1254,7 @@ public:
     on_backend_key_data(message &msg) {
         msg.read(serverPid_);
         msg.read(serverSecret_);
-        LOG_DEBUG("[pgsql] Received backend key data");
+        QB_LOG_DEBUG("[pgsql] Received backend key data");
     }
 
     /**
@@ -1267,7 +1267,7 @@ public:
         notice_message notice;
         msg.read(notice);
 
-        LOG_WARN("[pgsql] Error " << notice);
+        QB_LOG_WARN("[pgsql] Error " << notice);
         error::query_error err(notice.message, notice.severity, notice.sqlstate, notice.detail);
 
         on_error_query(err);
@@ -1288,7 +1288,7 @@ public:
         msg.read(key);
         msg.read(value);
 
-        LOG_DEBUG("[pgsql] Received parameter " << key << "=" << value);
+        QB_LOG_DEBUG("[pgsql] Received parameter " << key << "=" << value);
 
         // Server-reported ParameterStatus values are cached for the accessors
         // (parameter_status() / server_version()) but kept SEPARATE from the
@@ -1310,7 +1310,7 @@ public:
         notice_message notice;
         msg.read(notice);
 
-        LOG_INFO("[pgsql] Received notice" << notice);
+        QB_LOG_INFO("[pgsql] Received notice" << notice);
     }
 
     /**
@@ -1327,13 +1327,13 @@ public:
         if (stat == 'I' || stat == 'T' || stat == 'E')
             _txn_status = stat;
         if (stat == 'E') {
-            LOG_WARN("[pgsql] ReadyForQuery: backend session is in failed transaction "
+            QB_LOG_WARN("[pgsql] ReadyForQuery: backend session is in failed transaction "
                      "(SQLSTATE implicit); issue ROLLBACK before new commands");
         }
 
         if (!process_query(_current_command)) {
             _ready_for_query = true;
-            LOG_DEBUG("[pgsql] Database " << conn_opts_.uri << "[" << conn_opts_.database << "]"
+            QB_LOG_DEBUG("[pgsql] Database " << conn_opts_.uri << "[" << conn_opts_.database << "]"
                                           << " is ready for query (" << stat << ")");
         }
     }
@@ -1355,7 +1355,7 @@ public:
         // size_t — into reserve()/the loop bound.
         smallint col_cnt = 0;
         if (!msg.read(col_cnt) || col_cnt < 0) {
-            LOG_WARN("[pgsql] RowDescription with missing or negative column count");
+            QB_LOG_WARN("[pgsql] RowDescription with missing or negative column count");
             _current_command->result(false);
             _current_command->on_new_row_description({});
             return;
@@ -1366,7 +1366,7 @@ public:
             if (msg.read(fd)) {
                 fields.push_back(fd);
             } else {
-                LOG_WARN("[pgsql] Failed to read field description " << i);
+                QB_LOG_WARN("[pgsql] Failed to read field description " << i);
                 _current_command->result(false);
                 break;
             }
@@ -1387,7 +1387,7 @@ public:
         if (msg.read(row))
             _current_command->on_new_data_row(std::move(row));
         else {
-            LOG_WARN("[pgsql] Failed to read data row");
+            QB_LOG_WARN("[pgsql] Failed to read data row");
             _current_command->result(false);
         }
     }
@@ -1399,7 +1399,7 @@ public:
      */
     void
     on_parse_complete(message &) {
-        LOG_DEBUG("[pgsql] Parse complete");
+        QB_LOG_DEBUG("[pgsql] Parse complete");
     }
 
     /**
@@ -1409,7 +1409,7 @@ public:
      */
     void
     on_parameter_description(message &) {
-        LOG_DEBUG("[pgsql] Parameter descriptions");
+        QB_LOG_DEBUG("[pgsql] Parameter descriptions");
     }
 
     /**
@@ -1419,7 +1419,7 @@ public:
      */
     void
     on_bind_complete(message &) {
-        LOG_DEBUG("[pgsql] Bind complete");
+        QB_LOG_DEBUG("[pgsql] Bind complete");
     }
 
     /**
@@ -1429,7 +1429,7 @@ public:
      */
     void
     on_no_data(message &) {
-        LOG_DEBUG("[pgsql] No data");
+        QB_LOG_DEBUG("[pgsql] No data");
     }
 
     /**
@@ -1439,7 +1439,7 @@ public:
      */
     void
     on_portal_suspended(message &) {
-        LOG_DEBUG("[pgsql] Portal suspended");
+        QB_LOG_DEBUG("[pgsql] Portal suspended");
     }
 
     /**
@@ -1452,7 +1452,7 @@ public:
      */
     void
     on_empty_query_response(message &) {
-        LOG_DEBUG("[pgsql] Empty query response");
+        QB_LOG_DEBUG("[pgsql] Empty query response");
     }
 
     /**
@@ -1489,7 +1489,7 @@ public:
         std::string channel;
         std::string payload;
         if (!msg.read(pid) || !msg.read(channel) || !msg.read(payload)) {
-            LOG_WARN("[pgsql] Malformed NotificationResponse");
+            QB_LOG_WARN("[pgsql] Malformed NotificationResponse");
             return;
         }
         ::qb::pg::notification n;
@@ -1501,7 +1501,7 @@ public:
         } else if (inbound_notify_handler_) {
             inbound_notify_handler_(std::move(n));
         } else {
-            LOG_INFO("[pgsql] NOTIFY pid=" << n.server_backend_pid << " channel=" << n.channel << " payload=" << n.payload);
+            QB_LOG_INFO("[pgsql] NOTIFY pid=" << n.server_backend_pid << " channel=" << n.channel << " payload=" << n.payload);
         }
     }
 
@@ -1513,12 +1513,12 @@ public:
         char     overall{};
         smallint ncols{};
         if (!msg.read(overall) || !msg.read(ncols)) {
-            LOG_WARN("[pgsql] Malformed CopyInResponse");
+            QB_LOG_WARN("[pgsql] Malformed CopyInResponse");
             send_copy_fail();
             return;
         }
         if (ncols < 0 || ncols > 4096) {
-            LOG_WARN("[pgsql] CopyInResponse invalid column count " << ncols);
+            QB_LOG_WARN("[pgsql] CopyInResponse invalid column count " << ncols);
             on_error_query(error::client_error{"Malformed CopyInResponse from server"});
             send_copy_fail();
             return;
@@ -1531,7 +1531,7 @@ public:
             }
         }
         if (!_copy_in_source) {
-            LOG_WARN("[pgsql] CopyInResponse with no copy_in() source registered; failing the COPY");
+            QB_LOG_WARN("[pgsql] CopyInResponse with no copy_in() source registered; failing the COPY");
             on_error_query(error::client_error{"COPY FROM STDIN requires copy_in() with a data source"});
             send_copy_fail();
             return;
@@ -1556,7 +1556,7 @@ public:
                 }
             }
         } catch (...) {
-            LOG_WARN("[pgsql] copy_in source threw; aborting the COPY with CopyFail");
+            QB_LOG_WARN("[pgsql] copy_in source threw; aborting the COPY with CopyFail");
             send_copy_fail();
             return;
         }
@@ -1572,12 +1572,12 @@ public:
         char     overall{};
         smallint ncols{};
         if (!msg.read(overall) || !msg.read(ncols)) {
-            LOG_WARN("[pgsql] Malformed CopyOutResponse");
+            QB_LOG_WARN("[pgsql] Malformed CopyOutResponse");
             msg.discard_remaining();
             return;
         }
         if (ncols < 0 || ncols > 4096) {
-            LOG_WARN("[pgsql] CopyOutResponse invalid column count " << ncols);
+            QB_LOG_WARN("[pgsql] CopyOutResponse invalid column count " << ncols);
             msg.discard_remaining();
             return;
         }
@@ -1588,7 +1588,7 @@ public:
                 return;
             }
         }
-        LOG_DEBUG("[pgsql] CopyOutResponse received (data will pass as CopyData messages)");
+        QB_LOG_DEBUG("[pgsql] CopyOutResponse received (data will pass as CopyData messages)");
     }
 
     /**
@@ -1597,7 +1597,7 @@ public:
     void
     on_copy_both_response(message &msg) {
         on_copy_out_response(msg);
-        LOG_WARN("[pgsql] CopyBothResponse: bidirectional COPY not fully supported");
+        QB_LOG_WARN("[pgsql] CopyBothResponse: bidirectional COPY not fully supported");
     }
 
     /**
@@ -1620,7 +1620,7 @@ public:
      */
     void
     on_copy_done(message &msg) {
-        LOG_DEBUG("[pgsql] CopyDone (server)");
+        QB_LOG_DEBUG("[pgsql] CopyDone (server)");
         msg.discard_remaining();
     }
 
@@ -1629,7 +1629,7 @@ public:
      */
     void
     on_close_complete(message &msg) {
-        LOG_DEBUG("[pgsql] CloseComplete");
+        QB_LOG_DEBUG("[pgsql] CloseComplete");
         msg.discard_remaining();
     }
 
@@ -1638,7 +1638,7 @@ public:
      */
     void
     on_function_call_response(message &msg) {
-        LOG_WARN("[pgsql] FunctionCallResponse (V): fast-path function protocol not "
+        QB_LOG_WARN("[pgsql] FunctionCallResponse (V): fast-path function protocol not "
                  "implemented; message ignored");
         msg.discard_remaining();
     }
@@ -1650,7 +1650,7 @@ public:
      */
     void
     on_unhandled_message(message &msg) {
-        LOG_WARN("[pgsql] Unhandled backend message tag " << (char) msg.tag() << " (length " << msg.length() << ") — check protocol coverage");
+        QB_LOG_WARN("[pgsql] Unhandled backend message tag " << (char) msg.tag() << " (length " << msg.length() << ") — check protocol coverage");
     }
 
     /**
@@ -2351,7 +2351,7 @@ private:
         // Enable TCP keepalive (Winsock: option value is const char*)
         int optval = 1;
         if (setsockopt(sock_fd, SOL_SOCKET, SO_KEEPALIVE, reinterpret_cast<const char *>(&optval), static_cast<int>(sizeof(optval))) < 0) {
-            LOG_WARN("[pgsql] Failed to enable TCP keepalive");
+            QB_LOG_WARN("[pgsql] Failed to enable TCP keepalive");
             return;
         }
 
@@ -2373,7 +2373,7 @@ private:
         setsockopt(sock_fd, IPPROTO_TCP, TCP_KEEPCNT, reinterpret_cast<const char *>(&optval), static_cast<int>(sizeof(optval)));
 #endif
 
-        LOG_INFO("[pgsql] TCP keepalive enabled: idle=" << conn_opts_.keepalive_idle << "s, interval=" << conn_opts_.keepalive_interval
+        QB_LOG_INFO("[pgsql] TCP keepalive enabled: idle=" << conn_opts_.keepalive_idle << "s, interval=" << conn_opts_.keepalive_interval
                                                         << "s, probes=" << conn_opts_.keepalive_probes);
     }
 
@@ -2568,7 +2568,7 @@ public:
             try {
                 on_notify_callback_(::qb::pg::notification{n});
             } catch (std::exception const &ex) {
-                LOG_WARN("[pgsql] notify_co_consumer on_notify callback error: " << ex.what());
+                QB_LOG_WARN("[pgsql] notify_co_consumer on_notify callback error: " << ex.what());
             }
         }
         if (notify_channel_.try_send(std::move(n)))
@@ -2577,10 +2577,10 @@ public:
             try {
                 on_notify_dropped_(std::move(n));
             } catch (std::exception const &ex) {
-                LOG_WARN("[pgsql] notify_co_consumer on_notify_dropped error: " << ex.what());
+                QB_LOG_WARN("[pgsql] notify_co_consumer on_notify_dropped error: " << ex.what());
             }
         } else {
-            LOG_WARN("[pgsql] notify_co_consumer: notification dropped (buffer full)");
+            QB_LOG_WARN("[pgsql] notify_co_consumer: notification dropped (buffer full)");
         }
     }
 
