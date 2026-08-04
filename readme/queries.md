@@ -27,7 +27,7 @@ only when you need a synchronous drain on the current thread. See [transaction.m
 
 ## `execute` callback SFINAE
 
-From [`src/qbm/pgsql/transaction.inl`](../src/qbm/pgsql/transaction.inl) **`Transaction::execute(expr, on_success, on_error)`**:
+From [`src/qbm/pgsql/commands.h`](../src/qbm/pgsql/commands.h) **`Transaction::execute(expr, on_success, on_error)`**:
 
 | Your success lambda           | Command object    | Use case                                                                |
 |:------------------------------|:------------------|:------------------------------------------------------------------------|
@@ -35,7 +35,7 @@ From [`src/qbm/pgsql/transaction.inl`](../src/qbm/pgsql/transaction.inl) **`Tran
 | **`(Transaction&)`** only     | **`Query`**       | Fire-and-forget or you read side effects elsewhere                      |
 
 The overload selects the command type from your lambda's arity via `if constexpr (std::is_invocable_v<...>)`
-([`transaction.inl`](../src/qbm/pgsql/transaction.inl)). Only these two arities are valid; any other success
+([`commands.h`](../src/qbm/pgsql/commands.h)). Only these two arities are valid; any other success
 signature stops compilation when the selected command instantiates against your callback.
 
 **Coroutine:** only **`co_await execute(expr)`** → **`Reply<resultset>`**; no SFINAE split (always a resultset
@@ -247,10 +247,10 @@ transaction is never joined and never ended by `query_stream`.
 
 Both read the file then delegate to **`execute` / `prepare`**. The two paths report a file error differently:
 
-- **Callback overloads** ([`transaction.inl`](../src/qbm/pgsql/transaction.inl)) invoke **`on_error`** with an
+- **Callback overloads** ([`commands.h`](../src/qbm/pgsql/commands.h)) invoke **`on_error`** with an
   **`error::query_error`**, then **rethrow** it — wrap the call in `try`/`catch` if a missing or unreadable file
   must not propagate.
-- **Coroutine overloads** ([`transaction_coro.inl`](../src/qbm/pgsql/transaction_coro.inl)) do not throw; they surface the
+- **Coroutine overloads** ([`commands.h`](../src/qbm/pgsql/commands.h)) do not throw; they surface the
   file error as a failed **`Reply`** (check **`reply.ok()`**). The coroutine **`prepare_file`** yields
   **`Reply<PreparedQuery>`**, matching **`co_await prepare`**.
 

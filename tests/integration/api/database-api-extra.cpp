@@ -18,7 +18,7 @@
  *  - Connection introspection accessors that no other test drives:
  *    `is_connection_alive()`, `server_version()`, `parameter_status()`, `backend_pid()`,
  *    `enable_keepalive()` (+ the `apply_keepalive_settings()` setsockopt path).
- *  - The fluent callback combinators `then()` / `success()` / `error()` (transaction.inl),
+ *  - The fluent callback combinators `then()` / `success()` / `error()` (commands.h tail),
  *    untouched by any neighbour.
  *  - Callback-mode `begin`/`execute`/`commit`/`rollback` lifecycle with a decoded round-trip.
  *  - A syntax error mid-transaction puts the block into the failed (E) state; ROLLBACK clears
@@ -145,7 +145,7 @@ TEST_F(PgsqlDbApiExtra, EnableKeepaliveKeepsConnectionUsable) {
 }
 
 // --------------------------------------------------------------------------------------
-// Fluent callback combinators then() / success() / error() (transaction.inl)
+// Fluent callback combinators then() / success() / error() (commands.h tail)
 // --------------------------------------------------------------------------------------
 
 // then(): a follow-up success callback runs after the prior operation; the chain drains
