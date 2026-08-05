@@ -93,7 +93,7 @@ or across machines — point each runner at its own database, or run them sequen
 `${CMAKE_BINARY_DIR}/bin/tests` with that directory as its working
 directory (<!-- src: qb/cmake/qbFunctions.cmake:511-514, qb/cmake/qbFunctions.cmake:553-555 -->). Each test carries `tier:<tier>` and
 `module:qbm-pgsql` CTest labels plus a per-tier timeout (unit 60 s, integration 300 s)
-(<!-- src: qb/cmake/qbFunctions.cmake:345-359 -->). Each binary links `GTest::gtest_main`, so it
+(<!-- src: qb/cmake/qbFunctions.cmake:494-495 -->). Each binary links `GTest::gtest_main`, so it
 accepts the usual `--gtest_filter`, `--gtest_list_tests`, and `--gtest_repeat` flags.
 
 `connection-ssl` is the one conditional suite: it is registered inside an `if (QB_HAS_SSL)` guard, only when

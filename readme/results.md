@@ -41,7 +41,7 @@ are safe. There are two flavors:
 
 - An **owning** result set holds a real allocation and keeps its rows alive. The default constructor, `deep_snapshot()`,
   and the coroutine path all produce owning result sets.
-- A **borrowing** result set wraps a caller-owned `result_impl` with a no-op deleter (`resultset.cpp:223-227`). It
+- A **borrowing** result set wraps a caller-owned `result_impl` with a no-op deleter (`resultset.cpp:231-235`). It
   observes the live row buffer but neither frees nor extends it. The result set handed to a synchronous success callback
   is borrowing.
 
@@ -340,7 +340,7 @@ This is convenient for diagnostics, admin endpoints, or quick serialization. In 
   Storing a `row` or `field` past the lifetime of the `results` that vended it is a use-after-free. Copy the data out,
   or snapshot the whole set (`resultset.h:317-319`).
 - **The callback result set is borrowing.** It does not extend the lifetime of the live row buffer. To retain rows after
-  a synchronous success callback returns, call `deep_snapshot()` first (`resultset.cpp:223-227`).
+  a synchronous success callback returns, call `deep_snapshot()` first (`resultset.cpp:231-235`).
 - **`operator[]`, `front()`, `back()` assert; they do not throw.** `results::operator[]` only asserts on an out-of-range
   index (UB in a release build past the end); `front()`/`back()` assert on an empty set. Use `at()` for a checked row,
   and guard `front()`/`back()` with `empty()` or `operator bool` (`resultset.cpp:271-286`).
