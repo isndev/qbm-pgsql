@@ -307,7 +307,7 @@ bool ok = qb::io::async::run_sync(db.connect("tcp://user:secret@db.internal:5432
 #endif
 ```
 
-<!-- src: qbm/pgsql/tests/integration/connection/connection-ssl.cpp:106-118 -->
+<!-- src: qbm/pgsql/tests/integration/connection/connection-ssl.cpp:108-120 -->
 
 > **Server-certificate verification is OFF by default.** `ssl_verify` defaults to `ssl_verify_mode::none` (≈ libpq
 `sslmode=require`): the link is encrypted but the server's certificate chain and hostname are **not** validated, and the

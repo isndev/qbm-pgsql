@@ -39,6 +39,7 @@
 #include <qb/io/async.h>
 #include <qb/io/async/coroutine.h>
 #include <qb/io/async/coroutine/utils.h>
+#include "../../shared/pg_integration_fixture.hpp"
 #include "../../shared/pg_pump.hpp"
 #include "../../shared/test_config.hpp"
 #include <qbm/pgsql/pgsql.h>
@@ -80,7 +81,8 @@ protected:
         auto probe = std::make_unique<qb::pg::tcp::ssl::database>();
         if (!ssl_connect(*probe)) {
             if (!ssl_dsn_pinned())
-                GTEST_SKIP() << "TLS connect failed with default DSN and QB_PG_SSL_DSN is "
+                GTEST_SKIP() << qb::pg::test::kDaemonUnreachableSentinel
+                             << " TLS connect failed with default DSN and QB_PG_SSL_DSN is "
                                 "unset; skipping. Set QB_PG_SSL_DSN to enforce TLS coverage.";
             else
                 FAIL() << "QB_PG_SSL_DSN is set but TLS connect failed: " << dsn_ssl_string();
@@ -276,7 +278,8 @@ protected:
         if (!ssl_connect(*db_)) {
             db_.reset();
             if (!ssl_dsn_pinned())
-                GTEST_SKIP() << "TLS connect failed with default DSN and QB_PG_SSL_DSN is "
+                GTEST_SKIP() << qb::pg::test::kDaemonUnreachableSentinel
+                             << " TLS connect failed with default DSN and QB_PG_SSL_DSN is "
                                 "unset; skipping SSL workload. Set QB_PG_SSL_DSN to enforce.";
             else
                 FAIL() << "QB_PG_SSL_DSN is set but TLS connect failed: " << dsn_ssl_string();

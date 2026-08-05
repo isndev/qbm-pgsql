@@ -146,8 +146,13 @@ passwords (a `md5` or `scram-sha-256` socket with a wrong password).
 
 `connection-ssl` connects over `QB_PG_SSL_DSN` and skips when TLS cannot complete, again only if you have not set the
 variable yourself — the gate is the `ssl_dsn_pinned()` helper keyed on the `QB_PG_SSL_DSN` environment variable: when it
-is unset a failed TLS probe skips, and when it is set a failed probe is a hard failure (<!-- src: qbm/pgsql/tests/integration/connection/connection-ssl.cpp:54-56,80-88 -->). On a build without OpenSSL the suite is not
+is unset a failed TLS probe skips, and when it is set a failed probe is a hard failure (<!-- src: qbm/pgsql/tests/integration/connection/connection-ssl.cpp:55-57,81-90 -->). On a build without OpenSSL the suite is not
 compiled at all, so there is nothing to skip.
+
+Both TLS fixtures print the `QBM_INTEGRATION_SKIP_DAEMON_UNREACHABLE` sentinel when they skip, so CTest reports the
+binary as **Skipped**. Until 3.0 they did not, and a run with no reachable PostgreSQL reported `connection-ssl` as
+**Passed** while every one of its cases had skipped internally — the one `REQUIRES live` binary that looked like
+coverage it had not produced.
 
 ## Steps
 
