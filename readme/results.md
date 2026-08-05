@@ -124,7 +124,7 @@ The `result` here is borrowing. If you need the rows after this lambda returns, 
 ### From `await()` (blocking)
 
 For a blocking drain, pass the discard sentinels and call `await()`. The returned `status` is convertible to `bool`;
-`status.results()` returns the result set for that drain (`transaction.h:760`).
+`status.results()` returns the result set for that drain (`transaction.h:776`).
 
 ```cpp
 <!-- src: qbm/pgsql/src/qbm/pgsql/transaction.h:760 -->
@@ -347,7 +347,7 @@ This is convenient for diagnostics, admin endpoints, or quick serialization. In 
 - **`operator bool` is a row-presence test, not DML success.** A successful DML statement with no returned rows is
   falsy. Use `rows_affected()` to detect an effect (`resultset.h:268,298`).
 - **Iterators are bidirectional, not random-access.** Comparing iterators from different result sets — or, for field
-  iterators, different rows — trips an assert (`resultset.cpp:96,181-182`).
+  iterators, different rows — trips an assert (`resultset.cpp:104,189-190`).
 - **Do not share a result set across cores/threads.** Text-format `as<T>()` uses a function-local
   `static ParamUnserializer`; this is safe only because an actor/connection runs on a single `VirtualCore` (one thread).
   Sharing a `results` across cores is a data race (`resultset.h:629`).
