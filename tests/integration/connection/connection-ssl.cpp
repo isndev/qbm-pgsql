@@ -235,10 +235,15 @@ TEST_F(SslConnection, ScramChannelBindingNegotiatedOverTls) {
     // server (the common local/CI default) negotiates no channel binding, which is not a
     // failure of this code path — so skip unless a SCRAM-over-TLS server is actually pinned
     // via QB_PG_SSL_DSN. Only then is a missing binding a real defect to hard-assert.
-    if (!ssl_dsn_pinned() || !db_->used_channel_binding())
-        GTEST_SKIP() << "no SCRAM-SHA-256-PLUS channel binding negotiated (server uses "
-                        "trust/cleartext auth, or QB_PG_SSL_DSN is unset); set QB_PG_SSL_DSN "
-                        "to a SCRAM role over TLS to exercise channel binding.";
+    //
+    // The skip condition must NOT also test used_channel_binding(). It did until 3.0, and that
+    // made the EXPECT_TRUE below unreachable-as-a-failure: the only run that got past the guard
+    // was one where the flag was already true, so the assertion could not fail and the test
+    // could not detect the regression it exists to catch. Pinning the DSN is the operator
+    // asserting "this IS a SCRAM role over TLS"; a missing binding then is the defect.
+    if (!ssl_dsn_pinned())
+        GTEST_SKIP() << "QB_PG_SSL_DSN is unset, so no SCRAM-over-TLS server is pinned; set it "
+                        "to a scram-sha-256 role over TLS to exercise channel binding.";
     EXPECT_TRUE(db_->used_channel_binding()) << "SCRAM-SHA-256-PLUS (tls-server-end-point) channel binding was not negotiated over "
                                                 "TLS against the pinned SCRAM role";
 }
