@@ -60,6 +60,27 @@ qb_register_module(
         src/qbm/pgsql/pgsql.cpp
         DEFINES
         QBM_PGSQL_VERSION="${PROJECT_VERSION}"
+        # The one file under src/qbm/pgsql/ that is NOT part of this module's public surface.
+        #
+        # field_handler.h is dead and broken, and it was shipped to every consumer anyway.
+        # Dead: no TU in this module, in the superproject, in the examples or in any test
+        # includes it -- the live decode path is resultset.h's merged tail (field::as<T> at
+        # resultset.h:552, resultset::row::to at resultset.h:975). Broken: compiled alone it
+        # produces 11 errors under clang 17 (`typename specifier refers to non-type member
+        # 'field' in 'qb::pg::resultset'` x6, `no member named 'deserialize' in
+        # ParamUnserializer`, `inline declaration of 'to' follows non-inline definition` x2,
+        # and an unqualified field_is_null). The last of those is the substance: it redefines
+        # members resultset.h already defines, so it is not a missing #include -- reconciling
+        # it means deciding whether that feature comes back, which is a maintainer call.
+        #
+        # Until that call is made the file stays in the tree (it is still swept by
+        # check-header-linkage.py, check-namespace-scoped-includes.py and
+        # check-abi-macro-split.py, all of which read src/ rather than a prefix) but it must
+        # not reach a prefix. It had been handled the other way round -- installed, and named
+        # as a permanent exclusion in qb/scripts/check-installed-headers.sh -- which is the
+        # worse half of the trade: it left the only broken file in the shipped surface as the
+        # only file the self-containment gate could not see.
+        HEADER_EXCLUDE "/qbm/pgsql/field_handler\\.h$"
 )
 
 # No CONFIG_DEPENDENCIES / INSTALL_CMAKE_FILES: this module's only consume-time dependency is
