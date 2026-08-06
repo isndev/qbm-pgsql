@@ -276,7 +276,7 @@ can detect a downgrade that stripped it); `n` on a cleartext link. Negotiation i
 TLS is **not** a pgsql-specific build option. It follows the framework-wide `QB_HAS_SSL`, which is auto-detected from
 OpenSSL. When OpenSSL is present, `QB_HAS_SSL` is defined and the `qb::pg::tcp::ssl::database` alias exists; when it is
 absent, the build is cleartext TCP only and that alias does not compile.
-<!-- src: qbm/pgsql/CMakeLists.txt:26-29 -->
+<!-- src: qbm/pgsql/CMakeLists.txt:55-58 -->
 
 TLS is PostgreSQL's in-band negotiation (STARTTLS-style), not a separate port or scheme. The whole exchange is **fully
 asynchronous** — driven by the event loop, never blocking it:

@@ -19,7 +19,7 @@ decoding, type mapping, and LISTEN/NOTIFY — over a single non-blocking TCP (or
 the `qb::pg` namespace; `qb::pg::detail` holds the implementation. The umbrella header is `<qbm/pgsql/pgsql.h>`.
 
 The module is a **compiled static library**, not header-only. The build registers it through `qb_register_module` with a
-`SOURCES` list of seventeen translation units (`qbm/pgsql/CMakeLists.txt:32-56`), so consuming it links a real archive
+`SOURCES` list of seventeen translation units (`qbm/pgsql/CMakeLists.txt:61-85`), so consuming it links a real archive
 under the alias `qbm::pgsql`. It compiles at C++20 by default and C++23 when `QB_CXX_STANDARD=23`; the standard is
 governed by the framework, not the module, and propagates to consumers as a compile feature.
 
