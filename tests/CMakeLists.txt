@@ -100,6 +100,7 @@ qpg_itest(coro-api integration/api/coro-api.cpp REQUIRES coroutine)
 qpg_itest(errors-sqlstate integration/errors/errors-sqlstate.cpp REQUIRES coroutine)
 qpg_itest(database-api-extra integration/api/database-api-extra.cpp REQUIRES coroutine)
 qpg_itest(param-roundtrip integration/serialization/param-roundtrip.cpp REQUIRES coroutine)
+qpg_itest(resilience integration/resilience/coro-cancel-and-connection-loss.cpp REQUIRES coroutine)
 
 if (QB_HAS_SSL)
     qpg_itest(connection-ssl integration/connection/connection-ssl.cpp REQUIRES ssl coroutine EXTRA_LABELS ssl)
