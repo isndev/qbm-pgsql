@@ -239,7 +239,7 @@ transaction is never joined and never ended by `query_stream`.
 > caller-owned only once its `BEGIN` has **completed** — `in_transaction()` mirrors the last `ReadyForQuery`. Started
 > before that, the stream reads the session as idle and opens (and later ends) a block of its own. `co_await` the
 > `begin()` first.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2020-2171 (query_stream), 2234-2277 (cursor-name + shared-block bookkeeping), 1875-1883 (in_transaction) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2041-2192 (query_stream), 2234-2277 (cursor-name + shared-block bookkeeping), 1875-1883 (in_transaction) -->
 
 ---
 
