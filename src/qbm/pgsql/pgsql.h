@@ -1959,6 +1959,27 @@ public:
     }
 
     /**
+     * @brief Did this connection authenticate with SCRAM-SHA-256, mutual auth included?
+     * @return `true` only if the handshake ran a SASL/SCRAM-SHA-256 exchange **and** the
+     *         server's `AuthenticationSASLFinal` ServerSignature (`v=`) verified.
+     *
+     * The negotiated method is chosen entirely by the server (`pg_hba.conf`) and is otherwise
+     * invisible to the caller, so a downgrade — a server that starts asking for cleartext or
+     * MD5, or a client change that stops running SASL — produces a perfectly working connection
+     * and no observable difference at all. This is the observable: it is the same flag the
+     * mutual-auth gate in `on_authentication` uses to decide whether `AuthenticationOk` may be
+     * trusted, so it is `true` exactly when a real SCRAM exchange completed *and* the peer
+     * proved it knew the password.
+     *
+     * Read-only; per connection. Reset by `prepare_reconnect()` and re-established by the next
+     * handshake, so it always describes the CURRENT session, never a previous one.
+     */
+    [[nodiscard]] bool
+    scram_authenticated() const noexcept {
+        return _scram_server_verified;
+    }
+
+    /**
      * @brief Server version as a libpq-style integer (`PQserverVersion`): 16.2 -> 160002,
      *        9.6.24 -> 90624. Returns 0 if the `server_version` parameter is unknown.
      */

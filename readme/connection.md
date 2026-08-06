@@ -78,7 +78,7 @@ transport aliases in `qb::pg::tcp`:
 | `qb::pg::tcp::database`      | `qb::io::transport::tcp` (cleartext) | always                            |
 | `qb::pg::tcp::ssl::database` | `qb::io::transport::stcp` (TLS)      | only when `QB_HAS_SSL` is defined |
 
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2655 (tcp::database), 2681 (tcp::ssl::database) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2676 (tcp::database), 2702 (tcp::ssl::database) -->
 
 The transport is a **compile-time** choice baked into the alias. The connection string scheme (`tcp`, `ssl`, `socket`)
 does **not** switch it: a `tcp://…` string on a `tcp::ssl::database` still negotiates TLS, and an `ssl://…` string on a
@@ -212,7 +212,7 @@ qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
 }());
 ```
 
-<!-- src: qbm/pgsql/tests/integration/connection/connection-lifecycle.cpp:79-90 -->
+<!-- src: qbm/pgsql/tests/integration/connection/connection-lifecycle.cpp:119-130 -->
 
 The awaiter's `await_ready()` returns `true` if the object is already connected (so re-awaiting a live client is a
 no-op), and `await_resume()` returns `is_connected_` — i.e. the `co_await` / `run_sync` result is `true` only when the
@@ -403,7 +403,7 @@ if (!r.ok() && r.error().sqlstate == qb::pg::sqlstate::query_canceled)
     handle_timeout();
 ```
 
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2173-2231 (cancel) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2194-2252 (cancel) -->
 
 > **`cancel()` is SYNCHRONOUS / BLOCKING — it is *not* non-blocking like the rest of the client.** Unlike every other
 > operation (which is event-loop-driven and `co_await`-only), `cancel()` opens its out-of-band socket and sends the
@@ -424,12 +424,12 @@ if (!r.ok() && r.error().sqlstate == qb::pg::sqlstate::query_canceled)
 
 `disconnect()` tears down the session and runs the event loop once (`EVRUN_NOWAIT`) so the close I/O is observed; it is
 safe to call from a coroutine or nested I/O path where `async::run()` would throw.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2432-2458 (disconnect) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2453-2479 (disconnect) -->
 
 To reuse the **same** object for a new connection, call `prepare_reconnect()` after `disconnect()` and before the next
 `connect()`. It closes the underlying fd, resets the I/O buffers and `qb::io::async::io` disposed state, and clears the
 handshake/connected flags. Do **not** call it while SQL is still queued on this object — drain or fail the queue first.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2388-2430 (prepare_reconnect) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2409-2451 (prepare_reconnect) -->
 
 ```cpp
 ASSERT_TRUE(qb::io::async::run_sync(db.connect(dsn)));
@@ -438,7 +438,7 @@ db.prepare_reconnect();
 ASSERT_TRUE(qb::io::async::run_sync(db.connect(dsn)));
 ```
 
-<!-- src: qbm/pgsql/tests/integration/connection/connection-lifecycle.cpp:120-135 -->
+<!-- src: qbm/pgsql/tests/integration/connection/connection-lifecycle.cpp:160-175 -->
 
 For a fresh connection you do not need `prepare_reconnect()` — a newly constructed client is ready to `connect()`.
 
@@ -449,7 +449,7 @@ handler does more than fail the one in-flight query — it calls `fail_all_pendi
 drains **every** queued query and pending sub-transaction so their callers' awaiters resume with the error instead of
 hanging forever. `fail_all_pending` swaps the queues out before draining, so an error callback that enqueues new work
 does not re-enter the traversal.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2347-2386 (on(disconnected)), 2374 (fail_all_pending call); qbm/pgsql/src/qbm/pgsql/transaction.h:214-222 -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2368-2407 (on(disconnected)), 2374 (fail_all_pending call); qbm/pgsql/src/qbm/pgsql/transaction.h:214-222 -->
 
 This also covers a malformed wire message and an unsupported/hostile auth method: both mark the protocol invalid (
 `not_ok()`), which disposes the I/O layer and fires `event::disconnected`, whose handler fails pending work and resumes

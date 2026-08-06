@@ -126,7 +126,7 @@ in [connection.md](./connection.md); the test config only wraps it.
 detects this and skips rather than fail, but only when you have not set `QB_PG_INVALID_DSN` yourself:
 
 ```cpp
-// src: qbm/pgsql/tests/integration/connection/connection-lifecycle.cpp:104-113
+// src: qbm/pgsql/tests/integration/connection/connection-lifecycle.cpp:144-153
 const bool connected = qb::io::async::run_sync(invalid_db->connect(qb::pg::test::dsn_invalid_auth_string()));
 
 if (connected) {

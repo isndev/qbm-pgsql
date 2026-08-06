@@ -76,6 +76,46 @@ TEST_F(ConnectionLifecycle, ConnectSuccess) {
     EXPECT_GT(db_->backend_pid(), 0) << "BackendKeyData PID must be captured at connect";
 }
 
+/**
+ * @brief The handshake must actually have run SCRAM-SHA-256, with mutual auth satisfied.
+ *
+ * Every other case here proves only that the connection came up — and it comes up just the same
+ * over cleartext or MD5. The method is picked by the server (`pg_hba.conf`) and the client
+ * reports nothing about it, so a downgrade is completely silent: a client change that stopped
+ * running SASL, or an `md5`/`password` line creeping into `pg_hba.conf`, would leave the whole
+ * suite green while every login shipped the password in a form the modern method exists to avoid.
+ *
+ * `scram_authenticated()` is `true` only when a SASL/SCRAM-SHA-256 exchange completed AND the
+ * server's `AuthenticationSASLFinal` ServerSignature verified — i.e. the server proved it knew
+ * the password too, which is the half an impersonating peer cannot fake.
+ *
+ * Hard failure by design. A server deliberately configured for another method is a legitimate
+ * setup but it is NOT one this assertion can tell apart from a regression, and skipping on
+ * `false` would make the guard vanish in exactly the case it exists for. Operators running such
+ * a server set `QB_PG_AUTH_NOT_SCRAM=1` to state so explicitly.
+ */
+TEST_F(ConnectionLifecycle, HandshakeUsesScramSha256WithMutualAuth) {
+    ASSERT_TRUE(qb::io::async::run_sync(db_->connect(dsn_tcp_string())));
+
+    if (std::getenv("QB_PG_AUTH_NOT_SCRAM") != nullptr) {
+        EXPECT_FALSE(db_->scram_authenticated()) << "QB_PG_AUTH_NOT_SCRAM is set, yet the handshake DID run SCRAM — "
+                                                    "unset it so this case can guard the real configuration";
+        GTEST_SKIP() << "QB_PG_AUTH_NOT_SCRAM set: this server is configured for a non-SCRAM method";
+    }
+
+    EXPECT_TRUE(db_->scram_authenticated())
+        << "the connection to " << dsn_tcp_string()
+        << " came up WITHOUT a verified SCRAM-SHA-256 exchange. Either the client stopped running SASL, or the server's "
+           "pg_hba.conf no longer requires scram-sha-256 for this role. Both are silent to every other test in this suite.";
+
+    // A reconnect must renegotiate from scratch, not inherit the previous session's verdict.
+    db_->disconnect();
+    db_->prepare_reconnect();
+    EXPECT_FALSE(db_->scram_authenticated()) << "the SCRAM verdict must be per-session; prepare_reconnect() left it set";
+    ASSERT_TRUE(qb::io::async::run_sync(db_->connect(dsn_tcp_string())));
+    EXPECT_TRUE(db_->scram_authenticated()) << "the re-handshake did not run SCRAM";
+}
+
 /// `co_await connect()` on a spawned task (libev + coro_scheduler).
 TEST_F(ConnectionLifecycle, ConnectSuccess_Coroutine) {
     bool ok  = false;
