@@ -43,7 +43,7 @@ The unit suites exercise wire-format encoding and decoding, parameter serializat
 protocol-message framing in isolation — they pass on any host. The integration suites drive a real wire
 handshake, prepared statements, transactions, type round-trips, and asynchronous NOTIFY delivery against a server.
 
-<!-- src: qbm/pgsql/tests/CMakeLists.txt:60-113 -->
+<!-- src: qbm/pgsql/tests/CMakeLists.txt:60-114 -->
 
 ### How a missing server is handled
 
@@ -98,7 +98,7 @@ accepts the usual `--gtest_filter`, `--gtest_list_tests`, and `--gtest_repeat` f
 
 `connection-ssl` is the one conditional suite: it is registered inside an `if (QB_HAS_SSL)` guard, only when
 `QB_HAS_SSL` is set, because it links the `qb::pg::tcp::ssl::database` alias that exists only with
-OpenSSL (<!-- src: qbm/pgsql/tests/CMakeLists.txt:104-106 -->).
+OpenSSL (<!-- src: qbm/pgsql/tests/CMakeLists.txt:105-107 -->).
 
 ## Configuring the server
 
