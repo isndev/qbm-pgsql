@@ -46,6 +46,16 @@ Tracks changes on the development branch not yet part of a tagged release. The m
 
 ### Fixed
 
+- **`CMakeLists.txt` had no `cmake_minimum_required()`, and a standalone configure died on an
+  unhelpful error.** CMake reported `No cmake_minimum_required command is present` alongside
+  `Unknown CMake command "qb_status_message"` — which reads like a missing include rather than
+  "wrong entry point". This module is built from the qb-dev superproject, which loads qb's CMake
+  helpers first; an *installed* qb ships none of them (`lib/cmake/qb/` carries only `qbConfig`,
+  `qbConfigVersion`, `qbTargets` and the `Find` modules), so pointing `CMAKE_PREFIX_PATH` at one
+  does not help — the exact mistake the old error invited. There is now a
+  `cmake_minimum_required(VERSION 3.24)` and a guard that names the constraint and points at the
+  superproject root and the `package` preset.
+
 - **`transaction_coro.inl` ran seven `#include` directives inside `namespace qb::pg::detail`.**
   It was spliced into `transaction.inl:526`, which is *between* that namespace's braces, so its own
   `#include <cctype> <filesystem> <fstream> <sstream> <string>` and two local includes were
