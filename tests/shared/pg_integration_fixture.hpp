@@ -13,7 +13,7 @@
  *
  * Integration tests need a live `postgres:5432`. The DSN is already env-overridable via
  * `test_config.hpp` (`QB_PG_DSN`); this header adds the missing half of the conventions
- * contract (docs/tests-audit/_CONVENTIONS.md §4.5): if the daemon is unreachable the test is
+ * contract (dev/tests-audit/_CONVENTIONS.md §4.5): if the daemon is unreachable the test is
  * `GTEST_SKIP`-ped (never `ASSERT_TRUE(false)` / thrown), printing the exact sentinel
  * `QBM_INTEGRATION_SKIP_DAEMON_UNREACHABLE` that the CMake helper wires into CTest's
  * `SKIP_REGULAR_EXPRESSION` (via `REQUIRES live`), so a daemon-down run reports
