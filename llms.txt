@@ -1,0 +1,59 @@
+# qbm-pgsql — asynchronous PostgreSQL client
+
+> qbm-pgsql is the PostgreSQL client of the qb C++20 actor framework: a non-blocking client
+> that speaks the PostgreSQL v3 frontend/backend wire protocol directly over qb-io, with **no
+> libpq** — connection handshake, SCRAM-SHA-256 / MD5 / cleartext authentication, the simple
+> and extended query protocols, prepared statements, transactions and savepoints, COPY, and
+> LISTEN/NOTIFY. The same method names serve `co_await` and callback styles. A **compiled**
+> library — link `qbm::pgsql` — behind one umbrella header, `<qbm/pgsql/pgsql.h>`.
+
+Six rules decide whether generated qbm-pgsql code is correct; everything else is detail.
+
+1. **`connect()` is an awaiter, not a call.** `co_await` it, or drive it with `run_sync`; a
+   discarded `db.connect(...)` does nothing at all. There is no blocking `connect()` and no
+   `connect` callback overload. Callbacks only *enqueue* — nothing reaches the wire until
+   `run_once()` / `run()` / `await()` runs on the connection's thread (an actor's tick does it).
+2. **One `database` is one I/O thread and one serial wire stream.** Never block the loop in a
+   callback or coroutine except through `co_await`. `Transaction` and `database` are
+   non-copyable and non-movable — hold them by pointer or reference.
+3. **There are no nested transactions.** `with_transaction` inside an open block fails fast
+   with a `client_error`; PostgreSQL has one transaction per session and would silently
+   flatten the nesting. Use savepoints to nest units of work.
+4. **`bool(results)` is row-presence, not DML success.** An `INSERT`/`UPDATE`/`DELETE` that
+   returns no rows is falsy — use `rows_affected()`. `row` and `field` are non-owning views
+   into a `results`; using one after a callback returns is undefined behaviour unless you took
+   `deep_snapshot()`. A coroutine `Reply<resultset>` is already a snapshot.
+5. **A NULL read throws.** `field.as<T>()` on a NULL, non-optional `T` throws
+   `error::value_is_null`; read as `std::optional<T>` or check `is_null()` first.
+6. **The DSN puts the database name in brackets**, `...:5432[mydb]`, not `.../mydb`. The
+   scheme does **not** select TLS: the transport is the alias (`tcp::database` vs
+   `tcp::ssl::database`), a compile-time choice, and `tcp::ssl::database` exists only under
+   `QB_HAS_SSL`. TLS certificate verification is off by default — set
+   `connection_options::ssl_verify = ssl_verify_mode::full` and pass the options to
+   `connect(connection_options)`. There is no libpq `sslmode` string parsing.
+
+## Agent reference
+
+- [llms-full.txt](https://raw.githubusercontent.com/isndev/qbm-pgsql/main/llms-full.txt): both agent docs above, concatenated — one fetch, the whole machine-facing surface of this repo.
+- [qbm-pgsql — LLM concepts (write correct code)](https://raw.githubusercontent.com/isndev/qbm-pgsql/main/llm/qbm-pgsql.llm.md): Asynchronous PostgreSQL client for the qb C++ actor framework.
+- [qb::pg (PostgreSQL) Module API Reference](https://raw.githubusercontent.com/isndev/qbm-pgsql/main/llm/qbm-pgsql.llm.api.md): This document provides a detailed API reference for the qb::pg module, part of the QB C++ Actor Framework.
+
+## Project
+
+- [qbm-pgsql — asynchronous PostgreSQL client](https://raw.githubusercontent.com/isndev/qbm-pgsql/main/README.md): A non-blocking PostgreSQL wire-protocol client built on qb-io: connect, run simple and prepared SQL, drive transactions and savepoints, and consume LISTEN/NOTIFY — with the same method names for co_await and callback styles.
+
+## Optional
+
+- [qbm-pgsql documentation map](https://raw.githubusercontent.com/isndev/qbm-pgsql/main/readme/README.md): This is the table of contents for the qbm-pgsql narrative documentation: seven topic pages covering connection management, query execution, transactions, result sets, type mapping, error handling, and integration testing, ordered as a learn
+- [Connecting to PostgreSQL](https://raw.githubusercontent.com/isndev/qbm-pgsql/main/readme/connection.md): How qb::pg::tcp::database (and, under QB_HAS_SSL, qb::pg::tcp::ssl::database) parses a connection string, opens an asynchronous TCP socket, authenticates, optionally upgrades to TLS, and what happens to in-flight work when the link drops.
+- [Error handling](https://raw.githubusercontent.com/isndev/qbm-pgsql/main/readme/error_handling.md): How qbm-pgsql reports failures: the qb::pg::error::db_error hierarchy, SQLSTATE codes, the coroutine error-result model (Reply<T>) versus the C++ exceptions used at the field-decode and with_transaction seams, and the two protocol-level con
+- [Query execution](https://raw.githubusercontent.com/isndev/qbm-pgsql/main/readme/queries.md): Run simple queries, extended (prepared) queries, SQL files, and LISTEN/NOTIFY against a qb::pg::tcp::database (or qb::pg::tcp::ssl::database on an OpenSSL build), using either the coroutine or the callback overload of each SQL-facing operat
+- [Result sets and field access](https://raw.githubusercontent.com/isndev/qbm-pgsql/main/readme/results.md): How to read rows and columns from qb::pg::results — the container a query hands back — using container iteration, indexed access, and typed field.as<T>() conversions, with NULL handled through std::optional<T>.
+- [Integration testing](https://raw.githubusercontent.com/isndev/qbm-pgsql/main/readme/testing.md): Build and run the qbm-pgsql test suite under CTest: pure-unit suites run anywhere, while the integration suites need a reachable PostgreSQL server and skip themselves cleanly when one is absent.
+- [Transactions and command queues](https://raw.githubusercontent.com/isndev/qbm-pgsql/main/readme/transaction.md): How qb::pg::detail::Transaction drives BEGIN/COMMIT/ROLLBACK, savepoints, isolation modes, statement timeout, and LISTEN/NOTIFY — through both the fluent callback API and the co_await coroutine API.
+- [Type mapping](https://raw.githubusercontent.com/isndev/qbm-pgsql/main/readme/types.md): How qbm-pgsql maps C++ values to PostgreSQL OIDs and wire formats: outbound for bind parameters (qb::pg::params) and inbound for result columns (field::as<T>()).
+- [Changelog](https://raw.githubusercontent.com/isndev/qbm-pgsql/main/CHANGELOG.md): All notable changes to the qbm-pgsql module are documented here.
+- [Contributing to qbm-pgsql](https://raw.githubusercontent.com/isndev/qbm-pgsql/main/CONTRIBUTING.md): qbm-pgsql is a module of the qb actor framework.
+- [Security policy](https://raw.githubusercontent.com/isndev/qbm-pgsql/main/SECURITY.md): qbm-pgsql is a module of the qb actor framework.
+
+<!-- generated by scripts/gen-llms-txt.py from llm/ + the files in this repo; run `python3 scripts/gen-llms-txt.py --write` after editing llm/ -->
