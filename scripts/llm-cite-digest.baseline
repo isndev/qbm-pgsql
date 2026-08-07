@@ -1,0 +1,19 @@
+# llm-cite-digest.baseline -- what every line-cited range in llm/ SAID when
+# it was last verified.  Regenerate with:
+#     python3 scripts/llm-guard.py --record-digests
+# and REVIEW the git diff: the trailing excerpt is the first cited line, so a
+# citation that has silently drifted onto other code shows up as a changed
+# excerpt rather than as an opaque hash.  Fields: doc <TAB> cited-spec <TAB>
+# digest <TAB> excerpt.  Keyed WITHOUT the doc's own line number, so
+# re-flowing a paragraph does not re-key the file.
+llm/qbm-pgsql.llm.api.md	pgsql.h:2266-2267	174bc1d30cbd	bool
+llm/qbm-pgsql.llm.api.md	pgsql.h:2677-2677	3e2a63be5571	using results = detail::resultset;
+llm/qbm-pgsql.llm.api.md	qbm/pgsql/src/qbm/pgsql/pgsql.h:2677-2677	3e2a63be5571	using results = detail::resultset;
+llm/qbm-pgsql.llm.api.md	queries.h:174-174	ab6ca6aa9ac4	using PreparedQueryStorage = PreparedStorage;
+llm/qbm-pgsql.llm.api.md	queries.h:65-65	e0fb44c50b81	class PreparedStorage {
+llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/type_mapping.h:58-63	1d898ef4b879	template <typename T, typename Enable = void>
+llm/qbm-pgsql.llm.api.md	type_converter.h:1018-1018	f35a19148070	struct TypeConverter<std::chrono::duration<Rep, Period>> {
+llm/qbm-pgsql.llm.api.md	type_converter.h:1130-1130	2ea2442b025a	struct TypeConverter<std::string> {
+llm/qbm-pgsql.llm.api.md	type_converter.h:1219-1219	08899155e3f1	struct TypeConverter<numeric> {
+llm/qbm-pgsql.llm.api.md	type_converter.h:131-131	5055bd28810c	public:
+llm/qbm-pgsql.llm.api.md	type_converter.h:685-685	e3c66a05bb51	static void

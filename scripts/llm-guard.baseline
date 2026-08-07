@@ -1,0 +1,17 @@
+# llm-guard.baseline — exceptions for scripts/llm-guard.py, each VERIFIED BY HAND.
+#
+# Format:  <doc>  TAB  <key>  TAB  <why this finding is not a defect>
+#   key = <cited-path>:<lo>-<hi>   for a `citations` finding
+#         symbol:<name>            for a `symbols` finding whose name belongs to another repo
+#
+# Only `citations` and cross-repo `symbols` findings can be listed here. `paths`, `forbidden`,
+# `phantom`, `version`, out-of-bounds and `vacuous` are deterministic and always fail.
+#
+# An entry matching nothing is reported as `baseline-stale` and FAILS, so this file cannot rot
+# into a blanket exemption.  Re-derive with: python3 scripts/llm-guard.py --no-baseline
+#
+# DELIBERATELY EMPTY.  qbm-pgsql is the one module whose two llm/ docs produce zero findings:
+# every declaration-shaped name they use resolves inside this repo, and every citation's cited
+# lines carry the symbol the sentence is about.  The file exists so that the mechanism is
+# discoverable here rather than only in the repos that happen to need it — and so that adding
+# an exception is an edit to a documented file instead of an invention.
