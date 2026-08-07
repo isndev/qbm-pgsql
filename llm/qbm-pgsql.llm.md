@@ -15,6 +15,40 @@ is set), alias `qbm::pgsql`. Public namespace `qb::pg`; implementation in
 
 ---
 
+<!-- llms-txt:lead -->
+> qbm-pgsql is the PostgreSQL client of the qb C++20 actor framework: a non-blocking client
+> that speaks the PostgreSQL v3 frontend/backend wire protocol directly over qb-io, with **no
+> libpq** — connection handshake, SCRAM-SHA-256 / MD5 / cleartext authentication, the simple
+> and extended query protocols, prepared statements, transactions and savepoints, COPY, and
+> LISTEN/NOTIFY. The same method names serve `co_await` and callback styles. A **compiled**
+> library — link `qbm::pgsql` — behind one umbrella header, `<qbm/pgsql/pgsql.h>`.
+
+Six rules decide whether generated qbm-pgsql code is correct; everything else is detail.
+
+1. **`connect()` is an awaiter, not a call.** `co_await` it, or drive it with `run_sync`; a
+   discarded `db.connect(...)` does nothing at all. There is no blocking `connect()` and no
+   `connect` callback overload. Callbacks only *enqueue* — nothing reaches the wire until
+   `run_once()` / `run()` / `await()` runs on the connection's thread (an actor's tick does it).
+2. **One `database` is one I/O thread and one serial wire stream.** Never block the loop in a
+   callback or coroutine except through `co_await`. `Transaction` and `database` are
+   non-copyable and non-movable — hold them by pointer or reference.
+3. **There are no nested transactions.** `with_transaction` inside an open block fails fast
+   with a `client_error`; PostgreSQL has one transaction per session and would silently
+   flatten the nesting. Use savepoints to nest units of work.
+4. **`bool(results)` is row-presence, not DML success.** An `INSERT`/`UPDATE`/`DELETE` that
+   returns no rows is falsy — use `rows_affected()`. `row` and `field` are non-owning views
+   into a `results`; using one after a callback returns is undefined behaviour unless you took
+   `deep_snapshot()`. A coroutine `Reply<resultset>` is already a snapshot.
+5. **A NULL read throws.** `field.as<T>()` on a NULL, non-optional `T` throws
+   `error::value_is_null`; read as `std::optional<T>` or check `is_null()` first.
+6. **The DSN puts the database name in brackets**, `...:5432[mydb]`, not `.../mydb`. The
+   scheme does **not** select TLS: the transport is the alias (`tcp::database` vs
+   `tcp::ssl::database`), a compile-time choice, and `tcp::ssl::database` exists only under
+   `QB_HAS_SSL`. TLS certificate verification is off by default — set
+   `connection_options::ssl_verify = ssl_verify_mode::full` and pass the options to
+   `connect(connection_options)`. There is no libpq `sslmode` string parsing.
+<!-- /llms-txt:lead -->
+
 ## 1. Purpose
 
 Connect to PostgreSQL, run simple and prepared SQL, drive transactions /
