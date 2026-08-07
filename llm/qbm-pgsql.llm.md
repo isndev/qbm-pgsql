@@ -16,11 +16,12 @@ is set), alias `qbm::pgsql`. Public namespace `qb::pg`; implementation in
 ---
 
 <!-- llms-txt:lead -->
-> qbm-pgsql is the PostgreSQL client of the qb C++20 actor framework: a non-blocking client
-> that speaks the PostgreSQL v3 frontend/backend wire protocol directly over qb-io, with **no
-> libpq** — connection handshake, SCRAM-SHA-256 / MD5 / cleartext authentication, the simple
-> and extended query protocols, prepared statements, transactions and savepoints, COPY, and
-> LISTEN/NOTIFY. The same method names serve `co_await` and callback styles. A **compiled**
+> qbm-pgsql is the PostgreSQL client of the qb Actor Framework (QBAF), C++20-first: a
+> non-blocking client that speaks the PostgreSQL v3 frontend/backend wire protocol directly
+> over qb-io, with **no libpq** — connection handshake, SCRAM-SHA-256 / MD5 / cleartext
+> authentication, the simple and extended query protocols, prepared statements, transactions
+> and savepoints, COPY, and LISTEN/NOTIFY. The same method names serve `co_await` and callback
+> styles. A **compiled**
 > library — link `qbm::pgsql` — behind one umbrella header, `<qbm/pgsql/pgsql.h>`.
 
 Six rules decide whether generated qbm-pgsql code is correct; everything else is detail.

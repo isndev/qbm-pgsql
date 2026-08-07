@@ -1,10 +1,11 @@
-# qbm-pgsql — asynchronous PostgreSQL client
+# qbm-pgsql — asynchronous PostgreSQL client for the qb Actor Framework (QBAF)
 
-> qbm-pgsql is the PostgreSQL client of the qb C++20 actor framework: a non-blocking client
-> that speaks the PostgreSQL v3 frontend/backend wire protocol directly over qb-io, with **no
-> libpq** — connection handshake, SCRAM-SHA-256 / MD5 / cleartext authentication, the simple
-> and extended query protocols, prepared statements, transactions and savepoints, COPY, and
-> LISTEN/NOTIFY. The same method names serve `co_await` and callback styles. A **compiled**
+> qbm-pgsql is the PostgreSQL client of the qb Actor Framework (QBAF), C++20-first: a
+> non-blocking client that speaks the PostgreSQL v3 frontend/backend wire protocol directly
+> over qb-io, with **no libpq** — connection handshake, SCRAM-SHA-256 / MD5 / cleartext
+> authentication, the simple and extended query protocols, prepared statements, transactions
+> and savepoints, COPY, and LISTEN/NOTIFY. The same method names serve `co_await` and callback
+> styles. A **compiled**
 > library — link `qbm::pgsql` — behind one umbrella header, `<qbm/pgsql/pgsql.h>`.
 
 Six rules decide whether generated qbm-pgsql code is correct; everything else is detail.
@@ -40,7 +41,7 @@ Six rules decide whether generated qbm-pgsql code is correct; everything else is
 
 ## Project
 
-- [qbm-pgsql — asynchronous PostgreSQL client](https://raw.githubusercontent.com/isndev/qbm-pgsql/main/README.md): A non-blocking PostgreSQL wire-protocol client built on qb-io: connect, run simple and prepared SQL, drive transactions and savepoints, and consume LISTEN/NOTIFY — with the same method names for co_await and callback styles.
+- [qbm-pgsql — asynchronous PostgreSQL client for the qb Actor Framework (QBAF)](https://raw.githubusercontent.com/isndev/qbm-pgsql/main/README.md): A non-blocking PostgreSQL wire-protocol client for the qb Actor Framework (QBAF), built on qb-io: connect, run simple and prepared SQL, drive transactions and savepoints, and consume LISTEN/NOTIFY — with the same method names for co_await a
 
 ## Optional
 

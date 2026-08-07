@@ -1,10 +1,11 @@
-# qbm-pgsql — asynchronous PostgreSQL client
+# qbm-pgsql — asynchronous PostgreSQL client for the qb Actor Framework (QBAF)
 
 > **Audience:** Adopter · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 3.0.0 (C++20 default, C++23
 > supported)
 
-A non-blocking PostgreSQL wire-protocol client built on qb-io: connect, run simple and prepared SQL, drive transactions
-and savepoints, and consume LISTEN/NOTIFY — with the same method names for `co_await` and callback styles.
+A non-blocking PostgreSQL wire-protocol client for the qb Actor Framework (QBAF), built on qb-io: connect, run simple
+and prepared SQL, drive transactions and savepoints, and consume LISTEN/NOTIFY — with the same method names for
+`co_await` and callback styles.
 
 **Prerequisites:** a working qb framework checkout (see [qb/README.md](https://github.com/isndev/qb/blob/main/README.md)) and a reachable PostgreSQL
 server — **See also:** [readme/README.md](./readme/README.md) (technical
