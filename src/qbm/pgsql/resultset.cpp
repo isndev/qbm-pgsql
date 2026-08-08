@@ -373,8 +373,16 @@ resultset::json() const {
     for (const auto row : *this) {
         qb::json row_obj = qb::json::object();
         for (const auto field : row) {
+            // Unwrap explicitly rather than assigning the optional itself. nlohmann only
+            // learned to serialise std::optional in 3.12, while qb's floor is
+            // `find_package(nlohmann_json 3.11)` (qbDependencies.cmake:364) -- so this one
+            // line silently required a version half a minor above what the build asks for,
+            // and broke on any distro at 3.11.x (measured on Debian's 3.11.3: "no match for
+            // operator=", resultset.cpp:377). It is the ONLY site in the tree that assigned a
+            // raw optional to a json; everywhere else already unwraps with .value(). Same
+            // result either way -- a disengaged optional is null.
             auto opt              = field.as<std::optional<std::string>>();
-            row_obj[field.name()] = opt;
+            row_obj[field.name()] = opt ? qb::json(*opt) : qb::json(nullptr);
         }
         result.push_back(row_obj);
     }
