@@ -174,7 +174,7 @@ qb::uuid id = result[0][0].as<qb::uuid>(); // src: tests/integration/datatypes/d
 A 1-D `std::vector<T>` **does** round-trip as a PostgreSQL array. On the send side, `param_serializer`'s `add_vector`
 serializes the vector in PostgreSQL's binary array wire form and declares the matching array OID; on the receive side,
 `field.as<std::vector<T>>()` decodes it via `decode_pg_array` (the `QB_PG_DEFINE_ARRAY_CONVERTER`
-specializations). <!-- src: src/qbm/pgsql/param_serializer.h:579-605; src/qbm/pgsql/type_converter.h:1376-1511 -->
+specializations). <!-- src: src/qbm/pgsql/param_serializer.h:579-605; src/qbm/pgsql/type_converter.h:1376-1523 -->
 
 ```cpp
 #include <qbm/pgsql/pgsql.h>
