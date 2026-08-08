@@ -1,0 +1,406 @@
+# The qbm-pgsql test suite, run by THIS repository's own CI, against a live PostgreSQL.
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# Until it landed, a pull request opened against isndev/qbm-pgsql was gated by doc-lint.yml
+# and nothing else: 34 registered tests lived in this repository and protected no push to it.
+# They did run -- in the PRIVATE qb-dev superproject, whose qbm-tests.yml builds all three
+# modules together -- but that is maintainer-side coverage: it fires when the superproject
+# bumps its submodule pointer, days after the PR that broke something was reviewed and merged
+# here.
+#
+# WHY IT NEEDS A CHECKOUT OF isndev/qb
+# ------------------------------------
+# This module cannot be configured on its own, and says so with a FATAL_ERROR at the top of
+# CMakeLists.txt: it calls qb_status_message() / qb_register_module() / qb_add_test(), which
+# are development-time helpers in qb/cmake/qbFunctions.cmake that an INSTALLED qb does not
+# ship. CMAKE_PREFIX_PATH pointed at an installed qb does not help. What works -- verified,
+# not assumed -- is a minimal root that add_subdirectory()es a qb SOURCE tree first and this
+# module second. That root is committed here at .github/ci/superbuild/CMakeLists.txt, is
+# byte-identical in the three qbm repositories, and is documented in .github/ci/README.md.
+#
+# WHICH qb
+# --------
+# The branch of the same name: qb, the three modules and the superproject all carry `main`
+# (released) and `develop` (next version) and move together, so a PR against develop is
+# tested against qb's develop. The ref is resolved and then PROVEN to exist on the remote --
+# a silent fallback to some other branch would test the wrong pairing and still report green.
+#
+# WHY THE POSTGRES IS NOT A PLAIN SERVICE CONTAINER
+# -------------------------------------------------
+# It needs TLS ENABLED, and the official postgres image ships `ssl=off`. This is not cosmetic
+# and it was measured, not assumed: with ssl off, TWO tests print the daemon-unreachable
+# sentinel and ctest marks each Skipped --
+#   * qbm-pgsql-test-integration-connection-ssl  (whole binary: its fixture SetUp skips)
+#   * qbm-pgsql-test-integration-listen-notify   (the SslListenNotify fixture prints the same
+#     sentinel, and SKIP_REGULAR_EXPRESSION matches test OUTPUT, so the WHOLE binary reports
+#     Skipped -- taking its non-TLS NOTIFY coverage down with it)
+# -- while ctest still exits 0 and prints `100% tests passed`. A service container cannot be
+# used because the server needs a certificate that has to exist BEFORE it starts, and services
+# start before any step runs. So the postgres is started with `docker run` after a self-signed
+# cert is generated.
+#
+# QB_PG_SSL_DSN is then PINNED on purpose. Both tests above treat an unset QB_PG_SSL_DSN as
+# "TLS simply isn't available here, skip"; with it set they FAIL instead. Pinning it converts
+# the soft skip into a hard gate, which is the whole point of running them here.
+#
+# WHAT THIS LANE DOES NOT COVER
+# -----------------------------
+# It answers "does this module still work with qb?", not "do all three modules still work
+# together?". A qb-side change lands with no push here, so nothing in this repository fires
+# for it; the superproject's qbm-tests.yml remains the lane that sees qb and all three
+# modules at once.
+#
+# ANTI-VACUITY
+# ------------
+# ctest counts `Skipped` as passed, and 14 of these 34 tests are `REQUIRES live` -- with no
+# reachable PostgreSQL this lane would run them, skip every one, exit 0 and print `100% tests
+# passed`. So it asserts, separately: a registration floor before the build (module total AND
+# the integration tier on its own), a non-zero translation-unit count, an executable on disk
+# for every registered test, an EXECUTED floor, and skipped == 0. Same discipline as the
+# superproject's qbm-tests.yml, from which the checks are taken.
+name: tests
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'cmake/**'
+      - 'CMakeLists.txt'
+      - '.github/ci/**'
+      - '.github/workflows/tests.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'cmake/**'
+      - 'CMakeLists.txt'
+      - '.github/ci/**'
+      - '.github/workflows/tests.yml'
+  workflow_dispatch:
+    inputs:
+      qb_ref:
+        description: 'isndev/qb ref to build against (empty = the branch of the same name)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: qbm-pgsql suite (live postgres with TLS)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    env:
+      # Defaults baked into the fixtures are user/password/database `test` on localhost:5432
+      # (tests/shared/test_config.hpp). They are set explicitly so the lane does not silently
+      # depend on a default changing under it.
+      QB_PG_DSN: 'tcp://test:test@localhost:5432[test]'
+      QB_PG_SSL_DSN: 'tcp://test:test@localhost:5432[test]'
+      # One place to change the server. Referenced by the uid probe and by `docker run`, so the
+      # uid that is chowned and the image that is started can never drift apart.
+      PG_IMAGE: 'postgres:17-alpine'
+      # Pinned, and the reason is measured rather than inherited: the ubuntu-latest default
+      # compiler is GNU 13.3.0, which this project targets nowhere, and which hits
+      # `internal compiler error: in build_special_member_call` on the coroutine ramps in the
+      # qbm test tree (qbm-pgsql's coro-api among them). clang-22 is what the superproject's
+      # qbm-tests.yml pins for exactly that reason, and it is installed by --profile build.
+      LLVM_VERSION: '22'
+
+    steps:
+      - name: Check out this module
+        uses: actions/checkout@v6
+        with:
+          path: module
+
+      # github.base_ref for a PR (the branch being merged INTO, which is main or develop by
+      # this workflow's triggers), github.ref_name otherwise. Never github.head_ref: on a fork
+      # PR that string is attacker-controlled, and it is also the wrong question -- what must
+      # be tested is the pairing this change is proposed to become part of.
+      #
+      # Passed through env: rather than interpolated into the script, so a branch name can
+      # never be shell.
+      - name: Resolve which isndev/qb to build against
+        env:
+          INPUT_REF: ${{ inputs.qb_ref }}
+          BASE_REF: ${{ github.base_ref }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          ref="${INPUT_REF}"
+          if [ -z "${ref}" ]; then
+            if [ -n "${BASE_REF}" ]; then ref="${BASE_REF}"; else ref="${REF_NAME}"; fi
+          fi
+          echo "qb ref: ${ref}"
+          # Prove it exists rather than discovering it at checkout time as "couldn't find
+          # remote ref", and refuse to fall back: a lane that quietly tested develop while
+          # claiming to test main would be worse than no lane.
+          if ! git ls-remote --exit-code --heads --tags https://github.com/isndev/qb "${ref}" >/dev/null; then
+            echo "::error::isndev/qb has no branch or tag '${ref}'. qb and the qbm modules carry the same two branch names (main, develop); re-run this workflow manually with the qb_ref input if you need a different pairing."
+            exit 1
+          fi
+          echo "QB_REF=${ref}" >> "${GITHUB_ENV}"
+
+      - name: Check out isndev/qb
+        uses: actions/checkout@v6
+        with:
+          repository: isndev/qb
+          ref: ${{ env.QB_REF }}
+          path: qb
+
+      # PostgreSQL WITH TLS. Generated cert first, then the server -- the ordering a service
+      # container cannot express.
+      - name: Start PostgreSQL with TLS enabled
+        run: |
+          set -euo pipefail
+          certdir="${RUNNER_TEMP}/pgcerts"
+          mkdir -p "${certdir}"
+          openssl req -new -x509 -days 2 -nodes -text \
+            -out "${certdir}/server.crt" -keyout "${certdir}/server.key" \
+            -subj "/CN=localhost" 2>/dev/null
+          # postgres refuses a key that is group- or world-readable, and refuses one not owned
+          # by the user the server runs as:
+          #     FATAL: private key file "/certs/server.key" must be owned by the database user
+          #            or root
+          # The uid is asked of the image rather than hard-coded, because it is NOT the same
+          # across variants -- 70 in the alpine images, 999 in the Debian ones -- and a wrong
+          # constant fails at server start, well after this step reports success.
+          # (measured: 70 for postgres:17-alpine. tail -1 because the image entrypoint may
+          # print before exec'ing the command.)
+          pg_uid="$(docker run --rm "${PG_IMAGE}" id -u postgres | tail -1 | tr -d '[:space:]')"
+          echo "postgres runs as uid ${pg_uid} in ${PG_IMAGE}"
+          case "${pg_uid}" in
+            ''|*[!0-9]*) echo "::error::could not determine the postgres uid from ${PG_IMAGE} (got '${pg_uid}')"; exit 1 ;;
+          esac
+          chmod 600 "${certdir}/server.key"
+          chmod 644 "${certdir}/server.crt"
+          sudo chown "${pg_uid}:${pg_uid}" "${certdir}/server.key" "${certdir}/server.crt"
+
+          docker run -d --name qb-pg \
+            -e POSTGRES_USER=test \
+            -e POSTGRES_PASSWORD=test \
+            -e POSTGRES_DB=test \
+            -v "${certdir}:/certs:ro" \
+            -p 5432:5432 \
+            "${PG_IMAGE}" \
+            -c ssl=on \
+            -c ssl_cert_file=/certs/server.crt \
+            -c ssl_key_file=/certs/server.key
+
+      # A daemon that is merely "started" is not a daemon the tests can reach. This step proves
+      # reachability and TLS BEFORE the suite runs, so a container problem reports as itself
+      # rather than as 14 mysterious skips 20 minutes later.
+      - name: Prove postgres is reachable, and that it really has TLS on
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 60); do
+            if docker exec qb-pg pg_isready -U test -d test >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+          if ! docker exec qb-pg pg_isready -U test -d test; then
+            echo "::error::postgres never became ready"; docker logs qb-pg | tail -50; exit 1
+          fi
+
+          ssl_on="$(docker exec qb-pg psql -U test -d test -tAc 'show ssl' | tr -d '[:space:]')"
+          echo "postgres ssl = ${ssl_on}"
+          if [ "${ssl_on}" != "on" ]; then
+            echo "::error::postgres came up with ssl=${ssl_on}; the two TLS tests would self-skip and this lane would still print 100% passed."
+            docker logs qb-pg | tail -50
+            exit 1
+          fi
+
+          auth="$(docker exec qb-pg psql -U test -d test -tAc 'show password_encryption' | tr -d '[:space:]')"
+          echo "postgres password_encryption = ${auth}"
+
+      - name: Install dependencies
+        run: ./qb/scripts/ci-install-linux-dependencies.sh --profile build
+
+      - name: Configure
+        run: |
+          set -euo pipefail
+          cmake -S module/.github/ci/superbuild -B build -G Ninja \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DQB_CXX_STANDARD=20 \
+                -DCMAKE_C_COMPILER="clang-${LLVM_VERSION}" \
+                -DCMAKE_CXX_COMPILER="clang++-${LLVM_VERSION}" \
+                -DQBM_CI_QB_DIR="${GITHUB_WORKSPACE}/qb" \
+                -DQBM_CI_MODULE_DIR="${GITHUB_WORKSPACE}/module" \
+                2>&1 | tee "${RUNNER_TEMP}/configure.log"
+          # Assert the cache, do not trust the command line: a toolchain file could override
+          # it, and this lane's whole compiler argument would then be decoration.
+          got="$(sed -n 's/^CMAKE_CXX_COMPILER:[A-Z]*=//p' build/CMakeCache.txt)"
+          echo "CMAKE_CXX_COMPILER = ${got}"
+          case "${got}" in
+            *clang++-${LLVM_VERSION}) ;;
+            *) echo "::error::configured with '${got}', not clang++-${LLVM_VERSION}"; exit 1 ;;
+          esac
+
+      # Registration floors need only the configure step, so a suite that vanished from
+      # registration fails here rather than being silently absent from the totals later.
+      #
+      # UNLIKE qbm-http, NOTHING HERE IS HOST-VARYING, and that is a measurement rather than an
+      # assumption: qbm-pgsql registers 34 (18 unit + 2 system + 14 integration) on a
+      # maintainer's macOS box and 34 on ubuntu-latest. qbm-http's four http3 tests must be
+      # derived from a capability because ubuntu-latest has no ngtcp2 OpenSSL crypto helper;
+      # this module has no such gate, so the floor is the constant. If one is ever added --
+      # anything wrapped in an if(QB_HAS_*) or a find_package() result -- this step must start
+      # reading the decision out of the configure log the way qbm-http's does, because a
+      # constant would then be red on a host that is merely different, not broken.
+      #
+      # The integration tier is floored SEPARATELY because it is the part a missing daemon
+      # silently guts, and it is the reason this lane runs a real PostgreSQL at all.
+      # A floor may only ever go UP.
+      - name: Registration floors (before building)
+        run: |
+          set -euo pipefail
+          fail=0
+          count() { ctest --test-dir build -N "$@" | grep -cE '^ *Test +#[0-9]+:' || true; }
+          check() {
+            echo "$1 registered: $2 (floor $3)"
+            if [ "$2" -lt "$3" ]; then
+              echo "::error::$1 registered $2, below its floor of $3"; fail=1
+            fi
+          }
+
+          check "qbm-pgsql (integration tier)" "$(count -L 'module:qbm-pgsql' -L 'tier:integration')" 14
+          total="$(count -L 'module:qbm-pgsql')"
+          check "qbm-pgsql (total)" "${total}" 34
+
+          # Every later step gates on the same number; computing it twice is how the two drift.
+          echo "QBM_TEST_FLOOR=34" >> "${GITHUB_ENV}"
+          exit "${fail}"
+
+      # Build this module's test binaries only -- not qb's own ~174, which this lane does not
+      # run and which qb's own CI already builds.
+      #
+      # A ctest name is a target name for every qb_register_module_test() entry, but the names
+      # are INTERSECTED with the real target list rather than trusted: qbm-http has one
+      # hand-written add_test() that re-runs an existing binary and is not a target, and this
+      # step is kept identical across the three modules so it cannot rot differently in each.
+      # Nothing is weakened -- a test whose binary genuinely never got built is caught twice
+      # below, by the executables-exist step and by ctest itself, which reports a missing
+      # executable as a FAILURE and never as a skip.
+      - name: Build the qbm-pgsql test binaries
+        run: |
+          set -euo pipefail
+          mapfile -t names < <(ctest --test-dir build -N -L 'module:qbm-pgsql' |
+                               sed -n 's/^ *Test *#[0-9]*: *//p' | sort -u)
+          mapfile -t all_targets < <(cmake --build build --target help |
+                                     sed 's/^\.\///; s/: phony$//' | sort -u)
+          mapfile -t targets < <(comm -12 <(printf '%s\n' "${names[@]}") <(printf '%s\n' "${all_targets[@]}"))
+          mapfile -t reruns  < <(comm -23 <(printf '%s\n' "${names[@]}") <(printf '%s\n' "${all_targets[@]}"))
+          echo "ctest entries: ${#names[@]} -> buildable targets: ${#targets[@]}"
+          if [ "${#reruns[@]}" -gt 0 ]; then
+            echo "entries that are not targets (they re-run a binary another entry builds):"
+            printf '  %s\n' "${reruns[@]}"
+          fi
+          if [ "${#targets[@]}" -eq 0 ]; then
+            echo "::error::no qbm-pgsql test target resolved; refusing to run a build that compiles nothing"
+            exit 1
+          fi
+          # `-k 0` (ninja keep-going) is diagnostic, not lenient: ninja still exits non-zero on
+          # any failure and `set -o pipefail` still fails the step. It buys the FULL list of
+          # broken targets from one runner iteration instead of the first one only -- this lane
+          # compiles with -Werror (QB_TESTS_WERROR defaults to QB_CI, so every runner is strict
+          # and a contributor's local build is not).
+          cmake --build build --parallel "$(nproc)" \
+                --target "${targets[@]}" -- -k 0 2>&1 | tee "${RUNNER_TEMP}/build.log"
+
+      # A build that compiled nothing cannot fail, and would make every number after it vacuous.
+      - name: Translation units compiled must be non-zero
+        run: |
+          set -euo pipefail
+          tus="$(grep -c 'Building CXX object' "${RUNNER_TEMP}/build.log" || true)"
+          echo "translation units compiled: ${tus}"
+          [ "${tus}" -gt 0 ] || { echo "::error::0 TUs compiled; every count below would be vacuous"; exit 1; }
+
+      # Every registered test must now have an executable on disk: after the build,
+      # `--show-only=json-v1` names the command of every test whose file exists, so a test left
+      # without a binary -- by the intersection, by a target renamed out from under a ctest
+      # entry, or by `-k 0` letting the build continue past a link failure -- is named here,
+      # while the reason is still legible.
+      - name: Every registered test has an executable
+        run: |
+          set -euo pipefail
+          ctest --test-dir build -L 'module:qbm-pgsql' --show-only=json-v1 > "${RUNNER_TEMP}/tests.json"
+          python3 - "${RUNNER_TEMP}/tests.json" "${QBM_TEST_FLOOR}" <<'PY'
+          import json, os, sys
+          tests = json.load(open(sys.argv[1]))["tests"]
+          floor = int(sys.argv[2])
+          missing = [t["name"] for t in tests
+                     if not t.get("command") or not os.path.exists(t["command"][0])]
+          binaries = {os.path.basename(t["command"][0]) for t in tests if t.get("command")}
+          print(f"registered={len(tests)} distinct binaries={len(binaries)} without an executable={len(missing)}")
+          bad = False
+          if len(tests) < floor:
+              print(f"::error::{len(tests)} tests listed, floor is {floor}"); bad = True
+          for n in missing[:20]:
+              print(f"  NO EXECUTABLE: {n}")
+          if missing:
+              print(f"::error::{len(missing)} registered test(s) have no executable after the build"); bad = True
+          sys.exit(1 if bad else 0)
+          PY
+
+      - name: Run the qbm-pgsql suite
+        run: |
+          ctest --test-dir build -L 'module:qbm-pgsql' \
+                --output-on-failure \
+                --output-junit "${RUNNER_TEMP}/results.xml"
+
+      # THE anti-vacuity gate. ctest already exited 0 above -- including in the world where
+      # every integration test skipped itself because the daemon was unreachable. This reads
+      # the JUnit report and fails on any skip.
+      - name: Executed == registered, and skipped must be 0
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ ! -f "${RUNNER_TEMP}/results.xml" ]; then
+            echo "::error::no JUnit report at ${RUNNER_TEMP}/results.xml - the suite never ran. Look at the step that failed above, not here."
+            exit 1
+          fi
+          python3 - "${RUNNER_TEMP}/results.xml" "${QBM_TEST_FLOOR:-0}" <<'PY'
+          import sys, xml.etree.ElementTree as ET
+
+          root = ET.parse(sys.argv[1]).getroot()
+          floor = int(sys.argv[2])
+          cases = list(root.iter('testcase'))
+          skipped = [c.get('name') for c in cases if c.find('skipped') is not None]
+          failed  = [c.get('name') for c in cases if c.find('failure') is not None]
+          total, executed = len(cases), len(cases) - len(skipped)
+
+          print(f"registered={total} executed={executed} skipped={len(skipped)} failed={len(failed)} floor={floor}")
+          for n in skipped:
+              print(f"  SKIPPED: {n}")
+          for n in failed:
+              print(f"  FAILED:  {n}")
+
+          bad = False
+          # The floor is computed once, in the registration step, and carried here through
+          # GITHUB_ENV. A 0 means that step never ran, which is itself a failure: it would let
+          # an empty report satisfy `total >= floor`.
+          if floor < 34:
+              print(f"::error::floor is {floor}; the registration step did not run or did not export one"); bad = True
+          if total < floor:
+              print(f"::error::only {total} qbm-pgsql tests in the report, floor is {floor}"); bad = True
+          if executed < floor:
+              print(f"::error::only {executed} qbm-pgsql tests EXECUTED, floor is {floor}"); bad = True
+          if skipped:
+              print("::error::%d qbm-pgsql test(s) self-skipped. A skip here means the daemon was "
+                    "unreachable, and ctest reports that as a pass." % len(skipped)); bad = True
+          if failed:
+              print(f"::error::{len(failed)} qbm-pgsql test(s) failed"); bad = True
+          sys.exit(1 if bad else 0)
+          PY
+
+      - name: Postgres logs (on failure)
+        if: failure()
+        run: docker logs qb-pg | tail -100
