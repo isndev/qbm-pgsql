@@ -284,3 +284,11 @@ Claude Desktop and other clients without native remote-MCP support wrap the same
 - [readme/README.md](./readme/README.md) — the long-form technical index for this module.
 - `qbm/pgsql/tests/` — integration tests are executable documentation; start with `integration/api/coro-api.cpp` (coroutines,
   `with_transaction`, `run_sync`) and `integration/transaction/transaction-basic.cpp` (callback `begin`, savepoints, `await()`).
+
+## License
+
+Apache License 2.0. See [LICENSE](./LICENSE). PostgreSQL wire-protocol handling is implemented in this module; I/O is handled entirely by qb-io.
+
+---
+
+Part of the [qb actor framework](https://github.com/isndev/qb).
