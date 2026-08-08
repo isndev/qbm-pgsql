@@ -1441,10 +1441,22 @@ template <typename Elem>
 std::vector<byte>
 encode_pg_array(const std::vector<Elem> &vec) {
     std::vector<byte> buf;
-    auto              wr32 = [](std::vector<byte> &b, std::int32_t v) {
-        std::int32_t be = qb::endian::to_big_endian(v);
-        const byte  *p  = reinterpret_cast<const byte *>(&be);
-        b.insert(b.end(), p, p + sizeof(be));
+    // Appended with resize()+memcpy() rather than the insert(end(), p, p + N) used
+    // elsewhere in this file, and that is deliberate — do not "simplify" it back.
+    // GCC 13 at -O3 inlines the five calls below into one chain over a vector it has
+    // tracked from empty, mis-computes the destination extent of the range-insert's
+    // reallocation, and emits
+    //     error: writing 4 bytes into a region of size 0 [-Werror=stringop-overflow=]
+    // pointing at __builtin_memmove inside std::copy. It is a false positive (insert
+    // grows the vector first), but every test and benchmark target compiles with
+    // -Werror under QB_TESTS_WERROR=ON, i.e. on every CI runner, so it is fatal there
+    // and invisible on the maintainer's clang. resize()+memcpy() states the extent
+    // GCC could not infer; the emitted bytes are identical.
+    auto wr32 = [](std::vector<byte> &b, std::int32_t v) {
+        const std::int32_t be = qb::endian::to_big_endian(v);
+        const std::size_t  at = b.size();
+        b.resize(at + sizeof(be));
+        std::memcpy(b.data() + at, &be, sizeof(be));
     };
     wr32(buf, 1);                                     // ndim (1-D)
     wr32(buf, 0);                                     // has-null flags
