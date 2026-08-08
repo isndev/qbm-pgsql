@@ -89,9 +89,11 @@ Tracks changes on the development branch not yet part of a tagged release. The m
   string in this tree and in an installed prefix, and the two cannot drift.
 - **The source tree moved to `src/qbm/pgsql/`** — one pure `git mv`, 100 % rename detection, zero
   content change, so `git blame` and every line-numbered citation survive intact. The module's old inner `src/` is gone as a *level*, not as content: its 42 files now sit directly
-  beside the umbrella they implement, so `pgsql.h`'s `./src/…` includes became `./…` and the installed
-  `.inl` files moved from `include/qbm/pgsql/src/` to `include/qbm/pgsql/`.
-  `tests/`, `readme/`, `scripts/` and `cmake/` live BESIDE `src/`, never inside it, which is what
+  beside the umbrella they implement, so `pgsql.h`'s `./src/…` includes became `./…` and every header
+  that used to install under `include/qbm/pgsql/src/` now installs directly under
+  `include/qbm/pgsql/`. (The three `.inl` files this once described are **gone** — see *Removed*
+  above; nothing named `.inl` ships in 3.0.)
+  `tests/`, `readme/` and `scripts/` live BESIDE `src/`, never inside it, which is what
   makes a stray `#include <tests/fixture.h>` impossible rather than merely unlikely.
   The test suite now includes the shipped spelling instead of resolving `"../pgsql.h"` by string
   concatenation onto a `-I <mod>/tests` flag.
@@ -107,7 +109,7 @@ Tracks changes on the development branch not yet part of a tagged release. The m
   out alone, as it is in its own CI — and cross-checked against `QB_FRAMEWORK_VERSION` whenever a qb
   tree is reachable. A version it cannot determine is a hard stop, never a skip.
 
-## [2.6.0] - 2026-06-29
+## [2.6.0] - 2026-08-02
 
 Aligned with the qb 2.6.0 framework release.
 
