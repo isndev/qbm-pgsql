@@ -18,7 +18,7 @@ govern how you run them:
 
 - **Tests are opt-in at configure time.** Nothing under `tests/` is built unless `QB_BUILD_TESTS` is on. The framework
   option defaults to `ON` (<!-- src: qb/cmake/qbConfig.cmake:86 -->), and the qb-dev super-project forces it
-  on at its own root `CMakeLists.txt:14` — named in prose rather than as a `src:` citation, because a
+  on at its own root `CMakeLists.txt:38` — named in prose rather than as a `src:` citation, because a
   bare `CMakeLists.txt` token resolves against THIS module and would silently range-check
   `qbm/pgsql/CMakeLists.txt` instead — so a default build already produces the binaries.
 - **Integration suites need a live server.** Eighteen unit suites have no socket, and two system suites
