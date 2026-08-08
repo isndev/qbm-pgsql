@@ -194,11 +194,14 @@ TEST_F(UnserializerPrimitives, ReadBinaryStringThrowsOnBufferShorterThanLengthPr
 // treats as SQL NULL and returns "" — any trailing payload bytes are ignored
 // (param_unserializer.cpp:228).
 TEST_F(UnserializerPrimitives, ReadBinaryStringNegativeLengthIsSqlNull) {
-    std::vector<byte> null_prefix{byte(0xFF), byte(0xFF), byte(0xFF), byte(0xFF)};
+    // '\xFF' rather than byte(0xFF): `byte` is `char` (pg_types.h:126), which is SIGNED on
+    // MSVC, so the functional cast of 255 is a truncating cast and warns (C4310) x8. The
+    // character literal states the same wire byte with no cast at all, on every compiler.
+    std::vector<byte> null_prefix{'\xFF', '\xFF', '\xFF', '\xFF'};
     EXPECT_EQ(u.read_binary_string(null_prefix), "");
 
     // Same NULL sentinel followed by data: still empty (the negative length short-circuits).
-    std::vector<byte> null_with_tail{byte(0xFF), byte(0xFF), byte(0xFF), byte(0xFF), byte('x'), byte('y')};
+    std::vector<byte> null_with_tail{'\xFF', '\xFF', '\xFF', '\xFF', 'x', 'y'};
     EXPECT_EQ(u.read_binary_string(null_with_tail), "");
 }
 
