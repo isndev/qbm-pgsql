@@ -261,19 +261,9 @@ TEST(TypeConverterArrayBinary, ByteaStdByteRoundTrip) {
     const std::vector<std::byte> in{std::byte{0xDE}, std::byte{0xAD}, std::byte{0x00}, std::byte{0xBE}, std::byte{0xEF}};
 
     // Result value carries no length prefix.
-    //
-    // Filled with one sized memcpy rather than an indexed store loop, and that is
-    // deliberate — do not "simplify" it back. GCC 14 at -O3 inlines the vector
-    // constructor into the loop, loses the extent it just allocated, and emits
-    //     error: writing 8 bytes into a region of size 5 [-Werror=stringop-overflow=]
-    //     error: writing 1 byte into a region of size 0  [-Werror=stringop-overflow=]
-    // on the store below. It is a false positive — the vector is sized to in.size()
-    // before the first write — but QB_TESTS_WERROR defaults to QB_CI, so it is fatal
-    // on every runner and invisible on the maintainer's clang. Same family, and the
-    // same remedy, as encode_pg_array()'s wr32 in
-    // qbm/pgsql/src/qbm/pgsql/type_converter.h: state the extent GCC could not infer.
     std::vector<byte> wire(in.size());
-    std::memcpy(wire.data(), in.data(), in.size());
+    for (size_t i = 0; i < in.size(); ++i)
+        wire[i] = static_cast<byte>(in[i]);
     EXPECT_EQ(TypeConverter<std::vector<std::byte>>::from_binary(wire), in);
 
     // to_binary writes [int32 length][raw]; strip the prefix and decode back.
