@@ -336,14 +336,14 @@ This is convenient for diagnostics, admin endpoints, or quick serialization. In 
 
 ## Pitfalls
 
-- **Views must not outlive the result set.** `row` and `field` are pointers-plus-indices into the parent `results`.
-  Storing a `row` or `field` past the lifetime of the `results` that vended it is a use-after-free. Copy the data out,
-  or snapshot the whole set (`resultset.h:317-319`).
+- **Views must not outlive the result set.** `row` and `field` are pointers-plus-indices into the parent `results`
+  (`resultset.h:317-319`). Storing a `row` or `field` past the lifetime of the `results` that vended it is a
+  use-after-free. Copy the data out, or snapshot the whole set with `deep_snapshot()` (`resultset.h:161`).
 - **The callback result set is borrowing.** It does not extend the lifetime of the live row buffer. To retain rows after
-  a synchronous success callback returns, call `deep_snapshot()` first (`resultset.cpp:231-235`).
+  a synchronous success callback returns, call `deep_snapshot()` first (`resultset.cpp:237-244`).
 - **`operator[]`, `front()`, `back()` assert; they do not throw.** `results::operator[]` only asserts on an out-of-range
   index (UB in a release build past the end); `front()`/`back()` assert on an empty set. Use `at()` for a checked row,
-  and guard `front()`/`back()` with `empty()` or `operator bool` (`resultset.cpp:278-290`).
+  and guard `front()`/`back()` with `empty()` or `operator bool` (`resultset.cpp:278-296`).
 - **`operator bool` is a row-presence test, not DML success.** A successful DML statement with no returned rows is
   falsy. Use `rows_affected()` to detect an effect (`resultset.h:268,298`).
 - **Iterators are bidirectional, not random-access.** Comparing iterators from different result sets — or, for field
@@ -352,7 +352,7 @@ This is convenient for diagnostics, admin endpoints, or quick serialization. In 
   `static ParamUnserializer`; this is safe only because an actor/connection runs on a single `VirtualCore` (one thread).
   Sharing a `results` across cores is a data race (`resultset.h:629`).
 - **NULL into a non-`std::optional` target throws.** Always decode possibly-NULL columns as `std::optional<U>`, or guard
-  with `is_null()` (`resultset.h:562`).
+  with `is_null()` (`resultset.h:562`, `:480`).
 - **Retired time tokens are gone.** `timestamptz` maps to `qb::wall_time`; `qb::Timestamp` / `qb::UtcTimestamp` /
   `to_timestamp(...)` no longer exist in this API.
 

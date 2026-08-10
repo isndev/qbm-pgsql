@@ -78,7 +78,7 @@ transport aliases in `qb::pg::tcp`:
 | `qb::pg::tcp::database`      | `qb::io::transport::tcp` (cleartext) | always                            |
 | `qb::pg::tcp::ssl::database` | `qb::io::transport::stcp` (TLS)      | only when `QB_HAS_SSL` is defined |
 
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2728 (tcp::database), 2754 (tcp::ssl::database) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2728,2754 (in that order: tcp::database; tcp::ssl::database) -->
 
 The transport is a **compile-time** choice baked into the alias. The connection string scheme (`tcp`, `ssl`, `socket`)
 does **not** switch it: a `tcp://…` string on a `tcp::ssl::database` still negotiates TLS, and an `ssl://…` string on a
@@ -227,7 +227,7 @@ handshake reached `AuthenticationOk` (the point where `is_connected_` is set; th
 After the TCP socket is connected, the client switches to the PostgreSQL protocol, starts its read/write watchers, and
 sends the **startup message**: protocol version 3.0 plus null-terminated `user` and `database` name/value pairs (and any
 client options).
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:723-725 (switch_protocol + start + send_startup_message), 798-814 (create_startup_message) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:723-725,798-814 (in that order: switch_protocol + start + send_startup_message; create_startup_message) -->
 
 The server then drives one of the supported authentication exchanges, handled in `on_authentication`:
 
@@ -254,7 +254,7 @@ other schemes are **not** implemented: they hit the `default:` throw. That throw
 `onMessage` boundary, which drops the connection and resumes the pending `connect` awaiter with an error — it does
 **not** call `std::terminate`. The same containment applies to a malformed SCRAM server message (including a mismatched
 nonce). You therefore see an unsupported or hostile auth method as a failed connect, not a descriptive auth-method error.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:770-782 (gate re-armed in on_transport_ready), 1012-1018 (AuthenticationOk refused without a verified server signature), 1221-1224 (the default: throw) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:770-782,1012-1018,1221-1224 (in that order: gate re-armed in on_transport_ready; AuthenticationOk refused without a verified server signature; the default arm's throw) -->
 
 The `AuthenticationOk` row in the table above is therefore conditional: it marks the connection ready *only after* the
 mutual-auth gate is satisfied for a SCRAM handshake.
@@ -267,7 +267,7 @@ RFC 5802: `p=tls-server-end-point` when bound; `y` over TLS when the server did 
 can detect a downgrade that stripped it); `n` on a cleartext link. Negotiation is automatic; check the result with
 `db.used_channel_binding()`.
 <!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h (on_authentication, used_channel_binding); qb/src/qb/io/tcp/ssl/socket.cpp (tls_server_end_point) -->
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:1072-1092 (gs2 cbind-flag negotiation), 1146-1153 (cbind_input) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:1072-1092,1146-1153 (in that order: gs2 cbind-flag negotiation; cbind_input) -->
 
 ---
 
@@ -336,7 +336,7 @@ TCP keepalive is configured through `connection_options` or
 `enable_keepalive(int interval, int idle = 60, int probes = 3)`. Settings are applied to the socket **after** the
 connection is established (on `Authentication OK`); calling `enable_keepalive` before connecting only stores them. An
 `interval` of 0 leaves keepalive disabled.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:1845-1864 (enable_keepalive), 1020-1022 (applied on AuthenticationOk), 2352-2399 (apply_keepalive_settings) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:1845-1864,1020-1022,2352-2399 (in that order: enable_keepalive; applied on AuthenticationOk; apply_keepalive_settings) -->
 
 ```cpp
 qb::pg::tcp::database db;
@@ -367,7 +367,7 @@ int pid = db.backend_pid();  // 0 until connected
 ```
 
 The returned `std::string_view` from `parameter_status` is valid only while this connection is alive.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:1937-1950 (parameter_status), 1952-1959 (backend_pid), 1982-2024 (server_version) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:1937-1950,1952-1959,1982-2024 (in that order: parameter_status; backend_pid; server_version) -->
 
 ### Cancelling a running query
 
@@ -449,7 +449,7 @@ handler does more than fail the one in-flight query — it calls `fail_all_pendi
 drains **every** queued query and pending sub-transaction so their callers' awaiters resume with the error instead of
 hanging forever. `fail_all_pending` swaps the queues out before draining, so an error callback that enqueues new work
 does not re-enter the traversal.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2420-2459 (the on disconnected handler), 2447 (fail_all_pending call); qbm/pgsql/src/qbm/pgsql/transaction.h:231; qbm/pgsql/src/qbm/pgsql/transaction.cpp:112-140 -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2420-2459,2447 (in that order: the on disconnected handler; the fail_all_pending call); qbm/pgsql/src/qbm/pgsql/transaction.h:231; qbm/pgsql/src/qbm/pgsql/transaction.cpp:112-140 -->
 
 This also covers a malformed wire message and an unsupported/hostile auth method: both mark the protocol invalid (
 `not_ok()`), which disposes the I/O layer and fires `event::disconnected`, whose handler fails pending work and resumes

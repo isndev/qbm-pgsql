@@ -393,7 +393,7 @@ Key facts to get right:
 
 ## LISTEN / NOTIFY
 
-<!-- src: src/qbm/pgsql/transaction.h:429-493, src/qbm/pgsql/pg_notify_sql.h:25-92, qbm/pgsql/src/qbm/pgsql/pgsql.h:378-388 (notification), 1832-1843 (on_incoming_notify), 2541-2646 (notify_consumer / notify_co_consumer / notify_cb_consumer) -->
+<!-- src: src/qbm/pgsql/transaction.h:429-493; src/qbm/pgsql/pg_notify_sql.h:25-92; qbm/pgsql/src/qbm/pgsql/pgsql.h:378-388,1832-1843,2541-2646 (in that order: notification; on_incoming_notify; notify_consumer / notify_co_consumer / notify_cb_consumer) -->
 
 ### Publishing (NOTIFY)
 

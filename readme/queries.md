@@ -157,7 +157,9 @@ auto sum = co_await db.query("SELECT $1::int + $2::int", 2, 3);   // -> 5
 ```
 
 Parameter OIDs are deduced from the C++ argument types. Internally it runs through the **unnamed** prepared statement (
-`""`), so it does **not** pollute the prepared-statement cache and keeps full per-column **binary** result decoding.
+`""`), so it does **not** pollute the prepared-statement cache and still gets **per-column result-format selection** —
+binary for the OIDs on `common.h`'s whitelist, text for the rest — instead of the all-text columns a simple query
+returns.
 Cost is two server round-trips (Parse+Describe, then Bind+Execute) — the same as a manual `prepare`+`execute`, but one
 call; it returns **`qb::io::async::task<Reply<resultset>>`**. The overload requires at least one bound argument, so
 `query(sql)` with no args still resolves to the simple-query awaiter above. For a hot, repeated query prefer a **named**
@@ -239,7 +241,7 @@ transaction is never joined and never ended by `query_stream`.
 > caller-owned only once its `BEGIN` has **completed** — `in_transaction()` mirrors the last `ReadyForQuery`. Started
 > before that, the stream reads the session as idle and opens (and later ends) a block of its own. `co_await` the
 > `begin()` first.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2124-2244 (query_stream), 2158-2161 (cursor name), 2138-2156, 2216-2236 (shared-block bookkeeping), 1932-1935 (in_transaction) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2124-2244,2138-2156,2158-2161,2216-2236,1932-1935 (in that order: query_stream; the seat/guard bookkeeping; the cursor name; the last-one-out COMMIT/ROLLBACK; in_transaction) -->
 
 ---
 

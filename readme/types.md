@@ -279,18 +279,31 @@ safer for overloaded operators and for `NULL` parameters whose type the server c
   `src/qbm/pgsql/common.h`](../src/qbm/pgsql/common.h)). After `Bind`, the client patches each `RowDescription` column's `format_code` to
   match what it requested, via `sync_field_format_codes_with_extended_query_bind` (because `Describe('S')` always
   reports `0`). <!-- src: src/qbm/pgsql/common.h:404-464 -->
-    - **Text on the wire** (format code 0): `text`, `varchar`, `bpchar`, `unknown`, `xml`, `cstring`, `json`,
-      `tsvector`, `tsquery`, `gtsvector`, `name`, the `reg*` catalog types, and `money` (`cash`). These decode through
-      the text path so they match `std::string` consumption.
-    - **Binary on the wire** (format code 1): everything else — integers, floats, `bool`, `bytea`, `timestamp`/
-      `timestamptz`, `uuid`, and `jsonb`.
+    - **Binary on the wire** (format code 1) is an **opt-in whitelist**, not a catch-all: exactly the 23 OIDs this
+      module has a verified `from_binary` decoder for — `bool`, `int2`, `int4`, `int8`, `float4`, `float8`, `numeric`,
+      `bytea`, `uuid`, `jsonb`, `timestamp`, `timestamptz`, `date`, `time`, `timetz`, `interval`, and the seven 1-D
+      array OIDs (`boolean_array`, `int2_array`, `int4_array`, `int8_array`, `float4_array`, `float8_array`,
+      `text_array`). <!-- src: src/qbm/pgsql/common.h:417-448 -->
+    - **Text on the wire** (format code 0) is the **default**, reached by the `switch`'s `default:` arm: every OID the
+      list above does not name — `text`, `varchar`, `bpchar`, `name`, `unknown`, `xml`, `cstring`, `json`, `tsvector`,
+      `tsquery`, `gtsvector`, the `reg*` catalog types, `money` (`cash`), the network / bit / geometric / range types,
+      and every extension OID. These decode through the text path so they match `std::string` consumption.
+      <!-- src: src/qbm/pgsql/common.h:449-452 -->
+
+  The polarity matters: this is deliberately the inverse of a denylist, so a type the module cannot decode in binary
+  degrades to its readable text form instead of letting raw binary bytes reach the `std::string` decoder.
 
 A **simple** query (`execute("SELECT …")` without a prepared statement) commonly returns text columns (format code 0)
 regardless of OID; `field::as<T>()` branches on the actual `format_code` and routes to `from_text` or `from_binary`
-accordingly, so the same `as<T>()` call works on either path. <!-- src: src/qbm/pgsql/resultset.h:572,621,631; src/qbm/pgsql/field_handler.h:86-89 -->
+accordingly, so the same `as<T>()` call works on either path. <!-- src: src/qbm/pgsql/resultset.h:572,621,631 -->
 
-If an extension OID (for example `citext`) is misclassified, cast it to `text` in SQL, or extend the `switch` in
-`common.h`.
+An OID the whitelist does not name — every extension type, `citext` among them — therefore arrives as **text**, which
+`as<std::string>()` reads correctly; there is no "silently classified as binary" direction to guard against. To move a
+type onto the binary path, implement its `TypeConverter::from_binary` and add its OID to that `switch`.
+<!-- src: src/qbm/pgsql/common.h:409-419 -->
+
+`format_code` is the only thing `as<T>()` branches on, so a column can still be *decoded* either way: if you need the
+text form of a whitelisted type, cast it in SQL (`SELECT id::text`).
 
 ---
 
@@ -357,7 +370,8 @@ bool c;
 row.to(std::tie(a, b, c));
 ```
 
-The handler walks columns by index, converting each per its declared type. <!-- src: src/qbm/pgsql/field_handler.h:197-201 -->
+`row_to_impl` expands into one `as<T>()` per column, matched to the tuple element at the same index — so each element
+is converted per its own declared type. <!-- src: src/qbm/pgsql/resultset.h:863-867,875-879,975-989 -->
 
 ---
 
@@ -398,5 +412,5 @@ The handler walks columns by index, converting each per its declared type. <!-- 
 | C++ → OID (`type_mapping<T>`)     | [`src/qbm/pgsql/type_mapping.h`](../src/qbm/pgsql/type_mapping.h)                                                              |
 | Encode / decode (`TypeConverter`) | [`src/qbm/pgsql/type_converter.h`](../src/qbm/pgsql/type_converter.h)                                                          |
 | `params` → `Bind` buffer          | [`src/qbm/pgsql/param_serializer.h`](../src/qbm/pgsql/param_serializer.h)                                                      |
-| Column decode (`as<T>`)           | [`src/qbm/pgsql/field_handler.h`](../src/qbm/pgsql/field_handler.h), [`src/qbm/pgsql/param_unserializer.h`](../src/qbm/pgsql/param_unserializer.h) |
+| Column decode (`as<T>`)           | [`src/qbm/pgsql/resultset.h`](../src/qbm/pgsql/resultset.h), [`src/qbm/pgsql/param_unserializer.h`](../src/qbm/pgsql/param_unserializer.h)         |
 | Result-format selection           | [`src/qbm/pgsql/common.h`](../src/qbm/pgsql/common.h) (`type_oid_prefers_binary_result_format`)                                |
