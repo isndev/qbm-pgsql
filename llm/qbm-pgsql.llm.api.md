@@ -627,8 +627,8 @@ public:
 };
 // Specializations: qb::uuid, qb::wall_time (timestamptz/timestamp), qb::json, qb::jsonb,
 // std::chrono::duration (type_converter.h:1018), std::string (:1130), numeric (:1219),
-// qb::date (:1257), qb::time_of_day (:1279), qb::time_of_day_tz (:1301),
-// qb::calendar_interval (:1321), std::vector<std::byte> (:1346)
+// qb::date (type_converter.h:1257), qb::time_of_day (:1279), qb::time_of_day_tz (:1301),
+// qb::calendar_interval (type_converter.h:1321), std::vector<std::byte> (:1346)
 // (the retired qb::Timestamp / qb::UtcTimestamp / qb::LocalTimestamp are NOT specialized).
 } // namespace qb::pg::detail
 ```
