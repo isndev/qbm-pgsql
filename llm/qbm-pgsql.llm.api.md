@@ -623,7 +623,7 @@ public:
     static std::string to_text(const value_type& value);
     static value_type from_binary(std::span<const byte> buffer);
     static value_type from_text(const std::string& text);
-    static void write_integer(std::vector<byte>& buffer, integer value); // public — TypeConverter<T>'s only access specifier is `public:` (type_converter.h:131, :685)
+    static void write_integer(std::vector<byte>& buffer, integer value); // public — TypeConverter<T>'s only access specifier is `public:` (type_converter.h:131, :685-686)
 };
 // Specializations: qb::uuid, qb::wall_time (timestamptz/timestamp), qb::json, qb::jsonb,
 // std::chrono::duration (type_converter.h:1018), std::string (:1130), numeric (:1219),

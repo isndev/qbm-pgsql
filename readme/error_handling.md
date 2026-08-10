@@ -155,7 +155,7 @@ the I/O loop.
 
 ### Handle a failed coroutine operation
 
-<!-- src: qbm/pgsql/tests/integration/errors/errors-sqlstate.cpp:133-147 -->
+<!-- src: qbm/pgsql/tests/integration/errors/errors-sqlstate.cpp:139-155 -->
 
 ```cpp
 #include <qbm/pgsql/pgsql.h>
@@ -186,7 +186,7 @@ default-constructed and meaningless. Read `error()` instead.
 
 ### Handle a failure on the fluent (callback) API
 
-<!-- src: qbm/pgsql/tests/integration/errors/errors-sqlstate.cpp:114-130 -->
+<!-- src: qbm/pgsql/tests/integration/errors/errors-sqlstate.cpp:120-137 -->
 
 ```cpp
 #include <qbm/pgsql/pgsql.h>
@@ -284,7 +284,7 @@ them tells you what to expect when a connection misbehaves.
 
 ### The `noexcept` `onMessage` boundary (pre-auth DoS containment)
 
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h (onMessage, ~line 336) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:335-359 (onMessage) -->
 
 `qb::protocol::pgsql<IO_>::onMessage` is declared `noexcept final` — it is the qb-io seam that hands each decoded frame
 to the message handler. Because it is `noexcept`, any exception thrown by a handler would call `std::terminate` and kill
@@ -320,7 +320,7 @@ pending `connect()` awaiter with an error** rather than crashing. The supported 
 
 ### Malformed-frame drop via `not_ok()`
 
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h (getMessageSize, ~line 264) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:263-299 (getMessageSize) -->
 
 The frame-length check is the other containment point. `getMessageSize` reads the wire length from the message header
 and validates it against the protocol bounds — the decoded length must satisfy
