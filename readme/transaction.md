@@ -47,7 +47,7 @@ stateDiagram-v2
 
 ### One object, two queues
 
-<!-- src: src/qbm/pgsql/transaction.h:77-99, src/qbm/pgsql/transaction.cpp:81-116 -->
+<!-- src: src/qbm/pgsql/transaction.h:70-75, src/qbm/pgsql/transaction.cpp:81-116 -->
 
 `Transaction` holds:
 
@@ -78,7 +78,7 @@ normal case inside an actor), you do **not** call `await` after every statement.
 
 ### Status and `await`
 
-<!-- src: src/qbm/pgsql/transaction.cpp:176-213, src/qbm/pgsql/transaction.h:712-781 -->
+<!-- src: src/qbm/pgsql/transaction.cpp:179-216, src/qbm/pgsql/transaction.h:728-784 -->
 
 `Transaction::await()` is a **blocking drain on the current thread**: it pumps
 `qb::io::async::listener::current.run(EVRUN_ONCE)` until both queues are empty, then returns a `status` snapshot. It is
@@ -103,7 +103,7 @@ into the snapshot instead of reporting a false success. `qb::pg::await(db)` is a
 
 ### `Reply<T>` (coroutine results)
 
-<!-- src: src/qbm/pgsql/pg_reply.h:19-104 -->
+<!-- src: src/qbm/pgsql/pg_reply.h:29-100,196-200 -->
 
 Coroutine overloads return `pg_reply_awaiter<T>`; awaiting one yields `qb::pg::Reply<T>`:
 
@@ -170,7 +170,7 @@ A two-argument `begin(on_success, mode)` overload exists; it installs an empty e
 
 ### `then` / `success` / `error` chaining
 
-<!-- src: src/qbm/pgsql/transaction.h:668-689, src/qbm/pgsql/commands.h:450-540 -->
+<!-- src: src/qbm/pgsql/transaction.h:677-705, src/qbm/pgsql/commands.h:434-520 -->
 
 - `then(cb)` and `success(cb)` (aliases) push a `Then` command. When it is popped, if the parent's result is still
   success, `cb(*parent())` runs with the same `Transaction&` you chained from.
@@ -271,7 +271,7 @@ it has no effect on autocommit statements run outside a block.
 
 ## Savepoints
 
-<!-- src: src/qbm/pgsql/commands.h:805-828, src/qbm/pgsql/commands.h:1364-1392, src/qbm/pgsql/commands.h:169-300 -->
+<!-- src: src/qbm/pgsql/commands.h:801-824, src/qbm/pgsql/commands.h:1364-1392, src/qbm/pgsql/commands.h:154-294 -->
 
 **Callback — open a savepoint sub-block:**
 
@@ -303,8 +303,9 @@ else
 ```
 
 **Name validation.** The coroutine `savepoint`, `release_savepoint`, and `rollback_savepoint` reject names that are
-empty, longer than 63 characters, or contain anything other than alphanumerics and underscore. An invalid name returns a
-pre-failed awaiter carrying `qb::pg::error::client_error` — no SQL is sent (`src/qbm/pgsql/commands.h:1238-1248,1364-1392`).
+empty, longer than 63 characters, or contain anything other than alphanumerics and underscore
+(`pg_savepoint_name_ok`, `src/qbm/pgsql/commands.h:1237-1247`). An invalid name returns a
+pre-failed awaiter carrying `qb::pg::error::client_error` — no SQL is sent (`src/qbm/pgsql/commands.h:1365-1392`).
 This pre-check is defense-in-depth on top of the identifier quoting above: even the callback path, which does *not*
 pre-validate, cannot be made to inject SQL because the name is always quoted into a single literal identifier.
 
@@ -316,7 +317,7 @@ on the fluent path.
 
 ## Isolation and transaction modes
 
-<!-- src: src/qbm/pgsql/common.h:221-291, src/qbm/pgsql/common.cpp:108-137 -->
+<!-- src: src/qbm/pgsql/common.h:227-295, src/qbm/pgsql/common.cpp:98-127 -->
 
 `qb::pg::transaction_mode` selects the isolation level and access flags rendered into the `BEGIN` statement:
 
@@ -357,7 +358,7 @@ objects.
 
 ## Statement timeout
 
-<!-- src: src/qbm/pgsql/transaction.h:634-659, src/qbm/pgsql/commands.h:1227-1236, src/qbm/pgsql/queries.h:374-407 -->
+<!-- src: src/qbm/pgsql/transaction.h:650-675, src/qbm/pgsql/commands.h:1227-1236, src/qbm/pgsql/queries.h:374-407 -->
 
 `set_timeout(qb::duration)` arms a PostgreSQL `statement_timeout` for the **next** `BEGIN` on this connection. The
 following `begin()` (callback *or* coroutine) appends `; SET LOCAL statement_timeout = N` to the same simple-query
@@ -392,7 +393,7 @@ Key facts to get right:
 
 ## LISTEN / NOTIFY
 
-<!-- src: src/qbm/pgsql/transaction.h:420-477, src/qbm/pgsql/pg_notify_sql.h:51-80, qbm/pgsql/src/qbm/pgsql/pgsql.h:378-388 (notification), 1780-1791 (on_incoming_notify), 2461-2573 (notify_consumer / notify_co_consumer / notify_cb_consumer) -->
+<!-- src: src/qbm/pgsql/transaction.h:429-493, src/qbm/pgsql/pg_notify_sql.h:25-92, qbm/pgsql/src/qbm/pgsql/pgsql.h:378-388 (notification), 1832-1843 (on_incoming_notify), 2541-2646 (notify_consumer / notify_co_consumer / notify_cb_consumer) -->
 
 ### Publishing (NOTIFY)
 
@@ -461,7 +462,7 @@ resolves to `std::nullopt`.
   `End`/`with_transaction` do it) before sending new commands.
 - **A lost connection fails every pending query automatically.** You do **not** write a disconnect handler. The built-in
   `Database::on(qb::io::async::event::disconnected)` handler calls `fail_all_pending(...)` on the root transaction (
-  `qbm/pgsql/src/qbm/pgsql/pgsql.h:2395`), which drains every queued query and pending sub-transaction so suspended `co_await`
+  `qbm/pgsql/src/qbm/pgsql/pgsql.h:2447`), which drains every queued query and pending sub-transaction so suspended `co_await`
   awaiters resume with `client_error("database disconnected")` instead of hanging forever.
   See [connection.md](./connection.md) (Fail-all-on-disconnect).
 - **Statement timeout below 1 ms vanishes.** A sub-millisecond `set_timeout` truncates to 0 and emits no `SET LOCAL`.

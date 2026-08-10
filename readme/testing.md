@@ -17,7 +17,8 @@ executable specification: when this documentation and the code disagree, prefer 
 govern how you run them:
 
 - **Tests are opt-in at configure time.** Nothing under `tests/` is built unless `QB_BUILD_TESTS` is on. The framework
-  option defaults to `ON` (<!-- src: qb/cmake/qbConfig.cmake:86 -->), and the qb-dev super-project forces it
+  option defaults to `ON` only when qb is the top-level project; added as a subproject it defaults to `BUILD_TESTING`
+  when that is set and to `OFF` otherwise (<!-- src: qb/cmake/qbConfig.cmake:75-86 -->), and the qb-dev super-project forces it
   on at its own root `CMakeLists.txt:38` — named in prose rather than as a `src:` citation, because a
   bare `CMakeLists.txt` token resolves against THIS module and would silently range-check
   `qbm/pgsql/CMakeLists.txt` instead — so a default build already produces the binaries.
@@ -37,7 +38,7 @@ daemon (a connect-to-dead-host timeout), and `integration/` needs a live server.
 |-------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------|
 | Unit        | `unserializer-primitives`, `typeconverter-codecs`, `result-format-routing`, `param-serializer-encode`, `typeconverter-{scalar,numeric,temporal,array,json,adversarial}`, `datastructures`, `oid-stream`, `protocol-message-codec`, `identifier-quoting`, `dsn-parse`, `scram-and-cancel`, `prepared-storage-lru`, `module-surface` | No              |
 | System      | `connect-timeout` (connects to a dead host — no daemon, network-timing dependent), `scram-mitm-refuse` (SCRAM mutual-auth refusal, no daemon)                                                                                                                                      | No              |
-| Integration | `connection-lifecycle`, `queries`, `prepared-statements`, `transaction-basic`, `transaction-advanced`, `datatypes-roundtrip`, `wire-formats`, `listen-notify`, `coro-api`, `errors-sqlstate`, `database-api-extra`, `param-roundtrip`, and `connection-ssl` (TLS only)              | Yes             |
+| Integration | `connection-lifecycle`, `queries`, `prepared-statements`, `transaction-basic`, `transaction-advanced`, `datatypes-roundtrip`, `wire-formats`, `listen-notify`, `coro-api`, `errors-sqlstate`, `database-api-extra`, `param-roundtrip`, `resilience`, and `connection-ssl` (TLS only)              | Yes             |
 
 The unit suites exercise wire-format encoding and decoding, parameter serialization, type conversion, and
 protocol-message framing in isolation — they pass on any host. The integration suites drive a real wire

@@ -127,7 +127,7 @@ For a blocking drain, pass the discard sentinels and call `await()`. The returne
 `status.results()` returns the result set for that drain (`transaction.h:776`).
 
 ```cpp
-<!-- src: qbm/pgsql/src/qbm/pgsql/transaction.h:760 -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/transaction.h:775-778,796 -->
 #include <qbm/pgsql/pgsql.h>
 
 auto st = db.execute("SELECT 1 AS x", qb::pg::discard_query, qb::pg::discard_error).await();
@@ -139,7 +139,7 @@ if (st) {
 
 `status::operator bool` is truthy only when the batch drained with no failed sub-result and
 `_error.sqlstate == sqlstate::unknown_code` (the success sentinel) — always test it before calling `results()` (
-`transaction.h:750-751`).
+`transaction.h:765-768`).
 
 ---
 
@@ -180,9 +180,9 @@ for (qb::pg::results::row const &row : rows) {
 qb::pg::results::row first = rows.at(0);          // checked
 ```
 
-`index_of_name(name)` returns the column index, or `results::npos` if the name is absent (`resultset.cpp:311-320`) —
+`index_of_name(name)` returns the column index, or `results::npos` if the name is absent (`resultset.cpp:318-327`) —
 useful for a presence check that does not throw. `field(name)` (metadata-by-name) instead throws `std::runtime_error`
-when the name is missing (`resultset.cpp:335`).
+when the name is missing (`resultset.cpp:335-343`).
 
 ---
 
@@ -309,7 +309,7 @@ if (!field.is_null())
 ```
 
 `results::json()` uses exactly this pattern internally — it extracts every cell as `std::optional<std::string>`, so NULL
-cells become JSON null (`resultset.cpp:362-375`).
+cells become JSON null (`resultset.cpp:369-391`).
 
 ### Type mismatches
 
@@ -325,7 +325,7 @@ See [error_handling.md](./error_handling.md).
 with NULL rendered as JSON null:
 
 ```cpp
-<!-- src: qbm/pgsql/src/qbm/pgsql/resultset.cpp:362 -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/resultset.cpp:369-391 -->
 qb::json j = rows.json();   // e.g. [{"id":1,"name":"ada"}, ...]
 ```
 
@@ -343,7 +343,7 @@ This is convenient for diagnostics, admin endpoints, or quick serialization. In 
   a synchronous success callback returns, call `deep_snapshot()` first (`resultset.cpp:231-235`).
 - **`operator[]`, `front()`, `back()` assert; they do not throw.** `results::operator[]` only asserts on an out-of-range
   index (UB in a release build past the end); `front()`/`back()` assert on an empty set. Use `at()` for a checked row,
-  and guard `front()`/`back()` with `empty()` or `operator bool` (`resultset.cpp:271-286`).
+  and guard `front()`/`back()` with `empty()` or `operator bool` (`resultset.cpp:278-290`).
 - **`operator bool` is a row-presence test, not DML success.** A successful DML statement with no returned rows is
   falsy. Use `rows_affected()` to detect an effect (`resultset.h:268,298`).
 - **Iterators are bidirectional, not random-access.** Comparing iterators from different result sets — or, for field

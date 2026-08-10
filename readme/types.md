@@ -24,9 +24,9 @@ here so you can navigate the implementation — application code never includes 
 - **OID.** A PostgreSQL type identifier from the `pg_type` catalog (e.g. `23` = `int4`, `1184` = `timestamptz`).
   `qbm-pgsql` models the common ones as `enum class qb::pg::oid` ([`src/qbm/pgsql/pg_types.h`](../src/qbm/pgsql/pg_types.h)).
 - **`type_oid_sequence`.** `using type_oid_sequence = std::vector<oid>` ([`src/qbm/pgsql/common.h`](../src/qbm/pgsql/common.h)). You pass
-  one to `prepare()` to declare each parameter's type. <!-- src: src/qbm/pgsql/common.h:519 -->
+  one to `prepare()` to declare each parameter's type. <!-- src: src/qbm/pgsql/common.h:527-532 -->
 - **`params`.** `using params = detail::QueryParams` ([`pgsql.h`](../src/qbm/pgsql/pgsql.h)). A heterogeneous container of bind values
-  serialized to PostgreSQL **binary** wire form. <!-- src: pgsql.h:2633 -->
+  serialized to PostgreSQL **binary** wire form. <!-- src: pgsql.h:2685 -->
 - **`type_mapping<T>`.** Compile-time C++-type → OID lookup ([`src/qbm/pgsql/type_mapping.h`](../src/qbm/pgsql/type_mapping.h)). Drives
   `get_type_oid<T>()` and `fill_types<T...>()`. The primary template is **intentionally ill-formed** (a `static_assert`):
   a C++ type with no mapping is a **hard compile error**, not a silent fallback to OID `705` (unknown). Add a
@@ -147,7 +147,7 @@ text. <!-- src: src/qbm/pgsql/type_converter.h:526-562 -->
 - **`qb::json` → `json` (114).** Sent and received as JSON text with a length prefix.
 - **`qb::jsonb` → `jsonb` (3802).** Sent in PostgreSQL's `jsonb_recv` binary form (a version byte `1` followed by UTF-8
   JSON). Unlike string-like types, **`jsonb` stays binary on the result wire** — it is not in the text-preferring
-  set. <!-- src: src/qbm/pgsql/type_converter.h:941-982; src/qbm/pgsql/common.h:419 (jsonb binary case) -->
+  set. <!-- src: src/qbm/pgsql/type_converter.h:941-982; src/qbm/pgsql/common.h:432 (jsonb binary case) -->
 
 ```cpp
 #include <qbm/pgsql/pgsql.h>
@@ -260,7 +260,7 @@ auto ex = co_await db.execute("ins",
 
 The parameter count and the declared-type count must each fit in a signed 16-bit field (≤ 32767); `prepare` rejects more
 declared types and `params` serialization throws `std::length_error` past 32767 values, because a wrapped `int16` count
-would desynchronize the wire stream. <!-- src: src/qbm/pgsql/queries.h:655-664; src/qbm/pgsql/param_serializer.h:91-106 -->
+would desynchronize the wire stream. <!-- src: src/qbm/pgsql/queries.h:678-690; src/qbm/pgsql/param_serializer.h:91-106 -->
 
 Each individual bind value is also framed as `[int32 byte-length][payload]`, so a **single parameter ≥ 2 GiB** is
 rejected — `checked_param_length` throws `std::length_error` rather than let the signed `int32` length wrap while the
@@ -274,11 +274,11 @@ safer for overloaded operators and for `NULL` parameters whose type the server c
 
 ## Binary versus text on the wire
 
-- **Parameters:** always binary (format code 1, applied uniformly). <!-- src: src/qbm/pgsql/queries.h:736-745 -->
+- **Parameters:** always binary (format code 1, applied uniformly). <!-- src: src/qbm/pgsql/queries.h:761-770 -->
 - **Result columns:** chosen per column by `type_oid_prefers_binary_result_format(oid)` ([
   `src/qbm/pgsql/common.h`](../src/qbm/pgsql/common.h)). After `Bind`, the client patches each `RowDescription` column's `format_code` to
   match what it requested, via `sync_field_format_codes_with_extended_query_bind` (because `Describe('S')` always
-  reports `0`). <!-- src: src/qbm/pgsql/common.h:404-451 -->
+  reports `0`). <!-- src: src/qbm/pgsql/common.h:404-464 -->
     - **Text on the wire** (format code 0): `text`, `varchar`, `bpchar`, `unknown`, `xml`, `cstring`, `json`,
       `tsvector`, `tsquery`, `gtsvector`, `name`, the `reg*` catalog types, and `money` (`cash`). These decode through
       the text path so they match `std::string` consumption.
@@ -287,7 +287,7 @@ safer for overloaded operators and for `NULL` parameters whose type the server c
 
 A **simple** query (`execute("SELECT …")` without a prepared statement) commonly returns text columns (format code 0)
 regardless of OID; `field::as<T>()` branches on the actual `format_code` and routes to `from_text` or `from_binary`
-accordingly, so the same `as<T>()` call works on either path. <!-- src: src/qbm/pgsql/field_handler.h:86-89 -->
+accordingly, so the same `as<T>()` call works on either path. <!-- src: src/qbm/pgsql/resultset.h:572,621,631; src/qbm/pgsql/field_handler.h:86-89 -->
 
 If an extension OID (for example `citext`) is misclassified, cast it to `text` in SQL, or extend the `switch` in
 `common.h`.
