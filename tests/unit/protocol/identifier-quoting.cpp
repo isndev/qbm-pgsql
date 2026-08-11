@@ -78,18 +78,18 @@ TEST(PgQuoteIdentifier, EmbeddedQuotesAreDoubled) {
 // statement, whatever it contains.
 TEST(PgQuoteIdentifier, InjectionAttemptsStayASingleIdentifier) {
     const std::string vectors[] = {
-        "s; DROP TABLE users; --",       // the canonical statement-splitting attempt
-        "s\"; DROP TABLE users; --",     // close the identifier first, then split
-        "s\"\"; DROP TABLE users; --",   // pre-doubled quotes, to defeat naive un-doubling
-        "\"; DROP TABLE users; --",      // leading quote
-        "s'; DROP TABLE users; --",      // single quote (a literal terminator, not an identifier one)
-        "s -- comment",                  // trailing line comment
-        "s /* block */",                 // block comment
-        "s\nDROP TABLE users",           // newline instead of a separator
-        "s\r\nDROP TABLE users",         //
-        "s\tDROP TABLE users",           //
-        "s\\\"; DROP TABLE users; --",   // backslash escape (PostgreSQL identifiers do not honour it)
-        std::string("s\0; DROP", 9),     // embedded NUL
+        "s; DROP TABLE users; --",     // the canonical statement-splitting attempt
+        "s\"; DROP TABLE users; --",   // close the identifier first, then split
+        "s\"\"; DROP TABLE users; --", // pre-doubled quotes, to defeat naive un-doubling
+        "\"; DROP TABLE users; --",    // leading quote
+        "s'; DROP TABLE users; --",    // single quote (a literal terminator, not an identifier one)
+        "s -- comment",                // trailing line comment
+        "s /* block */",               // block comment
+        "s\nDROP TABLE users",         // newline instead of a separator
+        "s\r\nDROP TABLE users",       //
+        "s\tDROP TABLE users",         //
+        "s\\\"; DROP TABLE users; --", // backslash escape (PostgreSQL identifiers do not honour it)
+        std::string("s\0; DROP", 9),   // embedded NUL
     };
 
     for (auto const &v : vectors) {

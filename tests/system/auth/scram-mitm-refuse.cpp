@@ -202,8 +202,8 @@ run_fake_server(qb::io::tcp::listener &listener, FakeResult *res) {
 
     // 4. AuthenticationSASLContinue(11): server-first "r=<clientNonce+ext>,s=<base64 salt>,i=4096".
     {
-        const std::string server_nonce = client_nonce + "0123456789abcdef"; // extends the client nonce
-        const std::string server_first = "r=" + server_nonce + ",s=MDEyMzQ1,i=4096"; // s= is valid base64 ("012345")
+        const std::string    server_nonce = client_nonce + "0123456789abcdef";          // extends the client nonce
+        const std::string    server_first = "r=" + server_nonce + ",s=MDEyMzQ1,i=4096"; // s= is valid base64 ("012345")
         std::vector<uint8_t> p;
         put_i32(p, 11);
         p.insert(p.end(), server_first.begin(), server_first.end());
@@ -327,7 +327,7 @@ TEST(PgsqlScramMitm, ClientRefusesAuthenticationOkWithoutVerifiedServerSignature
     FakeResult  res;
     std::thread server(run_fake_server, std::ref(listener), &res);
 
-    const std::string dsn = "tcp://test:test@127.0.0.1:" + std::to_string(port) + "[test]";
+    const std::string dsn       = "tcp://test:test@127.0.0.1:" + std::to_string(port) + "[test]";
     bool              connected = true; // must be flipped to false by the gate
     {
         qb::pg::tcp::database db{};
@@ -377,7 +377,7 @@ run_nossl_refusal_case(uint32_t auth_code, bool &connected, FakeResult &res, std
         qb::pg::tcp::database db{};
         const auto            started = std::chrono::steady_clock::now();
         connected                     = static_cast<bool>(qb::io::async::run_sync(db.connect(dsn)));
-        elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started);
+        elapsed                       = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started);
         db.disconnect();
     }
 

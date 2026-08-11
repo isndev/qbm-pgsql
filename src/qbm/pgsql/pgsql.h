@@ -284,7 +284,7 @@ public:
             const qb::pg::uinteger wire_len = static_cast<qb::pg::uinteger>(message_->length());
             if (wire_len < 4u || wire_len > qb::pg::PG_PROTOCOL_MAX_MESSAGE_BYTES) {
                 QB_LOG_CRIT("[pgsql] Invalid wire message length " << wire_len << " (must be 4.." << qb::pg::PG_PROTOCOL_MAX_MESSAGE_BYTES
-                                                                << "); dropping connection");
+                                                                   << "); dropping connection");
                 message_.reset();
                 offset_ = 0;
                 // Mark the protocol invalid (the documented contract for a malformed size
@@ -597,11 +597,10 @@ private:
      */
     void
     refuse_auth_without_ssl(const char *method) {
-        QB_LOG_CRIT("[pgsql] Server requested "
-                 << method
-                 << " authentication, which this build cannot perform: qb was built without OpenSSL "
-                    "(QB_HAS_SSL undefined / QB_WITH_SSL=OFF). Rebuild qb with OpenSSL, or configure the "
-                    "PostgreSQL role for 'trust' or 'password' (cleartext) authentication.");
+        QB_LOG_CRIT("[pgsql] Server requested " << method
+                                                << " authentication, which this build cannot perform: qb was built without OpenSSL "
+                                                   "(QB_HAS_SSL undefined / QB_WITH_SSL=OFF). Rebuild qb with OpenSSL, or configure the "
+                                                   "PostgreSQL role for 'trust' or 'password' (cleartext) authentication.");
         connect_handshake_failed_ = true;
         is_connected_             = false;
         try_resume_connect_wait();
@@ -673,8 +672,8 @@ private:
                 if (!warned_unverified_tls) {
                     warned_unverified_tls = true;
                     QB_LOG_WARN("[pgsql] TLS WITHOUT certificate verification (ssl_verify=none): the server "
-                             "certificate chain/hostname is NOT verified. Set ssl_verify_mode::full to "
-                             "authenticate the server (or rely on SCRAM-SHA-256 mutual auth).");
+                                "certificate chain/hostname is NOT verified. Set ssl_verify_mode::full to "
+                                "authenticate the server (or rely on SCRAM-SHA-256 mutual auth).");
                 }
             }
             // Build the value-semantic client TLS context from the connection options:
@@ -697,8 +696,8 @@ private:
                 return;
             }
             transport_sock sock{std::move(tls)};
-            qb::io::async::tcp::starttls_connect<transport_sock, postgres_ssl_negotiator>(
-                std::move(sock), connect_uri, std::move(cb), qb::detail::from_ev_seconds(t_out));
+            qb::io::async::tcp::starttls_connect<transport_sock, postgres_ssl_negotiator>(std::move(sock), connect_uri, std::move(cb),
+                                                                                          qb::detail::from_ev_seconds(t_out));
 #else
             connect_handshake_failed_ = true;
             _error                    = error::connection_error{"ssl transport requires QB_HAS_SSL"};
@@ -960,14 +959,14 @@ private:
     }
 
 private:
-    std::string                _nonce;           ///< Client nonce for SCRAM authentication
-    std::vector<uint8_t>       _password_salt;   ///< Salted password for SCRAM authentication
-    std::string                _auth_message;    ///< Authentication message for SCRAM protocol
+    std::string          _nonce;         ///< Client nonce for SCRAM authentication
+    std::vector<uint8_t> _password_salt; ///< Salted password for SCRAM authentication
+    std::string          _auth_message;  ///< Authentication message for SCRAM protocol
     /// SECURITY (SCRAM mutual auth): true once a SCRAM-SHA-256 exchange has started. While set,
     /// AuthenticationOk MUST NOT be accepted unless _scram_server_verified is also true — otherwise
     /// an impersonating server / active MITM that does not know the password can skip
     /// AuthenticationSASLFinal and send AuthenticationOk to be trusted (defeats SCRAM mutual auth).
-    bool                       _scram_pending         = false;
+    bool _scram_pending = false;
     /// Set only when the server's SASLFinal ServerSignature (`v=`) verified successfully.
     bool                       _scram_server_verified = false;
     std::string                _gs2_header;      ///< SCRAM gs2-header chosen at SASL init (`n,,` / `y,,` / `p=tls-server-end-point,,`)
@@ -1057,7 +1056,7 @@ public:
                 refuse_auth_without_ssl("SCRAM-SHA-256");
 #else
                 QB_LOG_INFO("[pgsql] SCRAM-SHA-256 authentication requested");
-                _scram_pending         = true;  // gate AuthenticationOk until SASLFinal verifies (mutual auth)
+                _scram_pending         = true; // gate AuthenticationOk until SASLFinal verifies (mutual auth)
                 _scram_server_verified = false;
 
                 // AuthenticationSASL body: the NUL-terminated mechanism names the
@@ -1208,7 +1207,7 @@ public:
                     }
                     _scram_server_verified = true; // mutual auth satisfied — AuthenticationOk may now be accepted
                     QB_LOG_INFO("[pgsql] SCRAM-SHA-256 Authentication successful: server "
-                             "signature verified");
+                                "signature verified");
                     break;
                 } catch (std::exception &ex) {
                     QB_LOG_CRIT("[pgsql] SCRAM-SHA-256 Failed verifying server signature: " << ex.what());
@@ -1328,13 +1327,13 @@ public:
             _txn_status = stat;
         if (stat == 'E') {
             QB_LOG_WARN("[pgsql] ReadyForQuery: backend session is in failed transaction "
-                     "(SQLSTATE implicit); issue ROLLBACK before new commands");
+                        "(SQLSTATE implicit); issue ROLLBACK before new commands");
         }
 
         if (!process_query(_current_command)) {
             _ready_for_query = true;
             QB_LOG_DEBUG("[pgsql] Database " << conn_opts_.uri << "[" << conn_opts_.database << "]"
-                                          << " is ready for query (" << stat << ")");
+                                             << " is ready for query (" << stat << ")");
         }
     }
 
@@ -1639,7 +1638,7 @@ public:
     void
     on_function_call_response(message &msg) {
         QB_LOG_WARN("[pgsql] FunctionCallResponse (V): fast-path function protocol not "
-                 "implemented; message ignored");
+                    "implemented; message ignored");
         msg.discard_remaining();
     }
 
@@ -1650,7 +1649,8 @@ public:
      */
     void
     on_unhandled_message(message &msg) {
-        QB_LOG_WARN("[pgsql] Unhandled backend message tag " << (char) msg.tag() << " (length " << msg.length() << ") — check protocol coverage");
+        QB_LOG_WARN("[pgsql] Unhandled backend message tag " << (char) msg.tag() << " (length " << msg.length()
+                                                             << ") — check protocol coverage");
     }
 
     /**
@@ -2395,7 +2395,7 @@ private:
 #endif
 
         QB_LOG_INFO("[pgsql] TCP keepalive enabled: idle=" << conn_opts_.keepalive_idle << "s, interval=" << conn_opts_.keepalive_interval
-                                                        << "s, probes=" << conn_opts_.keepalive_probes);
+                                                           << "s, probes=" << conn_opts_.keepalive_probes);
     }
 
 public:
@@ -2496,10 +2496,10 @@ public:
         // P1: the next handshake renegotiates SCRAM from scratch; clear the mutual-auth gate.
         _scram_pending         = false;
         _scram_server_verified = false;
-        _error           = error::db_error{"unknown error"};
-        _current_command = root_transaction();
-        _current_query   = nullptr;
-        _ready_for_query = false;
+        _error                 = error::db_error{"unknown error"};
+        _current_command       = root_transaction();
+        _current_query         = nullptr;
+        _ready_for_query       = false;
     }
 
     /**

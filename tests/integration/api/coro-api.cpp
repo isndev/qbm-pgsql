@@ -324,7 +324,7 @@ TEST_F(PgsqlCoroApiTest, WithTransaction_VoidBodyCommits) {
 TEST_F(PgsqlCoroApiTest, WithTransaction_NestedIsRejectedNotFlattened) {
     bool nested_rejected = false, outer_ok = false;
     qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
-        auto r = co_await with_transaction(*db_, [&](Transaction &) -> qb::io::async::task<void> {
+        auto r   = co_await with_transaction(*db_, [&](Transaction &) -> qb::io::async::task<void> {
             // Inside the live transaction, in_transaction() is now true → the nested begin is refused.
             auto nested     = co_await with_transaction(*db_, [](Transaction &) -> qb::io::async::task<void> { co_return; });
             nested_rejected = !nested.ok();
@@ -1403,7 +1403,7 @@ TEST_F(PgsqlCoroApiTest, ConcurrentQueryStreamsDoNotCollideOnTheCursorName) {
             }());
         // Both streams are done, so the block they shared must be closed — exactly once.
         in_txn_after = db_->in_transaction();
-        co_return r_long && r_short;
+        co_return r_long &&r_short;
     }());
 
     EXPECT_TRUE(ok) << "two overlapping query_stream calls on one connection failed: either both asked for the same "
@@ -1437,7 +1437,7 @@ TEST_F(PgsqlCoroApiTest, ConcurrentQueryStreamsInsideCallerTransactionLeaveItOpe
         still_in_txn = db_->in_transaction();
         auto c       = co_await db_->commit();
         committed    = c.ok();
-        co_return ra && rb;
+        co_return ra &&rb;
     }());
 
     EXPECT_TRUE(ok);
