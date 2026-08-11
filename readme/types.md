@@ -156,7 +156,7 @@ using namespace qb::pg;
 qb::jsonb doc = result[0][0].as<qb::jsonb>(); // jsonb column, binary on the wire
 ```
 
-`qb::json` / `qb::jsonb` are `nlohmann::json` (see [`qb/json.h`](https://github.com/isndev/qb/blob/main/include/qb/json.h)). Both decoders fold PostgreSQL's `[[key, value], ...]`
+`qb::json` / `qb::jsonb` are `nlohmann::json` (see [`qb/json.h`](https://github.com/isndev/qb/blob/main/src/qb/json.h)). Both decoders fold PostgreSQL's `[[key, value], ...]`
 array form back into a JSON object when they detect it.
 
 ### UUID
