@@ -86,9 +86,9 @@ with_transaction_impl(Transaction &tr, F &&f, BeginOp &&begin_op) {
     // COMMIT/ROLLBACK would end the OUTER transaction and the other scope's writes would run
     // outside any transaction (silent lost isolation). Reject it loudly; use SAVEPOINTs to nest.
     if (tr.in_transaction()) {
-        co_return ::qb::pg::Reply<T>::failure(error::client_error{
-            "with_transaction: connection already in a transaction block; nested transactions are not "
-            "supported (PostgreSQL flattens them, silently losing isolation) — use a SAVEPOINT instead"});
+        co_return ::qb::pg::Reply<T>::failure(
+            error::client_error{"with_transaction: connection already in a transaction block; nested transactions are not "
+                                "supported (PostgreSQL flattens them, silently losing isolation) — use a SAVEPOINT instead"});
     }
     auto b = co_await std::invoke(std::forward<BeginOp>(begin_op), tr);
     if (!b.ok()) {

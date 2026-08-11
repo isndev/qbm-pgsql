@@ -115,8 +115,8 @@ protected:
         qb::pg::test::PgIntegrationTest::SetUp(); // connect-or-skip
         if (IsSkipped())
             return;
-        ASSERT_TRUE(db_->execute(std::string("DROP TABLE IF EXISTS ") + std::string(kTable), qb::pg::discard_query, qb::pg::discard_error)
-                        .await());
+        ASSERT_TRUE(
+            db_->execute(std::string("DROP TABLE IF EXISTS ") + std::string(kTable), qb::pg::discard_query, qb::pg::discard_error).await());
         // NOT a TEMP table: the whole point of the connection-loss case is to read the row back
         // from a DIFFERENT session, and a TEMP table is invisible to one.
         ASSERT_TRUE(db_->execute(std::string("CREATE TABLE ") + std::string(kTable) + " (id INT PRIMARY KEY, v TEXT NOT NULL)",
@@ -133,8 +133,7 @@ protected:
         // The table outlives the connection it was made on, so drop it from a fresh session.
         auto cleanup = std::make_unique<qb::pg::tcp::database>();
         if (qb::pg::test::pg_try_connect(*cleanup)) {
-            (void) cleanup->execute(std::string("DROP TABLE IF EXISTS ") + std::string(kTable), qb::pg::discard_query,
-                                    qb::pg::discard_error)
+            (void) cleanup->execute(std::string("DROP TABLE IF EXISTS ") + std::string(kTable), qb::pg::discard_query, qb::pg::discard_error)
                 .await();
             cleanup->disconnect();
         }
@@ -172,8 +171,8 @@ TEST_F(PgsqlResilienceTest, CoroutineDestroyedWhileParkedOnLiveQuery) {
     bool orphan_resumed  = false;
     bool orphan_reply_ok = false;
 
-    auto orphan = qb::io::async::coro_scheduler().spawn_tracked(park_on_query(db_.get(), "SELECT pg_sleep(2)", &orphan_resumed,
-                                                                              &orphan_reply_ok));
+    auto orphan =
+        qb::io::async::coro_scheduler().spawn_tracked(park_on_query(db_.get(), "SELECT pg_sleep(2)", &orphan_resumed, &orphan_reply_ok));
     ASSERT_TRUE(orphan) << "spawn_tracked returned an empty handle — nothing was parked";
     void *const orphan_frame = orphan.address();
 
@@ -184,8 +183,8 @@ TEST_F(PgsqlResilienceTest, CoroutineDestroyedWhileParkedOnLiveQuery) {
     const int target = db_->backend_pid();
     ASSERT_GT(target, 0);
     ASSERT_TRUE(pump_until([&] {
-        auto r = qb::io::async::run_sync(probe->query("SELECT count(*) FROM pg_stat_activity WHERE pid = " + std::to_string(target)
-                                                      + " AND state = 'active'"));
+        auto r = qb::io::async::run_sync(
+            probe->query("SELECT count(*) FROM pg_stat_activity WHERE pid = " + std::to_string(target) + " AND state = 'active'"));
         return r.ok() && r.result().size() == 1 && r.result()[0][0].as<std::int64_t>() == 1;
     })) << "the query never became active on the backend; the coroutine was not parked on real work";
 
@@ -195,8 +194,7 @@ TEST_F(PgsqlResilienceTest, CoroutineDestroyedWhileParkedOnLiveQuery) {
     // Recycle it under an innocent coroutine.
     bool heir_resumed  = false;
     bool heir_reply_ok = false;
-    auto heir = qb::io::async::coro_scheduler().spawn_tracked(park_on_query(db_.get(), "SELECT pg_sleep(8)", &heir_resumed,
-                                                                            &heir_reply_ok));
+    auto heir = qb::io::async::coro_scheduler().spawn_tracked(park_on_query(db_.get(), "SELECT pg_sleep(8)", &heir_resumed, &heir_reply_ok));
     ASSERT_TRUE(heir);
     EXPECT_EQ(heir.address(), orphan_frame)
         << "the coroutine frame pool did not hand the cancelled frame back to the next spawn, so the recycled-frame hazard is NOT "

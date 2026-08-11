@@ -44,8 +44,8 @@ TEST(ModuleSurface, InitRunsWithoutThrowing) {
 /// The exception-wrapping ctor prefixes the wrapped message with "Client thrown exception: "
 /// and carries the synthetic client SQLSTATE "00000".
 TEST(ModuleSurface, ClientErrorWrapsExceptionMessage) {
-    const std::runtime_error   original("boom");
-    const error::client_error  wrapped(original);
+    const std::runtime_error  original("boom");
+    const error::client_error wrapped(original);
 
     const std::string what = wrapped.what();
     EXPECT_NE(what.find("Client thrown exception: "), std::string::npos);
