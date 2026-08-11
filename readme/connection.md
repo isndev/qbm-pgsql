@@ -83,7 +83,7 @@ transport aliases in `qb::pg::tcp`:
 The transport is a **compile-time** choice baked into the alias. The connection string scheme (`tcp`, `ssl`, `socket`)
 does **not** switch it: a `tcp://…` string on a `tcp::ssl::database` still negotiates TLS, and an `ssl://…` string on a
 `tcp::database` does **not**. Pick the alias for the security you want; the scheme only feeds host/port resolution.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:644,654 -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:643,653 -->
 
 There are also `notify_cb_consumer` / `notify_co_consumer` aliases for dedicated LISTEN/NOTIFY clients;
 see [queries.md](./queries.md).
@@ -114,7 +114,7 @@ rarely build it by hand — a connection string is parsed into it — but these 
 `connect_timeout` is a `qb::duration` (the framework's `std::chrono`-based duration). A non-positive value falls back to
 the 10 s default. Internally the deadline is converted to libev seconds via `qb::detail::to_ev_seconds`; you never deal
 with that conversion.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:639-642 -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:638-641 -->
 
 > The connection string carries `user`, `password`, `database`, and the `host:port`. The remaining fields (
 `connect_timeout`, `ssl_verify`, keepalive) are **not** expressed in the string — set them on a `connection_options`
@@ -227,7 +227,7 @@ handshake reached `AuthenticationOk` (the point where `is_connected_` is set; th
 After the TCP socket is connected, the client switches to the PostgreSQL protocol, starts its read/write watchers, and
 sends the **startup message**: protocol version 3.0 plus null-terminated `user` and `database` name/value pairs (and any
 client options).
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:723-725,798-814 (in that order: switch_protocol + start + send_startup_message; create_startup_message) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:722-724,797-813 (in that order: switch_protocol + start + send_startup_message; create_startup_message) -->
 
 The server then drives one of the supported authentication exchanges, handled in `on_authentication`:
 
@@ -254,7 +254,7 @@ other schemes are **not** implemented: they hit the `default:` throw. That throw
 `onMessage` boundary, which drops the connection and resumes the pending `connect` awaiter with an error — it does
 **not** call `std::terminate`. The same containment applies to a malformed SCRAM server message (including a mismatched
 nonce). You therefore see an unsupported or hostile auth method as a failed connect, not a descriptive auth-method error.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:770-782,1012-1018,1221-1224 (in that order: gate re-armed in on_transport_ready; AuthenticationOk refused without a verified server signature; the default arm's throw) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:769-781,1011-1017,1220-1223 (in that order: gate re-armed in on_transport_ready; AuthenticationOk refused without a verified server signature; the default arm's throw) -->
 
 The `AuthenticationOk` row in the table above is therefore conditional: it marks the connection ready *only after* the
 mutual-auth gate is satisfied for a SCRAM handshake.
@@ -267,7 +267,7 @@ RFC 5802: `p=tls-server-end-point` when bound; `y` over TLS when the server did 
 can detect a downgrade that stripped it); `n` on a cleartext link. Negotiation is automatic; check the result with
 `db.used_channel_binding()`.
 <!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h (on_authentication, used_channel_binding); qb/src/qb/io/tcp/ssl/socket.cpp (tls_server_end_point) -->
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:1072-1092,1146-1153 (in that order: gs2 cbind-flag negotiation; cbind_input) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:1071-1091,1145-1152 (in that order: gs2 cbind-flag negotiation; cbind_input) -->
 
 ---
 
@@ -319,7 +319,7 @@ even here; it is the TLS channel itself and any non-SCRAM auth that stay unprote
 > connect. libpq's intermediate `verify-ca` (chain without hostname) is intentionally not offered: it accepts a valid
 > certificate issued for a *different* host, leaving an active-MITM window. `disable`/`prefer` map to the transport
 > choice — `tcp::database` never sends an SSLRequest; `tcp::ssl::database` requires TLS.
-<!-- src: qbm/pgsql/src/qbm/pgsql/common.h:127-146,173; qbm/pgsql/src/qbm/pgsql/pgsql.h:665-687 -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/common.h:127-146,173; qbm/pgsql/src/qbm/pgsql/pgsql.h:664-686 -->
 
 ---
 
@@ -336,7 +336,7 @@ TCP keepalive is configured through `connection_options` or
 `enable_keepalive(int interval, int idle = 60, int probes = 3)`. Settings are applied to the socket **after** the
 connection is established (on `Authentication OK`); calling `enable_keepalive` before connecting only stores them. An
 `interval` of 0 leaves keepalive disabled.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:1845-1864,1020-1022,2352-2399 (in that order: enable_keepalive; applied on AuthenticationOk; apply_keepalive_settings) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:1845-1864,1019-1021,2352-2399 (in that order: enable_keepalive; applied on AuthenticationOk; apply_keepalive_settings) -->
 
 ```cpp
 qb::pg::tcp::database db;
