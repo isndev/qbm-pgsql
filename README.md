@@ -9,52 +9,131 @@ and prepared SQL, drive transactions and savepoints, and consume LISTEN/NOTIFY �
 
 **Prerequisites:** a working qb framework checkout (see [qb/README.md](https://github.com/isndev/qb/blob/main/README.md)) and a reachable PostgreSQL
 server — **See also:** [readme/README.md](./readme/README.md) (technical
-index), [readme/connection.md](./readme/connection.md), [readme/transaction.md](./readme/transaction.md)
+index), [readme/actors.md](./readme/actors.md), [readme/connection.md](./readme/connection.md), [readme/transaction.md](./readme/transaction.md)
 
 ---
 
-## What this module is
+## A PostgreSQL actor
 
-`qbm-pgsql` speaks the PostgreSQL v3 frontend/backend protocol directly over a qb-io socket. There is no `libpq`
-dependency: connection handshake, authentication (SCRAM-SHA-256, MD5, cleartext), the simple- and extended-query
-protocols, type encoding, and LISTEN/NOTIFY are all implemented on top of `qb::io::async`. All wire I/O is non-blocking
-and runs on the qb-io event loop; you reach completion either by `co_await` or through callback overloads that the loop
-drains.
-
-The public surface lives in `qb::pg` (internals in `qb::pg::detail`). A single header pulls in everything an application
-needs:
+A `database` is an ordinary qb-io object: it binds to the event loop of the thread that constructs it, and inside a
+`qb::Main` that thread is a `VirtualCore`. So an actor that holds one needs **no pump, no drain, no `run_once`** — the
+core already runs its loop once per pass, before it dispatches your handlers, and that pass is what carries bytes to and
+from PostgreSQL. What the actor owes back is one rule: **never stop returning to the loop.**
 
 ```cpp
-#include <qbm/pgsql/pgsql.h>   // brings in <qb/io/async.h> transitively
+#include <qb/actor.h>
+#include <qb/main.h>
+#include <qbm/pgsql/pgsql.h>
+#include <memory>
+#include <string>
+
+struct LookupRequest : qb::Event {
+    int user_id;
+    explicit LookupRequest(int id) : user_id(id) {}
+};
+struct LookupResult : qb::Event {
+    // qb::string<N>, not std::string: an event is relocated by memcpy, and a short
+    // std::string on libstdc++ points into its own storage. See the note below.
+    qb::string<64> name;   // empty when the row is missing or the query failed
+    explicit LookupResult(std::string const &n) : name(n) {}
+};
+
+class UserStore : public qb::Actor {
+    // shared_ptr, not a plain member: a coroutine parked on a reply must be able to keep the
+    // connection alive even if the actor is destroyed underneath it.
+    std::shared_ptr<qb::pg::tcp::database> _db;
+
+public:
+    qb::io::async::task<bool> onInit() override {
+        registerEvent<LookupRequest>(*this);
+        registerEvent<qb::KillEvent>(*this);
+
+        _db = std::make_shared<qb::pg::tcp::database>();
+        if (!co_await _db->connect("tcp://user:secret@localhost:5432[mydb]"))
+            co_return false;                      // init fails; the actor never starts
+        auto prep = co_await _db->prepare("by_id", "SELECT name FROM users WHERE id = $1;",
+                                          qb::pg::type_oid_sequence{qb::pg::oid::int4});
+        co_return prep.ok();
+    }
+
+    void on(LookupRequest const &ev) {
+        auto              db     = _db;               // copy ALL of it BEFORE spawning
+        const int         id     = ev.user_id;
+        const qb::ActorId sender = ev.getSource();
+
+        spawn([db, id, sender](qb::ScopedCoroContext ctx) -> qb::io::async::task<void> {
+            auto        reply = co_await db->execute("by_id", qb::pg::params{id});
+            std::string name;
+            if (reply.ok() && !reply.result().empty())
+                name = reply.result()[0][0].as<std::string>();
+            ctx.push_to<LookupResult>(sender, std::move(name));   // safe: id copied by value
+        });
+    }
+
+    void on(qb::KillEvent const &) {
+        if (_db)
+            _db->disconnect();   // fails every queued query, so no coroutine is left parked
+        kill();
+    }
+};
 ```
 
-`qbm-pgsql` is a **compiled library** (17 translation units), aliased `qbm::pgsql` — static by default, or shared when
-`BUILD_SHARED_LIBS`/`QB_BUILD_SHARED_LIBS` is on. It is **not** header-only — link it; including the header alone will
-not resolve the protocol, type, and error symbols.
+Four decisions in that class carry the whole model, and [A PostgreSQL actor](./readme/actors.md) is the page for all
+four:
 
-### How it relates to qb-core
+- **`onInit()` is where you connect.** It is a coroutine, so the handshake reads as a straight line: connect, prepare,
+  `co_return true`. While it is suspended the actor is *Activating* — the engine holds its inbound business events and
+  replays them once init succeeds — so nothing is served against a half-open connection. `co_return false` fails the
+  init and the actor is destroyed without ever handling a message.
+- **An event handler must return, so suspending work goes to `Actor::spawn`.** It launches an isolated coroutine on this
+  core's scheduler and returns immediately.
+- **A spawned coroutine may not touch the actor's `database` after a `co_await`** — the actor, and any member of it, may
+  have been destroyed while the coroutine was parked. That is why the client is held behind a `std::shared_ptr` the
+  handler copies before spawning; everything else it needs is copied the same way, and after the suspension it speaks
+  only through `ctx`.
+- **The kill handler disconnects *before* it kills.** `disconnect()` fails every queued query, so no coroutine is left
+  parked on a reply that will never come.
 
-The module depends on `qb::core` at the build level (`qb_register_module(... DEPENDS qb-core)`), which transitively
-brings in `qb::io`. At the API level you use qb-io types: a `database` object is driven by whatever thread runs
-`qb::io::async`. You can use it from a plain executable that calls `qb::io::async::init()` and drives the loop yourself,
-or hold a `database` inside a `qb::Actor` and let the actor's `VirtualCore` tick drive the same loop. The client does
-not require actors.
+One framework rule shows through in the event definitions: **an event payload must be trivially *relocatable*, not
+merely copyable**, because the engine moves events with `memcpy` and never runs the source destructor. A by-value
+`std::string` is not — on libstdc++ a short one addresses its own inline buffer — so a row value goes into a
+`qb::string<N>` when it is bounded, or a `std::shared_ptr<std::string>` / `std::vector` when it is not. There is no
+compile-time check and there cannot be one; the debug build scans for it on the cross-core hop only. See
+[Inter-actor messaging](https://github.com/isndev/qb/blob/main/readme/4_qb_core/messaging.md).
 
----
+### Making a query interruptible
 
-## Feature overview
+`pg_reply_awaiter` is **not cancellation-aware**: it registers no `on_cancel` hook and consults no token, so `kill()`
+neither wakes nor unwinds a coroutine parked on `co_await db.query(...)`, `execute`, `prepare`, `begin`, `commit` or
+`connect`. It stays parked until the operation completes naturally — safely, because the awaiter's `alive` flag makes a
+late completion a no-op, but not promptly.
 
-| Area                      | What you get                                                                                                                                                                                                                          |
-|:--------------------------|:--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **Connection**            | Async handshake from a DSN (`tcp://user:pass@host:port[db]`); SCRAM-SHA-256 / MD5 / cleartext auth; per-connection `connect` timeout (`qb::duration`); `disconnect()` + `prepare_reconnect()` to reuse an object; optional keepalive. |
-| **TLS**                   | Available when the framework is built with `QB_HAS_SSL` (OpenSSL). The client sends an `SSLRequest` and upgrades the socket via `qb::pg::tcp::ssl::database`. Without SSL, cleartext TCP only.                                        |
-| **Simple & prepared SQL** | `execute` / `query` (simple protocol); `prepare` + parameterized `execute` (extended protocol) with a client-side prepared-statement LRU (local eviction only; no server-side `DEALLOCATE`); `execute_file` / `prepare_file`.         |
-| **Transactions**          | `begin` / `commit` / `rollback`, `transaction_mode` (isolation, read-only, deferrable), nested `savepoint` / `release_savepoint` / `rollback_savepoint`, and the `with_transaction` coroutine wrapper.                                |
-| **Statement timeout**     | `set_timeout(qb::duration)` arms a `SET LOCAL statement_timeout` on the next `BEGIN` (transaction-scoped; distinct from the connect timeout).                                                                                         |
-| **Results**               | `results` / `row` / `field` views; `field::as<T>()` and `to()`; `std::optional<T>` for NULL columns; `results.json()`.                                                                                                                |
-| **Types**                 | Scalars, `qb::uuid`, `qb::json` / `qb::jsonb`, `bytea`, NUMERIC, DATE/TIME, INTERVAL; `timestamptz` (OID 1184) maps to `qb::wall_time` with integer-microsecond round-trip. See [readme/types.md](./readme/types.md).                 |
-| **Pub/sub**               | `notify`, `listen` / `unlisten` / `unlisten_all`, an `on_incoming_notify` hook, and a `notify_co_consumer` with `co_await receive()`.                                                                                                 |
-| **Errors**                | `Reply<T>` carries either a result or a typed `error::db_error` (severity, SQLSTATE, detail); `Transaction::await()` returns a `status`.                                                                                              |
+An interruptible query is therefore one whose *frame* someone else can destroy, which is what
+`ScopedCoroContext::cancellable` does. It takes a `qb::io::async::task<T>` rather than an awaiter, so wrap the query in
+a **named** coroutine — not an immediately-invoked lambda, whose closure is already destroyed by the time the body runs:
+
+```cpp
+// A named coroutine, so its parameters live in the frame.
+qb::io::async::task<qb::pg::Reply<qb::pg::results>>
+run_lookup(std::shared_ptr<qb::pg::tcp::database> db, int id) {
+    co_return co_await db->execute("by_id", qb::pg::params{id});
+}
+
+// ... inside the handler:
+spawn([db, id, sender](qb::ScopedCoroContext ctx) -> qb::io::async::task<void> {
+    try {
+        auto reply = co_await ctx.cancellable(run_lookup(db, id));
+        ctx.push_to<LookupResult>(sender, reply.ok() && !reply.result().empty()
+                                              ? reply.result()[0][0].as<std::string>()
+                                              : std::string{});
+    } catch (qb::io::async::cancelled_error const &) {
+        // The actor was killed while the query was in flight. Nothing to answer.
+    }
+});
+```
+
+A dropped link needs no wrapper: `on(disconnected)` drains every queued query, so a parked `co_await` resumes with a
+failed `Reply` rather than hanging.
 
 ---
 
@@ -69,16 +148,18 @@ Each operation has two overload families with the **same method name**:
   drains whenever a thread runs `qb::io::async::run_once()` / `run()` on that connection. Call `await()` only when you
   want a synchronous drain on the current thread (tests, init) or a `status` snapshot.
 
-`qb::io::async::run_sync(awaiter)` bridges a single coroutine awaiter to blocking code — the idiom used throughout the
-integration tests for setup and one-shot queries.
-
 Pick one style per call stack. Inside a `begin(...)` callback body, use callbacks; do not mix in undriven coroutine
 awaiters there. The full coverage matrix (which operations expose callbacks vs. coroutine-only) is
 in [readme/queries.md](./readme/queries.md).
 
+`qb::io::async::run_sync(awaiter)` bridges a single coroutine awaiter to blocking code. **It stops the thread it runs
+on**, so it belongs where that thread is yours: a `main()`, a test fixture, a CLI, a setup step before
+`qb::Main::start()`. Inside an actor the thread is the `VirtualCore` and every other actor on it stops too — silently,
+because nothing in the framework diagnoses it.
+
 ---
 
-## Quickstart: connect, query, transact
+## Outside an actor: connect, query, transact
 
 A self-contained program. It connects, runs one simple query, and commits an insert inside a coroutine transaction.
 Build it as a normal executable linked against `qbm::pgsql`.
@@ -140,9 +221,7 @@ Key points the example demonstrates:
 For TLS, swap `tcp::database` for `tcp::ssl::database` (available only when `QB_HAS_SSL` is set); the DSN is unchanged
 and the client negotiates the upgrade. See [readme/connection.md](./readme/connection.md).
 
----
-
-## Callback style (ordered async)
+### Callback style (ordered async)
 
 The same operations are available without coroutines. Callback overloads enqueue work and return immediately; the loop
 runs it. Use `await()` when you need a synchronous drain — common in tests and one-shot init:
@@ -155,25 +234,72 @@ runs it. Use `await()` when you need a synchronous drain — common in tests and
 
 using namespace qb::pg;
 
-qb::io::async::init();
-tcp::database db;
-if (!qb::io::async::run_sync(db.connect("tcp://user:pass@localhost:5432[mydb]")))
-    return;
+void seed() {
+    qb::io::async::init();
+    tcp::database db;
+    if (!qb::io::async::run_sync(db.connect("tcp://user:pass@localhost:5432[mydb]")))
+        return;
 
-db.execute("SELECT 1", discard_query, discard_error).await();   // enqueue, then drain
+    db.execute("SELECT 1", discard_query, discard_error).await();   // enqueue, then drain
 
-db.begin(
-    [](transaction &tr) {
-        tr.execute("INSERT INTO t(v) VALUES (1)", discard_query, discard_error);
-    },
-    [](error::db_error const &) { /* BEGIN failed */ })
-  .await();                                                       // COMMIT/ROLLBACK on drain
+    db.begin(
+        [](transaction &tr) {
+            tr.execute("INSERT INTO t(v) VALUES (1)", discard_query, discard_error);
+        },
+        [](error::db_error const &) { /* BEGIN failed */ })
+      .await();                                                       // COMMIT/ROLLBACK on drain
+}
 ```
 
 `discard_query` and `discard_error` are the no-op success/error sinks for fire-and-forget steps. There is **no**
 `connect(on_ok, on_err)` overload — connect via `co_await` or `run_sync(db.connect(...))`.
 See [readme/transaction.md](./readme/transaction.md) for the `then` / `error` chaining rules (inner `transaction&` vs.
 root `database`).
+
+---
+
+## What this module is
+
+`qbm-pgsql` speaks the PostgreSQL v3 frontend/backend protocol directly over a qb-io socket. There is no `libpq`
+dependency: connection handshake, authentication (SCRAM-SHA-256, MD5, cleartext), the simple- and extended-query
+protocols, type encoding, and LISTEN/NOTIFY are all implemented on top of `qb::io::async`. All wire I/O is non-blocking
+and runs on the qb-io event loop; you reach completion either by `co_await` or through callback overloads that the loop
+drains.
+
+The public surface lives in `qb::pg` (internals in `qb::pg::detail`). A single header pulls in everything an application
+needs:
+
+```cpp
+#include <qbm/pgsql/pgsql.h>   // brings in <qb/io/async.h> transitively
+```
+
+`qbm-pgsql` is a **compiled library** (17 translation units), aliased `qbm::pgsql` — static by default, or shared when
+`BUILD_SHARED_LIBS`/`QB_BUILD_SHARED_LIBS` is on. It is **not** header-only — link it; including the header alone will
+not resolve the protocol, type, and error symbols.
+
+### How it relates to qb-core
+
+The module depends on `qb::core` at the build level (`qb_register_module(... DEPENDS qb-core)`), which transitively
+brings in `qb::io`. At the API level you use qb-io types: a `database` object is driven by whatever thread runs
+`qb::io::async`. You can use it from a plain executable that calls `qb::io::async::init()` and drives the loop yourself,
+or hold a `database` inside a `qb::Actor` and let the actor's `VirtualCore` tick drive the same loop. The client does
+not require actors — but inside `qb::Main` it is what most deployments do, which is why this page opens with it.
+
+---
+
+## Feature overview
+
+| Area                      | What you get                                                                                                                                                                                                                          |
+|:--------------------------|:--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Connection**            | Async handshake from a DSN (`tcp://user:pass@host:port[db]`); SCRAM-SHA-256 / MD5 / cleartext auth; per-connection `connect` timeout (`qb::duration`); `disconnect()` + `prepare_reconnect()` to reuse an object; optional keepalive. |
+| **TLS**                   | Available when the framework is built with `QB_HAS_SSL` (OpenSSL). The client sends an `SSLRequest` and upgrades the socket via `qb::pg::tcp::ssl::database`. Without SSL, cleartext TCP only.                                        |
+| **Simple & prepared SQL** | `execute` / `query` (simple protocol); `prepare` + parameterized `execute` (extended protocol) with a client-side prepared-statement LRU (local eviction only; no server-side `DEALLOCATE`); `execute_file` / `prepare_file`.         |
+| **Transactions**          | `begin` / `commit` / `rollback`, `transaction_mode` (isolation, read-only, deferrable), nested `savepoint` / `release_savepoint` / `rollback_savepoint`, and the `with_transaction` coroutine wrapper.                                |
+| **Statement timeout**     | `set_timeout(qb::duration)` arms a `SET LOCAL statement_timeout` on the next `BEGIN` (transaction-scoped; distinct from the connect timeout).                                                                                         |
+| **Results**               | `results` / `row` / `field` views; `field::as<T>()` and `to()`; `std::optional<T>` for NULL columns; `results.json()`.                                                                                                                |
+| **Types**                 | Scalars, `qb::uuid`, `qb::json` / `qb::jsonb`, `bytea`, NUMERIC, DATE/TIME, INTERVAL; `timestamptz` (OID 1184) maps to `qb::wall_time` with integer-microsecond round-trip. See [readme/types.md](./readme/types.md).                 |
+| **Pub/sub**               | `notify`, `listen` / `unlisten` / `unlisten_all`, an `on_incoming_notify` hook, and a `notify_co_consumer` with `co_await receive()`.                                                                                                 |
+| **Errors**                | `Reply<T>` carries either a result or a typed `error::db_error` (severity, SQLSTATE, detail); `Transaction::await()` returns a `status`.                                                                                              |
 
 ---
 
@@ -211,6 +337,10 @@ not set per module. TLS support is inherited too: when the framework finds OpenS
 `tcp::ssl::database` alias compiles; otherwise the build emits a status note and only the cleartext transport is
 available.
 
+A module **cannot be configured standalone**: it calls `qb_register_module()` and `qb_add_test()`, development-time
+helpers an installed qb does not ship. The repository's own CI configures `.github/ci/superbuild/CMakeLists.txt`, a
+minimal root that adds a qb *source* tree first and this module second.
+
 ---
 
 ## Documentation map
@@ -218,6 +348,7 @@ available.
 | Document                                               | Covers                                                                                                                                               |
 |:-------------------------------------------------------|:-----------------------------------------------------------------------------------------------------------------------------------------------------|
 | [readme/README.md](./readme/README.md)                 | Technical index: completion models, mental model, source map, and the example-as-specification test list.                                            |
+| [readme/actors.md](./readme/actors.md)                 | **Start here.** Owning a `database` inside a `qb::Actor`: who drives the loop, `onInit()` as the handshake, `Actor::spawn`, what `kill()` does to a parked `co_await`, and where `run_sync` is still right. |
 | [readme/connection.md](./readme/connection.md)         | DSN format, `connection_options`, the connect awaiter, handshake, `disconnect` / `prepare_reconnect`, TLS, auth.                                     |
 | [readme/transaction.md](./readme/transaction.md)       | `begin` / `commit` / `rollback`, ordered async and `then` / `error`, optional `await()` and `status`, `with_transaction`, `set_timeout`, savepoints. |
 | [readme/queries.md](./readme/queries.md)               | Every operation in both styles; `execute` overloads, prepared statements, files, NOTIFY/LISTEN, discards.                                            |
@@ -233,6 +364,10 @@ available.
 - **The loop must run.** Callback overloads only enqueue. If nothing calls `run_once()` / `run()` (or `await()` for a
   synchronous drain) on the connection's thread, queued queries never reach the wire. In an actor, the `VirtualCore`
   tick drives it for you.
+- **`run_sync` / `run_once` / `await()` inside an actor stop the core.** Each is correct where the thread it blocks is
+  yours; inside a handler they freeze every actor on that `VirtualCore`, with no diagnostic.
+- **An unwrapped `co_await` is not interruptible.** `pg_reply_awaiter` registers no cancellation hook, so `kill()`
+  neither wakes nor unwinds a coroutine parked on one. Wrap it in `ctx.cancellable(...)` when it runs inside an actor.
 - **Reuse needs a reset.** After `disconnect()`, call `prepare_reconnect()` before `connect()` again on the same
   `database` object — it re-arms the io layer (resets buffers, closes the fd). Connecting without it is undefined.
 - **Connect timeout is not the statement timeout.** The `connect(qb::duration)` timeout bounds the handshake.
