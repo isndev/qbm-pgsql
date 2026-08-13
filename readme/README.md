@@ -3,12 +3,14 @@
 > **Audience:** Adopter · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 3.0.0 (C++20 default, C++23
 > supported)
 
-This is the table of contents for the qbm-pgsql narrative documentation: seven topic pages covering connection
-management, query execution, transactions, result sets, type mapping, error handling, and integration testing, ordered
-as a learning path.
+This is the table of contents for the qbm-pgsql narrative documentation: eight topic pages covering actor integration,
+connection management, query execution, transactions, result sets, type mapping, error handling, and integration
+testing, ordered as a learning path.
 
-**Prerequisites:** working knowledge of the qb framework — see [`qb/README.md`](https://github.com/isndev/qb/blob/main/README.md) and the qb [
-`readme/`](https://github.com/isndev/qb/tree/main/readme/) docs for `qb-io` async, coroutines, and `run_sync`. **See also:** the module front
+**Prerequisites:** working knowledge of the qb framework — [`qb/README.md`](https://github.com/isndev/qb/blob/main/README.md)
+for the shape of an actor, then [Writing actors](https://github.com/isndev/qb/blob/main/readme/4_qb_core/actor.md),
+[Asynchronous work inside an actor](https://github.com/isndev/qb/blob/main/readme/5_core_io_integration/async_in_actors.md)
+and [C++20 coroutines](https://github.com/isndev/qb/blob/main/readme/3_qb_io/coroutines.md). **See also:** the module front
 door [`../README.md`](../README.md) for positioning, the build matrix, and a quickstart.
 
 ## What this module is
@@ -25,13 +27,18 @@ governed by the framework, not the module, and propagates to consumers as a comp
 
 Every database operation has two interchangeable completion models with the same method names:
 
-| Model         | How work finishes                                                                   | Drive it with                                                                                 |
-|---------------|-------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------|
-| **Coroutine** | Overloads *without* callbacks return an awaiter; `co_await` yields `Reply<T>`.      | `co_await` inside a coroutine, or `qb::io::async::run_sync(...)` from synchronous code.       |
-| **Callback**  | Overloads *with* success/error callbacks return `Transaction&` for fluent chaining. | `qb::io::async::run` / `run_once`, optionally `Transaction::await()` for a `status` snapshot. |
+| Model         | How work finishes                                                                   | Inside an actor                                                     | Standalone (`main`, test, CLI)                                    |
+|---------------|-------------------------------------------------------------------------------------|-----------------------------------------------------------------------|---------------------------------------------------------------------|
+| **Coroutine** | Overloads *without* callbacks return an awaiter; `co_await` yields `Reply<T>`.      | `co_await` in `onInit()` or inside an `Actor::spawn` body           | `qb::io::async::run_sync(awaiter)`                                |
+| **Callback**  | Overloads *with* success/error callbacks return `Transaction&` for fluent chaining. | enqueue and return — the `VirtualCore`'s loop pass drives it, no drain | `qb::io::async::run` / `run_once`, or `Transaction::await()` for a `status` snapshot |
 
 Use one style per call stack. Do not place undriven coroutine awaiters inside a callback body — see the "Large-project
 conventions" note in `pgsql.h`.
+
+**The right-hand column is not portable to the left.** `run_sync`, `run_once` and `await()` all stop the thread they
+run on until the work finishes; in a `main()` that thread is yours, inside an actor it is the `VirtualCore` and every
+other actor on it stops with you — silently, because nothing in the framework diagnoses it.
+[actors.md](./actors.md) is the page for the left-hand column.
 
 ## Integration in one place
 
@@ -74,6 +81,7 @@ Read top to bottom for a first pass. Each row links the page and gives its one-l
 
 | # | Page                                                | What it covers                                                                                                                                                                                                                                   |
 |---|-----------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 0 | [A PostgreSQL actor](./actors.md)                   | Owning a `database` inside a `qb::Actor`: who drives the loop, `onInit()` as the handshake, `Actor::spawn` for a query, what `kill()` does to a parked `co_await` and how to bound one, and where `run_sync` is still right.                     |
 | 1 | [Connection management](./connection.md)            | DSN parsing, `connection_options`, the `connect` awaiter (no callback connect), handshake and authentication (MD5, SCRAM-SHA-256, cleartext), `disconnect` / `prepare_reconnect`, keepalive, and TLS.                                            |
 | 2 | [Query execution](./queries.md)                     | Simple and prepared statements: `execute` / `query` / `prepare`, parameter binding, `execute_file` / `prepare_file`, the prepared-statement LRU, LISTEN / NOTIFY, and the `discard_*` no-op callbacks.                                           |
 | 3 | [Transactions and command queues](./transaction.md) | `begin` / `commit` / `rollback`, `transaction_mode` (isolation, read-only, deferrable), savepoints, the callback `then` / `error` chain and optional `await()`, the coroutine `with_transaction` helper, `transaction_abort`, and `set_timeout`. |
@@ -86,7 +94,10 @@ Read top to bottom for a first pass. Each row links the page and gives its one-l
 
 The numbering is the recommended path; you do not need all of it for every task.
 
-1. **Connect (1).** Start here — every operation needs a connected `database`, and the page establishes the
+0. **Decide where the client lives (0).** Almost every qbm-pgsql deployment puts the connection inside an actor, and
+   that decides the shape of everything after it — which calls are legal in a handler, what a shutdown must do, and
+   what happens to a query in flight when the actor dies. Read it before the first `co_await` you write.
+1. **Connect (1).** Every operation needs a connected `database`, and the page establishes the
    coroutine-versus-callback split you will use throughout.
 2. **Run statements (2, 4).** Query execution and result access are the core of day-to-day work. Read them together:
    page 2 sends SQL, page 4 reads what comes back.
