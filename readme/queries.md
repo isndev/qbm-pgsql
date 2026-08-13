@@ -19,9 +19,18 @@ It is not header-only.
 
 ## Ordered async (callbacks)
 
-All callback overloads **enqueue** and return **`Transaction&`** immediately. Completion runs under *
-*`qb::io::async::run_once()`** (or **`Transaction::await()`**). **`await()`** after each call is **optional** — use it
-only when you need a synchronous drain on the current thread. See [transaction.md](./transaction.md).
+All callback overloads **enqueue** and return **`Transaction&`** immediately. Nothing reaches the wire, and no callback
+fires, until the connection's event loop turns — so what you must call depends entirely on whose thread that loop is on:
+
+| Where the `database` lives | What turns the loop | What you call |
+|:---|:---|:---|
+| Inside an actor | the owning `VirtualCore`, once per pass, before it dispatches your handlers | **nothing** |
+| A `main()`, a test, a CLI | nobody until you say so | `qb::io::async::run()` / `run_once()`, or **`Transaction::await()`** |
+
+`await()` is a *synchronous drain*: it spins the loop until the reply queue empties, so it belongs only on the second
+row. Inside an actor handler it stops the `VirtualCore` — every other actor on that core with it —
+see [actors.md](./actors.md#callbacks-inside-an-actor). See [transaction.md](./transaction.md) for the `status` snapshot
+`await()` gives you.
 
 ---
 
@@ -349,17 +358,23 @@ Defined in **`pgsql.h`**.
 
 ---
 
-## QB actor vs standalone
+## Inside an actor versus standalone
 
-| Context        | Pattern                                                                                                 |
-|:---------------|:--------------------------------------------------------------------------------------------------------|
-| **Actor**      | Enqueue callbacks; **`run_once`** between messages; or **`task` + co_await** on **`coro_scheduler()`**. |
-| **Test / CLI** | **`run_sync`**, or **`await()`** after chains.                                                          |
+| Context                | Coroutine form                                                        | Callback form                                       |
+|:-----------------------|:-----------------------------------------------------------------------|:-----------------------------------------------------|
+| **Actor**              | `co_await` inside `onInit()`, or inside an `Actor::spawn` body        | enqueue and return — the core's loop pass drives it |
+| **`main` / test / CLI** | `qb::io::async::run_sync(awaiter)`                                   | enqueue, then `run()` / `run_once()` / `await()`    |
+
+Inside an actor, `run_sync`, `run_once` and `await()` are all the same defect wearing three names: each stops the
+`VirtualCore` until it returns, and none of them says so. `Actor::spawn` is the form that lets the handler return.
+[actors.md](./actors.md) is the page for that — the connection's lifetime, what `kill()` does to a parked `co_await`,
+and how to bound one.
 
 ---
 
 ## Related
 
+- [actors.md](./actors.md) — running these operations from inside a `qb::Actor`
 - [transaction.md](./transaction.md) — **`begin`**, **`then`** / **`error`**, **`await()`**
 - [results.md](./results.md) — **`results`**, **`Reply`**
 - [types.md](./types.md) — **`params`**, OIDs, `timestamptz` ↔ **`qb::wall_time`**

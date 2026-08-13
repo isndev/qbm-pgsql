@@ -378,6 +378,7 @@ count, for example, is rejected (`result(false)` plus an empty row description) 
 
 ## See also
 
+- [actors.md](./actors.md) — what a dropped link and a `kill()` each do to a parked `co_await`
 - [connection.md](./connection.md) — connect failures, `connection_error`, timeouts, the disconnect path
 - [transaction.md](./transaction.md) — `await()`, `status`, `with_transaction`, the fluent `.error(...)` node
 - [queries.md](./queries.md) — how each operation surfaces `Reply<T>` and `on_error`

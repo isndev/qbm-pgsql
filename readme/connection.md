@@ -8,7 +8,7 @@ asynchronous TCP socket, authenticates, optionally upgrades to TLS, and what hap
 drops.
 
 **Prerequisites:** [README.md](../README.md) (install, `qb_load_modules`, `qbm::pgsql`) — **See also:
-** [transaction.md](./transaction.md), [queries.md](./queries.md), [error_handling.md](./error_handling.md), [testing.md](./testing.md)
+** [actors.md](./actors.md), [transaction.md](./transaction.md), [queries.md](./queries.md), [error_handling.md](./error_handling.md), [testing.md](./testing.md)
 
 ---
 
@@ -21,6 +21,21 @@ SCRAM-SHA-256) runs on the event loop; the awaiter resolves to `true` at `Authen
 the coroutine scheduler, by which point `ParameterStatus` / `BackendKeyData` / `ReadyForQuery` have been processed),
 `false` on any failure. The same object *is* the root transaction (see [transaction.md](./transaction.md)), so once connected
 you call `execute`, `prepare`, `begin`, and friends directly on it.
+
+Inside an actor, the handshake belongs in `onInit()` and the awaiter is driven by `co_await` — the actor is not started
+until it resolves, so nothing is served against a half-open connection:
+
+```cpp
+// In a qb::Actor. See actors.md for the surrounding class and its shutdown.
+qb::io::async::task<bool> onInit() override {
+    registerEvent<qb::KillEvent>(*this);
+    _db = std::make_shared<qb::pg::tcp::database>();
+    co_return co_await _db->connect("tcp://user:secret@localhost:5432[mydb]");
+}
+```
+
+Outside one — a `main()`, a test fixture, a migration CLI — there is no loop running yet, so you drive the same awaiter
+yourself with `run_sync`, which pumps *your* thread until it resolves:
 
 ```cpp
 #include <qbm/pgsql/pgsql.h>
@@ -36,6 +51,9 @@ if (!qb::io::async::run_sync(db.connect("tcp://user:secret@localhost:5432[mydb]"
 ```
 
 <!-- src: qbm/pgsql/tests/integration/connection/connection-lifecycle.cpp:73-77 -->
+
+Every `run_sync` on this page is the second case. Inside an actor it blocks the `VirtualCore` instead of your own
+thread, and nothing reports it — [actors.md](./actors.md#bridging-to-synchronous-code) has the mechanism.
 
 `qb::pg::init()` is an optional forward-compatibility initialization hook. It currently performs no required setup — the
 field-reader's `ParamUnserializer` is statically constructed, so row decoding works without it (
@@ -483,6 +501,7 @@ a pending `connect` awaiter with an error.
 
 ## See also
 
+- [actors.md](./actors.md) — the client inside a `qb::Actor`: `onInit()`, `spawn`, cancellation, shutdown order
 - [transaction.md](./transaction.md) — the client *is* the root transaction; `set_timeout` vs connect timeout
 - [queries.md](./queries.md) — `execute` / `prepare`, and the LISTEN/NOTIFY consumers
 - [error_handling.md](./error_handling.md) — connection and query error types

@@ -7,7 +7,7 @@ How `qb::pg::detail::Transaction` drives `BEGIN`/`COMMIT`/`ROLLBACK`, savepoints
 and `LISTEN`/`NOTIFY` — through both the fluent callback API and the `co_await` coroutine API.
 
 **Prerequisites:** [connection.md](./connection.md) (you need a connected `database`) — **See also:
-** [queries.md](./queries.md), [results.md](./results.md), [error_handling.md](./error_handling.md), [types.md](./types.md)
+** [actors.md](./actors.md), [queries.md](./queries.md), [results.md](./results.md), [error_handling.md](./error_handling.md), [types.md](./types.md)
 
 ---
 
@@ -483,6 +483,7 @@ resolves to `std::nullopt`.
 
 ## See also
 
+- [actors.md](./actors.md) — a transaction inside a `qb::Actor`, and why `with_transaction` must not be wrapped in a cancellation wrapper
 - [connection.md](./connection.md) — establishing the `database`, the connect deadline (vs statement timeout)
 - [queries.md](./queries.md) — `execute`, prepared statements, parameter binding
 - [results.md](./results.md) — reading `resultset` rows and fields
