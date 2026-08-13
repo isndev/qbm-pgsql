@@ -37,8 +37,10 @@ struct LookupRequest : qb::Event {
     explicit LookupRequest(int id) : user_id(id) {}
 };
 struct LookupResult : qb::Event {
-    std::string name;      // empty when the row is missing or the query failed
-    explicit LookupResult(std::string n) : name(std::move(n)) {}
+    // qb::string<N>, not std::string: an event is relocated by memcpy, and a short
+    // std::string on libstdc++ points into its own storage. See "Payloads" below.
+    qb::string<64> name;   // empty when the row is missing or the query failed
+    explicit LookupResult(std::string const &n) : name(n) {}
 };
 
 class UserStore : public qb::Actor {
@@ -88,6 +90,19 @@ handler, and the kill handler disconnects **before** it kills.
 ---
 
 ## Concepts
+
+### Payloads
+
+One framework rule shows through in the event definitions above: **an event payload must be trivially *relocatable*,
+not merely copyable**, because the engine moves events with `memcpy` and never runs the source destructor. A by-value
+`std::string` is not — on libstdc++ a short one addresses its own inline buffer — so a row value goes into a
+`qb::string<N>` when it is bounded, or a `std::shared_ptr<std::string>` / `std::vector` when it is not.
+
+The rule is **not** scoped to cross-core delivery: the source pipe `memcpy`s what it already holds when it grows,
+and `reply`/`forward` byte-recycle the event, so a same-core `push` is exposed too. There is no compile-time check
+and there cannot be one; the debug build scans for it on the cross-core hop only, so a clean debug run is evidence
+rather than proof. libc++ recomputes `data()` from `this`, which is why this corrupts on Linux while passing every
+macOS test. See [Inter-actor messaging](https://github.com/isndev/qb/blob/main/readme/4_qb_core/messaging.md).
 
 ### Who drives the connection
 
