@@ -137,7 +137,7 @@ init and the actor is destroyed without ever handling a message, which is the be
 unreachable at startup.
 
 This is the "discover before activate" shape both shipped
-examples use (`examples/all/taskmanager/src/actors/task_manager.cpp:33-73`): connect PostgreSQL, prepare statements,
+examples use (`examples/07-applications/01-taskmanager/src/actors/task_manager.cpp:33-73`): connect PostgreSQL, prepare statements,
 connect Redis, only then compile the HTTP routes.
 
 A `co_await` inside `onInit()` is already cancellation-aware for the framework's own operations, because the actor's
@@ -367,7 +367,7 @@ The framework's own best statement of the case is a comment in a shipped example
 
 > *Pre-engine setup: there is no actor loop yet, so we drive a coroutine to completion synchronously with
 > `qb::io::async::run_sync`.*
-> — `examples/all/auction_house/src/main.cpp:34-35`
+> — `examples/07-applications/02-auction-house/src/main.cpp:45-46`
 
 ```cpp
 // main(), before the engine starts: applying a schema once.
