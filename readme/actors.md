@@ -136,9 +136,12 @@ succeeds — so nothing is served against a half-open connection. `co_return fal
 init and the actor is destroyed without ever handling a message, which is the behaviour you want when the database is
 unreachable at startup.
 
-This is the "discover before activate" shape both shipped
-examples use (`examples/07-applications/01-taskmanager/src/actors/task_manager.cpp:33-73`): connect PostgreSQL, prepare statements,
-connect Redis, only then compile the HTTP routes.
+This is the "discover before activate" shape both shipped *applications* use
+(`examples/07-applications/01-taskmanager/src/actors/task_manager.cpp:33-73`, and
+`examples/07-applications/02-auction-house/src/actors/auction_manager.cpp` step for step): connect PostgreSQL, prepare
+statements, connect Redis, only then compile the HTTP routes. Of the eight programs under
+`examples/06-modules/pgsql/` only `05-errors.cpp` is an actor; the other seven drive one `qb::io::async::init()` loop
+from `main()`, which is the shape "Bridging to synchronous code" below is about.
 
 A `co_await` inside `onInit()` is already cancellation-aware for the framework's own operations, because the actor's
 `context()` carries its cancellation scope. It is **not** for a `co_await _db.connect(...)`, for the reason the next
