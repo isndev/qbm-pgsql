@@ -173,7 +173,10 @@ TEST_F(PgsqlParamRoundTrip, StringVectorExpandsToMultiRowInsert) {
                                   type_oid_sequence{oid::text, oid::text, oid::text});
         if (!p)
             co_return;
-        auto ins = co_await db_->execute("qb_str_vec_batch", params{std::vector<std::string>{"sv_a", "sv_b", "sv_c"}});
+        // Named: a temporary built inside the co_await operand has to be promoted into the
+        // coroutine frame to outlive the suspension.
+        const std::vector<std::string> batch{"sv_a", "sv_b", "sv_c"};
+        auto                           ins = co_await db_->execute("qb_str_vec_batch", params{batch});
         if (!ins)
             co_return;
         auto cnt =
