@@ -202,12 +202,29 @@ jobs:
       - name: Prove postgres is reachable, and that it really has TLS on
         run: |
           set -euo pipefail
+          # `pg_isready` is NOT a sufficient probe for this image, and this lane went red proving
+          # it. The official postgres entrypoint runs a TEMPORARY server on the unix socket while
+          # initdb bootstraps, and pg_isready over `docker exec` answers "accepting connections"
+          # against THAT one -- before POSTGRES_DB has been created. The loop broke on that first
+          # success and the next line failed 37 ms later with
+          # `FATAL: database "test" does not exist`. It is a race, so it passed for weeks and then
+          # did not, which is the worst way for a probe to be wrong.
+          #
+          # So the probe asks for what the tests actually need: a query answered by the REAL
+          # database, over TCP -- the transport the DSNs use, and one the bootstrap server does
+          # not listen on at all.
+          ready=""
           for _ in $(seq 1 60); do
-            if docker exec qb-pg pg_isready -U test -d test >/dev/null 2>&1; then break; fi
+            if docker exec qb-pg psql -h 127.0.0.1 -U test -d test -tAc 'select 1' >/dev/null 2>&1; then
+              ready=yes; break
+            fi
             sleep 2
           done
-          if ! docker exec qb-pg pg_isready -U test -d test; then
-            echo "::error::postgres never became ready"; docker logs qb-pg | tail -50; exit 1
+          if [ -z "$ready" ]; then
+            echo "::error::postgres never became queryable as test@test over TCP"
+            docker exec qb-pg pg_isready -U test -d test || true
+            docker logs qb-pg | tail -50
+            exit 1
           fi
 
           ssl_on="$(docker exec qb-pg psql -U test -d test -tAc 'show ssl' | tr -d '[:space:]')"
