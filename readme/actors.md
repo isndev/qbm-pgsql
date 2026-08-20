@@ -370,7 +370,7 @@ The framework's own best statement of the case is a comment in a shipped example
 
 > *Pre-engine setup: there is no actor loop yet, so we drive a coroutine to completion synchronously with
 > `qb::io::async::run_sync`.*
-> — `examples/07-applications/02-auction-house/src/main.cpp:45-46`
+> — `examples/07-applications/02-auction-house/src/main.cpp:48-49`
 
 ```cpp
 // main(), before the engine starts: applying a schema once.
