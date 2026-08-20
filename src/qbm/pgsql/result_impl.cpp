@@ -151,8 +151,12 @@ result_impl::build_name_cache() const {
         return;
     }
     name_cache_.reserve(row_description_.size() * 2); // Load factor ~0.5
-    for (usmallint i = 0; i < row_description_.size(); ++i) {
-        name_cache_[row_description_[i].name] = i;
+    // Loop in size_t and narrow at the store, not the other way round: `usmallint i` against a
+    // size_t bound is a comparison with a wider type, and a description of 65536+ fields would
+    // wrap `i` into an infinite loop. PostgreSQL caps a row at ~1600 columns, so the narrowing
+    // cast below is always in range -- the loop index is where the width has to be honest.
+    for (std::size_t i = 0; i < row_description_.size(); ++i) {
+        name_cache_[row_description_[i].name] = static_cast<usmallint>(i);
     }
     name_cache_built_ = true;
 }
