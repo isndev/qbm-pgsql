@@ -1,6 +1,6 @@
 # A PostgreSQL actor
 
-> **Audience:** Adopter · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 3.0.0 (C++20 default, C++23
+> **Audience:** Adopter · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 3.0.1 (C++20 default, C++23
 > supported)
 
 How a `qb::pg::tcp::database` lives inside a `qb::Actor`: who drives its I/O, how a handler awaits a query without
