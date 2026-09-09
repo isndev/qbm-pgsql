@@ -7,14 +7,18 @@
  * Anchored to PostgreSQL `array_send()` ground truth (value bytes, no length prefix).
  * Layout, all big-endian: int32 ndim, int32 has-null flags, int32 element OID, then
  * per dimension {int32 size, int32 lower-bound}, then per element {int32 length
- * (-1 = NULL), value}. decode_pg_array flattens multi-dimensional arrays into one
- * flat vector. Split out of the legacy monolith `test-data-types.cpp` (array tests).
+ * (-1 = NULL), value}. The decoder is FAIL-LOUD (Huly QB-109): a NULL element throws
+ * `value_is_null` unless the element type is `std::optional<T>`, a multi-dimensional array
+ * throws `field_type_mismatch`, a malformed value throws `client_error`; and the text
+ * format (the simple query protocol) is decoded and rendered, no longer stubbed to `{}`.
+ * Split out of the legacy monolith `test-data-types.cpp` (array tests).
  *
  * @author qb - C++ Actor Framework
  * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
  * Licensed under the Apache License, Version 2.0 (the "License").
  */
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <gtest/gtest.h>
@@ -94,35 +98,49 @@ TEST(TypeConverterArrayBinary, ScalarElementTypesAgainstPostgresGroundTruth) {
 // decode_pg_array's bounds guards must degrade gracefully (empty / partial result) on a
 // malformed or truncated binary array header — never read out of bounds. Each case targets
 // one guard branch in decode_pg_array.
-TEST(TypeConverterArrayBinary, MalformedBuffersDecodeGracefullyWithoutOob) {
+TEST(TypeConverterArrayBinary, MalformedBuffersThrowClientErrorWithoutOob) {
     using IV = std::vector<integer>;
-    // header shorter than the 12-byte ndim+flags+elem_oid prefix -> empty.
-    EXPECT_TRUE(TypeConverter<IV>::from_binary(hex_to_bytes("00000001")).empty());
-    // ndim < 0 -> empty (the zero-dimensional / negative guard).
-    EXPECT_TRUE(TypeConverter<IV>::from_binary(hex_to_bytes("ffffffff0000000000000017")).empty());
-    // ndim == 1 but no room for the 8-byte dim header (off+8 > size) -> empty.
-    EXPECT_TRUE(TypeConverter<IV>::from_binary(hex_to_bytes("000000010000000000000017")).empty());
-    // a negative dimension size (dim_size = 0xffffffff, lower_bound = 1) -> empty.
-    EXPECT_TRUE(TypeConverter<IV>::from_binary(hex_to_bytes("000000010000000000000017ffffffff00000001")).empty());
-    // a bogus huge dimension (dim_size = 0x7fffffff) whose count exceeds the buffer -> empty.
-    EXPECT_TRUE(TypeConverter<IV>::from_binary(hex_to_bytes("0000000100000000000000177fffffff00000001")).empty());
-    // header claims 3 elements but the buffer holds only one (10) -> partial {10}, no OOB.
-    EXPECT_EQ(TypeConverter<IV>::from_binary(hex_to_bytes("0000000100000000000000170000000300000001000000040000000a")), (IV{10}));
-    // a negative element length that is NOT the -1 NULL sentinel (here -2) -> break (empty).
-    // header: ndim=1, flags, elem_oid, dim_size=1, lower_bound, then elem_len=0xfffffffe.
-    EXPECT_TRUE(TypeConverter<IV>::from_binary(hex_to_bytes("0000000100000000000000170000000100000001fffffffe")).empty());
+    // header shorter than the 12-byte ndim+flags+elem_oid prefix.
+    EXPECT_THROW(TypeConverter<IV>::from_binary(hex_to_bytes("00000001")), error::client_error);
+    // ndim < 0.
+    EXPECT_THROW(TypeConverter<IV>::from_binary(hex_to_bytes("ffffffff0000000000000017")), error::client_error);
+    // ndim == 1 but no room for the 8-byte dim header (off+8 > size).
+    EXPECT_THROW(TypeConverter<IV>::from_binary(hex_to_bytes("000000010000000000000017")), error::client_error);
+    // a negative dimension size (dim_size = 0xffffffff, lower_bound = 1).
+    EXPECT_THROW(TypeConverter<IV>::from_binary(hex_to_bytes("000000010000000000000017ffffffff00000001")), error::client_error);
+    // a bogus huge dimension (dim_size = 0x7fffffff) whose count exceeds the buffer.
+    EXPECT_THROW(TypeConverter<IV>::from_binary(hex_to_bytes("0000000100000000000000177fffffff00000001")), error::client_error);
+    // header claims 3 elements but the buffer holds only one (10): until 3.2 this decoded to a
+    // PARTIAL {10} -- a plausible value for a broken wire, the one answer a decoder must not give.
+    EXPECT_THROW(TypeConverter<IV>::from_binary(hex_to_bytes("0000000100000000000000170000000300000001000000040000000a")), error::client_error);
+    // a negative element length that is NOT the -1 NULL sentinel (here -2).
+    EXPECT_THROW(TypeConverter<IV>::from_binary(hex_to_bytes("0000000100000000000000170000000100000001fffffffe")), error::client_error);
+    // trailing bytes after the last element: not what array_send produces.
+    EXPECT_THROW(TypeConverter<IV>::from_binary(hex_to_bytes("00000001000000000000001700000001000000010000000400000001ff")),
+                 error::client_error);
 }
 
 // ----------------------------------------------------------------------------
-// NULL elements: the plain-element path defaults; the optional-element path nullopts
+// NULL elements: the plain-element path THROWS; the optional-element path nullopts
 // ----------------------------------------------------------------------------
 
-// Plain int4[] {1,NULL,3}: a NULL element decodes to the default-constructed 0
-// (the std::vector<integer> path cannot represent SQL NULL).
-TEST(TypeConverterArrayBinary, NullElementDefaultsForPlainVector) {
-    auto withnull = TypeConverter<std::vector<integer>>::from_binary(
-        hex_to_bytes("00000001000000010000001700000003000000010000000400000001ffffffff0000000400000003"));
-    EXPECT_EQ(withnull, (std::vector<integer>{1, 0, 3}));
+// Plain int4[] {1,NULL,3}: until 3.2 the NULL element decoded to a default-constructed 0
+// -- `{1,0,3}`, a value the database never held. It is `value_is_null` now, the rule
+// `field::as<T>()` applies to a NULL column, and the message names the way out.
+TEST(TypeConverterArrayBinary, NullElementThrowsForPlainVector) {
+    const auto bytes = hex_to_bytes("00000001000000010000001700000003000000010000000400000001ffffffff0000000400000003");
+    EXPECT_THROW(TypeConverter<std::vector<integer>>::from_binary(bytes), error::value_is_null);
+    try {
+        (void) TypeConverter<std::vector<integer>>::from_binary(bytes);
+    } catch (const error::value_is_null &e) {
+        EXPECT_NE(std::string(e.what()).find("std::vector<std::optional<T>>"), std::string::npos) << e.what();
+    }
+    // The same bytes through the optional-element converter: {1, nullopt, 3}.
+    auto opt = TypeConverter<std::vector<std::optional<integer>>>::from_binary(bytes);
+    ASSERT_EQ(opt.size(), 3u);
+    EXPECT_EQ(opt[0], 1);
+    EXPECT_FALSE(opt[1].has_value());
+    EXPECT_EQ(opt[2], 3);
 }
 
 // ADD: optional-element array NULL decode — the value-level NULL path that the plain
@@ -155,8 +173,9 @@ TEST(TypeConverterArrayBinary, OptionalElementNullDecode) {
 // ----------------------------------------------------------------------------
 
 // 2-D int4[2][2] = {{1,2},{3,4}}: ndim=2, two dimensions each {size=2,lb=1}, then 4
-// elements row-major. decode_pg_array flattens to {1,2,3,4}.
-TEST(TypeConverterArrayBinary, MultiDimensionalFlattens) {
+// elements row-major. Until 3.2 this FLATTENED to {1,2,3,4}, the shape lost in silence; a
+// flat std::vector cannot hold it, so it is `field_type_mismatch` now.
+TEST(TypeConverterArrayBinary, MultiDimensionalThrowsFieldTypeMismatch) {
     // Build the buffer field-by-field to avoid hand-counting a long hex literal.
     std::string h;
     h += "00000002"; // ndim = 2
@@ -174,8 +193,8 @@ TEST(TypeConverterArrayBinary, MultiDimensionalFlattens) {
          "00000003"; // 3
     h += "00000004"
          "00000004"; // 4
-    auto twoD = TypeConverter<std::vector<integer>>::from_binary(hex_to_bytes(h));
-    EXPECT_EQ(twoD, (std::vector<integer>{1, 2, 3, 4}));
+    EXPECT_THROW(TypeConverter<std::vector<integer>>::from_binary(hex_to_bytes(h)), error::field_type_mismatch);
+    EXPECT_THROW(TypeConverter<std::vector<std::optional<integer>>>::from_binary(hex_to_bytes(h)), error::field_type_mismatch);
 }
 
 // ----------------------------------------------------------------------------
@@ -190,41 +209,135 @@ TEST(TypeConverterArrayBinary, RoundTripThroughEncode) {
     EXPECT_EQ(TypeConverter<std::vector<integer>>::from_binary(body), (std::vector<integer>{7, -3, 100000}));
 }
 
+// std::vector<std::optional<T>> round-trips a NULL element: the -1 length on the wire and
+// the has-null flag raised in the header (what array_recv checks), and nullopt back.
+TEST(TypeConverterArrayBinary, OptionalElementRoundTripThroughEncode) {
+    using OV = std::vector<std::optional<integer>>;
+    const OV          in{7, std::nullopt, 100000};
+    std::vector<byte> buf;
+    TypeConverter<OV>::to_binary(in, buf);
+    std::vector<byte> body(buf.begin() + 4, buf.end());
+    // header: ndim=1, has-null=1, int4 OID, size=3, lb=1; then 7, NULL (-1), 100000.
+    EXPECT_EQ(body, hex_to_bytes("00000001000000010000001700000003000000010000000400000007ffffffff00000004000186a0"));
+    EXPECT_EQ(TypeConverter<OV>::from_binary(body), in);
+    // No NULL element: the flag stays down, and the bytes equal the plain vector's.
+    std::vector<byte> plain, opt;
+    TypeConverter<std::vector<integer>>::to_binary(std::vector<integer>{1, 2}, plain);
+    TypeConverter<OV>::to_binary(OV{1, 2}, opt);
+    EXPECT_EQ(plain, opt);
+}
+
 // ----------------------------------------------------------------------------
 // decode_pg_array guard paths (crafted buffers must never read out of bounds)
 // ----------------------------------------------------------------------------
 
 TEST(TypeConverterArrayBinary, DecodeGuardPaths) {
-    // < 12 bytes (header is ndim + flags + element OID) -> empty.
-    EXPECT_TRUE(decode_pg_array<integer>(hex_to_bytes("00000001")).empty());
-    EXPECT_TRUE(decode_pg_array<integer>(std::span<const byte>{}).empty());
+    // < 12 bytes (header is ndim + flags + element OID): malformed, loudly.
+    EXPECT_THROW(decode_pg_array<integer>(hex_to_bytes("00000001")), error::client_error);
+    EXPECT_THROW(decode_pg_array<integer>(std::span<const byte>{}), error::client_error);
 
-    // ndim == 0 -> empty (header present, zero-dimensional array).
+    // ndim == 0 -> empty: the one empty answer, '{}' as PostgreSQL sends it.
     EXPECT_TRUE(decode_pg_array<integer>(hex_to_bytes("000000000000000000000017")).empty());
 
-    // ndim < 0 -> empty.
-    EXPECT_TRUE(decode_pg_array<integer>(hex_to_bytes("ffffffff0000000000000017")).empty());
+    // ndim < 0.
+    EXPECT_THROW(decode_pg_array<integer>(hex_to_bytes("ffffffff0000000000000017")), error::client_error);
 
     // Truncated element: header claims a 1-D array of size 1 but the element's
-    // length/value is missing -> decode stops, returns empty.
-    EXPECT_TRUE(decode_pg_array<integer>(hex_to_bytes("0000000100000000000000170000000100000001")).empty());
+    // length/value is missing.
+    EXPECT_THROW(decode_pg_array<integer>(hex_to_bytes("0000000100000000000000170000000100000001")), error::client_error);
 
-    // Element length present but value truncated (claims 4 bytes, only 2 follow) -> empty.
-    EXPECT_TRUE(decode_pg_array<integer>(hex_to_bytes("0000000100000000000000170000000100000001000000040102")).empty());
+    // Element length present but value truncated (claims 4 bytes, only 2 follow).
+    EXPECT_THROW(decode_pg_array<integer>(hex_to_bytes("0000000100000000000000170000000100000001000000040102")), error::client_error);
 }
 
 // ----------------------------------------------------------------------------
-// Array converter to_text / from_text are intentionally inert (arrays travel in
-// binary). They must be reachable and return the documented empty result rather
-// than mis-encoding — covers the QB_PG_DEFINE_ARRAY_CONVERTER text stubs.
+// The TEXT format (the simple query protocol): parsed and rendered (Huly QB-109). Until 3.2
+// both were stubs -- `from_text` returned `{}` for every literal and `to_text` "", so a text
+// column read as std::vector<int> was silently empty.
 // ----------------------------------------------------------------------------
 
-TEST(TypeConverterArrayText, TextStubsAreInert) {
-    EXPECT_EQ(TypeConverter<std::vector<integer>>::to_text(std::vector<integer>{1, 2, 3}), std::string{});
-    EXPECT_TRUE(TypeConverter<std::vector<integer>>::from_text("{1,2,3}").empty());
-    EXPECT_EQ(TypeConverter<std::vector<std::string>>::to_text(std::vector<std::string>{"a", "b"}), std::string{});
-    EXPECT_TRUE(TypeConverter<std::vector<std::string>>::from_text("{a,b}").empty());
-    EXPECT_EQ(TypeConverter<std::vector<double>>::to_text(std::vector<double>{1.5}), std::string{});
+TEST(TypeConverterArrayText, ParsesEveryElementKind) {
+    EXPECT_EQ(TypeConverter<std::vector<integer>>::from_text("{1,2,3}"), (std::vector<integer>{1, 2, 3}));
+    EXPECT_EQ(TypeConverter<std::vector<integer>>::from_text("{-7, 0 ,  42}"), (std::vector<integer>{-7, 0, 42}));
+    EXPECT_EQ(TypeConverter<std::vector<bigint>>::from_text("{9000000000}"), (std::vector<bigint>{9000000000LL}));
+    EXPECT_EQ(TypeConverter<std::vector<smallint>>::from_text("{1,-1}"), (std::vector<smallint>{1, -1}));
+    EXPECT_EQ(TypeConverter<std::vector<bool>>::from_text("{t,f,t}"), (std::vector<bool>{true, false, true}));
+    EXPECT_EQ(TypeConverter<std::vector<double>>::from_text("{1.5,-2.25}"), (std::vector<double>{1.5, -2.25}));
+    EXPECT_EQ(TypeConverter<std::vector<float>>::from_text("{0.5}"), (std::vector<float>{0.5f}));
+    auto nonfinite = TypeConverter<std::vector<double>>::from_text("{NaN,Infinity,-Infinity}");
+    ASSERT_EQ(nonfinite.size(), 3u);
+    EXPECT_TRUE(std::isnan(nonfinite[0]));
+    EXPECT_TRUE(std::isinf(nonfinite[1]) && nonfinite[1] > 0);
+    EXPECT_TRUE(std::isinf(nonfinite[2]) && nonfinite[2] < 0);
+}
+
+TEST(TypeConverterArrayText, ParsesStringsQuotedAndBare) {
+    // Bare words, quoted words with a space, an escaped quote and an escaped backslash, an
+    // empty string (only ever quoted), and a word that spells NULL but is quoted -- a value.
+    auto v = TypeConverter<std::vector<std::string>>::from_text(R"({a,"b c","d\"e","f\\g","","NULL"})");
+    EXPECT_EQ(v, (std::vector<std::string>{"a", "b c", "d\"e", "f\\g", "", "NULL"}));
+}
+
+TEST(TypeConverterArrayText, EmptyAndDecoratedLiterals) {
+    EXPECT_TRUE(TypeConverter<std::vector<integer>>::from_text("{}").empty());
+    EXPECT_TRUE(TypeConverter<std::vector<std::string>>::from_text(" { } ").empty());
+    // array_out prints a dimension decoration when the lower bound is not 1.
+    EXPECT_EQ(TypeConverter<std::vector<integer>>::from_text("[0:2]={1,2,3}"), (std::vector<integer>{1, 2, 3}));
+}
+
+TEST(TypeConverterArrayText, NullElementThrowsUnlessOptional) {
+    EXPECT_THROW(TypeConverter<std::vector<integer>>::from_text("{1,NULL,3}"), error::value_is_null);
+    EXPECT_THROW(TypeConverter<std::vector<std::string>>::from_text("{a,null}"), error::value_is_null);
+    auto opt = TypeConverter<std::vector<std::optional<integer>>>::from_text("{1,NULL,3}");
+    ASSERT_EQ(opt.size(), 3u);
+    EXPECT_EQ(opt[0], 1);
+    EXPECT_FALSE(opt[1].has_value());
+    EXPECT_EQ(opt[2], 3);
+    auto opts = TypeConverter<std::vector<std::optional<std::string>>>::from_text(R"({a,null,"NULL"})");
+    ASSERT_EQ(opts.size(), 3u);
+    EXPECT_EQ(opts[0], "a");
+    EXPECT_FALSE(opts[1].has_value());
+    EXPECT_EQ(opts[2], "NULL"); // quoted: a value, not SQL NULL
+}
+
+TEST(TypeConverterArrayText, MultiDimensionalLiteralThrowsFieldTypeMismatch) {
+    EXPECT_THROW(TypeConverter<std::vector<integer>>::from_text("{{1,2},{3,4}}"), error::field_type_mismatch);
+    EXPECT_THROW(TypeConverter<std::vector<integer>>::from_text("[1:2][1:2]={{1,2},{3,4}}"), error::client_error);
+}
+
+TEST(TypeConverterArrayText, MalformedLiteralsThrowClientError) {
+    using IV = std::vector<integer>;
+    EXPECT_THROW(TypeConverter<IV>::from_text(""), error::client_error);
+    EXPECT_THROW(TypeConverter<IV>::from_text("1,2,3"), error::client_error);
+    EXPECT_THROW(TypeConverter<IV>::from_text("{1,2"), error::client_error);
+    EXPECT_THROW(TypeConverter<IV>::from_text("{1,,2}"), error::client_error);
+    EXPECT_THROW(TypeConverter<IV>::from_text("{1,2}x"), error::client_error);
+    EXPECT_THROW(TypeConverter<IV>::from_text("{1 2}"), error::client_error);
+    EXPECT_THROW(TypeConverter<std::vector<std::string>>::from_text(R"({"unterminated})"), error::client_error);
+    EXPECT_THROW(TypeConverter<std::vector<std::string>>::from_text(R"({"dangling\)"), error::client_error);
+    // An element the scalar parser refuses is the scalar parser's error, unchanged.
+    EXPECT_THROW(TypeConverter<IV>::from_text("{1,x}"), error::client_error);
+}
+
+TEST(TypeConverterArrayText, RendersAndRoundTrips) {
+    EXPECT_EQ(TypeConverter<std::vector<integer>>::to_text(std::vector<integer>{1, 2, 3}), "{1,2,3}");
+    EXPECT_EQ(TypeConverter<std::vector<integer>>::to_text(std::vector<integer>{}), "{}");
+    EXPECT_EQ(TypeConverter<std::vector<bool>>::to_text(std::vector<bool>{true, false}), "{t,f}");
+    EXPECT_EQ(TypeConverter<std::vector<double>>::to_text(std::vector<double>{1.5}), "{1.5}");
+    // Strings are always quoted, with `"` and `\` escaped, so every byte sequence round-trips.
+    const std::vector<std::string> words{"a", "b c", "d\"e", "f\\g", "", "NULL"};
+    const std::string              rendered = TypeConverter<std::vector<std::string>>::to_text(words);
+    EXPECT_EQ(rendered, R"({"a","b c","d\"e","f\\g","","NULL"})");
+    EXPECT_EQ(TypeConverter<std::vector<std::string>>::from_text(rendered), words);
+    // A nullopt element renders as the bare word NULL, and reads back as nullopt.
+    using OS = std::vector<std::optional<std::string>>;
+    const OS mixed{"x", std::nullopt, "NULL"};
+    EXPECT_EQ(TypeConverter<OS>::to_text(mixed), R"({"x",NULL,"NULL"})");
+    EXPECT_EQ(TypeConverter<OS>::from_text(TypeConverter<OS>::to_text(mixed)), mixed);
+    using OI = std::vector<std::optional<integer>>;
+    const OI ints{1, std::nullopt, 3};
+    EXPECT_EQ(TypeConverter<OI>::to_text(ints), "{1,NULL,3}");
+    EXPECT_EQ(TypeConverter<OI>::from_text("{1,NULL,3}"), ints);
 }
 
 // to_binary for every registered array element type frames as [int32 body-len][body]

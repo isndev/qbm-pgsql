@@ -7,8 +7,21 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ## [Unreleased]
 
-Nothing yet. Entries land here as they are merged, and move under a version heading when that
-version is tagged.
+### Fixed
+
+- **Array serde is fail-loud (Huly QB-109).** A NULL element decoded to a default-constructed
+  element (`{1,NULL,3}` read as `{1,0,3}`, `{'a',NULL,'c'}` as `{"a","","c"}`); it throws
+  `value_is_null` now, naming the way out, unless the column is read as
+  `std::vector<std::optional<T>>` -- supported for every array type on both the result and the
+  parameter side, where a `nullopt` element binds as the -1 length with the has-null flag raised.
+  A multi-dimensional array was flattened row-major; it throws `field_type_mismatch` (unnest it
+  in SQL, or read the column as text). A malformed value decoded to an empty or PARTIAL vector; it
+  throws `client_error`. And the TEXT format (the simple query protocol) is parsed and rendered --
+  `from_text` returned `{}` and `to_text` `""` for every array -- with quoting and escapes, the
+  bare `NULL`, `{}`, the `[lo:hi]=` decoration and whitespace-inside-a-bare-element refused as
+  `array_in` refuses it; the multi-dimensional literal is refused like its binary twin.
+  `decode_pg_array` / `encode_pg_array` / `parse_pg_array_text` / `render_pg_array_text` are the
+  four functions, `TypeConverter<std::vector<std::optional<T>>>` the new specialisations.
 
 ## [3.0.0] - 2026-08-20
 

@@ -35,6 +35,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <cctype>
 #include <cstring>
 #include <ctime>
 #include <iomanip>
@@ -1364,70 +1365,112 @@ struct TypeConverter<std::vector<std::byte>> {
 // ============================================================================
 
 /**
+ * @brief The element type of an array converter, with SQL NULL made explicit.
+ * @details `std::vector<T>` cannot hold a NULL element; `std::vector<std::optional<T>>` can. The
+ *          decoder is written once over `Elem` and asks this trait which of the two it is.
+ */
+template <typename Elem>
+struct pg_array_elem {
+    using inner                    = Elem;
+    static constexpr bool nullable = false;
+};
+template <typename T>
+struct pg_array_elem<std::optional<T>> {
+    using inner                    = T;
+    static constexpr bool nullable = true;
+};
+
+/**
  * @brief Decode a PostgreSQL binary array (value bytes, no length prefix) into a
  *        flat std::vector<Elem>.
  *
  * Wire layout, all big-endian: int32 ndim, int32 flags (has-null), int32 element
  * OID, then per dimension { int32 size, int32 lower_bound }, then each element as
- * { int32 length (-1 = NULL), value bytes }. Elements are stored row-major; this
- * flattens multi-dimensional arrays into a single vector. NULL elements become a
- * default-constructed Elem (the vector cannot represent SQL NULL otherwise).
+ * { int32 length (-1 = NULL), value bytes }.
+ *
+ * Fail-loud, like every other converter of the module (Huly QB-109). Until 3.2 this decoder
+ * was the one place that answered a question it could not answer with a plausible value:
+ *   - a NULL element became a DEFAULT-CONSTRUCTED `Elem` (`{1,NULL,3}` read as `{1,0,3}`);
+ *     it now throws `error::value_is_null` unless `Elem` is `std::optional<T>`, where it is
+ *     `std::nullopt` -- the same rule `field::as<T>()` applies to a NULL column;
+ *   - a multi-dimensional array was FLATTENED row-major (`{{1,2},{3,4}}` read as `{1,2,3,4}`,
+ *     its shape lost without a word); it now throws `error::field_type_mismatch`;
+ *   - a malformed value (a truncated header, a negative dimension, an element running past
+ *     the buffer) returned an EMPTY or PARTIAL vector; it now throws `error::client_error`.
+ * An empty array (`'{}'`, sent as ndim = 0) is the one empty result.
  */
 template <typename Elem>
 std::vector<Elem>
 decode_pg_array(std::span<const byte> buffer) {
+    using traits = pg_array_elem<Elem>;
+    using inner  = typename traits::inner;
     std::vector<Elem> result;
     auto              rd32 = [](const byte *p) -> std::int32_t {
         std::int32_t be;
         std::memcpy(&be, p, sizeof(be));
         return qb::endian::from_big_endian(be);
     };
+    auto malformed = [](const char *what) {
+        throw error::client_error(std::string("malformed array binary value: ") + what);
+    };
 
     const std::size_t size = buffer.size();
     if (size < 12) // ndim + flags + element_oid
-        return result;
+        malformed("header shorter than 12 bytes");
     const byte        *p    = buffer.data();
     const std::int32_t ndim = rd32(p + 0);
-    // p+4 = has-null flags, p+8 = element OID — both implied by Elem here.
-    if (ndim <= 0)
-        return result; // empty / zero-dimensional array
+    // p+4 = has-null flags, p+8 = element OID -- both implied by Elem here.
+    if (ndim < 0)
+        malformed("negative dimension count");
+    if (ndim == 0)
+        return result; // '{}': PostgreSQL sends an empty array as zero-dimensional
+    if (ndim > 1)
+        throw error::field_type_mismatch(std::to_string(ndim)
+                                         + "-dimensional array cannot be read into a flat std::vector; "
+                                           "multi-dimensional arrays are not supported -- read the column as text "
+                                           "(as<std::string>()) or unnest it in SQL");
 
-    std::size_t  off   = 12;
-    std::int64_t total = 1;
-    for (std::int32_t d = 0; d < ndim; ++d) {
-        if (off + 8 > size)
-            return result;
-        const std::int32_t dim_size = rd32(p + off);
-        off += 8; // dim size + lower bound
-        if (dim_size < 0)
-            return result;
-        total *= dim_size;
-        if (total > static_cast<std::int64_t>(size)) // guard against bogus dims
-            return result;
-    }
-    result.reserve(static_cast<std::size_t>(total));
+    std::size_t off = 12;
+    if (off + 8 > size)
+        malformed("truncated dimension header");
+    const std::int32_t dim_size = rd32(p + off);
+    off += 8; // dim size + lower bound
+    if (dim_size < 0)
+        malformed("negative dimension size");
+    // Each element costs at least its 4-byte length: a count past that is not a real array.
+    if (static_cast<std::size_t>(dim_size) > (size - off) / 4)
+        malformed("dimension size exceeds the value");
+    result.reserve(static_cast<std::size_t>(dim_size));
 
-    for (std::int64_t e = 0; e < total; ++e) {
+    for (std::int32_t e = 0; e < dim_size; ++e) {
         if (off + 4 > size)
-            break;
+            malformed("truncated element length");
         const std::int32_t elem_len = rd32(p + off);
         off += 4;
         if (elem_len == -1) {
-            result.emplace_back(); // SQL NULL -> default-constructed element
-            continue;
+            if constexpr (traits::nullable) {
+                result.emplace_back(std::nullopt);
+                continue;
+            } else {
+                throw error::value_is_null("array element " + std::to_string(e) + " (read the column as std::vector<std::optional<T>>)");
+            }
         }
-        if (elem_len < 0 || off + static_cast<std::size_t>(elem_len) > size)
-            break;
+        if (elem_len < 0)
+            malformed("negative element length");
+        if (off + static_cast<std::size_t>(elem_len) > size)
+            malformed("truncated element value");
         const byte *ev = p + off;
-        if constexpr (std::is_same_v<Elem, std::string>) {
-            result.emplace_back(reinterpret_cast<const char *>(ev), static_cast<std::size_t>(elem_len));
+        if constexpr (std::is_same_v<inner, std::string>) {
+            result.emplace_back(std::string(reinterpret_cast<const char *>(ev), static_cast<std::size_t>(elem_len)));
         } else {
-            // Element value carries no length prefix — exactly the contract the
+            // Element value carries no length prefix -- exactly the contract the
             // scalar from_binary decoders expect.
-            result.push_back(TypeConverter<Elem>::from_binary(std::span<const byte>(ev, static_cast<std::size_t>(elem_len))));
+            result.emplace_back(TypeConverter<inner>::from_binary(std::span<const byte>(ev, static_cast<std::size_t>(elem_len))));
         }
         off += static_cast<std::size_t>(elem_len);
     }
+    if (off != size)
+        malformed("trailing bytes after the last element");
     return result;
 }
 
@@ -1436,13 +1479,17 @@ decode_pg_array(std::span<const byte> buffer) {
  *        length prefix). Inverse of decode_pg_array. The real parameter path uses
  *        ParamSerializer::add_vector(); this mirrors it so the converter is also
  *        correct if used directly (and lets ParamSerializer ODR-use to_binary).
+ *        An `Elem` of `std::optional<T>` writes a NULL element as the -1 length and
+ *        raises the has-null flag (Huly QB-109).
  */
 template <typename Elem>
 std::vector<byte>
 encode_pg_array(const std::vector<Elem> &vec) {
+    using traits = pg_array_elem<Elem>;
+    using inner  = typename traits::inner;
     std::vector<byte> buf;
     // Appended with resize()+memcpy() rather than the insert(end(), p, p + N) used
-    // elsewhere in this file, and that is deliberate — do not "simplify" it back.
+    // elsewhere in this file, and that is deliberate -- do not "simplify" it back.
     // GCC 13 at -O3 inlines the five calls below into one chain over a vector it has
     // tracked from empty, mis-computes the destination extent of the range-insert's
     // reallocation, and emits
@@ -1458,32 +1505,226 @@ encode_pg_array(const std::vector<Elem> &vec) {
         b.resize(at + sizeof(be));
         std::memcpy(b.data() + at, &be, sizeof(be));
     };
+    bool has_null = false;
+    if constexpr (traits::nullable)
+        for (const Elem &e : vec)
+            has_null = has_null || !e.has_value();
     wr32(buf, 1);                                     // ndim (1-D)
-    wr32(buf, 0);                                     // has-null flags
-    wr32(buf, TypeConverter<Elem>::get_oid());        // element OID
+    wr32(buf, has_null ? 1 : 0);                      // has-null flags
+    wr32(buf, TypeConverter<inner>::get_oid());       // element OID
     wr32(buf, static_cast<std::int32_t>(vec.size())); // dimension size
     wr32(buf, 1);                                     // lower bound
     for (const Elem &e : vec) {
+        if constexpr (traits::nullable) {
+            if (!e.has_value()) {
+                wr32(buf, -1); // SQL NULL element
+                continue;
+            }
+        }
         std::vector<byte> elem; // each scalar to_binary emits [int32 length][value]
-        TypeConverter<Elem>::to_binary(e, elem);
+        if constexpr (traits::nullable)
+            TypeConverter<inner>::to_binary(*e, elem);
+        else
+            TypeConverter<inner>::to_binary(e, elem);
         buf.insert(buf.end(), elem.begin(), elem.end());
     }
     return buf;
 }
 
 /**
- * @brief Result/param converter for one-dimensional PostgreSQL arrays.
+ * @brief Parse a PostgreSQL array literal (the TEXT format of an array column) into a flat
+ *        std::vector<Elem> (Huly QB-109).
  *
- * `from_binary` decodes the binary result (arrays are requested in binary).
- * `to_binary` length-prefixes encode_pg_array (the live parameter path actually
- * goes through ParamSerializer::add_vector, but a compiling to_binary is required
- * because add_param ODR-uses it). Restricted to non-byte element types so
- * std::vector<byte>/std::vector<char> stay on the bytea path.
+ * The grammar `array_out` produces and `array_in` accepts, one dimension deep: an optional
+ * `[lo:hi]=` dimension decoration, `{`, elements separated by `,`, `}`. An element is either
+ * quoted -- `"..."`, with `\"` and `\\` escapes -- or bare, in which case it ends at the next
+ * `,` or `}` and the bare word `NULL` (any case) is SQL NULL; `{}` is the empty array. Elements
+ * are handed to the scalar `TypeConverter<T>::from_text`, so a bare `t` is a boolean, `1.5` a
+ * double, and a quoted string keeps its bytes. Until 3.2 this was a stub returning an empty
+ * vector: a column read through the simple query protocol (text format) came back as `{}`
+ * whatever it held, without a word.
+ *
+ * Fail-loud like the binary decoder: a NULL element into a non-optional `Elem` throws
+ * `error::value_is_null`, a nested `{` (a multi-dimensional literal) throws
+ * `error::field_type_mismatch`, anything else that is not the grammar throws
+ * `error::client_error`.
  */
-#define QB_PG_DEFINE_ARRAY_CONVERTER(ELEM, ARRAY_OID)                         \
+template <typename Elem>
+std::vector<Elem>
+parse_pg_array_text(const std::string &text) {
+    using traits = pg_array_elem<Elem>;
+    using inner  = typename traits::inner;
+    std::vector<Elem> result;
+    auto              malformed = [&text](const char *what) {
+        throw error::client_error(std::string("malformed array literal '") + text + "': " + what);
+    };
+    std::size_t i       = 0;
+    const auto  n       = text.size();
+    auto        skip_ws = [&] {
+        while (i < n && (text[i] == ' ' || text[i] == '\t' || text[i] == '\n' || text[i] == '\r'))
+            ++i;
+    };
+    skip_ws();
+    if (i < n && text[i] == '[') { // dimension decoration: [lo:hi]=  (one dimension only)
+        const auto eq = text.find('=', i);
+        if (eq == std::string::npos)
+            malformed("dimension decoration without '='");
+        if (text.find(']', i) == std::string::npos || text.find("][", i) < eq)
+            malformed("multi-dimensional decoration");
+        i = eq + 1;
+        skip_ws();
+    }
+    if (i >= n || text[i] != '{')
+        malformed("expected '{'");
+    ++i;
+    skip_ws();
+    if (i < n && text[i] == '}') {
+        ++i;
+        skip_ws();
+        if (i != n)
+            malformed("trailing characters after '}'");
+        return result; // '{}'
+    }
+    auto push_value = [&](const std::string &item) {
+        if constexpr (std::is_same_v<inner, std::string>)
+            result.emplace_back(item);
+        else
+            result.emplace_back(TypeConverter<inner>::from_text(item));
+    };
+    for (;;) {
+        skip_ws();
+        if (i >= n)
+            malformed("unterminated literal");
+        if (text[i] == '{')
+            throw error::field_type_mismatch("multi-dimensional array literal cannot be read into a flat std::vector; "
+                                             "multi-dimensional arrays are not supported -- read the column as text "
+                                             "(as<std::string>()) or unnest it in SQL");
+        if (text[i] == '"') {
+            std::string item;
+            ++i;
+            for (;;) {
+                if (i >= n)
+                    malformed("unterminated quoted element");
+                const char c = text[i++];
+                if (c == '\\') {
+                    if (i >= n)
+                        malformed("dangling backslash");
+                    item += text[i++];
+                } else if (c == '"') {
+                    break;
+                } else {
+                    item += c;
+                }
+            }
+            push_value(item);
+        } else {
+            std::size_t j = i;
+            while (j < n && text[j] != ',' && text[j] != '}')
+                ++j;
+            std::string item = text.substr(i, j - i);
+            while (!item.empty() && (item.back() == ' ' || item.back() == '\t'))
+                item.pop_back();
+            i = j;
+            if (item.empty())
+                malformed("empty unquoted element");
+            // `array_in` rejects whitespace inside a bare element (`{1 2}`); the scalar parsers
+            // would read the prefix and drop the rest, which is the one answer a literal that
+            // is not the grammar must not get.
+            if (item.find(' ') != std::string::npos || item.find('\t') != std::string::npos)
+                malformed("whitespace inside an unquoted element (quote it)");
+            std::string upper = item;
+            for (auto &c : upper)
+                c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+            if (upper == "NULL") {
+                if constexpr (traits::nullable)
+                    result.emplace_back(std::nullopt);
+                else
+                    throw error::value_is_null("array element " + std::to_string(result.size())
+                                               + " (read the column as std::vector<std::optional<T>>)");
+            } else {
+                push_value(item);
+            }
+        }
+        skip_ws();
+        if (i >= n)
+            malformed("unterminated literal");
+        if (text[i] == ',') {
+            ++i;
+            continue;
+        }
+        if (text[i] == '}') {
+            ++i;
+            break;
+        }
+        malformed("expected ',' or '}' after an element");
+    }
+    skip_ws();
+    if (i != n)
+        malformed("trailing characters after '}'");
+    return result;
+}
+
+/**
+ * @brief Render a std::vector<Elem> as a PostgreSQL array literal, the inverse of
+ *        parse_pg_array_text (Huly QB-109): `{1,2,3}`, `{"a b","c\"d",NULL}`, `{}`. Every
+ *        string element is quoted (with `\` and `"` escaped), so it round-trips whatever it
+ *        holds; scalars use their own `to_text`; a `std::nullopt` element is `NULL`.
+ */
+template <typename Elem>
+std::string
+render_pg_array_text(const std::vector<Elem> &vec) {
+    using traits = pg_array_elem<Elem>;
+    using inner  = typename traits::inner;
+    std::string out;
+    out.reserve(2 + vec.size() * 8);
+    out += '{';
+    bool first = true;
+    for (const Elem &e : vec) {
+        if (!first)
+            out += ',';
+        first              = false;
+        const inner *value = nullptr;
+        if constexpr (traits::nullable) {
+            if (!e.has_value()) {
+                out += "NULL";
+                continue;
+            }
+            value = &*e;
+        } else {
+            value = &e;
+        }
+        if constexpr (std::is_same_v<inner, std::string>) {
+            out += '"';
+            for (const char c : *value) {
+                if (c == '"' || c == '\\')
+                    out += '\\';
+                out += c;
+            }
+            out += '"';
+        } else {
+            out += TypeConverter<inner>::to_text(*value);
+        }
+    }
+    out += '}';
+    return out;
+}
+
+/**
+ * @brief Result/param converter for one-dimensional PostgreSQL arrays, for both
+ *        `std::vector<ELEM>` and `std::vector<std::optional<ELEM>>` (the latter is how a
+ *        column whose array can hold NULL elements is read and bound, Huly QB-109).
+ *
+ * `from_binary` decodes the binary result (arrays are requested in binary),
+ * `from_text` the text one (the simple query protocol). `to_binary` length-prefixes
+ * encode_pg_array (the live parameter path actually goes through
+ * ParamSerializer::add_vector, but a compiling to_binary is required because add_param
+ * ODR-uses it). Restricted to non-byte element types so std::vector<byte>/std::vector<char>
+ * stay on the bytea path.
+ */
+#define QB_PG_DEFINE_ARRAY_CONVERTER_FOR(VEC, ELEM, ARRAY_OID)                \
     template <>                                                               \
-    struct TypeConverter<std::vector<ELEM>> {                                 \
-        using value_type = std::vector<ELEM>;                                 \
+    struct TypeConverter<VEC> {                                               \
+        using value_type = VEC;                                               \
         static integer                                                        \
         get_oid() {                                                           \
             return (ARRAY_OID);                                               \
@@ -1503,14 +1744,17 @@ encode_pg_array(const std::vector<Elem> &vec) {
             return decode_pg_array<ELEM>(buffer);                             \
         }                                                                     \
         static value_type                                                     \
-        from_text(const std::string &) {                                      \
-            return {};                                                        \
+        from_text(const std::string &text) {                                  \
+            return parse_pg_array_text<ELEM>(text);                           \
         }                                                                     \
         static std::string                                                    \
-        to_text(const value_type &) {                                         \
-            return {};                                                        \
+        to_text(const value_type &vec) {                                      \
+            return render_pg_array_text<ELEM>(vec);                           \
         }                                                                     \
     };
+#define QB_PG_DEFINE_ARRAY_CONVERTER(ELEM, ARRAY_OID)                    \
+    QB_PG_DEFINE_ARRAY_CONVERTER_FOR(std::vector<ELEM>, ELEM, ARRAY_OID) \
+    QB_PG_DEFINE_ARRAY_CONVERTER_FOR(std::vector<std::optional<ELEM>>, std::optional<ELEM>, ARRAY_OID)
 
 QB_PG_DEFINE_ARRAY_CONVERTER(bool, 1000)        // boolean[]
 QB_PG_DEFINE_ARRAY_CONVERTER(smallint, 1005)    // int2[]
@@ -1521,5 +1765,6 @@ QB_PG_DEFINE_ARRAY_CONVERTER(double, 1022)      // float8[]
 QB_PG_DEFINE_ARRAY_CONVERTER(std::string, 1009) // text[]
 
 #undef QB_PG_DEFINE_ARRAY_CONVERTER
+#undef QB_PG_DEFINE_ARRAY_CONVERTER_FOR
 
 } // namespace qb::pg::detail

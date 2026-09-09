@@ -33,6 +33,7 @@
 #include <cmath>
 #include <gtest/gtest.h>
 #include <limits>
+#include <optional>
 #include <string>
 #include <vector>
 #include <qb/io/async.h>
@@ -686,16 +687,44 @@ TEST_F(DataTypesRoundTrip, NumericArrayParam_PreviouslyAnyarray_BindsAndMatches)
     EXPECT_TRUE(ok);
 }
 
-TEST_F(DataTypesRoundTrip, IntArray_MultiDimensional_FlattensInOrder) {
-    // ndim > 1: the binary array header carries 2 dims. The std::vector<int> decoder
-    // flattens row-major; assert against the server's own flattened ordering via unnest.
+TEST_F(DataTypesRoundTrip, IntArray_MultiDimensional_IsRefusedLoudly) {
+    // ndim > 1: the binary array header carries 2 dims, and a flat std::vector cannot hold the
+    // shape. Until 3.2 the decoder flattened row-major in silence (Huly QB-109); it throws
+    // `field_type_mismatch` now, and the SQL-side `unnest` the message recommends is what a
+    // caller who wants the elements in order reads instead -- proved against the same value.
     ASSERT_TRUE(db_->prepare("ia2", "SELECT ARRAY[[1,2,3],[4,5,6]]::int[] AS a", type_oid_sequence{}, discard_prepare, discard_error).await());
+    ASSERT_TRUE(db_->prepare("ia2u", "SELECT ARRAY(SELECT unnest(ARRAY[[1,2,3],[4,5,6]]::int[])) AS a", type_oid_sequence{}, discard_prepare,
+                             discard_error)
+                    .await());
     bool ok = false;
     ASSERT_TRUE(db_->execute(
                        "ia2", params(),
                        [&](transaction &, results r) {
                            ASSERT_EQ(r.size(), 1u);
                            EXPECT_EQ(r.field(0).format_code, protocol_data_format::Binary);
+                           // Two throw checks inside ONE macro argument: MSVC gives every token of a
+                           // multi-line macro invocation the same __LINE__, so two EXPECT_THROW here
+                           // would define the same goto label twice (C2045). Checked by hand instead.
+                           const auto refused = [&](auto &&read) {
+                               try {
+                                   read();
+                                   return false;
+                               } catch (const error::field_type_mismatch &) {
+                                   return true;
+                               }
+                           };
+                           EXPECT_TRUE(refused([&] { (void) r[0][0].as<std::vector<int>>(); }));
+                           EXPECT_TRUE(refused([&] { (void) r[0][0].as<std::vector<std::optional<int>>>(); }));
+                           ok = true;
+                       },
+                       [](error::db_error e) { FAIL() << e.what(); })
+                    .await());
+    EXPECT_TRUE(ok);
+    ok = false;
+    ASSERT_TRUE(db_->execute(
+                       "ia2u", params(),
+                       [&](transaction &, results r) {
+                           ASSERT_EQ(r.size(), 1u);
                            EXPECT_EQ(r[0][0].as<std::vector<int>>(), (std::vector<int>{1, 2, 3, 4, 5, 6}));
                            ok = true;
                        },
@@ -704,12 +733,13 @@ TEST_F(DataTypesRoundTrip, IntArray_MultiDimensional_FlattensInOrder) {
     EXPECT_TRUE(ok);
 }
 
-TEST_F(DataTypesRoundTrip, TextArray_WithNullElement_DecodesNullAsDefault) {
-    // A NULL element on the wire is element length = -1. The std::vector<std::string>
-    // decoder cannot represent SQL NULL, so per its documented contract (type_converter.h
-    // decode_pg_array) a NULL element becomes a default-constructed (empty) string. This
-    // pins that behavior AND proves the column truly held a NULL via a server-side check
-    // (so the test is exercising the -1 length path, not just two empty strings).
+TEST_F(DataTypesRoundTrip, TextArray_WithNullElement_ThrowsUnlessOptional) {
+    // A NULL element on the wire is element length = -1. std::vector<std::string> cannot
+    // represent SQL NULL: until 3.2 the decoder default-constructed the slot (an empty string
+    // indistinguishable from one the database held, Huly QB-109); it throws `value_is_null` now,
+    // and std::vector<std::optional<std::string>> is the way to read the column -- both proved
+    // against a value the server confirms holds a NULL (so the -1 length path is what runs, not
+    // two empty strings).
     ASSERT_TRUE(db_->prepare("ta",
                              "SELECT a, (a[2] IS NULL) AS mid_is_null "
                              "FROM (SELECT ARRAY['a', NULL, 'c']::text[] AS a) s",
@@ -723,12 +753,36 @@ TEST_F(DataTypesRoundTrip, TextArray_WithNullElement_DecodesNullAsDefault) {
                            EXPECT_EQ(r.field(0).format_code, protocol_data_format::Binary);
                            // Server confirms element 2 is genuinely NULL.
                            EXPECT_TRUE(r[0][1].as<bool>());
-                           // Decoder flattens NULL -> default-constructed string.
-                           const auto v = r[0][0].as<std::vector<std::string>>();
+                           EXPECT_THROW((void) r[0][0].as<std::vector<std::string>>(), error::value_is_null);
+                           const auto v = r[0][0].as<std::vector<std::optional<std::string>>>();
                            ASSERT_EQ(v.size(), 3u);
                            EXPECT_EQ(v[0], "a");
-                           EXPECT_EQ(v[1], ""); // SQL NULL collapsed to default
+                           EXPECT_FALSE(v[1].has_value()); // SQL NULL, distinguishable from ""
                            EXPECT_EQ(v[2], "c");
+                           ok = true;
+                       },
+                       [](error::db_error e) { FAIL() << e.what(); })
+                    .await());
+    EXPECT_TRUE(ok);
+}
+
+TEST_F(DataTypesRoundTrip, OptionalElementArrayParam_BindsNullElements) {
+    // The parameter side of the same contract: a std::vector<std::optional<int>> binds its
+    // nullopt as a NULL element (length -1, has-null flag raised), which the server can see.
+    ASSERT_TRUE(
+        db_->prepare("oap",
+                     "SELECT $1::int[] = ARRAY[1, NULL, 3]::int[] AS same, ($1::int[])[2] IS NULL AS mid_is_null, cardinality($1::int[]) AS n",
+                     type_oid_sequence{oid::int4_array}, discard_prepare, discard_error)
+            .await());
+    const std::vector<std::optional<int>> a{1, std::nullopt, 3};
+    bool                                  ok = false;
+    ASSERT_TRUE(db_->execute(
+                       "oap", params(a),
+                       [&](transaction &, results r) {
+                           ASSERT_EQ(r.size(), 1u);
+                           EXPECT_TRUE(r[0][0].as<bool>()); // element-wise equal, NULL included
+                           EXPECT_TRUE(r[0][1].as<bool>()); // the NULL landed as a NULL
+                           EXPECT_EQ(r[0][2].as<int>(), 3); // and the array kept its length
                            ok = true;
                        },
                        [](error::db_error e) { FAIL() << e.what(); })

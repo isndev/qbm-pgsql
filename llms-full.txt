@@ -1237,12 +1237,12 @@ public:
     static std::string to_text(const value_type& value);
     static value_type from_binary(std::span<const byte> buffer);
     static value_type from_text(const std::string& text);
-    static void write_integer(std::vector<byte>& buffer, integer value); // public — TypeConverter<T>'s only access specifier is `public:` (type_converter.h:131, :685-686)
+    static void write_integer(std::vector<byte>& buffer, integer value); // public — TypeConverter<T>'s only access specifier is `public:` (type_converter.h:132, :686-687)
 };
 // Specializations: qb::uuid, qb::wall_time (timestamptz/timestamp), qb::json, qb::jsonb,
-// std::chrono::duration (type_converter.h:1018), std::string (:1130), numeric (:1219),
-// qb::date (type_converter.h:1257), qb::time_of_day (:1279), qb::time_of_day_tz (:1301),
-// qb::calendar_interval (type_converter.h:1321), std::vector<std::byte> (:1346)
+// std::chrono::duration (type_converter.h:1019), std::string (:1131), numeric (:1220),
+// qb::date (type_converter.h:1258), qb::time_of_day (:1280), qb::time_of_day_tz (:1302),
+// qb::calendar_interval (type_converter.h:1322), std::vector<std::byte> (:1347)
 // (the retired qb::Timestamp / qb::UtcTimestamp / qb::LocalTimestamp are NOT specialized).
 } // namespace qb::pg::detail
 ```

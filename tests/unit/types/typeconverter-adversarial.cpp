@@ -523,9 +523,10 @@ TEST(TCAdversarialOptional, NullSentinelAndAllOnesValue) {
 // to known element values.
 // ============================================================================
 
-// text[] with a NULL element: the plain std::vector<std::string> path default-constructs
-// the NULL slot (empty string), while the optional path yields nullopt. Both must agree on
-// the surrounding values. Hand-built {"a", NULL, "c"}.
+// text[] with a NULL element: the plain std::vector<std::string> path THROWS `value_is_null`
+// (until 3.2 it default-constructed the slot to "" -- a value indistinguishable from an empty
+// string the database actually held, Huly QB-109), while the optional path yields nullopt.
+// Hand-built {"a", NULL, "c"}.
 TEST(TCAdversarialArray, TextArrayWithNullElement) {
     // ndim=1, has-null=1, elem OID=text(25=0x19), dim size=3 lb=1, then a/NULL/c.
     std::string h;
@@ -539,11 +540,7 @@ TEST(TCAdversarialArray, TextArrayWithNullElement) {
     h += "ffffffff"; // NULL
     h += "00000001"
          "63"; // "c"
-    auto plain = TypeConverter<std::vector<std::string>>::from_binary(hex_to_bytes(h));
-    ASSERT_EQ(plain.size(), 3u);
-    EXPECT_EQ(plain[0], "a");
-    EXPECT_EQ(plain[1], ""); // NULL -> default-constructed empty string
-    EXPECT_EQ(plain[2], "c");
+    EXPECT_THROW(TypeConverter<std::vector<std::string>>::from_binary(hex_to_bytes(h)), error::value_is_null);
 
     auto opt = decode_pg_array<std::optional<std::string>>(hex_to_bytes(h));
     ASSERT_EQ(opt.size(), 3u);
@@ -576,27 +573,28 @@ TEST(TCAdversarialArray, FloatArrayNonFiniteElements) {
     EXPECT_TRUE(std::isinf(v[2]) && v[2] < 0);
 }
 
-// Nested (2-D) int4[2][3] flattens row-major to a 6-element vector. Anchored to the
-// golden 2-D send bytes.
-TEST(TCAdversarialArray, MultiDimFlattenGroundTruth) {
-    auto v = TypeConverter<std::vector<integer>>::from_binary(hex_to_bytes(gt::array::int4_2d_2x3));
-    EXPECT_EQ(v, (std::vector<integer>{1, 2, 3, 4, 5, 6}));
+// Nested (2-D) int4[2][3]: a flat std::vector cannot hold it, so it is `field_type_mismatch`
+// (until 3.2 it flattened row-major to {1,2,3,4,5,6}, the shape lost in silence, Huly
+// QB-109). Anchored to the golden 2-D send bytes.
+TEST(TCAdversarialArray, MultiDimThrowsGroundTruth) {
+    EXPECT_THROW(TypeConverter<std::vector<integer>>::from_binary(hex_to_bytes(gt::array::int4_2d_2x3)), error::field_type_mismatch);
 }
 
-// Bogus/oversized dimension and an element length that overruns the buffer must degrade to
-// empty/partial WITHOUT reading out of bounds (each targets a distinct guard branch).
+// Bogus/oversized dimension and an element length that overruns the buffer must throw
+// `client_error` WITHOUT reading out of bounds (each targets a distinct guard branch); until
+// 3.2 each degraded to an empty or PARTIAL vector, a plausible value for a broken wire.
 TEST(TCAdversarialArray, MalformedDimsAndOverrunGuards) {
     using IV = std::vector<integer>;
-    // dim size = INT32_MAX, count exceeds buffer -> empty (the `total > size` guard).
-    EXPECT_TRUE(TypeConverter<IV>::from_binary(hex_to_bytes("0000000100000000000000177fffffff00000001")).empty());
-    // dim size negative -> empty.
-    EXPECT_TRUE(TypeConverter<IV>::from_binary(hex_to_bytes("000000010000000000000017ffffffff00000001")).empty());
-    // claims 2 elements, only one present -> partial {10}, no OOB.
-    EXPECT_EQ(TypeConverter<IV>::from_binary(hex_to_bytes("0000000100000000000000170000000200000001000000040000000a")), (IV{10}));
-    // element length 0x10 (16) but only 4 value bytes follow -> stop before the overrun (empty).
-    EXPECT_TRUE(TypeConverter<IV>::from_binary(hex_to_bytes("00000001000000000000001700000001000000010000001000000001")).empty());
-    // a non-(-1) negative element length (here -2 = 0xfffffffe) -> break (empty).
-    EXPECT_TRUE(TypeConverter<IV>::from_binary(hex_to_bytes("0000000100000000000000170000000100000001fffffffe")).empty());
+    // dim size = INT32_MAX, count exceeds buffer (the `dim_size > room` guard).
+    EXPECT_THROW(TypeConverter<IV>::from_binary(hex_to_bytes("0000000100000000000000177fffffff00000001")), error::client_error);
+    // dim size negative.
+    EXPECT_THROW(TypeConverter<IV>::from_binary(hex_to_bytes("000000010000000000000017ffffffff00000001")), error::client_error);
+    // claims 2 elements, only one present: was the partial {10}.
+    EXPECT_THROW(TypeConverter<IV>::from_binary(hex_to_bytes("0000000100000000000000170000000200000001000000040000000a")), error::client_error);
+    // element length 0x10 (16) but only 4 value bytes follow.
+    EXPECT_THROW(TypeConverter<IV>::from_binary(hex_to_bytes("00000001000000000000001700000001000000010000001000000001")), error::client_error);
+    // a non-(-1) negative element length (here -2 = 0xfffffffe).
+    EXPECT_THROW(TypeConverter<IV>::from_binary(hex_to_bytes("0000000100000000000000170000000100000001fffffffe")), error::client_error);
 }
 
 // ============================================================================
