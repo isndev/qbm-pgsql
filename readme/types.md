@@ -75,7 +75,7 @@ share an identical micros-since-2000 wire layout. <!-- src: src/qbm/pgsql/type_c
 #include <qbm/pgsql/pgsql.h>
 using namespace qb::pg;
 
-// Read a timestamptz column. (src: tests/integration/datatypes/datatypes-roundtrip.cpp:403)
+// Read a timestamptz column. (src: tests/integration/datatypes/datatypes-roundtrip.cpp:404)
 qb::wall_time created = result[0][0].as<qb::wall_time>();
 ```
 
@@ -135,12 +135,12 @@ text. <!-- src: src/qbm/pgsql/type_converter.h:527-563 -->
   sent verbatim with a length prefix; no null terminator is transmitted.
 - **`bytea`.** `qb::pg::bytea` is a `std::vector<char>` subclass (OID 17). Binary form is the raw bytes; text form is
   PostgreSQL hex (`\x...`). Plain `std::vector<char>` and `std::vector<unsigned char>` map to `bytea` as
-  well. <!-- src: src/qbm/pgsql/type_converter.h:216-223, 309-318 -->
+  well. <!-- src: src/qbm/pgsql/type_converter.h:216-223, 310-319 -->
 
 ### Boolean
 
 `bool` sends a single `0`/`1` byte. On decode, the binary path reads one raw byte; the text path accepts `t`, `true`,
-`1`, `yes`, `y`, `on` as true. <!-- src: src/qbm/pgsql/type_converter.h:404-411, 563-564 -->
+`1`, `yes`, `y`, `on` as true. <!-- src: src/qbm/pgsql/type_converter.h:404-411, 564-565 -->
 
 ### JSON and JSONB
 
@@ -166,7 +166,7 @@ array form back into a JSON object when they detect it.
 buffer. <!-- src: src/qbm/pgsql/type_converter.h:696-770 -->
 
 ```cpp
-qb::uuid id = result[0][0].as<qb::uuid>(); // src: tests/integration/datatypes/datatypes-roundtrip.cpp:356
+qb::uuid id = result[0][0].as<qb::uuid>(); // src: tests/integration/datatypes/datatypes-roundtrip.cpp:357
 ```
 
 ### Arrays
@@ -256,7 +256,7 @@ only). <!-- src: src/qbm/pgsql/type_mapping.h:171-174; src/qbm/pgsql/type_conver
 #include <qbm/pgsql/pgsql.h>
 using namespace qb::pg;
 
-// src: tests/integration/datatypes/datatypes-roundtrip.cpp:349 (brace-init of oid)
+// src: tests/integration/datatypes/datatypes-roundtrip.cpp:350 (brace-init of oid)
 auto pr = co_await db.prepare(
     "ins",
     "INSERT INTO t (n, label, at) VALUES ($1, $2, $3)",

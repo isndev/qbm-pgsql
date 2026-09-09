@@ -273,7 +273,7 @@ A `results::field` is a non-owning view of one cell. Its core members:
 `std::decay_t<T>` (`resultset.h:551-563`):
 
 ```cpp
-<!-- src: qbm/pgsql/tests/integration/datatypes/datatypes-roundtrip.cpp:284-289 -->
+<!-- src: qbm/pgsql/tests/integration/datatypes/datatypes-roundtrip.cpp:285-290 -->
 qb::pg::smallint s   = result[0][0].as<qb::pg::smallint>();
 qb::pg::integer  i   = result[0][0].as<qb::pg::integer>();
 qb::pg::bigint   b   = result[0][0].as<qb::pg::bigint>();
