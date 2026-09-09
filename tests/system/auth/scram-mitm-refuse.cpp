@@ -39,7 +39,7 @@
 
 #include <qbm/pgsql/pgsql.h>
 
-#include "../../shared/pg_fake_backend.hpp"
+#include "../../shared/pg_fake_backend.h"
 
 using namespace qb::pg;
 using namespace qb::pg::test::fake; // put_i32 / get_i32 / recv_exact / send_all / backend_msg / read_typed

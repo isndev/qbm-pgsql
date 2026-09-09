@@ -3,7 +3,7 @@
  * @brief System test: the out-of-band CancelRequest on the wire, `cancel_async()` next to `cancel()`,
  *        without a daemon (Huly QB-113).
  *
- * A fake PostgreSQL backend on a background thread (the shared `pg_fake_backend.hpp` helpers: qb's
+ * A fake PostgreSQL backend on a background thread (the shared `pg_fake_backend.h` helpers: qb's
  * own cross-platform `qb::io::tcp` sockets, an ephemeral loopback port) speaks just enough of the
  * wire protocol to hand the client a session --
  *   Startup  ->  AuthenticationOk(0), BackendKeyData(K: pid, secret), ReadyForQuery('I')
@@ -39,7 +39,7 @@
 
 #include <qbm/pgsql/pgsql.h>
 
-#include "../../shared/pg_fake_backend.hpp"
+#include "../../shared/pg_fake_backend.h"
 
 using namespace qb::pg;
 using namespace qb::pg::test::fake;

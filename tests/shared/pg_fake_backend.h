@@ -1,5 +1,5 @@
 /**
- * @file qbm/pgsql/tests/shared/pg_fake_backend.hpp
+ * @file qbm/pgsql/tests/shared/pg_fake_backend.h
  * @brief The wire-level helpers a fake PostgreSQL backend needs on a test thread: big-endian int32,
  *        bounded exact recv, exact send, backend-message framing, typed frontend-message reads.
  *
