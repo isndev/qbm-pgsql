@@ -156,7 +156,7 @@ run_fake_server(qb::io::tcp::listener &listener, FakeResult *res) {
     {
         std::vector<uint8_t> p;
         put_i32(p, 0);
-        send_all(client, backend_msg('R', p));
+        (void) send_all(client, backend_msg('R', p)); // best effort: the client is about to be refused anyway
         res->sent_ok = true;
     }
 
