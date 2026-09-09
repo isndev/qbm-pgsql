@@ -268,7 +268,7 @@ Two things this **does not** do, and both matter:
 
 - **It does not stop the query.** PostgreSQL keeps executing the statement to completion; only your coroutine stopped
   waiting. To bound the *server's* work, set a statement timeout with `Transaction::set_timeout(qb::duration)` before
-  `begin()`, or fire `cancel()` from off the loop — see [transaction.md](./transaction.md)
+  `begin()`, or `co_await db.cancel_async()` from a spawned coroutine (`cancel()` blocks the loop) — see [transaction.md](./transaction.md)
   and [connection.md](./connection.md#cancelling-a-running-query).
 - **It does not free the connection sooner.** The abandoned statement still occupies the single serial stream until the
   server is done with it, so the next `co_await` on the same `database` queues behind it.
@@ -326,7 +326,7 @@ The two arities are fixed and checked at compile time: the success handler is `(
 `(Transaction&)` alone, and the error handler takes `(error::db_error const&)` — one argument, no transaction. The
 shipped no-ops `qb::pg::discard_query` and `qb::pg::discard_error` have exactly those signatures and are the right
 placeholder when you read the side effects elsewhere.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2691-2699 (discard_query_results_t; discard_error_t) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2804-2812 (discard_query_results_t; discard_error_t) -->
 
 `this` is safe in a callback in a way it is not in a coroutine, but only because of a difference worth naming: the
 callback is invoked from the reply path of a connection the actor owns, and the actor's `KillEvent` handler
@@ -349,14 +349,15 @@ Every operation on this module is non-blocking except two, and both are document
 here because an actor is where the cost lands.
 
 - **`cancel()`** opens a second socket with a *blocking* connect and send, capped at `min(connect_timeout, 2 s)`. Firing
-  it from a timer on the core's own loop — the natural place — parks the `VirtualCore` for that duration. Run it from a
-  thread that is not a core, or accept the stall and keep `connect_timeout` small.
+  it from a timer on the core's own loop — the natural place — parks the `VirtualCore` for that duration. Fire
+  **`cancel_async()`** instead (`co_await db.cancel_async()` from a coroutine the actor spawns): the same request, the
+  coroutine suspended while the cancel connection comes up, the core free — and TLS-negotiated on a secure database.
   See [connection.md](./connection.md#cancelling-a-running-query).
 - **`disconnect()`** runs the loop once (`EVRUN_NOWAIT`) after tearing the socket down, so the close is observed. That
   is a single non-blocking pass rather than a pump, and it is deliberately not `async::run()` so it stays legal from a
   coroutine — but it is still a re-entrant turn of the loop from inside your handler. Prefer calling it from the
   `KillEvent` handler, where nothing runs after it anyway.
-  <!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2512-2531 (disconnect: fail_all_pending, then one EVRUN_NOWAIT pass) -->
+  <!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2625-2644 (disconnect: fail_all_pending, then one EVRUN_NOWAIT pass) -->
 
 ---
 
@@ -436,7 +437,8 @@ shutdown it is the difference between exiting now and exiting when the slowest q
 - **Sharing one `database` between actors.** A client is one I/O thread and one serial wire stream; it is not
   thread-safe and it cannot be moved. Give each actor its own, or put the database behind a single actor and send it
   events.
-- **Firing `cancel()` from a timer on the core.** It blocks the loop for up to `min(connect_timeout, 2 s)`.
+- **Firing `cancel()` from a timer on the core.** It blocks the loop for up to `min(connect_timeout, 2 s)`; `co_await
+  db.cancel_async()` from a spawned coroutine does not.
 - **Killing before disconnecting.** Parked queries then finish on the server's schedule rather than yours.
 
 ---

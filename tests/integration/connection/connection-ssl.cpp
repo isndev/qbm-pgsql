@@ -119,6 +119,86 @@ TEST_F(SslConnection, ConnectSuccess_Coroutine) {
 }
 
 // --------------------------------------------------------------------------------------
+// Out-of-band cancellation over TLS (Huly QB-113)
+// --------------------------------------------------------------------------------------
+
+/**
+ * @brief A secure database's `cancel_async()` negotiates the cancel connection the way the
+ *        session was negotiated -- SSLRequest, the server's 'S', the TLS handshake -- and the
+ *        CancelRequest it then carries aborts the in-flight query (SQLSTATE 57014).
+ *
+ * The blocking `cancel()` sends its request in plaintext even on a secure database, which a
+ * `hostssl`-only server rejects. This server accepts both, so what is proven here is the TLS
+ * path's delivery: a request sent in plaintext AFTER the server's 'S' would fail the TLS
+ * handshake and cancel nothing, and the wire test (`system/connection/cancel-request-wire.cpp`)
+ * pins that the plain variant sends the CancelRequest bare. The session's own TLS is asserted
+ * through `pg_stat_ssl` so the case cannot pass on a cleartext fallback.
+ */
+TEST_F(SslConnection, CancelAsyncOverTlsAbortsTheInFlightQuery) {
+    ASSERT_TRUE(ssl_connect(*db_));
+    const int target_pid = db_->backend_pid();
+    ASSERT_GT(target_pid, 0);
+
+    bool session_is_tls = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        auto r         = co_await db_->query("SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()");
+        session_is_tls = r.ok() && r.result().size() == 1 && r.result()[0][0].as<bool>();
+        co_return;
+    }());
+    ASSERT_TRUE(session_is_tls) << "the session under test is not a TLS session; the cancel path it exercises would not be the TLS one";
+
+    // The trigger runs on a second (TLS) connection and fires only once the sleep is server-confirmed
+    // running on the target backend -- never before the query is parked, never after it would end.
+    auto sentinel = std::make_unique<qb::pg::tcp::ssl::database>();
+    ASSERT_TRUE(ssl_connect(*sentinel));
+
+    bool        failed          = false;
+    bool        is_cancel_state = false;
+    bool        cancel_issued   = false;
+    std::string code;
+
+    auto trigger = [&]() -> qb::io::async::task<void> {
+        const std::string probe = std::string("SELECT count(*)::int FROM pg_stat_activity WHERE pid = ") + std::to_string(target_pid)
+                                  + " AND query LIKE 'SELECT pg_sleep%' AND state = 'active'";
+        for (int attempt = 0; attempt < 250; ++attempt) {
+            auto a = co_await sentinel->query(probe);
+            if (a.ok() && a.result().size() == 1 && a.result()[0][0].as<int>() > 0) {
+                cancel_issued = co_await db_->cancel_async();
+                co_return;
+            }
+            auto pause = co_await sentinel->query("SELECT pg_sleep(0.02)");
+            (void) pause;
+        }
+        co_return;
+    };
+
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        qb::io::async::coro_scheduler().spawn(trigger());
+        auto r = co_await db_->query("SELECT pg_sleep(5)");
+        failed = !r.ok();
+        if (!r.ok()) {
+            code            = r.error().code;
+            is_cancel_state = (r.error().sqlstate == sqlstate::query_canceled);
+        }
+        co_return;
+    }());
+    sentinel->disconnect();
+
+    EXPECT_TRUE(cancel_issued) << "cancel_async() over TLS should have reported the request delivered";
+    EXPECT_TRUE(failed) << "pg_sleep(5) should have been canceled, not completed";
+    EXPECT_EQ(code, "57014");
+    EXPECT_TRUE(is_cancel_state);
+
+    bool ok_after = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        auto r   = co_await db_->query("SELECT 1 AS one");
+        ok_after = r.ok() && r.result().size() == 1 && r.result()[0][0].as<int>() == 1;
+        co_return;
+    }());
+    EXPECT_TRUE(ok_after) << "the TLS session must remain usable after an async cancel";
+}
+
+// --------------------------------------------------------------------------------------
 // Reconnect (assert a real, re-captured backend PID)
 // --------------------------------------------------------------------------------------
 

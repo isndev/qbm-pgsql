@@ -795,6 +795,61 @@ TEST_F(PgsqlCoroApiTest, CancelInFlightQuery) {
     EXPECT_TRUE(ok_after) << "connection must remain usable after a cancel";
 }
 
+// The non-blocking twin (Huly QB-113): `co_await db_->cancel_async()` from the trigger coroutine.
+// Same server-confirmed trigger, same verdict (57014), same survival of the connection -- and the
+// trigger's own coroutine is what suspends while the cancel connection comes up, not the loop.
+TEST_F(PgsqlCoroApiTest, CancelAsyncInFlightQuery) {
+    auto sentinel = std::make_unique<qb::pg::tcp::database>();
+    ASSERT_TRUE(qb::io::async::run_sync(sentinel->connect(qb::pg::test::dsn_tcp_string())));
+    const int target_pid = db_->backend_pid();
+    ASSERT_GT(target_pid, 0) << "need the backend PID of the connection that will run pg_sleep";
+
+    bool        failed          = false;
+    bool        is_cancel_state = false;
+    bool        cancel_issued   = false;
+    std::string code;
+
+    auto trigger = [&]() -> qb::io::async::task<void> {
+        const std::string probe = std::string("SELECT count(*)::int FROM pg_stat_activity WHERE pid = ") + std::to_string(target_pid)
+                                  + " AND query LIKE 'SELECT pg_sleep%' AND state = 'active'";
+        for (int attempt = 0; attempt < 250; ++attempt) { // up to ~5s @ 20ms; deadline-bounded
+            auto a = co_await sentinel->query(probe);
+            if (a.ok() && a.result().size() == 1 && a.result()[0][0].as<int>() > 0) {
+                cancel_issued = co_await db_->cancel_async();
+                co_return;
+            }
+            auto pause = co_await sentinel->query("SELECT pg_sleep(0.02)"); // yield ~20ms without blocking the loop
+            (void) pause;
+        }
+        co_return;
+    };
+
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        qb::io::async::coro_scheduler().spawn(trigger());
+        auto r = co_await db_->query("SELECT pg_sleep(5)");
+        failed = !r.ok();
+        if (!r.ok()) {
+            code            = r.error().code;
+            is_cancel_state = (r.error().sqlstate == sqlstate::query_canceled);
+        }
+        co_return;
+    }());
+    sentinel->disconnect();
+
+    EXPECT_TRUE(cancel_issued) << "db_->cancel_async() should have reported the request delivered";
+    EXPECT_TRUE(failed) << "pg_sleep(5) should have been canceled, not completed";
+    EXPECT_EQ(code, "57014");
+    EXPECT_TRUE(is_cancel_state);
+
+    bool ok_after = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        auto r   = co_await db_->query("SELECT 1 AS one");
+        ok_after = r.ok() && r.result().size() == 1 && r.result()[0][0].as<int>() == 1;
+        co_return;
+    }());
+    EXPECT_TRUE(ok_after) << "connection must remain usable after an async cancel";
+}
+
 // COPY ... TO STDOUT streams each row to the sink as it arrives. Verifies text + CSV.
 TEST_F(PgsqlCoroApiTest, CopyOutStreamsToSink) {
     std::string text_out, csv_out;

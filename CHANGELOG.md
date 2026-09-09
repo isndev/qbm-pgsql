@@ -7,6 +7,29 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ## [Unreleased]
 
+### Added
+
+- **`cancel_async()` -- the out-of-band CancelRequest without blocking the event loop, TLS
+  included (Huly QB-113).** `cancel()` opens its second socket with a BLOCKING connect + send,
+  capped at `min(connect_timeout, 2 s)`; fired from a timer on the core's loop -- the natural place
+  -- it parked every actor of that core for the duration, and it sent the request in plaintext even
+  on a secure database, which a `hostssl`-only server rejects. It was the one blocking call in the
+  client, listed as such in both llm docs and three readme pages. `cancel_async()` (`task<bool>`)
+  is the same request driven by the async connector the session itself connects through:
+  `qb::io::async::tcp::connect` for a plain database, the STARTTLS connector with
+  `postgres_ssl_negotiator` -- SSLRequest, the server's `'S'`, the TLS handshake -- for a secure
+  one, the coroutine suspended meanwhile; then the 16 bytes written non-blocking (a would-block
+  parks the coroutine on the socket's readiness). A secure database never falls back to
+  plaintext: a server that declines SSL on the cancel connection fails the cancel, the rule the
+  session's connect applies. Same connect budget as `cancel()`, same verdict (57014 on the
+  awaiting caller, the connection survives). `cancel()` stays, unchanged on the wire: the two share
+  `cancel_request_packet()`, and the TLS context builder is shared with the session's connect
+  (`make_client_tls_context()`). Tests: a fake backend that hands out the BackendKeyData and reads
+  the second connection (`system/connection/cancel-request-wire.cpp`: the exact 16 bytes, the
+  loop's next turn running BEFORE the cancel completes, `cancel()` sending the same bytes, both
+  false on a never-connected database), the coroutine twin of `CancelInFlightQuery` and a TLS twin
+  in `connection-ssl` whose session is asserted TLS through `pg_stat_ssl`.
+
 ### Fixed
 
 - **Array serde is fail-loud (Huly QB-109).** A NULL element decoded to a default-constructed

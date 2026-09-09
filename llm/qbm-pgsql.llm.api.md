@@ -99,7 +99,8 @@ public:
         query_stream(std::string sql, std::size_t batch_size, RowFn on_row);
 
     // Connection introspection / control:
-    bool cancel();                                      // out-of-band PostgreSQL CancelRequest (SYNCHRONOUS, ≤2s); NOT [[nodiscard]] (pgsql.h:2266-2267)
+    bool cancel();                                      // out-of-band PostgreSQL CancelRequest (SYNCHRONOUS, ≤2s, plaintext); NOT [[nodiscard]] (pgsql.h:2312-2313)
+    [[nodiscard]] qb::io::async::task<bool> cancel_async(); // the same request, non-blocking, TLS on a secure database (pgsql.h:2357-2358)
     [[nodiscard]] bool in_transaction() const noexcept; // backend session in a transaction block ('T'/'E')
     [[nodiscard]] bool used_channel_binding() const noexcept; // SCRAM-SHA-256-PLUS tls-server-end-point binding negotiated
     [[nodiscard]] std::optional<std::string_view> parameter_status(std::string_view key) const; // PQparameterStatus
@@ -146,7 +147,8 @@ struct tcp {
     - `copy_in(std::string sql, std::string data) -> task<Reply<resultset>>`: Convenience overload that sends the entire `data` payload in one shot.
     - `query_stream(std::string sql, std::size_t batch_size, RowFn on_row) -> task<Reply<void>>`: Streams a large result via a server-side `CURSOR` (`DECLARE`/`FETCH`, `batch_size` rows per round trip), invoking `on_row` per row in **constant memory**. Auto-manages a transaction when idle (`BEGIN`/`COMMIT`, `ROLLBACK` on failure); when `in_transaction()` it declares the cursor in the caller's transaction and touches only the cursor. Cursor names are unique per connection (`qb_stream_cursor_<n>`), so streams **may overlap** on one `database` — and because a session has a single transaction, overlapping streams **share** the self-opened block: the first opens it, later ones only join, the last one out `COMMIT`s (or `ROLLBACK`s if any participant failed), so a server error in one stream aborts the block for the others. A caller-opened transaction is recognised as caller-owned only once its `BEGIN` has **completed** (`in_transaction()` mirrors the last `ReadyForQuery`), so do not start a stream while your own `begin()` is still in flight. `on_row` exceptions are rethrown after the cursor is closed and any self-opened transaction rolled back. `batch_size` is clamped to ≥ 1.
 - **Connection introspection / control:**
-    - `bool cancel()`: Sends an out-of-band PostgreSQL `CancelRequest` on a short-lived **separate** connection (libpq `PQcancel` style). It is **synchronous / blocking** (capped at ≤ 2s) and plaintext even when the main link is SSL. Surfaces on the in-flight query as `sqlstate::query_canceled` (57014). Note: it briefly blocks the calling thread — unlike the rest of the client, do not expect it to be non-blocking.
+    - `bool cancel()`: Sends an out-of-band PostgreSQL `CancelRequest` on a short-lived **separate** connection (libpq `PQcancel` style). It is **synchronous / blocking** (capped at ≤ 2s) and plaintext even when the main link is SSL. Surfaces on the in-flight query as `sqlstate::query_canceled` (57014). Note: it briefly blocks the calling thread — prefer `cancel_async()`.
+    - `[[nodiscard]] task<bool> cancel_async()`: The same `CancelRequest`, driven by the async connector the session connects through (`qb::io::async::tcp::connect`, or the STARTTLS connector + `postgres_ssl_negotiator` for a secure database: SSLRequest → `'S'` → TLS, never a plaintext fallback), the coroutine suspended meanwhile — nothing blocks the loop. Same connect budget as `cancel()` (`connect_timeout` capped at 2 s), same verdict, same `false` meaning "not delivered" (never connected, unreachable, TLS declined/failed, budget exhausted). `co_await db.cancel_async()` from a timer coroutine, an actor, or a second connection's trigger. (Huly QB-113)
     - `bool in_transaction() const noexcept`: True when the backend session is in a transaction block (`'T'`) or a failed transaction block (`'E'`); false when idle (`'I'`).
     - `bool used_channel_binding() const noexcept`: True when **SCRAM-SHA-256-PLUS** with `tls-server-end-point` channel binding was negotiated (only over TLS, when the server offers the `-PLUS` mechanism).
     - `std::optional<std::string_view> parameter_status(std::string_view key) const`: Value of a server `ParameterStatus` report (libpq `PQparameterStatus`); e.g. `"server_version"`, `"server_encoding"`, `"TimeZone"`. `std::nullopt` if the key was never reported.
@@ -382,12 +384,12 @@ namespace qb::pg {
 
 ### `qb::pg::results` (alias for `qb::pg::detail::resultset`)
 
-Represents the set of rows returned by a query. Provides a container-like interface to access rows. There is no public `qb::pg::resultset`: the class lives in `namespace qb::pg::detail` and the only public spelling is the alias `using results = detail::resultset;` (`qbm/pgsql/src/qbm/pgsql/pgsql.h:2677`). Row and field below are reachable as `qb::pg::results::row` / `qb::pg::results::field`.
+Represents the set of rows returned by a query. Provides a container-like interface to access rows. There is no public `qb::pg::resultset`: the class lives in `namespace qb::pg::detail` and the only public spelling is the alias `using results = detail::resultset;` (`qbm/pgsql/src/qbm/pgsql/pgsql.h:2790`). Row and field below are reachable as `qb::pg::results::row` / `qb::pg::results::field`.
 
 **Definition (`qbm/pgsql/src/qbm/pgsql/resultset.h`):**
 ```cpp
 namespace qb::pg {
-// Public alias (pgsql.h:2677); the class itself is qb::pg::detail::resultset.
+// Public alias (pgsql.h:2790); the class itself is qb::pg::detail::resultset.
 using results = detail::resultset;
 }
 

@@ -22,8 +22,8 @@ govern how you run them:
   on at its own root `CMakeLists.txt:38` — named in prose rather than as a `src:` citation, because a
   bare `CMakeLists.txt` token resolves against THIS module and would silently range-check
   `qbm/pgsql/CMakeLists.txt` instead — so a default build already produces the binaries.
-- **Integration suites need a live server.** Eighteen unit suites have no socket, and two system suites
-  (`connect-timeout`, `scram-mitm-refuse`) run with no daemon; the integration suites connect to
+- **Integration suites need a live server.** Eighteen unit suites have no socket, and three system suites
+  (`connect-timeout`, `scram-mitm-refuse`, `cancel-request-wire`) run with no daemon; the integration suites connect to
   PostgreSQL; each gates its fixture on a successful connect and calls `GTEST_SKIP()` when the server is unreachable, so
   the suite passes (as skipped) rather than failing on a machine with no database.
 
@@ -37,7 +37,7 @@ daemon (a connect-to-dead-host timeout), and `integration/` needs a live server.
 | Tier        | Suites                                                                                                                                                                                                                                                                              | Server required |
 |-------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------|
 | Unit        | `unserializer-primitives`, `typeconverter-codecs`, `result-format-routing`, `param-serializer-encode`, `typeconverter-{scalar,numeric,temporal,array,json,adversarial}`, `datastructures`, `oid-stream`, `protocol-message-codec`, `identifier-quoting`, `dsn-parse`, `scram-and-cancel`, `prepared-storage-lru`, `module-surface` | No              |
-| System      | `connect-timeout` (connects to a dead host — no daemon, network-timing dependent), `scram-mitm-refuse` (SCRAM mutual-auth refusal, no daemon)                                                                                                                                      | No              |
+| System      | `connect-timeout` (connects to a dead host — no daemon, network-timing dependent), `scram-mitm-refuse` (SCRAM mutual-auth refusal, no daemon), `cancel-request-wire` (the out-of-band CancelRequest against a fake backend, `cancel_async()` next to `cancel()`, no daemon)                                                                                                                                      | No              |
 | Integration | `connection-lifecycle`, `queries`, `prepared-statements`, `transaction-basic`, `transaction-advanced`, `datatypes-roundtrip`, `wire-formats`, `listen-notify`, `coro-api`, `errors-sqlstate`, `database-api-extra`, `param-roundtrip`, `resilience`, and `connection-ssl` (TLS only)              | Yes             |
 
 The unit suites exercise wire-format encoding and decoding, parameter serialization, type conversion, and

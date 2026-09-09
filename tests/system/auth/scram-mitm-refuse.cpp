@@ -39,85 +39,13 @@
 
 #include <qbm/pgsql/pgsql.h>
 
+#include "../../shared/pg_fake_backend.hpp"
+
 using namespace qb::pg;
-
-namespace {
-
-// --- little-helpers: big-endian int32 + exact send/recv --------------------------------------
-
-void
-put_i32(std::vector<uint8_t> &b, uint32_t v) {
-    b.push_back(static_cast<uint8_t>((v >> 24) & 0xFF));
-    b.push_back(static_cast<uint8_t>((v >> 16) & 0xFF));
-    b.push_back(static_cast<uint8_t>((v >> 8) & 0xFF));
-    b.push_back(static_cast<uint8_t>(v & 0xFF));
-}
-
-uint32_t
-get_i32(const uint8_t *p) {
-    return (static_cast<uint32_t>(p[0]) << 24) | (static_cast<uint32_t>(p[1]) << 16) | (static_cast<uint32_t>(p[2]) << 8)
-           | static_cast<uint32_t>(p[3]);
-}
-
+using namespace qb::pg::test::fake; // put_i32 / get_i32 / recv_exact / send_all / backend_msg / read_typed
 using namespace std::chrono_literals;
 
-// Bounded exact recv over a (blocking) qb socket: gate every read on handle_read_ready() so a
-// stuck peer can never hang the server thread. Cross-platform replacement for the SO_RCVTIMEO the
-// original set — handle_read_ready() is qb's portable select() wrapper (works on Windows too).
-bool
-recv_exact(qb::io::tcp::socket &s, uint8_t *buf, size_t n, qb::duration timeout = std::chrono::seconds(5)) {
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
-    size_t     got      = 0;
-    while (got < n) {
-        const auto now = std::chrono::steady_clock::now();
-        if (now >= deadline)
-            return false;
-        if (qb::io::socket::handle_read_ready(s.native_handle(), std::chrono::duration_cast<qb::duration>(deadline - now)) <= 0)
-            return false; // timeout or error
-        const int r = s.read(buf + got, n - got);
-        if (r <= 0)
-            return false; // EOF or error
-        got += static_cast<size_t>(r);
-    }
-    return true;
-}
-
-bool
-send_all(qb::io::tcp::socket &s, const std::vector<uint8_t> &m) {
-    size_t sent = 0;
-    while (sent < m.size()) {
-        const int r = s.write(m.data() + sent, m.size() - sent);
-        if (r <= 0)
-            return false;
-        sent += static_cast<size_t>(r);
-    }
-    return true;
-}
-
-// A backend message: [type][int32 length incl. length field][payload].
-std::vector<uint8_t>
-backend_msg(char type, const std::vector<uint8_t> &payload) {
-    std::vector<uint8_t> m;
-    m.push_back(static_cast<uint8_t>(type));
-    put_i32(m, static_cast<uint32_t>(4 + payload.size()));
-    m.insert(m.end(), payload.begin(), payload.end());
-    return m;
-}
-
-// Read one frontend message that has a type byte ('p' for SASL responses): returns its body.
-bool
-read_typed(qb::io::tcp::socket &s, char expected_type, std::vector<uint8_t> &body_out) {
-    uint8_t hdr[5];
-    if (!recv_exact(s, hdr, 5))
-        return false;
-    if (static_cast<char>(hdr[0]) != expected_type)
-        return false;
-    const uint32_t mlen = get_i32(hdr + 1);
-    if (mlen < 4 || mlen > 65536)
-        return false;
-    body_out.assign(mlen - 4, 0);
-    return recv_exact(s, body_out.data(), body_out.size());
-}
+namespace {
 
 struct FakeResult {
     std::atomic<bool> got_startup{false};

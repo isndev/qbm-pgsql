@@ -477,6 +477,17 @@ the query survived.
 > blocks the calling thread, so do not treat it as non-blocking. A server that
 > mandates SSL on every connection will reject the cancel.
 
+**`cancel_async() -> task<bool>` — the same request, non-blocking (Huly QB-113).**
+`co_await db.cancel_async()` opens the out-of-band connection through the async
+connector the session itself uses — plain `tcp::connect`, or the STARTTLS
+connector with `postgres_ssl_negotiator` on a secure database (SSLRequest, the
+server's `'S'`, the TLS handshake; a server that declines SSL fails the cancel,
+never a plaintext fallback) — the coroutine suspended meanwhile, then writes
+the 16 bytes without blocking. Same connect budget (`connect_timeout` capped at
+2 s), same verdict (57014), same `false` = "not delivered". Fire it from a timer
+coroutine, an actor, or a second connection's trigger; reach for `cancel()` only
+where no coroutine can run.
+
 **Connection introspection (all `[[nodiscard]]`, libpq-style):**
 
 ```cpp
@@ -568,7 +579,8 @@ server never sent it. The `string_view` is valid while the connection is alive.
   Start a stream only *after* your own `begin()` has completed, never while it is
   still in flight.
 - **`cancel()` blocks** (synchronous, ≤ 2 s, plaintext even over SSL) — the one
-  call in this client that briefly stalls the calling thread.
+  call in this client that briefly stalls the calling thread. `cancel_async()`
+  is the same request without the stall, and negotiates TLS on a secure database.
 
 ---
 

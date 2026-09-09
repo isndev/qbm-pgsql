@@ -84,6 +84,9 @@ qpg_test(unit module-surface unit/misc/module-surface.cpp)
 # -----------------------------------------------------------------------------
 qpg_test(system connect-timeout system/connection/connect-timeout.cpp EXTRA_LABELS slow)
 qpg_test(system scram-mitm-refuse system/auth/scram-mitm-refuse.cpp EXTRA_LABELS auth)
+# The out-of-band CancelRequest on the wire, cancel_async() next to cancel(), against a fake backend that hands out
+# the BackendKeyData and reads the second connection (Huly QB-113). No daemon.
+qpg_test(system cancel-request-wire system/connection/cancel-request-wire.cpp EXTRA_LABELS connection)
 
 # -----------------------------------------------------------------------------
 # INTEGRATION — live postgres:5432 (REQUIRES live, RESOURCE_LOCK)

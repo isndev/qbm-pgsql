@@ -7,7 +7,9 @@
  *  - `scram_server_nonce_extends_client` — RFC 5802 §5.1 server-nonce validation;
  *  - `scram_escape_saslname` — RFC 5802 saslname escaping (`=` → `=3D`, `,` → `=2C`);
  *  - `database::cancel()` on an un-handshaked connection (no BackendKeyData → false,
- *    no network touched).
+ *    no network touched), and its non-blocking twin `cancel_async()` (Huly QB-113), which is
+ *    driven by `run_sync` on a bare loop and completes on its first step, likewise touching no
+ *    network.
  *
  * Pure logic, parallel-safe, no `RESOURCE_LOCK`.
  *
@@ -38,6 +40,16 @@ using namespace qb::pg::detail;
 TEST(PgsqlCancel, ReturnsFalseWhenNotConnected) {
     qb::pg::tcp::database db;
     EXPECT_FALSE(db.cancel());
+}
+
+/**
+ * @brief `cancel_async()` (Huly QB-113) on a never-connected database reports false the same way:
+ *        no BackendKeyData, no second socket, the coroutine completes on its first step.
+ */
+TEST(PgsqlCancel, AsyncReturnsFalseWhenNotConnected) {
+    qb::io::async::init();
+    qb::pg::tcp::database db;
+    EXPECT_FALSE(qb::io::async::run_sync(db.cancel_async()));
 }
 
 // ---------------------------------------------------------------------------

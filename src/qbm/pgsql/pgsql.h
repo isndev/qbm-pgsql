@@ -607,6 +607,63 @@ private:
     }
 #endif // !QB_HAS_SSL
 
+#ifdef QB_HAS_SSL
+    /**
+     * @brief The value-semantic client TLS context the connection options describe -- built the
+     *        same way for the session and for an out-of-band `cancel_async()` (Huly QB-113):
+     *          default          -> Context::client() (TLS 1.2+, system trust store, verify chain + host);
+     *          ssl_verify=none  -> verification off (encrypt only);
+     *          ssl_root_cert    -> trust a private CA IN ADDITION to the system store (libpq sslrootcert);
+     *          ssl_cert+ssl_key -> present a client certificate (mutual TLS; libpq sslcert/sslkey).
+     *        A bad CA/cert/key path leaves `ok()` false: callers fail CLOSED on it.
+     */
+    [[nodiscard]] qb::io::ssl::Context
+    make_client_tls_context() const {
+        auto tls = qb::io::ssl::Context::client();
+        if (conn_opts_.ssl_verify != qb::pg::ssl_verify_mode::full)
+            tls.verify(qb::io::ssl::VerifyMode::none);
+        if (!conn_opts_.ssl_root_cert.empty())
+            tls.trust(conn_opts_.ssl_root_cert);
+        if (!conn_opts_.ssl_cert.empty() && !conn_opts_.ssl_key.empty())
+            tls.identity(conn_opts_.ssl_cert, conn_opts_.ssl_key);
+        return tls;
+    }
+#endif // QB_HAS_SSL
+
+    /**
+     * @brief The 16-byte PostgreSQL CancelRequest for this session's backend, all big-endian:
+     *        int32 length = 16, int32 request code = 80877102 (0x04D2162E), int32 backend process
+     *        id, int32 backend secret key -- the two captured from BackendKeyData at connect.
+     */
+    [[nodiscard]] std::array<std::uint8_t, 16>
+    cancel_request_packet() const noexcept {
+        std::array<std::uint8_t, 16> pkt{};
+        const std::uint32_t          len  = htonl(16u);
+        const std::uint32_t          code = htonl(80877102u);
+        const std::uint32_t          pid  = htonl(static_cast<std::uint32_t>(serverPid_));
+        const std::uint32_t          key  = htonl(static_cast<std::uint32_t>(serverSecret_));
+        std::memcpy(pkt.data() + 0, &len, 4);
+        std::memcpy(pkt.data() + 4, &code, 4);
+        std::memcpy(pkt.data() + 8, &pid, 4);
+        std::memcpy(pkt.data() + 12, &key, 4);
+        return pkt;
+    }
+
+    /**
+     * @brief The connect budget of an out-of-band cancel: `connect_timeout` (10 s when unset),
+     *        capped at 2 s. The cancel targets the SAME already-reachable endpoint as the live
+     *        session, so the connect is normally sub-millisecond; the cap only bounds the
+     *        pathological unreachable case -- the whole loop for `cancel()`, one coroutine for
+     *        `cancel_async()`.
+     */
+    [[nodiscard]] qb::duration
+    cancel_connect_budget() const noexcept {
+        const qb::duration cfg = conn_opts_.connect_timeout > qb::duration::zero()
+                                     ? conn_opts_.connect_timeout
+                                     : std::chrono::duration_cast<qb::duration>(std::chrono::seconds(10));
+        return std::min(cfg, std::chrono::duration_cast<qb::duration>(std::chrono::seconds(2)));
+    }
+
     /**
      * @brief Starts outbound TCP using the async framework (`qb::io::async::tcp::connect`).
      *
@@ -676,18 +733,7 @@ private:
                                 "authenticate the server (or rely on SCRAM-SHA-256 mutual auth).");
                 }
             }
-            // Build the value-semantic client TLS context from the connection options:
-            //   default        -> Context::client() (TLS 1.2+, system trust store, verify chain + host);
-            //   ssl_verify=none -> verification off (encrypt only);
-            //   ssl_root_cert   -> trust a private CA IN ADDITION to the system store (libpq sslrootcert);
-            //   ssl_cert+ssl_key -> present a client certificate (mutual TLS; libpq sslcert/sslkey).
-            auto tls = qb::io::ssl::Context::client();
-            if (!verify)
-                tls.verify(qb::io::ssl::VerifyMode::none);
-            if (!conn_opts_.ssl_root_cert.empty())
-                tls.trust(conn_opts_.ssl_root_cert);
-            if (!conn_opts_.ssl_cert.empty() && !conn_opts_.ssl_key.empty())
-                tls.identity(conn_opts_.ssl_cert, conn_opts_.ssl_key);
+            auto tls = make_client_tls_context();
             if (!tls.ok()) {
                 // Fail CLOSED on a bad CA/cert/key path rather than silently connecting without it.
                 connect_handshake_failed_ = true;
@@ -2260,38 +2306,21 @@ public:
      *
      * @note The cancel connection is plaintext even when the main connection is SSL
      *       (the request carries no secret beyond the per-connection cancel key). A
-     *       server that mandates SSL on every connection will reject it; SSL-tunneled
-     *       cancellation is a future enhancement (tracked with sslmode/verify-full).
+     *       server that mandates SSL on every connection will reject it: `cancel_async()`
+     *       negotiates TLS for a secure database, and blocks nothing (Huly QB-113).
      */
     bool
     cancel() {
         if (serverPid_ == 0)
             return false; // never received BackendKeyData -> nothing to cancel
 
-        // CancelRequest, 16 bytes, all big-endian:
-        //   int32 length = 16
-        //   int32 request code = 80877102 (0x04D2162E)
-        //   int32 backend process id
-        //   int32 backend secret key
-        std::array<std::uint8_t, 16> pkt{};
-        const std::uint32_t          len  = htonl(16u);
-        const std::uint32_t          code = htonl(80877102u);
-        const std::uint32_t          pid  = htonl(static_cast<std::uint32_t>(serverPid_));
-        const std::uint32_t          key  = htonl(static_cast<std::uint32_t>(serverSecret_));
-        std::memcpy(pkt.data() + 0, &len, 4);
-        std::memcpy(pkt.data() + 4, &code, 4);
-        std::memcpy(pkt.data() + 8, &pid, 4);
-        std::memcpy(pkt.data() + 12, &key, 4);
+        const auto pkt = cancel_request_packet();
 
         // cancel() is synchronous (like libpq's PQcancel) and is typically fired from a
         // timer ON the event loop, so the blocking connect+send must NOT stall the loop
-        // for the full connect_timeout. Cap it tightly (≤ 2s): the cancel targets the
-        // SAME already-reachable endpoint as the live connection, so the handshake is
-        // normally sub-millisecond; the cap only bounds the pathological unreachable case.
-        const qb::duration cfg   = conn_opts_.connect_timeout > qb::duration::zero()
-                                       ? conn_opts_.connect_timeout
-                                       : std::chrono::duration_cast<qb::duration>(std::chrono::seconds(10));
-        const qb::duration t_out = std::min(cfg, std::chrono::duration_cast<qb::duration>(std::chrono::seconds(2)));
+        // for the full connect_timeout: `cancel_connect_budget()` caps it at 2 s. The
+        // non-blocking form of the same request is `cancel_async()` (Huly QB-113).
+        const qb::duration t_out = cancel_connect_budget();
 
         // Plain TCP / unix socket to the same endpoint (scheme resolved by tcp::socket;
         // an ssl:// endpoint connects plaintext here — the TLS layer is skipped).
@@ -2301,6 +2330,90 @@ public:
         const int n = qb::io::socket::send_n(sock.native_handle(), pkt.data(), static_cast<int>(pkt.size()), t_out);
         sock.disconnect();
         return n == static_cast<int>(pkt.size());
+    }
+
+    /**
+     * @brief Request cancellation of the running query WITHOUT blocking the event loop
+     *        (Huly QB-113): the same out-of-band CancelRequest as `cancel()`, driven by the async
+     *        connector the session itself connects through -- TLS included.
+     *
+     * The cancel connection is opened by `qb::io::async::tcp::connect` (a plain database) or by
+     * the STARTTLS connector with `postgres_ssl_negotiator` (a secure database: SSLRequest, the
+     * server's `'S'`, the TLS handshake, exactly like the session), the coroutine suspended
+     * meanwhile so every other actor on the core keeps running; then the 16 bytes are written
+     * non-blocking and the socket closed. A secure database therefore reaches a `hostssl`-only
+     * server, which rejects `cancel()`'s plaintext request, and NEVER falls back to plaintext: a
+     * server that declines SSL on the cancel connection fails the cancel, the rule the session's
+     * own connect applies. The connect budget is `cancel()`'s (`connect_timeout` capped at 2 s).
+     *
+     * Same verdict as `cancel()`: `sqlstate::query_canceled` (57014) on the awaiting caller when
+     * the server acts on it; the connection survives.
+     *
+     * @return `true` if the CancelRequest was delivered; `false` if no backend key is known yet
+     *         (never connected), the cancel connection failed (unreachable, TLS declined or
+     *         failed, budget exhausted), or the write failed. A `false` only means the request
+     *         could not be sent -- not that the query survived.
+     */
+    [[nodiscard]] qb::io::async::task<bool>
+    cancel_async() {
+        if (serverPid_ == 0)
+            co_return false; // never received BackendKeyData -> nothing to cancel
+
+        const auto         pkt   = cancel_request_packet();
+        const qb::duration t_out = cancel_connect_budget();
+        const qb::io::uri  uri{conn_opts_.schema + "://" + conn_opts_.uri};
+        using transport_sock = std::remove_cvref_t<typename QB_IO_::transport_io_type>;
+
+        // The connector hands the coroutine the ready socket -- closed when the connect, the
+        // SSLRequest exchange or the TLS handshake failed -- through the generic callback bridge;
+        // nothing of `this` is touched after this suspension.
+        auto sock = co_await qb::io::async::async_awaiter<transport_sock>([this, uri, t_out](std::function<void(transport_sock)> complete) {
+            auto deliver = [complete](transport_sock &&s) mutable {
+                complete(std::move(s));
+            };
+            if constexpr (transport_sock::is_secure()) {
+#ifdef QB_HAS_SSL
+                auto tls = make_client_tls_context();
+                if (!tls.ok()) {
+                    complete(transport_sock{}); // the session's rule: fail CLOSED on a bad CA/cert/key path
+                    return;
+                }
+                transport_sock s{std::move(tls)};
+                qb::io::async::tcp::starttls_connect<transport_sock, postgres_ssl_negotiator>(std::move(s), uri, std::move(deliver), t_out);
+#else
+                complete(transport_sock{});
+#endif
+            } else {
+                qb::io::async::tcp::connect<transport_sock>(uri, std::move(deliver), t_out);
+            }
+        });
+        if (!sock.is_open())
+            co_return false;
+
+        // 16 bytes on a fresh socket go out at once; a would-block (or a TLS layer wanting I/O,
+        // which `ssl::socket::write` reports as 0) parks the coroutine on the socket's readiness,
+        // never the loop.
+        std::size_t sent = 0;
+        for (int spins = 0; sent < pkt.size() && spins < 64; ++spins) {
+            const int n = sock.write(pkt.data() + sent, pkt.size() - sent);
+            if (n > 0) {
+                sent += static_cast<std::size_t>(n);
+                continue;
+            }
+            if (n < 0) {
+                const int err = qb::io::socket::get_last_errno();
+#ifdef _WIN32
+                if (err != QB_WINDOWS_WOULDBLOCK_ERROR && !qb::io::socket_no_error(err))
+                    break;
+#else
+                if (!qb::io::socket_no_error(err))
+                    break;
+#endif
+            }
+            co_await qb::io::async::wait_for_io(sock.native_handle(), EV_READ | EV_WRITE);
+        }
+        sock.disconnect();
+        co_return sent == pkt.size();
     }
 
 private:
