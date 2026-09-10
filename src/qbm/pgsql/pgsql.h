@@ -2361,14 +2361,14 @@ public:
 
         const auto         pkt   = cancel_request_packet();
         const qb::duration t_out = cancel_connect_budget();
-        const qb::io::uri  uri{conn_opts_.schema + "://" + conn_opts_.uri};
-        using transport_sock = std::remove_cvref_t<typename QB_IO_::transport_io_type>;
+        using transport_sock     = std::remove_cvref_t<typename QB_IO_::transport_io_type>;
 
         // The connector hands the coroutine the ready socket -- closed when the connect, the
-        // SSLRequest exchange or the TLS handshake failed -- through the generic callback bridge;
-        // nothing of `this` is touched after this suspension.
-        auto sock = co_await qb::io::async::async_awaiter<transport_sock>([this, uri, t_out](std::function<void(transport_sock)> complete) {
-            auto deliver = [complete](transport_sock &&s) mutable {
+        // SSLRequest exchange or the TLS handshake failed -- through the generic callback bridge. The
+        // step reads the database's options itself (URI; TLS context when secure); nothing of `this` after.
+        auto sock = co_await qb::io::async::async_awaiter<transport_sock>([this, t_out](std::function<void(transport_sock)> complete) {
+            const qb::io::uri uri{conn_opts_.schema + "://" + conn_opts_.uri};
+            auto              deliver = [complete](transport_sock &&s) mutable {
                 complete(std::move(s));
             };
             if constexpr (transport_sock::is_secure()) {
