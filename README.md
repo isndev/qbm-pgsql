@@ -101,6 +101,25 @@ merely copyable**, because the engine moves events with `memcpy` and never runs 
 compile-time check and there cannot be one; the debug build scans for it on the cross-core hop only. See
 [Inter-actor messaging](https://github.com/isndev/qb/blob/main/readme/4_qb_core/messaging.md).
 
+## The loop pass, drawn
+
+A query is bytes the core's loop pass writes and frames the same pass reads back; nothing in between
+blocks, and the coroutine that asked resumes on the pass that sees `ReadyForQuery`.
+
+```mermaid
+sequenceDiagram
+    participant A as your actor (a coroutine)
+    participant D as qb::pg::tcp::database
+    participant L as the core's loop pass
+    participant S as PostgreSQL
+    A->>D: co_await db.execute("by_id", params)
+    D->>L: Parse, Bind, Execute, Sync queued on the outbound pipe
+    L->>S: the pass writes the bytes
+    S-->>L: RowDescription, DataRow..., CommandComplete, ReadyForQuery
+    L->>D: the pass parses each frame as it arrives
+    D-->>A: Reply<results> resumes the coroutine, same thread
+```
+
 ### Making a query interruptible
 
 `pg_reply_awaiter` is **not cancellation-aware**: it registers no `on_cancel` hook and consults no token, so `kill()`
@@ -134,6 +153,10 @@ spawn([db, id, sender](qb::ScopedCoroContext ctx) -> qb::io::async::task<void> {
 
 A dropped link needs no wrapper: `on(disconnected)` drains every queued query, so a parked `co_await` resumes with a
 failed `Reply` rather than hanging.
+
+To interrupt the *server*, not the frame: `cancel_async()` (`task<bool>`) sends the out-of-band `CancelRequest` on a
+second connection without blocking the loop — over TLS too, the way the session negotiated it — where `cancel()`
+remains the blocking form for code that owns its thread.
 
 ---
 
@@ -258,6 +281,32 @@ root `database`).
 
 ---
 
+## Quickstart
+
+One `CMakeLists.txt`, no submodule: qb and the module are fetched at the first configure, at the
+same ref (they ship in lockstep; `main` is the released line, pin a `vX.Y.Z` tag in production).
+This is the shape the [`qb-sample-project`](https://github.com/isndev/qb-sample-project) template
+builds in CI.
+
+```cmake
+cmake_minimum_required(VERSION 3.24)
+project(hello_pgsql CXX)
+include(FetchContent)
+set(QB_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(qb        GIT_REPOSITORY https://github.com/isndev/qb.git        GIT_TAG main GIT_SHALLOW TRUE)
+FetchContent_Declare(qbm-pgsql GIT_REPOSITORY https://github.com/isndev/qbm-pgsql.git GIT_TAG main GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(qb qbm-pgsql)      # qb first: the module registers itself against it
+add_executable(hello_pgsql main.cpp)
+target_link_libraries(hello_pgsql PRIVATE qbm::pgsql)
+```
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build && ./build/hello_pgsql
+```
+
+`main.cpp` is the actor of the first section above, with `#include <qbm/pgsql/pgsql.h>`. The actor engine's measurements are in
+[qb's README](https://github.com/isndev/qb#measured); this module publishes no throughput figure yet.
+
 ## What this module is
 
 `qbm-pgsql` speaks the PostgreSQL v3 frontend/backend protocol directly over a qb-io socket. There is no `libpq`
@@ -297,9 +346,10 @@ not require actors — but inside `qb::Main` it is what most deployments do, whi
 | **Transactions**          | `begin` / `commit` / `rollback`, `transaction_mode` (isolation, read-only, deferrable), nested `savepoint` / `release_savepoint` / `rollback_savepoint`, and the `with_transaction` coroutine wrapper.                                |
 | **Statement timeout**     | `set_timeout(qb::duration)` arms a `SET LOCAL statement_timeout` on the next `BEGIN` (transaction-scoped; distinct from the connect timeout).                                                                                         |
 | **Results**               | `results` / `row` / `field` views; `field::as<T>()` and `to()`; `std::optional<T>` for NULL columns; `results.json()`.                                                                                                                |
-| **Types**                 | Scalars, `qb::uuid`, `qb::json` / `qb::jsonb`, `bytea`, NUMERIC, DATE/TIME, INTERVAL; `timestamptz` (OID 1184) maps to `qb::wall_time` with integer-microsecond round-trip. See [readme/types.md](./readme/types.md).                 |
+| **Types**                 | Scalars, `qb::uuid`, `qb::json` / `qb::jsonb`, `bytea`, NUMERIC, DATE/TIME, INTERVAL; `timestamptz` (OID 1184) maps to `qb::wall_time` with integer-microsecond round-trip. See [readme/types.md](./readme/types.md). Arrays decode fail-loud: a NULL element throws `error::value_is_null` unless the column is read as `std::vector<std::optional<T>>`, a multi-dimensional array throws `error::field_type_mismatch` (unnest it server-side), and TEXT-format arrays parse. |
 | **Pub/sub**               | `notify`, `listen` / `unlisten` / `unlisten_all`, an `on_incoming_notify` hook, and a `notify_co_consumer` with `co_await receive()`.                                                                                                 |
 | **Errors**                | `Reply<T>` carries either a result or a typed `error::db_error` (severity, SQLSTATE, detail); `Transaction::await()` returns a `status`.                                                                                              |
+| **Cancellation**          | `cancel_async()` — the out-of-band `CancelRequest` without blocking the event loop (`task<bool>`), over TLS when the session used it; `cancel()` is the blocking form for a thread that is yours. |
 
 ---
 
