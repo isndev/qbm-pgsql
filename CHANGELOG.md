@@ -46,6 +46,17 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
   `decode_pg_array` / `encode_pg_array` / `parse_pg_array_text` / `render_pg_array_text` are the
   four functions, `TypeConverter<std::vector<std::optional<T>>>` the new specialisations.
 
+## [3.1.0] - 2026-08-30
+
+Lockstep release with the qb 3.1.0 train. In this repository only two `qbFunctions.cmake`
+citations re-keyed (a comment grew upstream).
+
+## [3.0.1] - 2026-08-29
+
+Lockstep patch with the qb 3.0.1 train (cut for qb-examples, Huly QB-4). In this repository only
+tooling: a nightly CI run against qb's `develop` of the day, and `scripts/gen-llms-txt.py` strips
+HTML comments by scanning rather than by regex.
+
 ## [3.0.0] - 2026-08-20
 
 Tracks changes not yet part of a tagged release. Since 2026-08-11 that is **both** branches:
@@ -197,6 +208,8 @@ Aligns qbm-pgsql with the qb 2.0 framework (C++20 baseline) and hardens the Post
 - Drop the connection via `not_ok()` on a malformed frame instead of attempting a reconnect.
 - Fixed a heap over-read in the timestamp binary decoder for 9–11 byte fields.
 
-[Unreleased]: https://github.com/isndev/qbm-pgsql/compare/v3.0.0...HEAD
+[Unreleased]: https://github.com/isndev/qbm-pgsql/compare/v3.1.0...HEAD
+[3.1.0]: https://github.com/isndev/qbm-pgsql/compare/v3.0.1...v3.1.0
+[3.0.1]: https://github.com/isndev/qbm-pgsql/compare/v3.0.0...v3.0.1
 [3.0.0]: https://github.com/isndev/qbm-pgsql/compare/v2.6.0...v3.0.0
 [2.6.0]: https://github.com/isndev/qbm-pgsql/releases/tag/v2.6.0
