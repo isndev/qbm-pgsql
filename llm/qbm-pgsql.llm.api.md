@@ -1,4 +1,4 @@
-<!-- Verified-against: qbm-pgsql @ qb 3.1.0. Source of truth: the headers under qbm/pgsql/src/qbm/pgsql/. -->
+<!-- Verified-against: qbm-pgsql @ qb 3.2.0. Source of truth: the headers under qbm/pgsql/src/qbm/pgsql/. -->
 # `qb::pg` (PostgreSQL) Module API Reference
 
 This document provides a detailed API reference for the `qb::pg` module, part of the QB C++ Actor Framework. It is intended for use by other AI models to understand the capabilities and usage of this PostgreSQL client library.
