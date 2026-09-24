@@ -1,6 +1,6 @@
 # Transactions and command queues
 
-> **Audience:** Adopter · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 3.2.0 (C++20 default, C++23
+> **Audience:** Adopter · **Status:** stable · **Verified-against:** qbm-pgsql @ qb 3.2.1 (C++20 default, C++23
 > supported)
 
 How `qb::pg::detail::Transaction` drives `BEGIN`/`COMMIT`/`ROLLBACK`, savepoints, isolation modes, statement timeout,

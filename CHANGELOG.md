@@ -9,6 +9,10 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 Nothing yet. Entries land here as they are merged, and move under a version heading when that version is tagged.
 
+## [3.2.1] - 2026-09-24
+
+Lockstep release with the qb 3.2.1 train; no change in this repository (the version says compatible, this section says unchanged).
+
 ## [3.2.0] - 2026-09-21
 
 ### Added
@@ -212,7 +216,8 @@ Aligns qbm-pgsql with the qb 2.0 framework (C++20 baseline) and hardens the Post
 - Drop the connection via `not_ok()` on a malformed frame instead of attempting a reconnect.
 - Fixed a heap over-read in the timestamp binary decoder for 9–11 byte fields.
 
-[Unreleased]: https://github.com/isndev/qbm-pgsql/compare/v3.2.0...HEAD
+[Unreleased]: https://github.com/isndev/qbm-pgsql/compare/v3.2.1...HEAD
+[3.2.1]: https://github.com/isndev/qbm-pgsql/compare/v3.2.0...v3.2.1
 [3.2.0]: https://github.com/isndev/qbm-pgsql/compare/v3.1.0...v3.2.0
 [3.1.0]: https://github.com/isndev/qbm-pgsql/compare/v3.0.1...v3.1.0
 [3.0.1]: https://github.com/isndev/qbm-pgsql/compare/v3.0.0...v3.0.1

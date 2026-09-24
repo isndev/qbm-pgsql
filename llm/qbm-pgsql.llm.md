@@ -1,4 +1,4 @@
-<!-- Verified-against: qbm-pgsql @ qb 3.2.0. Source of truth: the headers under qbm/pgsql/src/qbm/pgsql/. -->
+<!-- Verified-against: qbm-pgsql @ qb 3.2.1. Source of truth: the headers under qbm/pgsql/src/qbm/pgsql/. -->
 # qbm-pgsql — LLM concepts (write correct code)
 
 Asynchronous PostgreSQL client for the qb C++ actor framework. Speaks the
