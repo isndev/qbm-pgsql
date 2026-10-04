@@ -581,6 +581,10 @@ server never sent it. The `string_view` is valid while the connection is alive.
 - **`cancel()` blocks** (synchronous, ≤ 2 s, plaintext even over SSL) — the one
   call in this client that briefly stalls the calling thread. `cancel_async()`
   is the same request without the stall, and negotiates TLS on a secure database.
+- **A multi-statement simple query yields ONE `results`.** Same-shape statements
+  merge (rows concatenated under the last statement's columns); a statement of a
+  different shape after rows were collected fails the query with a
+  `client_error`. One `execute` per statement when you need one result set each.
 
 ---
 

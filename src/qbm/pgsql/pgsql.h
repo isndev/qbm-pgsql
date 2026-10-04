@@ -1501,10 +1501,10 @@ public:
     }
 
     /**
-     * @todo COPY protocol — not a product feature yet; only enough handling to keep the session
-     *       healthy. Future work: stream **COPY FROM STDIN** (client → server bulk load) and
-     *       surface **COPY TO STDOUT** / CopyData payloads to the application (today `on_copy_data`
-     *       discards chunks). See PostgreSQL docs: COPY, CopyIn/CopyOut/CopyData messages.
+     * @note COPY is a product feature: `copy_in()` streams **COPY FROM STDIN** from a source and
+     *       `copy_out()` hands **COPY TO STDOUT** CopyData chunks to a sink (the handlers below and
+     *       the API further down). CopyBoth -- replication's bidirectional mode -- is NOT supported:
+     *       `on_copy_both_response` handles it as a COPY OUT and logs a warning.
      */
 
     /**

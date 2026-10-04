@@ -207,9 +207,11 @@ Limits:
   throws `field_type_mismatch`: a flat `std::vector<T>` cannot hold its shape, and until 3.2 the decoder flattened it
   row-major in silence. Unnest it in SQL (`ARRAY(SELECT unnest(col))`) or read the column as text. The send path
   declares a 1-D array. <!-- src: src/qbm/pgsql/type_converter.h:1427-1430 -->
-- **Only the element types above.** A vector of any other element type throws `std::invalid_argument` at bind time (no
-  `anyarray` fallback) and has no `as<std::vector<T>>()` decoder. Bind a supported element type or add an array
-  converter.
+- **Decoding covers the element types above; binding goes further.** `as<std::vector<T>>()` decodes those seven. A
+  `std::vector<T>` *parameter* binds for any element type with a scalar converter and a PostgreSQL array companion —
+  `uuid`, `numeric`, `json` / `jsonb`, the date and time types as well (`src/qbm/pgsql/pg_types.h:335-380`) — as its
+  concrete array type; only an element with no array companion throws `std::invalid_argument` at bind time (no
+  `anyarray` fallback). Reading one of those other arrays back has no `as<std::vector<T>>()` decoder yet.
 - **`std::vector<char>` / `std::vector<unsigned char>` / `std::vector<std::byte>` stay on the `bytea` path**, not the
   array path (see [Text and binary blobs](#text-and-binary-blobs)).
 - **A SQL NULL element throws `value_is_null` into a `std::vector<T>`** — the vector cannot represent SQL `NULL` for an

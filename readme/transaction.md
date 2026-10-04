@@ -125,7 +125,7 @@ stays valid after the transaction's transient buffers are reused.
 
 ## The callback transaction block: `begin` / `End`
 
-<!-- src: src/qbm/pgsql/commands.h:760-787, src/qbm/pgsql/commands.h:49-158 -->
+<!-- src: src/qbm/pgsql/commands.h:791-818, src/qbm/pgsql/commands.h:49-158 -->
 
 `begin` does **not** take a `commit` callback. It pushes a `Begin` command, which itself queues an `End` command:
 
@@ -170,7 +170,7 @@ A two-argument `begin(on_success, mode)` overload exists; it installs an empty e
 
 ### `then` / `success` / `error` chaining
 
-<!-- src: src/qbm/pgsql/transaction.h:677-705, src/qbm/pgsql/commands.h:434-520 -->
+<!-- src: src/qbm/pgsql/transaction.h:677-705, src/qbm/pgsql/commands.h:465-551 -->
 
 - `then(cb)` and `success(cb)` (aliases) push a `Then` command. When it is popped, if the parent's result is still
   success, `cb(*parent())` runs with the same `Transaction&` you chained from.
@@ -190,7 +190,7 @@ There is no separate "next" type: `then` passes `*parent()`, the parent transact
 
 ## The coroutine transaction block
 
-<!-- src: src/qbm/pgsql/commands.h:1341-1362, tests/integration/api/coro-api.cpp:221-245 -->
+<!-- src: src/qbm/pgsql/commands.h:1372-1393, tests/integration/api/coro-api.cpp:221-245 -->
 
 The coroutine path is imperative: `begin` / `execute` / `commit` (or `rollback`) are explicit, and you branch on `ok()`.
 
@@ -271,7 +271,7 @@ it has no effect on autocommit statements run outside a block.
 
 ## Savepoints
 
-<!-- src: src/qbm/pgsql/commands.h:801-824, src/qbm/pgsql/commands.h:1364-1392, src/qbm/pgsql/commands.h:154-294 -->
+<!-- src: src/qbm/pgsql/commands.h:832-855, src/qbm/pgsql/commands.h:1395-1423, src/qbm/pgsql/commands.h:154-294 -->
 
 **Callback — open a savepoint sub-block:**
 
@@ -304,8 +304,8 @@ else
 
 **Name validation.** The coroutine `savepoint`, `release_savepoint`, and `rollback_savepoint` reject names that are
 empty, longer than 63 characters, or contain anything other than alphanumerics and underscore
-(`pg_savepoint_name_ok`, `src/qbm/pgsql/commands.h:1237-1247`). An invalid name returns a
-pre-failed awaiter carrying `qb::pg::error::client_error` — no SQL is sent (`src/qbm/pgsql/commands.h:1365-1392`).
+(`pg_savepoint_name_ok`, `src/qbm/pgsql/commands.h:1268-1278`). An invalid name returns a
+pre-failed awaiter carrying `qb::pg::error::client_error` — no SQL is sent (`src/qbm/pgsql/commands.h:1396-1423`).
 This pre-check is defense-in-depth on top of the identifier quoting above: even the callback path, which does *not*
 pre-validate, cannot be made to inject SQL because the name is always quoted into a single literal identifier.
 
@@ -358,7 +358,7 @@ objects.
 
 ## Statement timeout
 
-<!-- src: src/qbm/pgsql/transaction.h:650-675, src/qbm/pgsql/commands.h:1227-1236, src/qbm/pgsql/queries.h:374-407 -->
+<!-- src: src/qbm/pgsql/transaction.h:650-675, src/qbm/pgsql/commands.h:1258-1267, src/qbm/pgsql/queries.h:374-407 -->
 
 `set_timeout(qb::duration)` arms a PostgreSQL `statement_timeout` for the **next** `BEGIN` on this connection. The
 following `begin()` (callback *or* coroutine) appends `; SET LOCAL statement_timeout = N` to the same simple-query

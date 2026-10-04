@@ -55,7 +55,7 @@ qb::pg::results owned = borrowed.deep_snapshot();   // safe to keep after the ca
 
 The coroutine path does this for you: a successful `co_await` delivers `rs.deep_snapshot()`, so the `Reply<resultset>`
 owns a deep copy and stays valid after the transaction's transient buffers are reused (
-`src/qbm/pgsql/commands.h:1309,1337,1412`).
+`src/qbm/pgsql/commands.h:1340,1368,1443`).
 
 ### `operator bool` reflects rows, not DML success
 
@@ -355,6 +355,11 @@ This is convenient for diagnostics, admin endpoints, or quick serialization. In 
   with `is_null()` (`resultset.h:562`, `:480`).
 - **Retired time tokens are gone.** `timestamptz` maps to `qb::wall_time`; `qb::Timestamp` / `qb::UtcTimestamp` /
   `to_timestamp(...)` no longer exist in this API.
+- **A multi-statement simple query yields ONE result.** `execute("SELECT …; SELECT …", …)` collects every statement's
+  rows into a single `results` under the last statement's columns: statements of the same shape (column count, types,
+  formats) merge, and a statement of a different shape that follows rows already collected fails the whole query with
+  a `client_error` — those rows would otherwise decode against the wrong columns (an earlier statement that returned
+  no rows is simply superseded). One result set per statement means one `execute` per statement.
 
 ---
 

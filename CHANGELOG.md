@@ -7,7 +7,26 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ## [Unreleased]
 
-Nothing yet. Entries land here as they are merged, and move under a version heading when that version is tagged.
+### Changed
+
+- **A multi-statement simple query whose statements return rows of different shapes now fails instead of
+  mixing them (Huly QB-122).** `execute("SELECT …; SELECT …", …)` collected every statement's rows into ONE
+  result under the LAST RowDescription, undocumented: the earlier statement's rows were then decoded against
+  the later statement's columns -- a `field_type_mismatch` or an `out_of_range` at best, a wrong value in
+  silence at worst. Statements of the same shape (column count, types, formats) still merge into one result
+  as before; a different shape arriving after rows were collected fails the query with a `client_error`, once
+  the server has finished with it, so the connection stays usable -- exactly the queries that returned wrong
+  data. An earlier statement that returned no rows is superseded, as before. Documented in
+  `readme/results.md` and the llm gotchas.
+
+### Documentation
+
+- **The stale `@todo COPY` comment in `pgsql.h` is gone (Huly QB-120)** -- it said COPY was "not a product
+  feature yet" while `copy_in` / `copy_out` ship and are tested; the comment now says what is supported and
+  that CopyBoth is not.
+- **`readme/types.md` no longer says vectors of other element types fail to bind** -- binding works for any
+  element type with a PostgreSQL array companion (`uuid`, `numeric`, `json` / `jsonb`, the date and time types);
+  decoding them back is what is still limited to the seven listed.
 
 ## [3.2.1] - 2026-09-24
 

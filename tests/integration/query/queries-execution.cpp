@@ -561,6 +561,79 @@ TEST_F(QueryExecutionTest, ExecuteFromFile) {
     std::filesystem::remove(temp_file);
 }
 
+// A multi-statement simple query puts every statement's rows into ONE result under the LAST
+// RowDescription. Statements of the same shape merge; a different shape used to decode the rows
+// already collected against the later statement's columns -- it fails the query now (Huly QB-122).
+TEST_F(QueryExecutionTest, MultiStatementOfOneShapeMerges) {
+    bool ok = false;
+    ASSERT_TRUE(db_->execute(
+                       "SELECT 1::int4 AS v; SELECT 2::int4 AS v",
+                       [&](transaction &, results r) {
+                           ASSERT_EQ(r.size(), 2u);
+                           EXPECT_EQ(r[0][0].as<int32_t>(), 1);
+                           EXPECT_EQ(r[1][0].as<int32_t>(), 2);
+                           ok = true;
+                       },
+                       [](error::db_error const &e) { ADD_FAILURE() << e.code << " " << e.what(); })
+                    .await());
+    EXPECT_TRUE(ok);
+}
+
+TEST_F(QueryExecutionTest, MultiStatementOfDifferentShapesFailsLoudly) {
+    bool        success = false;
+    std::string message;
+    (void) db_
+        ->execute(
+            "SELECT 1::int4 AS n; SELECT 'x'::text AS s, 2::int4 AS m", [&](transaction &, results) { success = true; },
+            [&](error::db_error const &e) { message = e.what(); })
+        .await();
+    EXPECT_FALSE(success) << "rows of two shapes must not be handed out as one result";
+    EXPECT_NE(message.find("different shapes"), std::string::npos) << message;
+
+    // The connection is still usable afterwards: the failure is the client's, after ReadyForQuery.
+    bool after = false;
+    ASSERT_TRUE(db_->execute(
+                       "SELECT 3::int4",
+                       [&](transaction &, results r) {
+                           ASSERT_EQ(r.size(), 1u);
+                           EXPECT_EQ(r[0][0].as<int32_t>(), 3);
+                           after = true;
+                       },
+                       [](error::db_error const &e) { ADD_FAILURE() << e.code << " " << e.what(); })
+                    .await());
+    EXPECT_TRUE(after);
+}
+
+// Only rows ALREADY COLLECTED can be mis-decoded: an earlier statement of another shape that
+// returned none is superseded, and the result is the later statement's rows under its own columns.
+TEST_F(QueryExecutionTest, MultiStatementAfterAnEmptyStatementOfAnotherShapeSucceeds) {
+    bool ok = false;
+    ASSERT_TRUE(db_->execute(
+                       "SELECT 1::int4 AS n WHERE false; SELECT 'x'::text AS s, 2::int4 AS m",
+                       [&](transaction &, results r) {
+                           ASSERT_EQ(r.size(), 1u);
+                           EXPECT_EQ(r[0][0].as<std::string>(), "x");
+                           EXPECT_EQ(r[0][1].as<int32_t>(), 2);
+                           ok = true;
+                       },
+                       [](error::db_error const &e) { ADD_FAILURE() << e.code << " " << e.what(); })
+                    .await());
+    EXPECT_TRUE(ok);
+}
+
+// A zero-column statement still returns a row: it is collected, so a later shape fails the query.
+TEST_F(QueryExecutionTest, MultiStatementAfterAZeroColumnRowFailsLoudly) {
+    bool        success = false;
+    std::string message;
+    (void) db_
+        ->execute(
+            "SELECT; SELECT 1::int4 AS v", [&](transaction &, results) { success = true; },
+            [&](error::db_error const &e) { message = e.what(); })
+        .await();
+    EXPECT_FALSE(success);
+    EXPECT_NE(message.find("different shapes"), std::string::npos) << message;
+}
+
 int
 main(int argc, char **argv) {
     qb::io::async::init();

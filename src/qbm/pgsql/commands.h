@@ -350,9 +350,21 @@ public:
  */
 template <typename CB_SUCCESS, typename CB_ERROR>
 class ResultQuery final : public Transaction {
-    CB_SUCCESS  _on_success; ///< Success callback
-    CB_ERROR    _on_error;   ///< Error callback
-    result_impl _results;    ///< Result data storage
+    CB_SUCCESS  _on_success;          ///< Success callback
+    CB_ERROR    _on_error;            ///< Error callback
+    result_impl _results;             ///< Result data storage
+    bool        _mixed_shapes{false}; ///< rows were collected under a RowDescription a later one differs from
+
+    /// Same column count, types and formats: rows of the two statements decode the same way.
+    [[nodiscard]] static bool
+    same_shape(row_description_type const &a, row_description_type const &b) noexcept {
+        if (a.size() != b.size())
+            return false;
+        for (std::size_t i = 0; i < a.size(); ++i)
+            if (a[i].type_oid != b[i].type_oid || a[i].format_code != b[i].format_code)
+                return false;
+        return true;
+    }
 
 public:
     /**
@@ -370,6 +382,16 @@ public:
         push_query(std::unique_ptr<ISqlQuery>(new SimpleQuery(
             std::move(expr),
             [this]() {
+                if (_mixed_shapes) { // reported once the server is done with the whole query string
+                    _result = false;
+                    _on_error((error::db_error) error::client_error{
+                        "pgsql: the statements of this simple query returned rows of different shapes into one "
+                        "result -- run them as separate queries"
+                    });
+                    if (_parent)
+                        _parent->on_sub_command_status(false);
+                    return;
+                }
                 try {
                     _on_success(*this, resultset(&_results));
                     _parent->results() = std::move(_results);
@@ -391,13 +413,22 @@ public:
     /**
      * @brief Handles row description from the query result
      *
-     * Stores the row description metadata for the result set.
+     * Stores the row description metadata for the result set. A multi-statement simple query
+     * reports one RowDescription per statement that returns rows, and every row lands in this
+     * ONE result under the LAST description: statements of the same shape (column count, types,
+     * formats) merge, as they always did. A description of a DIFFERENT shape arriving after rows
+     * were collected would have those rows decoded against the wrong columns, so the query fails
+     * instead, once the server has finished with it; an earlier statement that returned no rows
+     * leaves nothing to mis-decode and is simply superseded.
      *
      * @param desc Row description metadata
      */
     void
     on_new_row_description(row_description_type &&desc) final {
-        _results.row_description() = std::move(desc);
+        auto &current = _results.row_description();
+        if (!_results.rows().empty() && !same_shape(current, desc))
+            _mixed_shapes = true;
+        current = std::move(desc);
     };
 
     /**
