@@ -326,7 +326,7 @@ The two arities are fixed and checked at compile time: the success handler is `(
 `(Transaction&)` alone, and the error handler takes `(error::db_error const&)` — one argument, no transaction. The
 shipped no-ops `qb::pg::discard_query` and `qb::pg::discard_error` have exactly those signatures and are the right
 placeholder when you read the side effects elsewhere.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2837-2845 (discard_query_results_t; discard_error_t) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2840-2848 (discard_query_results_t; discard_error_t) -->
 
 `this` is safe in a callback in a way it is not in a coroutine, but only because of a difference worth naming: the
 callback is invoked from the reply path of a connection the actor owns, and the actor's `KillEvent` handler
@@ -353,11 +353,11 @@ here because an actor is where the cost lands.
   **`cancel_async()`** instead (`co_await db.cancel_async()` from a coroutine the actor spawns): the same request, the
   coroutine suspended while the cancel connection comes up, the core free — and TLS-negotiated on a secure database.
   See [connection.md](./connection.md#cancelling-a-running-query).
-- **`disconnect()`** runs the loop once (`EVRUN_NOWAIT`) after tearing the socket down, so the close is observed. That
-  is a single non-blocking pass rather than a pump, and it is deliberately not `async::run()` so it stays legal from a
-  coroutine — but it is still a re-entrant turn of the loop from inside your handler. Prefer calling it from the
-  `KillEvent` handler, where nothing runs after it anyway.
-  <!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2629-2648 (disconnect: fail_all_pending, then one EVRUN_NOWAIT pass) -->
+- **`disconnect()`** fails every in-flight and queued query and completes the teardown inside the call, with no loop
+  pass — nothing else is resumed under your handler, and it is safe from a coroutine. Until 3.3 it ran one
+  `EVRUN_NOWAIT` pass after the close, which re-entered the coroutine scheduler when called from a coroutine (an abort
+  in a debug build — Huly QB-253).
+  <!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2632-2651 (disconnect: fail_all_pending, then disconnect_now) -->
 
 ---
 

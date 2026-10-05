@@ -108,6 +108,33 @@ TEST_F(PgsqlCoroApiTest, CoroConnectThenQuery) {
     ASSERT_TRUE(ok);
 }
 
+// disconnect() from a coroutine body (Huly QB-253). It used to end with a nested listener pass: every
+// pending watcher and deferred callback ran under the caller, and from a coroutine the pass re-entered
+// the coroutine scheduler's run_ready() -- an abort in a debug build until qb-io defined that case. It
+// now completes the teardown in the call, with no loop pass: a callback deferred just before it must
+// still be pending when it returns, and run at the caller's next pass.
+TEST_F(PgsqlCoroApiTest, DisconnectFromACoroutineCompletesInTheCall) {
+    bool done            = false;
+    bool connected_after = true;
+    bool deferred_ran    = false;
+    bool ran_inside      = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        auto r = co_await db_->query("SELECT 1");
+        EXPECT_TRUE(r.ok()) << r.error().what();
+        qb::io::async::defer([&deferred_ran] { deferred_ran = true; });
+        db_->disconnect();
+        ran_inside      = deferred_ran;
+        connected_after = db_->is_connected();
+        done            = true;
+    }());
+    for (int i = 0; i < 8 && !deferred_ran; ++i)
+        qb::io::async::run(EVRUN_NOWAIT);
+    EXPECT_TRUE(done) << "the coroutine never got past disconnect()";
+    EXPECT_FALSE(connected_after) << "disconnect() must have completed the teardown before it returned";
+    EXPECT_FALSE(ran_inside) << "disconnect() ran a loop pass: a deferred callback ran inside it";
+    EXPECT_TRUE(deferred_ran) << "the deferred callback must run at the caller's next pass";
+}
+
 TEST_F(PgsqlCoroApiTest, CoroQueryAndExecute) {
     bool ok = false;
     qb::io::async::run_sync([&]() -> qb::io::async::task<void> {

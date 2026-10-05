@@ -2622,29 +2622,32 @@ public:
     /**
      * @brief Explicitly disconnects from the database
      *
-     * Closes the connection to the PostgreSQL server and runs the event loop once
-     * to process any pending disconnection events. This ensures a clean shutdown
-     * of the database connection.
+     * Fails every in-flight and queued query, then completes the io teardown before it returns:
+     * `on(disconnected)` has run and the watcher is stopped. It runs no loop pass, so no other
+     * watcher and no coroutine is resumed under the caller -- safe from a coroutine body; the
+     * coroutines awaiting a failed query resume at the caller's next pass (Huly QB-253). From
+     * inside one of this client's own protocol handlers the teardown runs right after that
+     * dispatch returns, in the same pass -- qb-io's `disconnect_now()`, as qbm-redis uses it.
      */
     void
     disconnect() {
-        // Mark the handle down and fail any in-flight / queued query SYNCHRONOUSLY rather
-        // than relying on an async on(disconnected) event — a *local* disconnect may not
-        // deliver one, leaving is_connected_ true and those queries' coroutine awaiters
-        // unresolved (hanging) forever. Clearing is_connected_ here also makes the
-        // is_connection_usable() guard reject any query submitted after disconnect().
-        // on(disconnected), if it fires later, is a no-op (its `if (is_connected_)` guard
-        // is already false and fail_all_pending drains an empty queue).
+        // Mark the handle down and fail any in-flight / queued query SYNCHRONOUSLY, with the
+        // client's own reason, before the teardown: called from one of this client's protocol
+        // handlers the teardown only runs after that dispatch returns, and a query submitted
+        // in between must already be refused (the is_connection_usable() guard reads
+        // is_connected_). on(disconnected), which the teardown below runs, then fails nothing
+        // twice: its `if (is_connected_)` guard is already false and fail_all_pending drains
+        // an empty queue.
         if (is_connected_) {
             is_connected_ = false;
             on_error_query(error::connection_error("database disconnected by client"));
             root_transaction()->fail_all_pending(error::connection_error("database disconnected by client"));
             _current_command = root_transaction();
         }
-        static_cast<qb::io::async::tcp::client<Database<QB_IO_, NotifyDerived>, QB_IO_, void> &>(*this).disconnect();
-        // Same rationale as `Redis::await()` / `Transaction::await()`: may run from a
-        // coroutine or nested I/O path where `async::run()` would throw.
-        qb::io::async::listener::current.run(EVRUN_NOWAIT);
+        // The teardown, in the call. It used to be a deferred disconnect() followed by a nested
+        // listener pass, and that pass re-entered the coroutine scheduler's run_ready() when
+        // disconnect() was called from a coroutine body: an abort in a debug build (Huly QB-253).
+        this->disconnect_now();
     }
 };
 

@@ -96,7 +96,7 @@ transport aliases in `qb::pg::tcp`:
 | `qb::pg::tcp::database`      | `qb::io::transport::tcp` (cleartext) | always                            |
 | `qb::pg::tcp::ssl::database` | `qb::io::transport::stcp` (TLS)      | only when `QB_HAS_SSL` is defined |
 
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2874,2900 (in that order: tcp::database; tcp::ssl::database) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2877,2903 (in that order: tcp::database; tcp::ssl::database) -->
 
 The transport is a **compile-time** choice baked into the alias. The connection string scheme (`tcp`, `ssl`, `socket`)
 does **not** switch it: a `tcp://…` string on a `tcp::ssl::database` still negotiates TLS, and an `ssl://…` string on a
@@ -450,9 +450,11 @@ guard that needs no client action, set a `statement_timeout` (or the client
 
 ### Disconnect and reconnect
 
-`disconnect()` tears down the session and runs the event loop once (`EVRUN_NOWAIT`) so the close I/O is observed; it is
-safe to call from a coroutine or nested I/O path where `async::run()` would throw.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2622-2648 (disconnect) -->
+`disconnect()` fails every in-flight and queued query and completes the teardown before it returns — `on(disconnected)`
+has run, the watcher is stopped — with no loop pass, so it is safe from a coroutine body; the coroutines awaiting a
+failed query resume at the caller's next pass. Until 3.3 it ran a nested loop pass, which aborted a debug build when
+called from a coroutine (Huly QB-253).
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2622-2651 (disconnect) -->
 
 To reuse the **same** object for a new connection, call `prepare_reconnect()` after `disconnect()` and before the next
 `connect()`. It closes the underlying fd, resets the I/O buffers and `qb::io::async::io` disposed state, and clears the

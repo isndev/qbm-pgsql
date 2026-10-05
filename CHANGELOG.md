@@ -26,6 +26,12 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
   and `receive()` yielded `std::nullopt` for ever, so the documented advice was to build a new consumer. The queue
   is now replaced on the first `receive()` or NOTIFY of the next connection, carrying over in order what was
   received and not yet read. LISTEN still has to be re-issued: the subscription belongs to the session.
+- **`disconnect()` is safe from a coroutine (Huly QB-253).** It closed the socket and then ran one `EVRUN_NOWAIT`
+  loop pass to observe the close, and from a coroutine body that pass re-entered the coroutine scheduler: an abort in
+  a debug build, which the documentation answered with "call it from a callback or `main()`" and the
+  `07-listen-notify` example by not calling it. It now completes the teardown in the call through qb-io's
+  `disconnect_now()`, as qbm-redis's `disconnect()` does -- no loop pass, so no other watcher, deferred callback or
+  coroutine runs under the caller -- and still fails every in-flight and queued query first.
 - **A reconnection without `prepare_reconnect()` no longer sends the previous connection's queries first (Huly
   QB-202).** `disconnect()` fails the queued queries, but their bytes stayed in the client's output buffer, and the
   bare reconnect path -- `connect()` after `disconnect()`, supported and tested -- sent them ahead of the

@@ -14,8 +14,8 @@
 # re-flowing a paragraph does not re-key the file.
 llm/qbm-pgsql.llm.api.md	pgsql.h:2316-2317	174bc1d30cbd	bool
 llm/qbm-pgsql.llm.api.md	pgsql.h:2361-2362	14276ca02568	[[nodiscard]] qb::io::async::task<bool>
-llm/qbm-pgsql.llm.api.md	pgsql.h:2823-2823	3e2a63be5571	using results = detail::resultset;
-llm/qbm-pgsql.llm.api.md	qbm/pgsql/src/qbm/pgsql/pgsql.h:2823-2823	3e2a63be5571	using results = detail::resultset;
+llm/qbm-pgsql.llm.api.md	pgsql.h:2826-2826	3e2a63be5571	using results = detail::resultset;
+llm/qbm-pgsql.llm.api.md	qbm/pgsql/src/qbm/pgsql/pgsql.h:2826-2826	3e2a63be5571	using results = detail::resultset;
 llm/qbm-pgsql.llm.api.md	queries.h:174-174	ab6ca6aa9ac4	using PreparedQueryStorage = PreparedStorage;
 llm/qbm-pgsql.llm.api.md	queries.h:65-65	e0fb44c50b81	class PreparedStorage {
 llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/type_mapping.h:58-63	1d898ef4b879	template <typename T, typename Enable = void>

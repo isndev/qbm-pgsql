@@ -190,7 +190,7 @@ There is no separate "next" type: `then` passes `*parent()`, the parent transact
 
 ## The coroutine transaction block
 
-<!-- src: src/qbm/pgsql/commands.h:1372-1393, tests/integration/api/coro-api.cpp:221-245 -->
+<!-- src: src/qbm/pgsql/commands.h:1372-1393, tests/integration/api/coro-api.cpp:248-272 -->
 
 The coroutine path is imperative: `begin` / `execute` / `commit` (or `rollback`) are explicit, and you branch on `ok()`.
 
@@ -221,7 +221,7 @@ qb::io::async::task<void> transfer(qb::pg::tcp::database& db) {
 
 ### `with_transaction` (coroutine sugar)
 
-<!-- src: src/qbm/pgsql/with_transaction.h:103-139, tests/integration/api/coro-api.cpp:286-323 -->
+<!-- src: src/qbm/pgsql/with_transaction.h:103-139, tests/integration/api/coro-api.cpp:313-350 -->
 
 `qb::pg::with_transaction(db, body)` wraps the begin → body → commit/rollback dance. It runs `BEGIN`, awaits your
 `body(tr)` (which must return `qb::io::async::task<T>`), then `COMMIT`. On `begin` failure, `commit` failure, a thrown
@@ -393,7 +393,7 @@ Key facts to get right:
 
 ## LISTEN / NOTIFY
 
-<!-- src: src/qbm/pgsql/transaction.h:429-493; src/qbm/pgsql/pg_notify_sql.h:25-92; qbm/pgsql/src/qbm/pgsql/pgsql.h:378-388,1882-1893,2658-2792 (in that order: notification; on_incoming_notify; notify_consumer / notify_co_consumer / notify_cb_consumer) -->
+<!-- src: src/qbm/pgsql/transaction.h:429-493; src/qbm/pgsql/pg_notify_sql.h:25-92; qbm/pgsql/src/qbm/pgsql/pgsql.h:378-388,1882-1893,2661-2795 (in that order: notification; on_incoming_notify; notify_consumer / notify_co_consumer / notify_cb_consumer) -->
 
 ### Publishing (NOTIFY)
 
