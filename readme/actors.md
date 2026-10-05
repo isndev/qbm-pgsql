@@ -326,7 +326,7 @@ The two arities are fixed and checked at compile time: the success handler is `(
 `(Transaction&)` alone, and the error handler takes `(error::db_error const&)` — one argument, no transaction. The
 shipped no-ops `qb::pg::discard_query` and `qb::pg::discard_error` have exactly those signatures and are the right
 placeholder when you read the side effects elsewhere.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2804-2812 (discard_query_results_t; discard_error_t) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2808-2816 (discard_query_results_t; discard_error_t) -->
 
 `this` is safe in a callback in a way it is not in a coroutine, but only because of a difference worth naming: the
 callback is invoked from the reply path of a connection the actor owns, and the actor's `KillEvent` handler
@@ -357,7 +357,7 @@ here because an actor is where the cost lands.
   is a single non-blocking pass rather than a pump, and it is deliberately not `async::run()` so it stays legal from a
   coroutine — but it is still a re-entrant turn of the loop from inside your handler. Prefer calling it from the
   `KillEvent` handler, where nothing runs after it anyway.
-  <!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2625-2644 (disconnect: fail_all_pending, then one EVRUN_NOWAIT pass) -->
+  <!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2629-2648 (disconnect: fail_all_pending, then one EVRUN_NOWAIT pass) -->
 
 ---
 

@@ -229,7 +229,15 @@ TEST_F(ConnectionLifecycle, ReconnectWithoutPrepareReconnectIsUsable) {
     ASSERT_TRUE(qb::io::async::run_sync(db_->connect(dsn_tcp_string())));
     const int first_pid = db_->backend_pid();
     EXPECT_GT(first_pid, 0);
+    // A query queued and never flushed when the connection goes (Huly QB-202): disconnect() fails
+    // it, but its bytes stayed in the output buffer, and the bare reconnect below sent them ahead of
+    // the StartupMessage -- the server refused the connection as an invalid startup packet.
+    bool queued_failed = false;
+    (void) db_->execute(
+        "SELECT 42", [](transaction &, results) { ADD_FAILURE() << "a query queued at the disconnect must not succeed"; },
+        [&](error::db_error const &) { queued_failed = true; });
     db_->disconnect();
+    EXPECT_TRUE(queued_failed) << "disconnect() must fail the queued query";
 
     // No prepare_reconnect(): the connector still opens a fresh socket and re-handshakes.
     ASSERT_TRUE(qb::io::async::run_sync(db_->connect(dsn_tcp_string()))) << "bare connect() after disconnect() failed to re-handshake";

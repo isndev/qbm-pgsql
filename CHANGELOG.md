@@ -19,6 +19,14 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
   data. An earlier statement that returned no rows is superseded, as before. Documented in
   `readme/results.md` and the llm gotchas.
 
+### Fixed
+
+- **A reconnection without `prepare_reconnect()` no longer sends the previous connection's queries first (Huly
+  QB-202).** `disconnect()` fails the queued queries, but their bytes stayed in the client's output buffer, and the
+  bare reconnect path -- `connect()` after `disconnect()`, supported and tested -- sent them ahead of the
+  StartupMessage: the server refused the connection. Every connect path now clears both buffers, with the protocols,
+  where it installs the new transport (qb-io's `reset_for_reconnect()`).
+
 ### Documentation
 
 - **The stale `@todo COPY` comment in `pgsql.h` is gone (Huly QB-120)** -- it said COPY was "not a product

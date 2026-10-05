@@ -810,7 +810,11 @@ private:
             try_resume_connect_wait();
             return;
         }
-        this->clear_protocols(); // idempotent: drops any prior protocol, resets to the NoProtocol sentinel
+        // What the previous connection left -- the bytes of the queries disconnect() failed, still in
+        // out(), and the protocol -- goes before the new transport is installed: a bare reconnect sent
+        // those bytes ahead of the StartupMessage (Huly QB-202). prepare_reconnect() resets the
+        // buffers too; this is the choke point every connect path funnels through.
+        this->reset_for_reconnect();
         this->transport() = std::forward<Sock_>(sock);
         // Re-arm the SCRAM mutual-auth gate at the START of every handshake. These flags gate
         // AuthenticationOk in on_authentication; they are also cleared in prepare_reconnect(), but a
