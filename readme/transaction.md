@@ -190,7 +190,7 @@ There is no separate "next" type: `then` passes `*parent()`, the parent transact
 
 ## The coroutine transaction block
 
-<!-- src: src/qbm/pgsql/commands.h:1372-1393, tests/integration/api/coro-api.cpp:248-272 -->
+<!-- src: src/qbm/pgsql/commands.h:1373-1393, tests/integration/api/coro-api.cpp:248-272 -->
 
 The coroutine path is imperative: `begin` / `execute` / `commit` (or `rollback`) are explicit, and you branch on `ok()`.
 
@@ -271,7 +271,7 @@ it has no effect on autocommit statements run outside a block.
 
 ## Savepoints
 
-<!-- src: src/qbm/pgsql/commands.h:832-855, src/qbm/pgsql/commands.h:1395-1423, src/qbm/pgsql/commands.h:154-294 -->
+<!-- src: src/qbm/pgsql/commands.h:832-855, src/qbm/pgsql/commands.h:1396-1423, src/qbm/pgsql/commands.h:154-294 -->
 
 **Callback — open a savepoint sub-block:**
 

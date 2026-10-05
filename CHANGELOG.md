@@ -46,6 +46,9 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 - **`readme/types.md` no longer says vectors of other element types fail to bind** -- binding works for any
   element type with a PostgreSQL array companion (`uuid`, `numeric`, `json` / `jsonb`, the date and time types);
   decoding them back is what is still limited to the seven listed.
+- **Two `readme/transaction.md` citations re-derived (Huly QB-254).** The `begin` and `savepoint` ranges of
+  `commands.h` started one line early, on the blank line above each; found by the strengthened
+  `scripts/cite-check.py`.
 
 ## [3.2.1] - 2026-09-24
 
