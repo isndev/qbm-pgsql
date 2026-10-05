@@ -249,7 +249,7 @@ and the client negotiates the upgrade. See [readme/connection.md](./readme/conne
 The same operations are available without coroutines. Callback overloads enqueue work and return immediately; the loop
 runs it. Use `await()` when you need a synchronous drain — common in tests and one-shot init:
 
-<!-- src: qbm/pgsql/tests/integration/api/coro-api.cpp (callback drain via .await()) -->
+<!-- src: qbm/pgsql/tests/integration/api/coro-api.cpp:66-71 (execute(...).await()), qbm/pgsql/tests/integration/transaction/transaction-advanced.cpp:174 (begin(cb).await()) -->
 
 ```cpp
 #include <qbm/pgsql/pgsql.h>
