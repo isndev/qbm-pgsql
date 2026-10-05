@@ -384,12 +384,12 @@ namespace qb::pg {
 
 ### `qb::pg::results` (alias for `qb::pg::detail::resultset`)
 
-Represents the set of rows returned by a query. Provides a container-like interface to access rows. There is no public `qb::pg::resultset`: the class lives in `namespace qb::pg::detail` and the only public spelling is the alias `using results = detail::resultset;` (`qbm/pgsql/src/qbm/pgsql/pgsql.h:2794`). Row and field below are reachable as `qb::pg::results::row` / `qb::pg::results::field`.
+Represents the set of rows returned by a query. Provides a container-like interface to access rows. There is no public `qb::pg::resultset`: the class lives in `namespace qb::pg::detail` and the only public spelling is the alias `using results = detail::resultset;` (`qbm/pgsql/src/qbm/pgsql/pgsql.h:2823`). Row and field below are reachable as `qb::pg::results::row` / `qb::pg::results::field`.
 
 **Definition (`qbm/pgsql/src/qbm/pgsql/resultset.h`):**
 ```cpp
 namespace qb::pg {
-// Public alias (pgsql.h:2794); the class itself is qb::pg::detail::resultset.
+// Public alias (pgsql.h:2823); the class itself is qb::pg::detail::resultset.
 using results = detail::resultset;
 }
 

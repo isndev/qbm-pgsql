@@ -96,7 +96,7 @@ transport aliases in `qb::pg::tcp`:
 | `qb::pg::tcp::database`      | `qb::io::transport::tcp` (cleartext) | always                            |
 | `qb::pg::tcp::ssl::database` | `qb::io::transport::stcp` (TLS)      | only when `QB_HAS_SSL` is defined |
 
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2845,2871 (in that order: tcp::database; tcp::ssl::database) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2874,2900 (in that order: tcp::database; tcp::ssl::database) -->
 
 The transport is a **compile-time** choice baked into the alias. The connection string scheme (`tcp`, `ssl`, `socket`)
 does **not** switch it: a `tcp://…` string on a `tcp::ssl::database` still negotiates TLS, and an `ssl://…` string on a

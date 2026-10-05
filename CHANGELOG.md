@@ -21,6 +21,11 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Fixed
 
+- **`notify_co_consumer::receive()` serves the next connection (Huly QB-252).** A disconnect closes the consumer's
+  queue, and a channel closes for good: after a reconnect every NOTIFY was dropped -- and logged as "buffer full" --
+  and `receive()` yielded `std::nullopt` for ever, so the documented advice was to build a new consumer. The queue
+  is now replaced on the first `receive()` or NOTIFY of the next connection, carrying over in order what was
+  received and not yet read. LISTEN still has to be re-issued: the subscription belongs to the session.
 - **A reconnection without `prepare_reconnect()` no longer sends the previous connection's queries first (Huly
   QB-202).** `disconnect()` fails the queued queries, but their bytes stayed in the client's output buffer, and the
   bare reconnect path -- `connect()` after `disconnect()`, supported and tested -- sent them ahead of the

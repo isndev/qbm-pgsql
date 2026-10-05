@@ -2672,16 +2672,43 @@ public:
 /**
  * @brief LISTEN/NOTIFY consumer: optional callback + `co_await receive()` queue (mirrors Redis
  * `cb_consumer` / `co_consumer` in one type — PostgreSQL allows normal queries on the same link).
+ *
+ * A disconnect closes the queue: `receive()` yields what was already received, then `std::nullopt`
+ * for as long as the consumer stays disconnected. After the next `connect()` it serves the new
+ * connection, starting with anything received before the disconnect and not yet read. LISTEN is
+ * per session: LISTEN again after a reconnect.
  */
 template <typename QB_IO_>
 class notify_co_consumer : public notify_consumer<QB_IO_, notify_co_consumer<QB_IO_>> {
-    using base_type = notify_consumer<QB_IO_, notify_co_consumer<QB_IO_>>;
+    using base_type           = notify_consumer<QB_IO_, notify_co_consumer<QB_IO_>>;
+    using notify_channel_type = qb::io::async::channel<::qb::pg::notification>;
 
     static constexpr std::size_t default_notify_channel_capacity = 8192;
 
-    qb::io::async::channel<::qb::pg::notification> notify_channel_{default_notify_channel_capacity};
+    std::size_t                                    notify_capacity_ = default_notify_channel_capacity;
+    std::unique_ptr<notify_channel_type>           notify_channel_  = std::make_unique<notify_channel_type>(default_notify_channel_capacity);
     std::function<void(::qb::pg::notification &&)> on_notify_dropped_{};
     std::function<void(::qb::pg::notification &&)> on_notify_callback_{};
+
+    /**
+     * @brief The queue of the current connection.
+     * @details A channel closes for good, and the consumer outlives its connections: the queue a
+     *          disconnect closed is replaced as soon as the consumer is connected again -- observed
+     *          here, by the first `receive()` or NOTIFY of the new connection -- carrying over, in
+     *          order, what was received and not yet read. Until then a closed queue made every later
+     *          NOTIFY a drop reported as "buffer full", and `receive()` yield `std::nullopt` for good
+     *          (Huly QB-252, the redis `co_consumer` defect's twin).
+     */
+    notify_channel_type &
+    current_notify_channel() {
+        if (notify_channel_->is_closed() && this->is_connected()) {
+            auto fresh = std::make_unique<notify_channel_type>(notify_capacity_);
+            while (auto unread = notify_channel_->try_recv())
+                (void) fresh->try_send(std::move(*unread)); // never full: same capacity, at most as many
+            notify_channel_ = std::move(fresh);
+        }
+        return *notify_channel_;
+    }
 
 public:
     notify_co_consumer()
@@ -2689,7 +2716,8 @@ public:
 
     explicit notify_co_consumer(std::string const &opts, std::size_t notify_capacity = default_notify_channel_capacity)
         : base_type(opts)
-        , notify_channel_(notify_capacity) {}
+        , notify_capacity_(notify_capacity)
+        , notify_channel_(std::make_unique<notify_channel_type>(notify_capacity)) {}
 
     /**
      * @brief Optional callback invoked for each NOTIFY before the message is queued for `receive()`.
@@ -2709,7 +2737,7 @@ public:
                 QB_LOG_WARN("[pgsql] notify_co_consumer on_notify callback error: " << ex.what());
             }
         }
-        if (notify_channel_.try_send(std::move(n)))
+        if (current_notify_channel().try_send(std::move(n)))
             return;
         if (on_notify_dropped_) {
             try {
@@ -2724,7 +2752,7 @@ public:
 
     void
     on_pg_notify_consumer_disconnected(qb::io::async::event::disconnected const &) {
-        notify_channel_.close();
+        notify_channel_->close(); // receive() drains what is buffered, then yields std::nullopt
     }
 
     notify_co_consumer<QB_IO_> &
@@ -2735,11 +2763,12 @@ public:
 
     [[nodiscard]] std::size_t
     notify_channel_capacity() const noexcept {
-        return notify_channel_.capacity();
+        return notify_capacity_;
     }
 
     /**
-     * @brief Await the next NOTIFY; `std::nullopt` when the channel is closed (e.g. disconnect).
+     * @brief Await the next NOTIFY; `std::nullopt` once the consumer is disconnected and what it had
+     *        received is read. After a reconnect it serves the new connection.
      *
      * Implemented as a direct coroutine member (NOT an immediately-invoked lambda
      * `[this]{...}()`): the lambda closure would be a temporary destroyed at the end
@@ -2749,11 +2778,11 @@ public:
      */
     [[nodiscard]] qb::io::async::task<std::optional<::qb::pg::notification>>
     receive() {
-        co_return co_await notify_channel_.recv();
+        co_return co_await current_notify_channel().recv();
     }
 
     ~notify_co_consumer() {
-        notify_channel_.close();
+        notify_channel_->close();
     }
 };
 

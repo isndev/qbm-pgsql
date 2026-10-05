@@ -402,6 +402,9 @@ qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
 }());
 ```
 
+After a reconnect the same consumer's `receive()` serves the new connection, unread notifications
+first — `listen` again: the subscription belongs to the session.
+
 `notification { int server_backend_pid; std::string channel; std::string payload; }`.
 The `notify` publisher side must use a normal (non-pooled) connection.
 

@@ -393,7 +393,7 @@ Key facts to get right:
 
 ## LISTEN / NOTIFY
 
-<!-- src: src/qbm/pgsql/transaction.h:429-493; src/qbm/pgsql/pg_notify_sql.h:25-92; qbm/pgsql/src/qbm/pgsql/pgsql.h:378-388,1882-1893,2658-2763 (in that order: notification; on_incoming_notify; notify_consumer / notify_co_consumer / notify_cb_consumer) -->
+<!-- src: src/qbm/pgsql/transaction.h:429-493; src/qbm/pgsql/pg_notify_sql.h:25-92; qbm/pgsql/src/qbm/pgsql/pgsql.h:378-388,1882-1893,2658-2792 (in that order: notification; on_incoming_notify; notify_consumer / notify_co_consumer / notify_cb_consumer) -->
 
 ### Publishing (NOTIFY)
 
@@ -446,7 +446,8 @@ qb::io::async::task<void> consume() {
 
 The consumer's queue defaults to 8192 messages. On overflow the newest message is dropped and `on_notify_dropped(cb)` (
 if set) is invoked, otherwise a warning is logged. The channel closes on disconnect, so an in-flight `receive()`
-resolves to `std::nullopt`.
+resolves to `std::nullopt` once what was received is read. After the next `connect()` — and a new `LISTEN`: the
+subscription belongs to the session — `receive()` serves the new connection, unread notifications first.
 
 ---
 

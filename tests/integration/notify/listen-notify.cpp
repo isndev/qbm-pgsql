@@ -215,6 +215,34 @@ TEST_F(ListenNotify, CbConsumer_ReconnectAndReListen_StillDelivers) {
     sub.disconnect();
 }
 
+// The coroutine side of the same reconnect (Huly QB-252). A disconnect closes receive()'s queue, and a
+// channel closes for good: until the fix the reconnected consumer dropped every NOTIFY ("buffer full")
+// and receive() yielded nullopt forever. What was received before the disconnect and never read is
+// carried over, ahead of the new connection's notifications. The callback only counts arrivals.
+TEST_F(ListenNotify, CoConsumer_ReconnectAndReListen_ReceiveServesTheNewConnection) {
+    int                             arrived{};
+    qb::pg::tcp::notify_co_consumer sub{dsn_tcp_string()};
+    sub.on_notify([&](qb::pg::notification &&) { ++arrived; });
+    ASSERT_TRUE(qb::io::async::run_sync(sub.connect(dsn_tcp_string())));
+    ASSERT_TRUE(sub.listen(std::string(kChan), discard_query, discard_error).await());
+    ASSERT_TRUE(pub_->notify(std::string(kChan), "kept", discard_query, discard_error).await());
+    ASSERT_TRUE(pump_until([&] { return arrived == 1; }, kDeadline)) << "the first NOTIFY never arrived";
+    sub.disconnect(); // "kept" was received and never read
+
+    ASSERT_TRUE(qb::io::async::run_sync(sub.connect(dsn_tcp_string())));
+    ASSERT_TRUE(sub.listen(std::string(kChan), discard_query, discard_error).await());
+    ASSERT_TRUE(pub_->notify(std::string(kChan), "after", discard_query, discard_error).await());
+    ASSERT_TRUE(pump_until([&] { return arrived == 2; }, kDeadline)) << "the NOTIFY after the reconnect never arrived";
+
+    auto first  = qb::io::async::run_sync(sub.receive());
+    auto second = qb::io::async::run_sync(sub.receive());
+    ASSERT_TRUE(first.has_value()) << "what was received before the disconnect is still read";
+    EXPECT_EQ(first->payload, "kept");
+    ASSERT_TRUE(second.has_value()) << "receive() must serve the new connection";
+    EXPECT_EQ(second->payload, "after");
+    sub.disconnect();
+}
+
 // A throwing on_notify callback must be swallowed (logged) by deliver_pg_notify and must
 // NOT prevent the notification from being queued for receive(): the consumer keeps working.
 // Exercises the catch(std::exception&) arm of the on_notify_callback_ path.
