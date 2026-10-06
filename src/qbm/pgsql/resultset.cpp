@@ -375,7 +375,7 @@ resultset::json() const {
         for (const auto field : row) {
             // Unwrap explicitly rather than assigning the optional itself. nlohmann only
             // learned to serialise std::optional in 3.12, while qb's floor is
-            // `find_package(nlohmann_json 3.11)` (qbDependencies.cmake:364) -- so this one
+            // `find_package(nlohmann_json 3.11)` (qbDependencies.cmake:401) -- so this one
             // line silently required a version half a minor above what the build asks for,
             // and broke on any distro at 3.11.x (measured on Debian's 3.11.3: "no match for
             // operator=", resultset.cpp:377). It is the ONLY site in the tree that assigned a
