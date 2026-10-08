@@ -426,9 +426,10 @@ The `notify` publisher side must use a normal (non-pooled) connection.
 
 ### 3.10 Bulk COPY, streaming, and out-of-band control
 
-These live on `database` in `pgsql.h`. The COPY / streaming helpers chain several
-awaits internally, so they return `qb::io::async::task<Reply<T>>` (still
-`co_await`-only, yielding `Reply<T>`) rather than a `pg_reply_awaiter<T>`.
+These live on `database` in `pgsql.h`. The COPY helpers return
+`qb::io::async::task<Reply<T>>` while awaiting their one queued COPY command;
+streaming helpers may chain operations. Both remain `co_await`-only and yield
+`Reply<T>` rather than exposing a `pg_reply_awaiter<T>`.
 
 **`copy_out(sql, sink)` — `COPY … TO STDOUT`, constant memory.** Runs a
 `COPY … TO STDOUT` and delivers each `CopyData` chunk to `sink` **as it arrives**;

@@ -19,7 +19,7 @@ This document provides a detailed API reference for the `qb::pg` module, part of
   - [`qb::pg::params` (alias for `qb::pg::detail::QueryParams`)](#qbpgparams-alias-for-qbpgdetailqueryparams)
   - [Prepared Statements (`qb::pg::detail::PreparedQuery`, `qb::pg::detail::PreparedQueryStorage`)](#prepared-statements-qbpgdetailpreparedquery-qbpgdetailpreparedquerystorage)
 - [Result Set Processing](#result-set-processing)
-  - [`qb::pg::results` (alias for `qb::pg::detail::resultset`)](#qbpgresults-alias-for-qbpgdetailresultset)
+  - [`qb::pg::results` (alias for `qb::pg::resultset`)](#qbpgresults-alias-for-qbpgresultset)
   - [`qb::pg::results::row`](#qbpgresultsrow)
   - [`qb::pg::results::field`](#qbpgresultsfield)
   - [`qb::pg::field_description`](#qbpgfield_description)
@@ -383,18 +383,13 @@ namespace qb::pg {
 
 ## Result Set Processing
 
-### `qb::pg::results` (alias for `qb::pg::detail::resultset`)
+### `qb::pg::results` (alias for `qb::pg::resultset`)
 
-Represents the set of rows returned by a query. Provides a container-like interface to access rows. There is no public `qb::pg::resultset`: the class lives in `namespace qb::pg::detail` and the only public spelling is the alias `using results = detail::resultset;` (`qbm/pgsql/src/qbm/pgsql/pgsql.h:2941`). Row and field below are reachable as `qb::pg::results::row` / `qb::pg::results::field`.
+Represents the set of rows returned by a query. The class is declared publicly as `qb::pg::resultset` in `resultset.h`; `qb::pg::results` is its public alias (`qbm/pgsql/src/qbm/pgsql/pgsql.h:2941`). Both spellings are valid, with `results` preferred for application code. Row and field are reachable as `qb::pg::results::row` / `qb::pg::results::field`.
 
 **Definition (`qbm/pgsql/src/qbm/pgsql/resultset.h`):**
 ```cpp
 namespace qb::pg {
-// Public alias (pgsql.h:2941); the class itself is qb::pg::detail::resultset.
-using results = detail::resultset;
-}
-
-namespace qb::pg::detail {
 class resultset {
 public:
     // STL-like container typedefs (const_iterator, value_type=row, etc.)
@@ -428,17 +423,17 @@ public:
     // field_buffer at(size_type r, row::size_type c) const;
     // bool is_null(size_type r, row::size_type c) const;
 };
-} // namespace qb::pg::detail
+} // namespace qb::pg
 ```
 
 ### `qb::pg::results::row`
 
-Represents a single row within a `results` set (`qb::pg::detail::resultset::row`). Provides access to individual fields.
+Represents a single row within a `results` set (`qb::pg::resultset::row`). Provides access to individual fields.
 
 **Definition (`qbm/pgsql/src/qbm/pgsql/resultset.h`):**
 ```cpp
-namespace qb::pg::detail {
-class resultset { // public alias: qb::pg::results
+namespace qb::pg {
+class resultset { // also exposed as qb::pg::results
 public:
     class row {
     public:
@@ -467,17 +462,17 @@ public:
         size_type index_of_name(std::string const &name) const;
     };
 };
-} // namespace qb::pg::detail
+} // namespace qb::pg
 ```
 
 ### `qb::pg::results::field`
 
-Represents a single field (column value) within a `results::row` (`qb::pg::detail::resultset::field`).
+Represents a single field (column value) within a `results::row` (`qb::pg::resultset::field`).
 
 **Definition (`qbm/pgsql/src/qbm/pgsql/resultset.h`):**
 ```cpp
-namespace qb::pg::detail {
-class resultset { // public alias: qb::pg::results
+namespace qb::pg {
+class resultset { // also exposed as qb::pg::results
 public:
     class field {
     public:
@@ -502,7 +497,7 @@ public:
 
     };
 };
-} // namespace qb::pg::detail
+} // namespace qb::pg
 ```
 `jsonb_text()` returns PostgreSQL's canonical JSONB text for a non-NULL OID 3802
 field. It validates the result format and version byte, and the view lasts only
