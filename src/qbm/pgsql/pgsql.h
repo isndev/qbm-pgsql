@@ -1680,9 +1680,20 @@ public:
             // under the int32 wire length field: a single >2 GiB chunk would otherwise
             // wrap message::length() and desynchronize the stream.
             static constexpr std::size_t kMaxCopyDataBody = 1u << 30; // 1 GiB
-            while (std::optional<std::string> chunk = (*source)()) {
+            while (true) {
+                std::optional<std::string> chunk = (*source)();
                 if (!is_connected_)
                     return; // the source may have disconnected the session
+                // The source may destroy its own awaiting coroutine. Its scope guard
+                // detaches the callback, but this local shared_ptr keeps the current
+                // invocation alive. Do not call it again or send its returned bytes.
+                if (_active_copy_operation != copy || copy->source != source) {
+                    QB_LOG_WARN("[pgsql] copy_in source detached during callback; aborting the COPY with CopyFail");
+                    send_copy_fail();
+                    return;
+                }
+                if (!chunk)
+                    break;
                 std::string_view rest{*chunk};
                 while (!rest.empty()) { // empty chunk -> skipped; large chunk -> split
                     const std::size_t take = std::min(rest.size(), kMaxCopyDataBody);

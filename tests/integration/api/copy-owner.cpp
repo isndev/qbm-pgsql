@@ -15,6 +15,7 @@
  * without replacing the first command's sink or source.
  */
 #include <gtest/gtest.h>
+#include <coroutine>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -86,6 +87,20 @@ observe_copy_in(database *db, int *source_calls, bool *done, bool *ok) {
     });
     *ok        = reply.ok();
     *done      = true;
+    co_return;
+}
+
+qb::io::async::task<void>
+copy_in_source_cancels_waiter(database *db, std::coroutine_handle<> *handle, int *source_calls, bool *resumed) {
+    (void) co_await db->copy_in("COPY qb_copy_owner_self_cancel FROM STDIN", [handle, source_calls]() -> std::optional<std::string> {
+        ++*source_calls;
+        if (*source_calls == 1) {
+            qb::io::async::coro_scheduler().cancel_spawned(*handle);
+            return "orphan\n";
+        }
+        return std::nullopt;
+    });
+    *resumed = true;
     co_return;
 }
 
@@ -236,6 +251,28 @@ TEST_F(CopyOwner, DestroyedCopyInAwaiterDetachesSourceAndDrainsCopyFail) {
     EXPECT_TRUE(empty.ok());
     EXPECT_TRUE(bytes.empty());
     blocker->disconnect();
+}
+
+TEST_F(CopyOwner, SourceCancelsItsOwnWaiterWithoutAnotherCallback) {
+    ASSERT_TRUE(qb::io::async::run_sync(db_->query("CREATE TEMP TABLE qb_copy_owner_self_cancel (v text)")).ok());
+    int                     source_calls = 0;
+    bool                    resumed      = false;
+    std::coroutine_handle<> handle;
+    handle = qb::io::async::coro_scheduler().spawn_tracked(copy_in_source_cancels_waiter(db_.get(), &handle, &source_calls, &resumed));
+    ASSERT_TRUE(handle);
+
+    // This SELECT queues behind COPY, so its completion proves CopyFail was
+    // answered and the connection advanced exactly past the cancelled command.
+    auto after = qb::io::async::run_sync(db_->query("SELECT 1"));
+    EXPECT_TRUE(after.ok());
+    EXPECT_EQ(source_calls, 1) << "the local source handle must not permit a second call after its coroutine is destroyed";
+    EXPECT_FALSE(resumed);
+
+    std::string bytes;
+    auto        read = qb::io::async::run_sync(
+        db_->copy_out("COPY qb_copy_owner_self_cancel TO STDOUT", [&bytes](std::string_view chunk) { bytes.append(chunk); }));
+    EXPECT_TRUE(read.ok());
+    EXPECT_TRUE(bytes.empty()) << "the cancelled source chunk must not be sent before CopyFail";
 }
 
 } // namespace copy_owner_test

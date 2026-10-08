@@ -41,7 +41,9 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
   loaded the wrong table. A plain COPY query queued ahead cannot borrow a later `copy_in`
   source. Destroying an awaiting coroutine detaches its callback immediately while its
   command keeps the COPY reservation until completion; sequential COPY and connection
-  reuse still work.
+  reuse still work. If a source destroys its own awaiting coroutine inside a callback,
+  the returned chunk is discarded and the command sends one `CopyFail` before any
+  further source call.
 - **Present empty text and binary numeric values stay correct through `field::as<std::optional<T>>()` (Huly QB-646).**
   SQL NULL metadata now decides whether the optional is empty; a present value is decoded through `T` with
   its column format and OID. `results::json()` keeps an empty string as `""` rather than JSON null, and
