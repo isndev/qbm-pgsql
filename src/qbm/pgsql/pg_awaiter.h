@@ -106,6 +106,7 @@ public:
      */
     void
     await_suspend(std::coroutine_handle<> handle) {
+        qb::io::async::track_suspension(handle, "pgsql");
         shared_->h = handle;
         auto s     = shared_;
         auto done  = [s](::qb::pg::Reply<T> &&r) {

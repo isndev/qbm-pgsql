@@ -1544,3 +1544,59 @@ TEST_F(PgsqlCoroApiTest, SequentialQueryStreamsEachGetTheirOwnCursor) {
     EXPECT_EQ(first, 30u);
     EXPECT_EQ(second, 12u) << "a second stream after the first closed must still work — the counter must not break reuse";
 }
+
+// What a coroutine waits on, in its scheduler's dump (Huly QB-71): the module's awaiters label themselves with
+// qb::io::async::track_suspension, so a coroutine parked on a connect, then on a query, says so -- under the
+// module's names, not the record of an earlier wait. The observer runs after the client in the same ready-queue
+// drain, so it sees the connect parked; the query sleeps on the server long enough to be seen.
+TEST_F(PgsqlCoroApiTest, TheDumpSaysACoroutineWaitsOnAConnectThenAQuery) {
+    auto &sched = qb::io::async::coro_scheduler();
+    ASSERT_TRUE(sched.set_suspension_tracking(true));
+    auto        fresh    = std::make_unique<qb::pg::tcp::database>();
+    bool        done     = false;
+    bool        observed = false;
+    std::string on_connect;
+    std::string on_query;
+    // what the coroutine spawned as "pg-client" waits on, at the end of its chain
+    auto client_waits_on = [&sched]() -> std::string {
+        const auto                             dump = sched.dump();
+        qb::io::async::parked_coroutine const *at   = nullptr;
+        for (auto const &p : dump)
+            if (p.name == "pg-client")
+                at = &p;
+        for (std::size_t depth = 0; at && at->waits_on && depth < dump.size(); ++depth) {
+            qb::io::async::parked_coroutine const *next = nullptr;
+            for (auto const &p : dump)
+                if (p.frame == at->waits_on)
+                    next = &p;
+            if (!next)
+                break;
+            at = next;
+        }
+        return at && at->kind ? at->kind : "";
+    };
+    auto client = [&]() -> qb::io::async::task<void> {
+        if (co_await fresh->connect(qb::pg::test::dsn_tcp_string()))
+            (void) co_await fresh->query("SELECT pg_sleep(0.3)");
+        done = true;
+    };
+    auto observer = [&]() -> qb::io::async::task<void> {
+        on_connect = client_waits_on();
+        for (int i = 0; i < 400 && !done && on_query != "pgsql"; ++i) {
+            co_await qb::io::async::sleep(std::chrono::milliseconds(5));
+            on_query = client_waits_on();
+        }
+        observed = true;
+    };
+    sched.spawn("pg-client", client());
+    sched.spawn(observer());
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!(done && observed) && std::chrono::steady_clock::now() < deadline)
+        qb::io::async::run(EVRUN_NOWAIT);
+    sched.set_suspension_tracking(false);
+    fresh->disconnect();
+
+    ASSERT_TRUE(done && observed) << "the client or the observer never finished";
+    EXPECT_EQ(on_connect, "pgsql connect");
+    EXPECT_EQ(on_query, "pgsql");
+}

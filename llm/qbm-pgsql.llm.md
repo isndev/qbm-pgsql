@@ -79,6 +79,9 @@ qb-io, not qb-core.
     `copy_in`, `query_stream` — instead return `qb::io::async::task<Reply<T>>`.
     Either way `co_await` yields `Reply<T>` (`T` = `resultset`, `PreparedQuery`,
     or `void`), and nothing happens until you `co_await` it (or `run_sync` it).
+    A coroutine parked on one shows as `"pgsql"` in qb's
+    `CoroutineScheduler::dump()` (on `connect()`, `"pgsql connect"`) when its
+    thread tracks suspensions (3.3).
   - **Callback** — overloads **with** success/error lambdas return
     `transaction&` for fluent chaining and only **enqueue** work. The queue
     drains when a thread runs `qb::io::async::run_once()` / `run()` on that
