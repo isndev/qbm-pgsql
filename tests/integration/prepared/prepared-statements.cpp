@@ -518,6 +518,28 @@ TEST_F(PreparedStatementsIntegration, NonExistentPreparedStatement) {
     EXPECT_TRUE(followup_ok);
 }
 
+TEST_F(PreparedStatementsIntegration, LocalPreparedErrorDisconnectDoesNotSendFollowingQuery) {
+    int local_errors = 0;
+    db_->execute(
+        "never_prepared_statement", params{1}, [](Transaction &, results) { ADD_FAILURE() << "unknown statement succeeded"; },
+        [&](error::db_error const &) {
+            ++local_errors;
+            db_->disconnect();
+        });
+    ASSERT_TRUE(qb::pg::test::pump_until([&] { return local_errors != 0; }, std::chrono::seconds(2)));
+    ASSERT_EQ(local_errors, 1);
+    ASSERT_FALSE(db_->is_connection_alive());
+
+    const auto before    = db_->out().size();
+    int        successes = 0;
+    int        failures  = 0;
+    db_->execute("SELECT 1", [&](Transaction &, results) { ++successes; }, [&](error::db_error const &) { ++failures; });
+    EXPECT_EQ(db_->out().size(), before) << "a closed connection must not serialize work into its old output buffer";
+    EXPECT_EQ(successes, 0);
+    EXPECT_EQ(failures, 1);
+    db_.reset(); // do not ask this disconnected fixture to execute its teardown DROP
+}
+
 /**
  * @brief After SQL DEALLOCATE, execute-by-name fails with `26000` until re-prepared.
  *

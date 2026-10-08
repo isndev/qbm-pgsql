@@ -518,8 +518,9 @@ server never sent it. The `string_view` is valid while the connection is alive.
 - After `disconnect()` you must call `prepare_reconnect()` before re-`connect()`ing
   the **same** object (it closes the fd, resets buffers/disposed state). Drain or
   fail pending queries first. If `disconnect()` runs inside one of that connection's
-  query callbacks, queued failures run just after the callback returns; no new query
-  is accepted meanwhile.
+  query or fluent `.then` / `.error` callbacks, queued failures run just after
+  the callback returns; new callback commands fail once with a connection error
+  and coroutine calls return failed replies meanwhile.
 - On a lost connection the disconnect handler calls `fail_all_pending(...)`, so
   every queued query and sub-transaction resumes its awaiter with an error
   instead of hanging.

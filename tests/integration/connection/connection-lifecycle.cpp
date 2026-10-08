@@ -349,6 +349,50 @@ TEST_F(ConnectionLifecycle, DisconnectInsideErrorCallbackCompletesOnce) {
     EXPECT_FALSE(db_->is_connection_alive());
 }
 
+TEST_F(ConnectionLifecycle, DisconnectInsideChainedThenKeepsParentAlive) {
+    ASSERT_TRUE(qb::io::async::run_sync(db_->connect(dsn_tcp_string())));
+
+    int then_calls    = 0;
+    int queued_errors = 0;
+    db_->begin([&](transaction &tr) {
+        tr.then([&](transaction &) {
+            ++then_calls;
+            db_->disconnect();
+        });
+    });
+    db_->execute(
+        "SELECT 2", [](transaction &, results) { ADD_FAILURE() << "queued query ran after disconnect"; },
+        [&](error::db_error const &) { ++queued_errors; });
+
+    EXPECT_TRUE(qb::pg::test::pump_until([&] { return then_calls != 0; }, std::chrono::seconds(2)));
+    EXPECT_EQ(then_calls, 1);
+    EXPECT_EQ(queued_errors, 1);
+    EXPECT_FALSE(db_->is_connection_alive());
+}
+
+TEST_F(ConnectionLifecycle, DisconnectInsideChainedErrorKeepsParentAlive) {
+    ASSERT_TRUE(qb::io::async::run_sync(db_->connect(dsn_tcp_string())));
+
+    int chain_errors  = 0;
+    int queued_errors = 0;
+    db_->begin([&](transaction &tr) {
+        tr.execute(
+              "SELECT 1 / 0", [](transaction &, results) { ADD_FAILURE() << "invalid SQL succeeded"; }, [](error::db_error const &) {})
+            .error([&](error::db_error const &) {
+                ++chain_errors;
+                db_->disconnect();
+            });
+    });
+    db_->execute(
+        "SELECT 2", [](transaction &, results) { ADD_FAILURE() << "queued query ran after disconnect"; },
+        [&](error::db_error const &) { ++queued_errors; });
+
+    EXPECT_TRUE(qb::pg::test::pump_until([&] { return chain_errors != 0; }, std::chrono::seconds(2)));
+    EXPECT_EQ(chain_errors, 1);
+    EXPECT_EQ(queued_errors, 1);
+    EXPECT_FALSE(db_->is_connection_alive());
+}
+
 // --------------------------------------------------------------------------------------
 // Handshake deadline timer is owned (no UAF after destroy)
 // --------------------------------------------------------------------------------------

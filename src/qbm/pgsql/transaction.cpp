@@ -74,6 +74,18 @@ Transaction::parent() const {
 
 void
 Transaction::push_transaction(std::unique_ptr<Transaction> cmd) {
+    if (!is_connection_usable()) {
+        // Every callback API queues through this method. Match the coroutine
+        // overloads' closed-handle contract before a command can enter the
+        // queue or leave bytes in an output buffer that reconnect will clear.
+        const error::connection_error err{"connection is not established; query rejected (the handle is disconnected)"};
+        for (auto *node = this; node; node = node->_parent) {
+            node->_result = false;
+            node->_error  = err;
+        }
+        cmd->fail_all_pending(err);
+        return;
+    }
     _sub_commands.push(std::move(cmd));
     on_new_command();
 }

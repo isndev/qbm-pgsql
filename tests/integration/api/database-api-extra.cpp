@@ -338,6 +338,30 @@ TEST_F(PgsqlDbApiExtra, QueryAfterDisconnectFailsFastInsteadOfHanging) {
     }());
 }
 
+TEST_F(PgsqlDbApiExtra, CallbackCommandsAfterDisconnectFailFast) {
+    db_->disconnect();
+
+    int query_errors    = 0;
+    int prepare_errors  = 0;
+    int prepared_errors = 0;
+    db_->execute(
+        "SELECT 1", [](Transaction &, results) { ADD_FAILURE() << "closed query succeeded"; },
+        [&](error::db_error const &) { ++query_errors; });
+    db_->prepare("p_closed", "SELECT $1::int", type_oid_sequence{oid::int4}, discard_prepare,
+                 [&](error::db_error const &) { ++prepare_errors; });
+    db_->execute(
+        "p_closed", params{1}, [](Transaction &, results) { ADD_FAILURE() << "closed prepared query succeeded"; },
+        [&](error::db_error const &) { ++prepared_errors; });
+
+    EXPECT_EQ(query_errors, 1);
+    EXPECT_EQ(prepare_errors, 1);
+    EXPECT_EQ(prepared_errors, 1);
+
+    auto outcome = db_->await();
+    EXPECT_FALSE(outcome()) << "a rejected callback batch must also fail its fluent status";
+    EXPECT_NE(std::string_view(outcome.error().what()).find("connection is not established"), std::string_view::npos);
+}
+
 int
 main(int argc, char **argv) {
     qb::io::async::init();

@@ -901,16 +901,16 @@ private:
         return static_cast<Transaction *>(static_cast<Database<QB_IO_, NotifyDerived> *>(this));
     }
 
-    Transaction *_current_command      = this;    ///< Current transaction being processed
-    ISqlQuery   *_current_query        = nullptr; ///< Current query being executed
-    bool         _ready_for_query      = false;   ///< Flag indicating if ready for next query
-    unsigned     _query_callback_depth = 0;       ///< Keep its Transaction owner alive until callback returns
+    Transaction *_current_command           = this;    ///< Current transaction being processed
+    ISqlQuery   *_current_query             = nullptr; ///< Current query being executed
+    bool         _ready_for_query           = false;   ///< Flag indicating if ready for next query
+    unsigned     _completion_callback_depth = 0;       ///< Keep a callback's Transaction owner alive until it returns
     enum class DeferredDisconnect { none, client, transport };
     DeferredDisconnect _deferred_disconnect = DeferredDisconnect::none;
 
     void
     finish_query_callback() {
-        if (--_query_callback_depth != 0 || _deferred_disconnect == DeferredDisconnect::none)
+        if (--_completion_callback_depth != 0 || _deferred_disconnect == DeferredDisconnect::none)
             return;
 
         const auto reason    = _deferred_disconnect;
@@ -957,6 +957,8 @@ private:
     bool
     process_query(Transaction *cmd) {
         _ready_for_query = false;
+        if (!is_connected_)
+            return false;
         if (!cmd)
             cmd = root_transaction();
         _current_command = next_transaction(cmd);
@@ -972,13 +974,28 @@ private:
                 QB_LOG_DEBUG("[pgsql] error processing query not valid");
                 _error = error::client_error{"query couldn't be processed check logs for more infos"};
                 on_error_query(error());
-                return process_query(_current_command) || (_ready_for_query = true);
+                if (!is_connected_)
+                    return false;
+                const bool dispatched = process_query(_current_command);
+                if (!dispatched && is_connected_)
+                    _ready_for_query = true;
+                return dispatched;
             }
         } else if (_current_command->parent()) {
             auto next_cmd = _current_command->parent();
             do {
+                // pop_transaction() may invoke on_before_pop(), then a Then/Error
+                // destructor callback. A callback can disconnect: defer draining the
+                // parent until no code below still reads next_cmd.
+                ++_completion_callback_depth;
+                auto callback_guard = qb::scope_guard([this] { finish_query_callback(); });
                 next_cmd->pop_transaction();
-            } while (!next_cmd->result() && (next_cmd = next_cmd->parent()));
+                if (!is_connected_)
+                    return false;
+                if (next_cmd->result())
+                    break;
+                next_cmd = next_cmd->parent();
+            } while (next_cmd);
 
             return process_query(next_cmd);
         }
@@ -990,8 +1007,11 @@ private:
      */
     void
     process_if_query_ready() {
-        if (_ready_for_query && !process_query(_current_command))
-            _ready_for_query = true;
+        if (_ready_for_query && is_connected_) {
+            const bool dispatched = process_query(_current_command);
+            if (!dispatched && is_connected_)
+                _ready_for_query = true;
+        }
     }
 
     /**
@@ -1007,7 +1027,7 @@ private:
         }
         auto query     = _current_command->pop_query();
         _current_query = nullptr; // a callback may disconnect and re-enter error handling
-        ++_query_callback_depth;
+        ++_completion_callback_depth;
         auto callback_guard = qb::scope_guard([this] { finish_query_callback(); });
         query->on_success();
     }
@@ -1029,7 +1049,7 @@ private:
         _current_command->result(false);
         auto query     = _current_command->pop_query();
         _current_query = nullptr;
-        ++_query_callback_depth;
+        ++_completion_callback_depth;
         auto callback_guard = qb::scope_guard([this] { finish_query_callback(); });
         query->on_error(err);
     }
@@ -1408,7 +1428,7 @@ public:
                         "(SQLSTATE implicit); issue ROLLBACK before new commands");
         }
 
-        if (!process_query(_current_command)) {
+        if (!process_query(_current_command) && is_connected_) {
             _ready_for_query = true;
             QB_LOG_DEBUG("[pgsql] Database " << conn_opts_.uri << "[" << conn_opts_.database << "]"
                                              << " is ready for query (" << stat << ")");
@@ -1944,9 +1964,9 @@ public:
     /**
      * @brief A new query may only be enqueued while the handle is connected.
      *
-     * Overrides Transaction::is_connection_usable() so the coroutine query/execute entry
-     * points fail fast on a disconnected handle instead of enqueuing a command that can
-     * never be sent (which would hang the caller's awaiter). `is_connected_` is cleared
+     * Overrides Transaction::is_connection_usable() so coroutine entry points and
+     * the callback command queue fail fast on a disconnected handle instead of
+     * enqueuing a command that can never be sent. `is_connected_` is cleared
      * synchronously by disconnect() and by on(disconnected).
      */
     [[nodiscard]] bool
@@ -2579,7 +2599,7 @@ public:
         }
         if (is_connected_) {
             is_connected_ = false;
-            if (_query_callback_depth != 0)
+            if (_completion_callback_depth != 0)
                 _deferred_disconnect = DeferredDisconnect::transport;
             else
                 on_error_query(error::client_error("database disconnected"));
@@ -2589,9 +2609,9 @@ public:
         serverPid_    = 0;
         serverSecret_ = 0;
         // on_error_query() only fails the single in-flight query. Drain every
-        // queued query too. A nested disconnect during a query callback defers
+        // queued query too. A nested disconnect during a completion callback defers
         // this drain until the callback returns, preserving its Transaction owner.
-        if (_query_callback_depth != 0) {
+        if (_completion_callback_depth != 0) {
             if (_deferred_disconnect == DeferredDisconnect::none)
                 _deferred_disconnect = DeferredDisconnect::transport;
         } else {
@@ -2658,7 +2678,7 @@ public:
      * @brief Explicitly disconnects from the database
      *
      * Fails every in-flight and queued query, then completes the io teardown before it returns.
-     * From inside a query callback, queued failures run immediately after that callback returns:
+     * From inside a query or fluent transaction callback, queued failures run after it returns:
      * draining sooner would destroy the Transaction that owns the executing callback.
      * Outside message dispatch, `on(disconnected)` has run and the watcher is stopped. It runs no loop pass, so no other
      * watcher and no coroutine is resumed under the caller -- safe from a coroutine body; the
@@ -2673,7 +2693,7 @@ public:
         // guard drains pending work at that point. Outside a callback, fail synchronously.
         if (is_connected_) {
             is_connected_ = false;
-            if (_query_callback_depth != 0) {
+            if (_completion_callback_depth != 0) {
                 _deferred_disconnect = DeferredDisconnect::client;
             } else {
                 on_error_query(error::connection_error("database disconnected by client"));

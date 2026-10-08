@@ -143,9 +143,9 @@ public:
      * @brief Whether the underlying connection can still accept new queries.
      *
      * The root `Database` overrides this to report its live connection state; a
-     * sub-transaction delegates up to the root. Used by the coroutine query/execute
-     * entry points to fail FAST (a connection error) instead of enqueuing a command on
-     * a closed connection — which would never complete, hanging the caller's awaiter.
+     * sub-transaction delegates up to the root. Used by coroutine entry points and
+     * the common callback queue to fail fast (a connection error) instead of
+     * enqueuing work on a closed connection that could never complete.
      */
     [[nodiscard]] virtual bool
     is_connection_usable() const noexcept {

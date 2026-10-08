@@ -47,7 +47,7 @@ stateDiagram-v2
 
 ### One object, two queues
 
-<!-- src: src/qbm/pgsql/transaction.h:70-75, src/qbm/pgsql/transaction.cpp:81-116 -->
+<!-- src: src/qbm/pgsql/transaction.h:70-75, src/qbm/pgsql/transaction.cpp:93-128 -->
 
 `Transaction` holds:
 
@@ -78,7 +78,7 @@ normal case inside an actor), you do **not** call `await` after every statement.
 
 ### Status and `await`
 
-<!-- src: src/qbm/pgsql/transaction.cpp:179-216, src/qbm/pgsql/transaction.h:728-784 -->
+<!-- src: src/qbm/pgsql/transaction.cpp:191-228, src/qbm/pgsql/transaction.h:728-784 -->
 
 `Transaction::await()` is a **blocking drain on the current thread**: it pumps
 `qb::io::async::listener::current.run(EVRUN_ONCE)` until both queues are empty, then returns a `status` snapshot. It is
@@ -393,7 +393,7 @@ Key facts to get right:
 
 ## LISTEN / NOTIFY
 
-<!-- src: src/qbm/pgsql/transaction.h:429-493; src/qbm/pgsql/pg_notify_sql.h:25-92; qbm/pgsql/src/qbm/pgsql/pgsql.h:382-392,1910-1921,2698-2832 (in that order: notification; on_incoming_notify; notify_consumer / notify_co_consumer / notify_cb_consumer) -->
+<!-- src: src/qbm/pgsql/transaction.h:429-493; src/qbm/pgsql/pg_notify_sql.h:25-92; qbm/pgsql/src/qbm/pgsql/pgsql.h:382-392,1930-1941,2718-2852 (in that order: notification; on_incoming_notify; notify_consumer / notify_co_consumer / notify_cb_consumer) -->
 
 ### Publishing (NOTIFY)
 
@@ -463,7 +463,7 @@ subscription belongs to the session — `receive()` serves the new connection, u
   `End`/`with_transaction` do it) before sending new commands.
 - **A lost connection fails every pending query automatically.** You do **not** write a disconnect handler. The built-in
   `Database::on(qb::io::async::event::disconnected)` handler calls `fail_all_pending(...)` on the root transaction (
-  `qbm/pgsql/src/qbm/pgsql/pgsql.h:2598`), which drains every queued query and pending sub-transaction so suspended `co_await`
+  `qbm/pgsql/src/qbm/pgsql/pgsql.h:2618`), which drains every queued query and pending sub-transaction so suspended `co_await`
   awaiters resume with `client_error("database disconnected")` instead of hanging forever.
   See [connection.md](./connection.md) (Fail-all-on-disconnect).
 - **Statement timeout below 1 ms vanishes.** A sub-millisecond `set_timeout` truncates to 0 and emits no `SET LOCAL`.

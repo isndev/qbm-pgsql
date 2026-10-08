@@ -29,8 +29,14 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
   valid query is sent without waiting for a server response that cannot arrive.
 - **`disconnect()` from a query callback no longer re-enters a completed query (Huly QB-627).**
   The active query is removed before its callback, and queued failures wait until that callback
-  returns so its transaction owner stays alive. Success and error callbacks complete once;
-  queued work fails once.
+  returns so its transaction owner stays alive. The same lifetime guard covers fluent
+  `.then(...)` / `.error(...)` callbacks invoked while a transaction command is popped;
+  disconnect there cannot destroy the parent before the traversal finishes. Success and
+  error callbacks complete once; queued work fails once.
+- **Callback commands on a disconnected database fail immediately (Huly QB-917).** The
+  common command queue rejects callback `execute`, prepared `execute` and `prepare` before
+  serialization, delivers their error callback once, and records a failed status for
+  `await()`, matching the coroutine overloads' closed-handle behavior.
 - **`notify_co_consumer::receive()` serves the next connection (Huly QB-252).** A disconnect closes the consumer's
   queue, and a channel closes for good: after a reconnect every NOTIFY was dropped -- and logged as "buffer full" --
   and `receive()` yielded `std::nullopt` for ever, so the documented advice was to build a new consumer. The queue
