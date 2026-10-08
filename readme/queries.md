@@ -209,6 +209,16 @@ stream — chunks need not align to rows). Both return `Reply<resultset>` (`ok()
 with the **error** (the client sends `CopyFail`) and leaves the connection usable. A throwing `source` never corrupts
 the protocol stream.
 
+One connection admits one COPY operation at a time. If `copy_in` or `copy_out` is still
+active, another COPY call returns a failed `Reply` without sending its SQL or invoking
+its source or sink. Await the first reply before starting the next COPY on that connection.
+Destroying the awaiting coroutine detaches its source or sink immediately, so its
+captured variables cannot be used later. The connection stays reserved for that
+COPY until the in-flight command finishes; a cancelled COPY IN sends `CopyFail`
+if the server requests data after its source has been detached.
+The source or sink activates only when that command reaches the wire, so an earlier
+plain SQL command cannot borrow it.
+
 > **`copy_in` is _not_ constant-memory.** Unlike `copy_out`, it does **not** back-pressure on the socket: when the
 `CopyInResponse` arrives it calls `source` in a tight loop and writes every returned chunk into the output pipe *
 *synchronously**, only sending `CopyDone` once `source` returns `std::nullopt`. The entire input is therefore staged in
@@ -251,7 +261,7 @@ transaction is never joined and never ended by `query_stream`.
 > caller-owned only once its `BEGIN` has **completed** — `in_transaction()` mirrors the last `ReadyForQuery`. Started
 > before that, the stream reads the session as idle and opens (and later ends) a block of its own. `co_await` the
 > `begin()` first.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2222-2342,2236-2254,2256-2259,2314-2334,2030-2033 (in that order: query_stream; the seat/guard bookkeeping; the cursor name; the last-one-out COMMIT/ROLLBACK; in_transaction) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2280-2400,2294-2312,2314-2317,2372-2392,2080-2083 (in that order: query_stream; the seat/guard bookkeeping; the cursor name; the last-one-out COMMIT/ROLLBACK; in_transaction) -->
 
 ---
 
