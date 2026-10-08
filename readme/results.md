@@ -36,12 +36,12 @@ You include nothing extra: `#include <qbm/pgsql/pgsql.h>` pulls `resultset.h` th
 
 ### Ownership: owning vs borrowing result sets
 
-`results` is internally a `std::shared_ptr<const result_impl>` (`resultset.h:835`), so copying one is cheap and copies
+`results` is internally a `std::shared_ptr<const result_impl>` (`resultset.h:841`), so copying one is cheap and copies
 are safe. There are two flavors:
 
 - An **owning** result set holds a real allocation and keeps its rows alive. The default constructor, `deep_snapshot()`,
   and the coroutine path all produce owning result sets.
-- A **borrowing** result set wraps a caller-owned `result_impl` with a no-op deleter (`resultset.cpp:233-237`). It
+- A **borrowing** result set wraps a caller-owned `result_impl` with a no-op deleter (`resultset.cpp:263-267`). It
   observes the live row buffer but neither frees nor extends it. The result set handed to a synchronous success callback
   is borrowing.
 
@@ -180,9 +180,9 @@ for (qb::pg::results::row const &row : rows) {
 qb::pg::results::row first = rows.at(0);          // checked
 ```
 
-`index_of_name(name)` returns the column index, or `results::npos` if the name is absent (`resultset.cpp:320-329`) —
+`index_of_name(name)` returns the column index, or `results::npos` if the name is absent (`resultset.cpp:350-359`) —
 useful for a presence check that does not throw. `field(name)` (metadata-by-name) instead throws `std::runtime_error`
-when the name is missing (`resultset.cpp:337-345`).
+when the name is missing (`resultset.cpp:367-376`).
 
 ---
 
@@ -218,7 +218,7 @@ row.to({"id", "name", "active"}, id, name, active);
 ```
 
 The named form requires at least as many names as targets, or it throws `error::db_error` with message
-`"Not enough names in row data extraction"` (`resultset.h:968`). Each target decodes through the same path as
+`"Not enough names in row data extraction"` (`resultset.h:974`). Each target decodes through the same path as
 `field::as<T>()`, so a NULL into a non-`std::optional` target throws `value_is_null` (see below).
 
 ### Typed tuples & structured bindings
@@ -309,7 +309,7 @@ if (!field.is_null())
 ```
 
 `results::json()` checks SQL NULL directly, so a present empty TEXT value remains `""` while SQL NULL becomes JSON null
-(`resultset.cpp:499-512`).
+(`resultset.cpp:518-531`).
 `field.as<std::optional<T>>()` uses the same NULL metadata; a present value is decoded through `T`, preserving
 empty text and the column-OID conversion for binary numerics (`resultset.h:558-575,597-632`).
 
@@ -327,7 +327,7 @@ See [error_handling.md](./error_handling.md).
 Every present value is a JSON string, including numbers, booleans, JSONB, and arrays; SQL NULL is JSON null:
 
 ```cpp
-<!-- src: qbm/pgsql/src/qbm/pgsql/resultset.cpp:499-512 -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/resultset.cpp:518-531 -->
 qb::json j = rows.json();   // e.g. [{"id":"1","name":"ada"}, ...]
 ```
 
@@ -348,14 +348,14 @@ This export is convenient for diagnostics and admin endpoints; use typed `as<T>(
   (`resultset.h:319-321`). Storing a `row` or `field` past the lifetime of the `results` that vended it is a
   use-after-free. Copy the data out, or snapshot the whole set with `deep_snapshot()` (`resultset.h:161`).
 - **The callback result set is borrowing.** It does not extend the lifetime of the live row buffer. To retain rows after
-  a synchronous success callback returns, call `deep_snapshot()` first (`resultset.cpp:239-246`).
+  a synchronous success callback returns, call `deep_snapshot()` first (`resultset.cpp:269-277`).
 - **`operator[]`, `front()`, `back()` assert; they do not throw.** `results::operator[]` only asserts on an out-of-range
   index (UB in a release build past the end); `front()`/`back()` assert on an empty set. Use `at()` for a checked row,
-  and guard `front()`/`back()` with `empty()` or `operator bool` (`resultset.cpp:280-298`).
+  and guard `front()`/`back()` with `empty()` or `operator bool` (`resultset.cpp:310-329`).
 - **`operator bool` is a row-presence test, not DML success.** A successful DML statement with no returned rows is
   falsy. Use `rows_affected()` to detect an effect (`resultset.h:268,298`).
 - **Iterators are bidirectional, not random-access.** Comparing iterators from different result sets — or, for field
-  iterators, different rows — trips an assert (`resultset.cpp:106,191-192`).
+  iterators, different rows — trips an assert (`resultset.cpp:106,221-222`).
 - **Do not share a result set across cores/threads.** Text-format `as<T>()` uses a function-local
   `static ParamUnserializer`; this is safe only because an actor/connection runs on a single `VirtualCore` (one thread).
   Sharing a `results` across cores is a data race (`resultset.h:640`).

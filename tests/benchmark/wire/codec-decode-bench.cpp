@@ -97,6 +97,49 @@ struct Int4FieldFixture {
     }
 };
 
+// QB-945 comparison input. The result carries PostgreSQL's versioned JSONB
+// payload, so each timed typed read includes the same field routing as a query.
+std::string
+jsonb_document(int shape) {
+    switch (shape) {
+        case 0:
+            return R"({"name":"Ada","items":[true,null,"x"]})";
+        case 1:
+            return R"({"id":42,"ratio":1.5,"enabled":true})";
+        case 2: {
+            std::string text = "[";
+            for (int i = 0; i < 64; ++i) {
+                if (i)
+                    text += ',';
+                text += "0.1";
+            }
+            return text + ']';
+        }
+        case 3:
+            return "12345678901234567890.123456789";
+        default:
+            return "1e400";
+    }
+}
+
+struct JsonbFieldFixture {
+    result_impl impl;
+
+    explicit JsonbFieldFixture(std::string_view text) {
+        field_description desc{};
+        desc.name        = "doc";
+        desc.type_oid    = oid::jsonb;
+        desc.format_code = protocol_data_format::Binary;
+        impl.row_description().push_back(std::move(desc));
+
+        auto &row = impl.rows().emplace_back();
+        row.offsets.push_back(0);
+        row.null_map.push_back(false);
+        row.data.push_back(static_cast<byte>(1));
+        row.data.insert(row.data.end(), text.begin(), text.end());
+    }
+};
+
 bool
 is_present_binary_int4_42(const resultset::row::value_type &field) {
     const auto &desc = field.description();
@@ -260,5 +303,99 @@ BM_DecodeString(benchmark::State &state) {
     state.SetBytesProcessed(state.iterations() * static_cast<std::int64_t>(s.size()));
 }
 BENCHMARK(BM_DecodeString);
+
+static void
+BM_JsonbTypedRead(benchmark::State &state) {
+    const std::string text = jsonb_document(static_cast<int>(state.range(0)));
+    JsonbFieldFixture fixture(text);
+    resultset         result(&fixture.impl);
+    const auto        field = result[0][0];
+    if (field.as<qb::jsonb>().is_null()) {
+        state.SkipWithError("JSONB typed read lost its value");
+        return;
+    }
+
+    for (auto _ : state) {
+        auto value = field.as<qb::jsonb>();
+        benchmark::DoNotOptimize(value);
+    }
+    state.SetItemsProcessed(state.iterations());
+    state.SetBytesProcessed(state.iterations() * static_cast<std::int64_t>(text.size()));
+}
+BENCHMARK(BM_JsonbTypedRead)->Arg(0)->Arg(1)->Arg(2);
+
+#ifndef QB945_BASELINE
+static void
+BM_JsonbTextView(benchmark::State &state) {
+    const std::string text = jsonb_document(static_cast<int>(state.range(0)));
+    JsonbFieldFixture fixture(text);
+    resultset         result(&fixture.impl);
+    const auto        field = result[0][0];
+    if (field.jsonb_text() != text) {
+        state.SkipWithError("JSONB text view differs from the wire text");
+        return;
+    }
+
+    for (auto _ : state) {
+        auto view = field.jsonb_text();
+        benchmark::DoNotOptimize(view.data());
+        benchmark::DoNotOptimize(view.size());
+    }
+    state.SetItemsProcessed(state.iterations());
+    state.SetBytesProcessed(state.iterations() * static_cast<std::int64_t>(text.size()));
+}
+BENCHMARK(BM_JsonbTextView)->Arg(0)->Arg(1)->Arg(2)->Arg(3)->Arg(4);
+
+static void
+BM_JsonbTextCopy(benchmark::State &state) {
+    const std::string text = jsonb_document(static_cast<int>(state.range(0)));
+    JsonbFieldFixture fixture(text);
+    resultset         result(&fixture.impl);
+    const auto        field = result[0][0];
+    if (field.jsonb_text_copy() != text) {
+        state.SkipWithError("JSONB text copy differs from the wire text");
+        return;
+    }
+
+    for (auto _ : state) {
+        auto copy = field.jsonb_text_copy();
+        benchmark::DoNotOptimize(copy.data());
+        benchmark::DoNotOptimize(copy.size());
+    }
+    state.SetItemsProcessed(state.iterations());
+    state.SetBytesProcessed(state.iterations() * static_cast<std::int64_t>(text.size()));
+}
+BENCHMARK(BM_JsonbTextCopy)->Arg(0)->Arg(1)->Arg(2)->Arg(3)->Arg(4);
+
+// PostgreSQL NUMERIC accepts this value, but the nlohmann DOM cannot hold it.
+// Keep the rejection path measurable without claiming a successful typed read.
+static void
+BM_JsonbTypedRejected(benchmark::State &state) {
+    const std::string text = jsonb_document(static_cast<int>(state.range(0)));
+    JsonbFieldFixture fixture(text);
+    resultset         result(&fixture.impl);
+    const auto        field = result[0][0];
+    try {
+        (void) field.as<qb::jsonb>();
+        state.SkipWithError("unrepresentable JSONB number was accepted");
+        return;
+    } catch (const error::client_error &) {
+        // Expected. An unrelated parse failure must not produce a timing.
+    }
+
+    for (auto _ : state) {
+        try {
+            (void) field.as<qb::jsonb>();
+            state.SkipWithError("unrepresentable JSONB number was accepted");
+            break;
+        } catch (const error::client_error &e) {
+            benchmark::DoNotOptimize(e.what());
+        }
+    }
+    state.SetItemsProcessed(state.iterations());
+    state.SetBytesProcessed(state.iterations() * static_cast<std::int64_t>(text.size()));
+}
+BENCHMARK(BM_JsonbTypedRejected)->Arg(3)->Arg(4);
+#endif
 
 BENCHMARK_MAIN();

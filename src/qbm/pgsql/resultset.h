@@ -702,6 +702,12 @@ public:
         result_pointer result_;
         size_type      row_index_;
         row::size_type field_index_;
+
+    public:
+        /// Canonical JSONB text; view lives with backing rows; validates NULL/OID/format/version.
+        [[nodiscard]] std::string_view jsonb_text() const;
+        /// Owning copy of jsonb_text(), safe after the result is destroyed.
+        [[nodiscard]] std::string jsonb_text_copy() const;
     }; // field
     //@}
     //@{

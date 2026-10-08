@@ -327,6 +327,15 @@ C++ ⇄ PostgreSQL via `detail::type_mapping<T>` (OID for params) and
 Binary JSON/JSONB decoding preserves JSON structure: `[[1,2]]` remains an array
 of arrays. A pair-shaped array is never inferred to be an object.
 
+For JSONB, `field.as<qb::jsonb>()` rejects a number that would change decimal
+value in the nlohmann DOM; it throws `error::client_error`, including for a
+nested number. To retain PostgreSQL's exact canonical JSONB text, call
+`field.jsonb_text()` while the backing rows live or `field.jsonb_text_copy()` for
+an owning string. A callback result is borrowed: snapshot it or copy the text
+inside the callback before retaining either. Both methods validate SQL NULL,
+OID, format and binary version. Canonical JSONB text may already differ from
+the original input's spacing and key order.
+
 ```cpp
 // WRITE a timestamptz parameter (qb::wall_time is a UTC instant on system_clock):
 co_await db.prepare("ins_ev", "INSERT INTO ev(at) VALUES ($1)", {oid::timestamptz});
