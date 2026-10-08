@@ -324,6 +324,9 @@ C++ ⇄ PostgreSQL via `detail::type_mapping<T>` (OID for params) and
 | `qb::json` / `qb::jsonb` | json / jsonb | 114 / 3802 |
 | **`qb::wall_time`** | **timestamptz** | **1184** |
 
+Binary JSON/JSONB decoding preserves JSON structure: `[[1,2]]` remains an array
+of arrays. A pair-shaped array is never inferred to be an object.
+
 ```cpp
 // WRITE a timestamptz parameter (qb::wall_time is a UTC instant on system_clock):
 co_await db.prepare("ins_ev", "INSERT INTO ev(at) VALUES ($1)", {oid::timestamptz});

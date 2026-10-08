@@ -282,42 +282,9 @@ TypeConverter<qb::json>::from_binary(std::span<const byte> buffer) {
         // route to the text result format, but a real bug if ever binary-routed.)
         std::string json_str(reinterpret_cast<const char *>(buffer.data()), buffer.size());
 
-        // OPTIMIZED: Single parse with format detection (P0-10 fix)
-        // Previously called parse TWICE on error path - wasteful CPU usage
-        // Parse once, then check if it's array format that needs conversion
-        auto json = nlohmann::json::parse(json_str);
-
-        // If it's not an array, return as-is (standard JSON)
-        if (!json.is_array()) {
-            return qb::json(json);
-        }
-
-        // Check if it might be PostgreSQL array format with key-value pairs
-        // The format often begins with '[[' for pairs of key-value entries
-        bool is_key_value_format = false;
-        if (!json.empty() && json[0].is_array() && json[0].size() == 2) {
-            is_key_value_format = true;
-        }
-
-        if (!is_key_value_format) {
-            // Regular array, return as-is
-            return qb::json(json);
-        }
-
-        // Convert key-value array format to object format
-        nlohmann::json result;
-        for (const auto &pair : json) {
-            if (pair.is_array() && pair.size() == 2) {
-                if (pair[0].is_string()) {
-                    // Standard key-value pair
-                    result[pair[0].get<std::string>()] = pair[1];
-                } else {
-                    // Handle non-string keys by generating a string key
-                    result[pair[0].dump()] = pair[1];
-                }
-            }
-        }
-        return qb::json(result);
+        // PostgreSQL's binary JSON value is its text representation. An array
+        // of pairs is an array, with no object marker to infer from its shape.
+        return qb::json::parse(json_str);
     } catch (const std::exception &e) {
         throw std::runtime_error(std::string("Failed to parse JSON data: ") + e.what());
     }
@@ -368,42 +335,9 @@ TypeConverter<qb::jsonb>::from_binary(std::span<const byte> buffer) {
 
         std::string json_str(reinterpret_cast<const char *>(buffer.data() + json_off), buffer.size() - json_off);
 
-        // OPTIMIZED: Single parse with format detection (P0-10 fix)
-        // Previously called parse TWICE on error path - wasteful CPU usage
-        // Parse once, then check if it's array format that needs conversion
-        auto json = nlohmann::json::parse(json_str);
-
-        // If it's not an array, return as-is (standard JSON)
-        if (!json.is_array()) {
-            return qb::jsonb(json);
-        }
-
-        // Check if it might be PostgreSQL array format with key-value pairs
-        // The format often begins with '[[' for pairs of key-value entries
-        bool is_key_value_format = false;
-        if (!json.empty() && json[0].is_array() && json[0].size() == 2) {
-            is_key_value_format = true;
-        }
-
-        if (!is_key_value_format) {
-            // Regular array, return as-is
-            return qb::jsonb(json);
-        }
-
-        // Convert key-value array format to object format
-        nlohmann::json result;
-        for (const auto &pair : json) {
-            if (pair.is_array() && pair.size() == 2) {
-                if (pair[0].is_string()) {
-                    // Standard key-value pair
-                    result[pair[0].get<std::string>()] = pair[1];
-                } else {
-                    // Handle non-string keys by generating a string key
-                    result[pair[0].dump()] = pair[1];
-                }
-            }
-        }
-        return qb::jsonb(result);
+        // jsonb_send carries canonical JSON text after the version byte. Its
+        // structure is already unambiguous; preserve arrays of pairs as arrays.
+        return qb::jsonb(nlohmann::json::parse(json_str));
     } catch (const std::exception &e) {
         throw std::runtime_error(std::string("Failed to parse JSONB data: ") + e.what());
     }

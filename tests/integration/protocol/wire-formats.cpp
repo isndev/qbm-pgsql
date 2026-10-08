@@ -245,6 +245,34 @@ TEST_F(WireFormats, JsonExportPreservesJsonbCanonicalTextAndArrayLowerBound) {
     EXPECT_TRUE(ok);
 }
 
+TEST_F(WireFormats, PreparedJsonbFieldPreservesPairArrayShape) {
+    ASSERT_TRUE(db_->prepare("jsonb_pair_shape",
+                             "SELECT '[[1,2]]'::jsonb AS pairs, "
+                             "'[[[1,2],[3,4]],[[5,6],[7,8]]]'::jsonb AS nested, "
+                             "'{\"a\":[[1,2]]}'::jsonb AS object_value",
+                             type_oid_sequence{}, discard_prepare, discard_error)
+                    .await());
+
+    bool ok = false;
+    ASSERT_TRUE(db_->execute(
+                       "jsonb_pair_shape", params{},
+                       [&](transaction &, results r) {
+                           ASSERT_EQ(r.size(), 1u);
+                           for (const char *name : {"pairs", "nested", "object_value"})
+                               EXPECT_EQ(r.field(name).format_code, protocol_data_format::Binary);
+                           const auto pairs  = r[0]["pairs"].as<qb::jsonb>();
+                           const auto nested = r[0]["nested"].as<qb::jsonb>();
+                           const auto object = r[0]["object_value"].as<qb::jsonb>();
+                           EXPECT_EQ(pairs, qb::jsonb(qb::json::parse("[[1,2]]")));
+                           EXPECT_EQ(nested, qb::jsonb(qb::json::parse("[[[1,2],[3,4]],[[5,6],[7,8]]]")));
+                           EXPECT_EQ(object, qb::jsonb(qb::json::parse("{\"a\":[[1,2]]}")));
+                           ok = true;
+                       },
+                       [](error::db_error e) { FAIL() << e.what(); })
+                    .await());
+    EXPECT_TRUE(ok);
+}
+
 // Parameter format codes: bound params are sent binary for decodable OIDs and text for
 // the rest. Observe indirectly via pg_typeof on the bound value (it must arrive as the
 // declared OID regardless of transmission format) plus a binary read-back.

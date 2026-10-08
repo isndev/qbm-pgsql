@@ -41,7 +41,7 @@ are safe. There are two flavors:
 
 - An **owning** result set holds a real allocation and keeps its rows alive. The default constructor, `deep_snapshot()`,
   and the coroutine path all produce owning result sets.
-- A **borrowing** result set wraps a caller-owned `result_impl` with a no-op deleter (`resultset.cpp:231-235`). It
+- A **borrowing** result set wraps a caller-owned `result_impl` with a no-op deleter (`resultset.cpp:233-237`). It
   observes the live row buffer but neither frees nor extends it. The result set handed to a synchronous success callback
   is borrowing.
 
@@ -180,9 +180,9 @@ for (qb::pg::results::row const &row : rows) {
 qb::pg::results::row first = rows.at(0);          // checked
 ```
 
-`index_of_name(name)` returns the column index, or `results::npos` if the name is absent (`resultset.cpp:318-327`) —
+`index_of_name(name)` returns the column index, or `results::npos` if the name is absent (`resultset.cpp:320-329`) —
 useful for a presence check that does not throw. `field(name)` (metadata-by-name) instead throws `std::runtime_error`
-when the name is missing (`resultset.cpp:335-343`).
+when the name is missing (`resultset.cpp:337-345`).
 
 ---
 
@@ -190,7 +190,7 @@ when the name is missing (`resultset.cpp:335-343`).
 
 A `results::row` is a non-owning, index-based container of fields.
 
-- `row[i]` — field by 0-based index; throws `std::out_of_range` if out of range (`resultset.cpp:78`).
+- `row[i]` — field by 0-based index; throws `std::out_of_range` if out of range (`resultset.cpp:80`).
 - `row["name"]` — field by case-sensitive column name. If the name is unknown, `index_of_name` returns `npos` and the
   subsequent indexed access throws `std::out_of_range`.
 - `row.size()`, `row.empty()`, `row.begin()`/`row.end()` — field container interface.
@@ -348,14 +348,14 @@ This export is convenient for diagnostics and admin endpoints; use typed `as<T>(
   (`resultset.h:319-321`). Storing a `row` or `field` past the lifetime of the `results` that vended it is a
   use-after-free. Copy the data out, or snapshot the whole set with `deep_snapshot()` (`resultset.h:161`).
 - **The callback result set is borrowing.** It does not extend the lifetime of the live row buffer. To retain rows after
-  a synchronous success callback returns, call `deep_snapshot()` first (`resultset.cpp:237-244`).
+  a synchronous success callback returns, call `deep_snapshot()` first (`resultset.cpp:239-246`).
 - **`operator[]`, `front()`, `back()` assert; they do not throw.** `results::operator[]` only asserts on an out-of-range
   index (UB in a release build past the end); `front()`/`back()` assert on an empty set. Use `at()` for a checked row,
-  and guard `front()`/`back()` with `empty()` or `operator bool` (`resultset.cpp:278-296`).
+  and guard `front()`/`back()` with `empty()` or `operator bool` (`resultset.cpp:280-298`).
 - **`operator bool` is a row-presence test, not DML success.** A successful DML statement with no returned rows is
   falsy. Use `rows_affected()` to detect an effect (`resultset.h:268,298`).
 - **Iterators are bidirectional, not random-access.** Comparing iterators from different result sets — or, for field
-  iterators, different rows — trips an assert (`resultset.cpp:104,189-190`).
+  iterators, different rows — trips an assert (`resultset.cpp:106,191-192`).
 - **Do not share a result set across cores/threads.** Text-format `as<T>()` uses a function-local
   `static ParamUnserializer`; this is safe only because an actor/connection runs on a single `VirtualCore` (one thread).
   Sharing a `results` across cores is a data race (`resultset.h:640`).

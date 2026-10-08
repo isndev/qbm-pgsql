@@ -25,6 +25,11 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
   SQL NULL metadata now decides whether the optional is empty; a present value is decoded through `T` with
   its column format and OID. `results::json()` keeps an empty string as `""` rather than JSON null, and
   binary `int8` read as `optional<double>` converts numerically instead of reinterpreting its bytes.
+- **Binary JSON and JSONB decoding keeps arrays of pairs as arrays (Huly QB-944).**
+  `field.as<qb::jsonb>()` and the direct JSON binary decoder used to reinterpret
+  `[[1,2]]` as an object despite PostgreSQL sending ordinary JSON text with no
+  object marker. Both now parse that text without changing its structure; binary
+  version checks and parse errors still fail loudly.
 - **`results::json()` decodes binary result columns before stringifying them (Huly QB-943).**
   Prepared `int8`, `float8` and other binary columns used to become JSON strings containing
   PostgreSQL wire bytes. The export keeps its existing string-valued contract: scalar

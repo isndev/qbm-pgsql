@@ -974,9 +974,12 @@ TEST_F(DataTypesRoundTrip, Jsonb_CanonicalShape) {
         db_->prepare("jb_ins", "INSERT INTO jb_test (jb) VALUES ($1)", type_oid_sequence{oid::jsonb}, discard_prepare, discard_error).await());
     ASSERT_TRUE(db_->prepare("jb_sel", "SELECT jb FROM jb_test", type_oid_sequence{}, discard_prepare, discard_error).await());
 
-    const qb::jsonb in = {
-        {"user", {{"id", 42}, {"name", "JSONB User"}, {"active", true}}}, {"roles", {"editor", "reviewer"}}, {"scores", {98.5, 87.0}}
-    };
+    // The old brace form constructed an array of [key,value] pairs. The
+    // decoder used to rewrite that valid JSONB array into an object, masking
+    // the fixture error. State the object shape before the wire round trip.
+    const qb::jsonb in(
+        qb::json::parse(R"({"user":{"id":42,"name":"JSONB User","active":true},"roles":["editor","reviewer"],"scores":[98.5,87.0]})"));
+    ASSERT_TRUE(in.is_object());
 
     ASSERT_TRUE(
         db_->execute("jb_ins", params(in), [](transaction &, results) {}, [](error::db_error e) { FAIL() << "insert: " << e.what(); }).await());

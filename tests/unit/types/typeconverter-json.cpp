@@ -3,10 +3,10 @@
  * @brief Unit tests for the JSON / JSONB varlena converters and the std::optional
  *        scalar decode path.
  *
- * JSON wire = [int32 len][utf-8 text]. JSONB wire = [int32 varlena header][version
- * byte == 1][utf-8 text]; from_binary receives the VALUE bytes (the leading 4-byte
- * varlena header is present but ignored, the byte at offset 4 is the version). Split
- * out of the legacy monolith `test-data-types.cpp` (json / optional tests).
+ * JSON result wire = UTF-8 text. JSONB result wire = [version byte == 1][UTF-8
+ * text]; the decoder also accepts a legacy 4-byte-prefixed shape. The protocol
+ * strips each field's length prefix before from_binary. Split out of the legacy
+ * monolith `test-data-types.cpp` (json / optional tests).
  *
  * @author qb - C++ Actor Framework
  * @copyright Copyright (c) 2011-2026 qb - isndev (cpp.actor)
@@ -63,21 +63,23 @@ TEST(TypeConverterJsonTest, BinaryAndTextPaths) {
     // Empty buffer -> throw.
     EXPECT_THROW(TypeConverter<qb::json>::from_binary(std::vector<byte>{}), std::runtime_error);
 
-    // Key-value pair array payload [["k","v"]] -> converted to an object {"k":"v"}.
+    // A JSON array of pairs is still an array: PostgreSQL does not tag it as
+    // an object on the binary wire.
     {
-        auto parsed = TypeConverter<qb::json>::from_binary(value_of(R"([["k","v"]])"));
-        ASSERT_TRUE(parsed.is_object());
-        EXPECT_EQ(parsed["k"], "v");
+        const std::string text   = R"([["k","v"]])";
+        auto              parsed = TypeConverter<qb::json>::from_binary(value_of(text));
+        ASSERT_TRUE(parsed.is_array());
+        EXPECT_EQ(parsed, qb::json::parse(text));
     }
 
-    // Key-value pair array with a NON-string key: the first element of a pair is a
-    // number, so the converter stringifies it via .dump() to form the object key
-    // (the non-string-key branch). [[1,"a"],[2,"b"]] -> {"1":"a","2":"b"}.
+    // Numeric pair keys and nested pair arrays are likewise ordinary JSON arrays.
     {
-        auto parsed = TypeConverter<qb::json>::from_binary(value_of(R"([[1,"a"],[2,"b"]])"));
-        ASSERT_TRUE(parsed.is_object());
-        EXPECT_EQ(parsed["1"], "a");
-        EXPECT_EQ(parsed["2"], "b");
+        const std::string text   = R"([[1,"a"],[2,"b"]])";
+        auto              parsed = TypeConverter<qb::json>::from_binary(value_of(text));
+        ASSERT_TRUE(parsed.is_array());
+        EXPECT_EQ(parsed, qb::json::parse(text));
+        const std::string nested = R"([[[1,2]],[[3,4]]])";
+        EXPECT_EQ(TypeConverter<qb::json>::from_binary(value_of(nested)), qb::json::parse(nested));
     }
 
     // from_text: valid parses, invalid throws.
@@ -104,10 +106,7 @@ TEST(TypeConverterJsonTest, TextFormatShapes) {
     EXPECT_THROW(TypeConverter<qb::jsonb>::from_text(R"({"unclosed": "object")"), std::runtime_error);
 }
 
-// A top-level JSON array whose first element is NOT a [key,value] pair is not the
-// key-value (flat-map) shape, so from_binary returns it verbatim as an array.
-// BinaryAndTextPaths only covers object and key-value-array inputs, leaving the
-// "plain array" branch unexercised.
+// A top-level JSON array without pair elements also keeps its array shape.
 TEST(TypeConverterJsonTest, FromBinaryPlainArrayNotKeyValue) {
     const std::string text = "[1,2,3]";
     std::vector<byte> bytes(text.data(), text.data() + text.size());
@@ -127,8 +126,8 @@ TEST(TypeConverterJsonbTest, VarlenaBranchAndRoundTrip) {
     TypeConverter<qb::jsonb>::to_binary(obj, buf);
     EXPECT_EQ(TypeConverter<qb::jsonb>::from_binary(buf), obj);
 
-    // 4-byte varlena header branch: bytes[4] == version 1, then key-value array
-    // payload [["k","v"]] -> object {"k":"v"}.
+    // 4-byte varlena header branch: bytes[4] == version 1, then an ordinary
+    // JSON array of pairs, which must retain its array shape.
     {
         const std::string payload = R"([["k","v"]])";
         std::vector<byte> wire;
@@ -136,11 +135,11 @@ TEST(TypeConverterJsonbTest, VarlenaBranchAndRoundTrip) {
         wire.push_back(static_cast<byte>(1));             // jsonb version
         wire.insert(wire.end(), payload.begin(), payload.end());
         auto parsed = TypeConverter<qb::jsonb>::from_binary(wire);
-        ASSERT_TRUE(parsed.is_object());
-        EXPECT_EQ(parsed["k"], "v");
+        ASSERT_TRUE(parsed.is_array());
+        EXPECT_EQ(parsed, qb::jsonb(qb::json::parse(payload)));
     }
 
-    // Key-value pair array with a NON-string key: number key stringified via .dump().
+    // Numeric pair keys have no special object meaning either.
     {
         const std::string payload = R"([[10,"x"],[20,"y"]])";
         std::vector<byte> wire;
@@ -148,24 +147,30 @@ TEST(TypeConverterJsonbTest, VarlenaBranchAndRoundTrip) {
         wire.push_back(static_cast<byte>(1));             // jsonb version
         wire.insert(wire.end(), payload.begin(), payload.end());
         auto parsed = TypeConverter<qb::jsonb>::from_binary(wire);
-        ASSERT_TRUE(parsed.is_object());
-        EXPECT_EQ(parsed["10"], "x");
-        EXPECT_EQ(parsed["20"], "y");
+        ASSERT_TRUE(parsed.is_array());
+        EXPECT_EQ(parsed, qb::jsonb(qb::json::parse(payload)));
     }
 
     // Unversioned / unsupported leading bytes -> throw.
     EXPECT_THROW(TypeConverter<qb::jsonb>::from_binary(hex_to_bytes("0203")), std::runtime_error);
 }
 
+TEST(TypeConverterJsonbTest, VersionedValuePreservesArrayShape) {
+    for (const std::string &text : {R"([[1,2]])", R"([["k","v"]])", R"([[[1,2]],[[3,4]]])", R"({"a":[[1,2]]})"}) {
+        std::vector<byte> wire{static_cast<byte>(1)};
+        wire.insert(wire.end(), text.begin(), text.end());
+        const auto parsed = TypeConverter<qb::jsonb>::from_binary(wire);
+        EXPECT_EQ(parsed, qb::jsonb(qb::json::parse(text))) << text;
+    }
+    EXPECT_THROW(TypeConverter<qb::jsonb>::from_binary(hex_to_bytes("025b5b312c325d5d")), std::runtime_error);
+}
+
 // A realistic nested JSONB document decodes with all fields intact.
 TEST(TypeConverterJsonbTest, NestedDocumentVersionedWire) {
-    qb::jsonb doc = {
-        {"id", 123},
-        {"name", "test user"},
-        {"active", true},
-        {"scores", {98, 87, 95}},
-        {"details", {{"address", "123 Test St"}, {"email", "test@example.com"}}},
-    };
+    // Parse an actual object: qb::jsonb brace initialization here produces an
+    // array of pairs, which the old decoder wrongly folded into an object.
+    qb::jsonb         doc(qb::json::parse(
+        R"({"id":123,"name":"test user","active":true,"scores":[98,87,95],"details":{"address":"123 Test St","email":"test@example.com"}})"));
     const std::string json_str = doc.dump();
 
     // Build the JSONB wire VALUE: [int32 content-len][version 1][json text].
