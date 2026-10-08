@@ -265,8 +265,12 @@ public:
         constexpr const size_t header_size = sizeof(qb::pg::integer) + sizeof(qb::pg::byte);
 
         const auto &in = this->_io.in();
-        if (in.size() < offset_ + header_size)
-            return 0; // read more
+        if (!message_) {
+            if (in.size() < header_size)
+                return 0; // header incomplete
+        } else if (in.size() <= offset_) {
+            return 0; // no new body bytes
+        }
 
         auto max_bytes = in.size() - offset_;
 
@@ -897,9 +901,28 @@ private:
         return static_cast<Transaction *>(static_cast<Database<QB_IO_, NotifyDerived> *>(this));
     }
 
-    Transaction *_current_command = this;    ///< Current transaction being processed
-    ISqlQuery   *_current_query   = nullptr; ///< Current query being executed
-    bool         _ready_for_query = false;   ///< Flag indicating if ready for next query
+    Transaction *_current_command      = this;    ///< Current transaction being processed
+    ISqlQuery   *_current_query        = nullptr; ///< Current query being executed
+    bool         _ready_for_query      = false;   ///< Flag indicating if ready for next query
+    unsigned     _query_callback_depth = 0;       ///< Keep its Transaction owner alive until callback returns
+    enum class DeferredDisconnect { none, client, transport };
+    DeferredDisconnect _deferred_disconnect = DeferredDisconnect::none;
+
+    void
+    finish_query_callback() {
+        if (--_query_callback_depth != 0 || _deferred_disconnect == DeferredDisconnect::none)
+            return;
+
+        const auto reason    = _deferred_disconnect;
+        _deferred_disconnect = DeferredDisconnect::none;
+        if (reason == DeferredDisconnect::client)
+            root_transaction()->fail_all_pending(error::connection_error("database disconnected by client"));
+        else
+            root_transaction()->fail_all_pending(error::client_error("database disconnected"));
+        _current_command = root_transaction();
+        _current_query   = nullptr;
+        _ready_for_query = false;
+    }
 
     /**
      * @brief Finds the next transaction to execute
@@ -967,9 +990,8 @@ private:
      */
     void
     process_if_query_ready() {
-        if (_ready_for_query) {
-            process_query(_current_command);
-        }
+        if (_ready_for_query && !process_query(_current_command))
+            _ready_for_query = true;
     }
 
     /**
@@ -983,9 +1005,11 @@ private:
             _current_query = nullptr;
             return;
         }
-        auto query = _current_command->pop_query();
+        auto query     = _current_command->pop_query();
+        _current_query = nullptr; // a callback may disconnect and re-enter error handling
+        ++_query_callback_depth;
+        auto callback_guard = qb::scope_guard([this] { finish_query_callback(); });
         query->on_success();
-        _current_query = nullptr;
     }
 
     /**
@@ -1003,9 +1027,11 @@ private:
             return;
         }
         _current_command->result(false);
-        auto query = _current_command->pop_query();
-        query->on_error(err);
+        auto query     = _current_command->pop_query();
         _current_query = nullptr;
+        ++_query_callback_depth;
+        auto callback_guard = qb::scope_guard([this] { finish_query_callback(); });
+        query->on_error(err);
     }
 
 private:
@@ -1370,6 +1396,8 @@ public:
     void
     on_ready_for_query(message &msg) {
         on_success_query();
+        if (!is_connected_)
+            return; // a success callback may have disconnected this session
         char stat(0);
         msg.read(stat);
         // I = idle, T = in transaction block, E = failed transaction (must ROLLBACK)
@@ -2551,20 +2579,27 @@ public:
         }
         if (is_connected_) {
             is_connected_ = false;
-            on_error_query(error::client_error("database disconnected"));
+            if (_query_callback_depth != 0)
+                _deferred_disconnect = DeferredDisconnect::transport;
+            else
+                on_error_query(error::client_error("database disconnected"));
         }
         // The backend cancel key is per-connection; drop it so a post-disconnect
         // cancel() can't address a recycled PID on the server.
         serverPid_    = 0;
         serverSecret_ = 0;
-        // on_error_query() only fails the single in-flight query. Fail every
-        // query still queued behind it (pipelined / multi-statement / pending
-        // sub-transactions) so their callers' coroutine awaiters resume with the
-        // failure instead of hanging forever.
-        root_transaction()->fail_all_pending(error::client_error("database disconnected"));
-        _current_command = root_transaction();
-        _current_query   = nullptr;
-        _ready_for_query = false;
+        // on_error_query() only fails the single in-flight query. Drain every
+        // queued query too. A nested disconnect during a query callback defers
+        // this drain until the callback returns, preserving its Transaction owner.
+        if (_query_callback_depth != 0) {
+            if (_deferred_disconnect == DeferredDisconnect::none)
+                _deferred_disconnect = DeferredDisconnect::transport;
+        } else {
+            root_transaction()->fail_all_pending(error::client_error("database disconnected"));
+            _current_command = root_transaction();
+            _current_query   = nullptr;
+            _ready_for_query = false;
+        }
         if constexpr (!std::is_same_v<NotifyDerived, void>) {
             if constexpr (requires {
                               std::declval<NotifyDerived &>().on_pg_notify_consumer_disconnected(
@@ -2622,8 +2657,10 @@ public:
     /**
      * @brief Explicitly disconnects from the database
      *
-     * Fails every in-flight and queued query, then completes the io teardown before it returns:
-     * `on(disconnected)` has run and the watcher is stopped. It runs no loop pass, so no other
+     * Fails every in-flight and queued query, then completes the io teardown before it returns.
+     * From inside a query callback, queued failures run immediately after that callback returns:
+     * draining sooner would destroy the Transaction that owns the executing callback.
+     * Outside message dispatch, `on(disconnected)` has run and the watcher is stopped. It runs no loop pass, so no other
      * watcher and no coroutine is resumed under the caller -- safe from a coroutine body; the
      * coroutines awaiting a failed query resume at the caller's next pass (Huly QB-253). From
      * inside one of this client's own protocol handlers the teardown runs right after that
@@ -2631,18 +2668,18 @@ public:
      */
     void
     disconnect() {
-        // Mark the handle down and fail any in-flight / queued query SYNCHRONOUSLY, with the
-        // client's own reason, before the teardown: called from one of this client's protocol
-        // handlers the teardown only runs after that dispatch returns, and a query submitted
-        // in between must already be refused (the is_connection_usable() guard reads
-        // is_connected_). on(disconnected), which the teardown below runs, then fails nothing
-        // twice: its `if (is_connected_)` guard is already false and fail_all_pending drains
-        // an empty queue.
+        // Mark the handle down before teardown so a new query is refused immediately.
+        // Keep the active callback's Transaction owner queued until it returns; its scope
+        // guard drains pending work at that point. Outside a callback, fail synchronously.
         if (is_connected_) {
             is_connected_ = false;
-            on_error_query(error::connection_error("database disconnected by client"));
-            root_transaction()->fail_all_pending(error::connection_error("database disconnected by client"));
-            _current_command = root_transaction();
+            if (_query_callback_depth != 0) {
+                _deferred_disconnect = DeferredDisconnect::client;
+            } else {
+                on_error_query(error::connection_error("database disconnected by client"));
+                root_transaction()->fail_all_pending(error::connection_error("database disconnected by client"));
+                _current_command = root_transaction();
+            }
         }
         // The teardown, in the call. It used to be a deferred disconnect() followed by a nested
         // listener pass, and that pass re-entered the coroutine scheduler's run_ready() when

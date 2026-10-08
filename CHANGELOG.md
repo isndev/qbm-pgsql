@@ -21,6 +21,16 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Fixed
 
+- **Fragmented `ReadyForQuery` completes as soon as its final byte arrives (Huly QB-626).** The
+  framer no longer asks for another five bytes after it has already consumed the header; a
+  six-byte response split 5+1 or 1+4+1 no longer leaves the next query waiting.
+- **A local prepared-statement error leaves the connection ready (Huly QB-659).** A fluent
+  `.error(...)` branch with no query no longer clears readiness permanently; a following
+  valid query is sent without waiting for a server response that cannot arrive.
+- **`disconnect()` from a query callback no longer re-enters a completed query (Huly QB-627).**
+  The active query is removed before its callback, and queued failures wait until that callback
+  returns so its transaction owner stays alive. Success and error callbacks complete once;
+  queued work fails once.
 - **`notify_co_consumer::receive()` serves the next connection (Huly QB-252).** A disconnect closes the consumer's
   queue, and a channel closes for good: after a reconnect every NOTIFY was dropped -- and logged as "buffer full" --
   and `receive()` yielded `std::nullopt` for ever, so the documented advice was to build a new consumer. The queue

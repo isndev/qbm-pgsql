@@ -43,6 +43,7 @@
  * limitations under the License.
  */
 
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
@@ -53,6 +54,7 @@
 #include <qb/io/async/coroutine.h>
 #include <qb/io/async/coroutine/utils.h>
 #include "../../shared/pg_integration_fixture.hpp"
+#include "../../shared/pg_pump.hpp"
 #include "../../shared/test_config.hpp"
 #include <qbm/pgsql/pgsql.h>
 
@@ -487,13 +489,33 @@ TEST_F(PreparedStatementsIntegration, PrepareNonexistentTable) {
  */
 TEST_F(PreparedStatementsIntegration, NonExistentPreparedStatement) {
     bool error_detected = false;
+    bool chain_error    = false;
     auto status         = db_->execute(
                                  "never_prepared_statement", params{std::string("value")},
                                  [](Transaction &, results) { ADD_FAILURE() << "Should not succeed with non-existent statement"; },
                                  [&error_detected](error::db_error const &) { error_detected = true; })
+                              .error([&chain_error](error::db_error const &) { chain_error = true; })
                               .await();
     ASSERT_FALSE(status);
     ASSERT_TRUE(error_detected);
+    ASSERT_TRUE(chain_error);
+
+    bool followup_done = false;
+    bool followup_ok   = false;
+    db_->execute(
+        "SELECT 1",
+        [&](Transaction &, results r) {
+            followup_done = true;
+            followup_ok   = r.size() == 1 && r[0][0].as<int>() == 1;
+        },
+        [&](error::db_error const &) { followup_done = true; });
+    const bool completed = qb::pg::test::pump_until([&followup_done] { return followup_done; }, std::chrono::seconds(2));
+    if (!completed) {
+        db_->disconnect();
+        db_.reset(); // do not let fixture teardown enqueue DROP on the stuck connection
+    }
+    EXPECT_TRUE(completed) << "a local prepared-statement error must leave the connection ready";
+    EXPECT_TRUE(followup_ok);
 }
 
 /**

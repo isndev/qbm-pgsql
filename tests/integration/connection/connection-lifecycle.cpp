@@ -302,6 +302,53 @@ TEST_F(ConnectionLifecycle, DisconnectFailsAllQueuedQueries) {
     EXPECT_EQ(with_message, errors) << "each failed query must carry an error message";
 }
 
+TEST_F(ConnectionLifecycle, DisconnectInsideSuccessCallbackCompletesOnce) {
+    ASSERT_TRUE(qb::io::async::run_sync(db_->connect(dsn_tcp_string())));
+
+    int success_calls = 0;
+    int error_calls   = 0;
+    int queued_errors = 0;
+    db_->execute(
+        "SELECT 1",
+        [&](transaction &, results) {
+            ++success_calls;
+            db_->disconnect();
+        },
+        [&](error::db_error const &) { ++error_calls; });
+    db_->execute(
+        "SELECT 2", [](transaction &, results) { ADD_FAILURE() << "queued query ran after disconnect"; },
+        [&](error::db_error const &) { ++queued_errors; });
+
+    EXPECT_TRUE(qb::pg::test::pump_until([&] { return success_calls != 0; }, std::chrono::seconds(2)));
+    EXPECT_EQ(success_calls, 1);
+    EXPECT_EQ(error_calls, 0);
+    EXPECT_EQ(queued_errors, 1);
+    EXPECT_FALSE(db_->is_connection_alive());
+}
+
+TEST_F(ConnectionLifecycle, DisconnectInsideErrorCallbackCompletesOnce) {
+    ASSERT_TRUE(qb::io::async::run_sync(db_->connect(dsn_tcp_string())));
+
+    int success_calls = 0;
+    int error_calls   = 0;
+    int queued_errors = 0;
+    db_->execute(
+        "SELECT 1 / 0", [&](transaction &, results) { ++success_calls; },
+        [&](error::db_error const &) {
+            ++error_calls;
+            db_->disconnect();
+        });
+    db_->execute(
+        "SELECT 2", [](transaction &, results) { ADD_FAILURE() << "queued query ran after disconnect"; },
+        [&](error::db_error const &) { ++queued_errors; });
+
+    EXPECT_TRUE(qb::pg::test::pump_until([&] { return error_calls != 0; }, std::chrono::seconds(2)));
+    EXPECT_EQ(success_calls, 0);
+    EXPECT_EQ(error_calls, 1);
+    EXPECT_EQ(queued_errors, 1);
+    EXPECT_FALSE(db_->is_connection_alive());
+}
+
 // --------------------------------------------------------------------------------------
 // Handshake deadline timer is owned (no UAF after destroy)
 // --------------------------------------------------------------------------------------

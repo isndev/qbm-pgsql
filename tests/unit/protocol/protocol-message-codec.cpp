@@ -49,6 +49,58 @@ using namespace qb::pg;
 using namespace qb::pg::detail;
 using qb::pg::test::hex_to_bytes;
 
+namespace protocol_message_codec_test {
+
+struct FramingProbeIO {
+    using base_io_t = FramingProbeIO;
+
+    qb::allocator::pipe<char> input;
+    int                       delivered = 0;
+    char                      status    = 0;
+
+    qb::allocator::pipe<char> &
+    in() noexcept {
+        return input;
+    }
+
+    void
+    on(std::unique_ptr<qb::pg::detail::message> msg) {
+        ++delivered;
+        EXPECT_EQ(msg->tag(), ready_for_query_tag);
+        EXPECT_TRUE(msg->read(status));
+    }
+};
+
+} // namespace protocol_message_codec_test
+
+TEST(ProtocolMessageFraming, ReadyForQueryCompletesAcrossHeaderAndBodyFragments) {
+    constexpr std::array<char, 6>                       wire       = {'Z', 0, 0, 0, 5, 'I'};
+    constexpr std::array<std::array<std::size_t, 3>, 3> partitions = {{{6, 0, 0}, {1, 4, 1}, {5, 1, 0}}};
+
+    for (const auto &parts : partitions) {
+        protocol_message_codec_test::FramingProbeIO                      io;
+        qb::protocol::pgsql<protocol_message_codec_test::FramingProbeIO> framing{io};
+        std::size_t                                                      received = 0;
+        for (const auto part : parts) {
+            if (part == 0)
+                continue;
+            std::memcpy(io.in().allocate_back(part), wire.data() + received, part);
+            received += part;
+
+            const auto size = framing.getMessageSize();
+            if (received < wire.size()) {
+                EXPECT_EQ(size, 0u) << "partial ReadyForQuery after " << received << " bytes";
+            } else {
+                EXPECT_EQ(size, wire.size()) << "complete ReadyForQuery split after " << parts[0] << " bytes";
+                if (size == wire.size())
+                    framing.onMessage(size);
+            }
+        }
+        EXPECT_EQ(io.delivered, 1) << "split after " << parts[0] << " bytes";
+        EXPECT_EQ(io.status, 'I');
+    }
+}
+
 // ===========================================================================
 // Constants + SSLRequest pre-startup packet.
 // ===========================================================================
