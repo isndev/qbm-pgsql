@@ -540,7 +540,7 @@ server never sent it. The `string_view` is valid while the connection is alive.
 - `connect()` is an awaiter — `co_await` or `run_sync` it; a discarded
   `db.connect(...)` does nothing. There is no blocking `connect()` and no
   `connect` callback overload.
-- After `disconnect()`, `connect()` on the **same** object opens a fresh socket and
+- After `disconnect()`, ordinary `connect()` on the **same** object opens a fresh socket and
   handshake, clearing stale I/O buffers and protocols. `prepare_reconnect()` is optional
   for an explicit fd and per-backend state reset; drain or fail pending queries first.
   If `disconnect()` runs inside one of that connection's

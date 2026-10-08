@@ -459,7 +459,7 @@ Coroutines awaiting failed queries resume on the caller's next pass. Until 3.3, 
 which aborted a debug build when called from a coroutine (Huly QB-253, QB-627).
 <!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2746-2777 (disconnect) -->
 
-The **same** object can call `connect()` after `disconnect()` without a preparation step: it opens a fresh socket,
+The **same** object can call the ordinary `connect()` overloads after `disconnect()` without a preparation step: the connector opens a fresh socket,
 clears stale I/O buffers and protocols before installing that transport, and performs a new handshake. This is tested
 with a query that was still queued when the old connection closed. `prepare_reconnect()` remains recommended when you
 also want to close the old fd and clear cached per-backend state before the next `connect()`. Do **not** call it while

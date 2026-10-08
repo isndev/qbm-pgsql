@@ -2702,7 +2702,7 @@ public:
     /**
      * @brief Explicitly reset session state before reconnecting this client
      *
-     * A later `connect()` opens a fresh TCP/TLS transport and resets stale I/O state before
+     * A later ordinary `connect()` opens a fresh TCP/TLS transport and resets stale I/O state before
      * the new handshake. Call this optional helper to close the old fd and clear cached
      * per-backend state explicitly before `co_await connect()` or `run_sync(connect(...))`.
      *
