@@ -487,6 +487,11 @@ public:
         field_description const& description() const;
         bool is_null() const;
         bool empty() const; // (Note: empty() might be misleading, is_null() is primary for null checks)
+        std::span<const std::byte> view() const; // raw wire bytes
+        std::string_view text() const; // raw bytes as characters, including binary version byte
+
+        std::string_view jsonb_text() const; // PostgreSQL canonical JSONB text, borrows backing row storage
+        std::string jsonb_text_copy() const; // owning copy; both validate NULL/OID/format/version
 
         // Value extraction:
         template <typename T>
@@ -494,11 +499,24 @@ public:
         template <typename T>
         bool to(T &val) const; // For non-optional T, THROWS error::value_is_null on NULL. For std::optional<T>/nullable T, sets the target to null and returns true. The bool return reports parse success, not NULL-ness — use as<std::optional<T>>() or is_null() to detect NULL.
 
-        field_buffer input_buffer() const; // Raw data buffer
     };
 };
 } // namespace qb::pg::detail
 ```
+`jsonb_text()` returns PostgreSQL's canonical JSONB text for a non-NULL OID 3802
+field. It validates the result format and version byte, and the view lasts only
+while its backing row storage remains alive. A callback's `results` is borrowed:
+copying it or keeping its `field` does not keep rows alive after the callback.
+Call `jsonb_text_copy()` inside the callback, or take a `deep_snapshot()` and
+read the view from that owning snapshot. Coroutine replies already own their
+result snapshot. The field API expects version-byte-plus-text result bytes;
+the direct converter's legacy four-byte prefix does not apply to fields.
+`as<qb::jsonb>()` throws `error::client_error` when a PostgreSQL JSONB number
+would change decimal value or overflow the nlohmann DOM (`1e400` is a valid
+PostgreSQL JSONB number). Malformed JSON keeps a distinct `std::runtime_error`
+path. Equal values with different spellings such as `1.2300` and `1.23` remain
+readable.
+
 There are **no** global `qb::pg::get<T>(field)` / `qb::pg::get(field, T&)` helpers. Two such
 templates are written in `qbm/pgsql/src/qbm/pgsql/field_handler.h`, but that file is dead — no
 translation unit includes it, it does not compile on its own, and as of 3.0 it is excluded from

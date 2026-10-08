@@ -978,7 +978,7 @@ struct TypeConverter<qb::jsonb> {
      *
      * @param buffer Buffer containing the PostgreSQL binary format data
      * @return value_type Deserialized JSONB object
-     * @throws std::runtime_error If the buffer contains invalid or malformed data
+     * @throws std::runtime_error For malformed data; error::client_error for numeric value loss
      */
     static value_type from_binary(std::span<const byte> buffer);
 
@@ -989,7 +989,7 @@ struct TypeConverter<qb::jsonb> {
      *
      * @param text PostgreSQL text representation to convert
      * @return value_type Deserialized JSONB object
-     * @throws std::runtime_error If the text contains invalid or malformed JSON
+     * @throws std::runtime_error For malformed JSON; error::client_error for numeric value loss
      */
     static value_type from_text(const std::string &text);
 

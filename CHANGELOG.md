@@ -21,6 +21,14 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Fixed
 
+- **Typed JSONB reads reject decimal value changes (Huly QB-945).**
+  `field.as<qb::jsonb>()` now throws `client_error` if nlohmann would round a
+  PostgreSQL JSONB number, including nested decimals and integers outside its
+  integer ranges and `1e400` beyond the DOM floating range. Malformed JSON
+  keeps its separate parse error; equal decimal values with different spellings remain valid.
+  `field.jsonb_text()` exposes the server's canonical text without parsing or
+  copying, with OID/format/version checks and backing-row lifetime;
+  `jsonb_text_copy()` keeps an owning copy. The `qb::jsonb` layout is unchanged.
 - **Present empty text and binary numeric values stay correct through `field::as<std::optional<T>>()` (Huly QB-646).**
   SQL NULL metadata now decides whether the optional is empty; a present value is decoded through `T` with
   its column format and OID. `results::json()` keeps an empty string as `""` rather than JSON null, and

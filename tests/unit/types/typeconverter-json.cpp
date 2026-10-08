@@ -14,15 +14,20 @@
  */
 
 #include <gtest/gtest.h>
+#include <cstddef>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 #include "../../shared/pg_wire_ground_truth.hpp"
 #include <qbm/pgsql/pgsql.h>
+#include <qbm/pgsql/result_impl.h>
 
 using namespace qb::pg;
 using namespace qb::pg::detail;
 using qb::pg::test::hex_to_bytes;
+
+static_assert(sizeof(qb::jsonb) == sizeof(qb::json)); // the fix adds no state to the public carrier
 
 // ----------------------------------------------------------------------------
 // get_oid()
@@ -163,6 +168,137 @@ TEST(TypeConverterJsonbTest, VersionedValuePreservesArrayShape) {
         EXPECT_EQ(parsed, qb::jsonb(qb::json::parse(text))) << text;
     }
     EXPECT_THROW(TypeConverter<qb::jsonb>::from_binary(hex_to_bytes("025b5b312c325d5d")), std::runtime_error);
+}
+
+TEST(TypeConverterJsonbTest, RejectsDecimalValueChangesWithoutRejectingEquivalentSpelling) {
+    const auto binary = [](std::string_view text) {
+        std::vector<byte> wire{static_cast<byte>(1)};
+        wire.insert(wire.end(), text.begin(), text.end());
+        return wire;
+    };
+
+    for (const std::string text : {
+             "12345678901234567890.123456789",
+             "18446744073709551616",
+             "-9223372036854775809",
+             R"({"nested":[0,{"n":-12345678901234567890.123456789}]})",
+         }) {
+        EXPECT_THROW((void) TypeConverter<qb::jsonb>::from_text(text), error::client_error) << text;
+        EXPECT_THROW((void) TypeConverter<qb::jsonb>::from_binary(binary(text)), error::client_error) << text;
+    }
+
+    for (const std::string text :
+         {"1", "-1", "18446744073709551615", "-9223372036854775808", "1.5", "0.1", "1.2300", "1e3", "1e-3", "-0.000"}) {
+        EXPECT_NO_THROW((void) TypeConverter<qb::jsonb>::from_text(text)) << text;
+        EXPECT_NO_THROW((void) TypeConverter<qb::jsonb>::from_binary(binary(text))) << text;
+    }
+}
+
+TEST(TypeConverterJsonbTest, NumericOverflowHasTypedErrorButMalformedJsonStaysDistinct) {
+    const auto binary = [](std::string_view text) {
+        std::vector<byte> wire{static_cast<byte>(1)};
+        wire.insert(wire.end(), text.begin(), text.end());
+        return wire;
+    };
+
+    for (const std::string text : {"1e400", "-1e400", R"({"nested":[1e400]})"}) {
+        EXPECT_THROW((void) TypeConverter<qb::jsonb>::from_text(text), error::client_error) << text;
+        EXPECT_THROW((void) TypeConverter<qb::jsonb>::from_binary(binary(text)), error::client_error) << text;
+    }
+
+    for (const std::string text : {"{broken", "[1,]"}) {
+        auto expect_syntax_error = [&](auto &&decode) {
+            try {
+                (void) decode();
+                FAIL() << "malformed JSONB was accepted: " << text;
+            } catch (const error::client_error &e) {
+                FAIL() << "malformed JSONB was classified as numeric loss: " << e.what();
+            } catch (const std::runtime_error &) {
+                // Syntax errors keep the converter's distinct malformed-data path.
+            }
+        };
+        expect_syntax_error([&] { return TypeConverter<qb::jsonb>::from_text(text); });
+        expect_syntax_error([&] { return TypeConverter<qb::jsonb>::from_binary(binary(text)); });
+    }
+}
+
+namespace {
+
+struct JsonbFieldFixture {
+    result_impl impl;
+
+    JsonbFieldFixture(oid type, protocol_data_format format, std::string_view value, bool null = false) {
+        field_description description{};
+        description.name        = "doc";
+        description.type_oid    = type;
+        description.format_code = format;
+        impl.row_description().push_back(std::move(description));
+
+        row_data row;
+        row.offsets.push_back(0);
+        row.null_map.push_back(null);
+        if (!null)
+            row.data.insert(row.data.end(), value.begin(), value.end());
+        impl.rows().push_back(std::move(row));
+    }
+
+    resultset
+    result() {
+        return resultset(&impl);
+    }
+};
+
+} // namespace
+
+TEST(JsonbFieldText, ValidatesOidFormatVersionAndNull) {
+    const std::string canonical = "12345678901234567890.123456789";
+    const std::string binary    = std::string(1, '\x01') + canonical;
+    JsonbFieldFixture binary_field(oid::jsonb, protocol_data_format::Binary, binary);
+    auto              result = binary_field.result();
+    auto              field  = result[0][0];
+    EXPECT_EQ(field.jsonb_text(), canonical);
+    EXPECT_EQ(field.jsonb_text().data(), field.text().data() + 1); // view into the wire buffer
+    EXPECT_EQ(field.jsonb_text_copy(), canonical);
+    EXPECT_THROW((void) field.as<qb::jsonb>(), error::client_error);
+    EXPECT_THROW((void) field.as<std::optional<qb::jsonb>>(), error::client_error);
+
+    JsonbFieldFixture text_field(oid::jsonb, protocol_data_format::Text, canonical);
+    auto              text_result = text_field.result();
+    EXPECT_EQ(text_result[0][0].jsonb_text(), canonical);
+
+    JsonbFieldFixture wrong_oid(oid::json, protocol_data_format::Text, canonical);
+    auto              wrong_result = wrong_oid.result();
+    EXPECT_THROW((void) wrong_result[0][0].jsonb_text(), error::client_error);
+
+    JsonbFieldFixture wrong_version(oid::jsonb, protocol_data_format::Binary, std::string(1, '\x02') + canonical);
+    auto              version_result = wrong_version.result();
+    EXPECT_THROW((void) version_result[0][0].jsonb_text(), error::client_error);
+
+    JsonbFieldFixture wrong_format(oid::jsonb, static_cast<protocol_data_format>(7), canonical);
+    auto              format_result = wrong_format.result();
+    EXPECT_THROW((void) format_result[0][0].jsonb_text(), error::client_error);
+
+    JsonbFieldFixture empty_text(oid::jsonb, protocol_data_format::Text, "");
+    auto              empty_result = empty_text.result();
+    EXPECT_THROW((void) empty_result[0][0].jsonb_text(), error::client_error);
+
+    JsonbFieldFixture null_field(oid::jsonb, protocol_data_format::Text, "", true);
+    auto              null_result = null_field.result();
+    EXPECT_THROW((void) null_result[0][0].jsonb_text(), error::value_is_null);
+}
+
+TEST(JsonbFieldText, OwningCopySurvivesResultLifetime) {
+    resultset snapshot;
+    {
+        JsonbFieldFixture source(oid::jsonb, protocol_data_format::Binary, "\x01[1.2300]");
+        auto              borrowed = source.result();
+        snapshot                   = borrowed.deep_snapshot();
+    }
+    const auto view = snapshot[0][0].jsonb_text();
+    EXPECT_EQ(view, "[1.2300]"); // the owning snapshot keeps the view's storage alive
+    const std::string copy = snapshot[0][0].jsonb_text_copy();
+    snapshot               = resultset{};
+    EXPECT_EQ(copy, "[1.2300]");
 }
 
 // A realistic nested JSONB document decodes with all fields intact.

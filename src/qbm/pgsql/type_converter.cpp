@@ -16,6 +16,8 @@
  */
 #include "./type_converter.h"
 
+#include <cmath>
+#include <cstdint>
 #include <qb/system/parse.h> // qb::to_number (locale-free, throw-free string->number)
 
 namespace qb::pg::detail {
@@ -303,6 +305,145 @@ TypeConverter<qb::json>::from_text(const std::string &text) {
 // TypeConverter<qb::jsonb>
 // ============================================================================
 
+namespace {
+
+// Compare decimal VALUES, not JSON spellings: 1.2300, 1.23 and 123e-2 all
+// normalize to the same coefficient and base-10 exponent. The SAX callback
+// supplies the original lexeme even when an overflowing integer became double.
+struct decimal_value {
+    bool         negative = false;
+    std::string  digits;
+    std::int64_t exponent = 0;
+
+    friend bool operator==(const decimal_value &, const decimal_value &) = default;
+};
+
+decimal_value
+normalize_decimal(std::string_view text) {
+    decimal_value value;
+    std::size_t   i = 0;
+    if (text[i] == '-') {
+        value.negative = true;
+        ++i;
+    }
+
+    bool         fraction        = false;
+    std::int64_t fraction_digits = 0;
+    value.digits.reserve(text.size());
+    for (; i < text.size() && text[i] != 'e' && text[i] != 'E'; ++i) {
+        if (text[i] == '.') {
+            fraction = true;
+        } else {
+            value.digits.push_back(text[i]);
+            if (fraction)
+                ++fraction_digits;
+        }
+    }
+
+    // PostgreSQL numeric's decimal exponent is bounded. A value supplied to
+    // the direct converter with a larger exponent cannot be represented by
+    // nlohmann double either; fail rather than overflow this comparison.
+    std::int64_t explicit_exponent = 0;
+    if (i < text.size()) {
+        ++i;
+        bool exponent_negative = false;
+        if (text[i] == '+' || text[i] == '-') {
+            exponent_negative = text[i] == '-';
+            ++i;
+        }
+        for (; i < text.size(); ++i) {
+            if (explicit_exponent > 1000000)
+                throw error::client_error("JSONB numeric exponent exceeds comparison range");
+            explicit_exponent = explicit_exponent * 10 + (text[i] - '0');
+        }
+        if (explicit_exponent > 1000000)
+            throw error::client_error("JSONB numeric exponent exceeds comparison range");
+        if (exponent_negative)
+            explicit_exponent = -explicit_exponent;
+    }
+
+    const auto first = value.digits.find_first_not_of('0');
+    if (first == std::string::npos)
+        return {}; // positive and negative zero have the same numeric value
+    value.digits.erase(0, first);
+    const auto last = value.digits.find_last_not_of('0');
+    value.exponent  = explicit_exponent - fraction_digits + static_cast<std::int64_t>(value.digits.size() - last - 1);
+    value.digits.erase(last + 1);
+    return value;
+}
+
+struct jsonb_precision_sax : nlohmann::json_sax<nlohmann::json> {
+    bool
+    null() override {
+        return true;
+    }
+    bool
+    boolean(bool) override {
+        return true;
+    }
+    bool
+    number_integer(number_integer_t) override {
+        return true;
+    }
+    bool
+    number_unsigned(number_unsigned_t) override {
+        return true;
+    }
+    bool
+    number_float(number_float_t number, const string_t &lexeme) override {
+        if (!std::isfinite(number) || normalize_decimal(lexeme) != normalize_decimal(nlohmann::json(number).dump()))
+            throw error::client_error("JSONB numeric value cannot be represented without decimal rounding: " + lexeme);
+        return true;
+    }
+    bool
+    string(string_t &) override {
+        return true;
+    }
+    bool
+    binary(binary_t &) override {
+        return true;
+    }
+    bool
+    start_object(std::size_t) override {
+        return true;
+    }
+    bool
+    key(string_t &) override {
+        return true;
+    }
+    bool
+    end_object() override {
+        return true;
+    }
+    bool
+    start_array(std::size_t) override {
+        return true;
+    }
+    bool
+    end_array() override {
+        return true;
+    }
+    bool
+    parse_error(std::size_t, const std::string &last_token, const nlohmann::detail::exception &ex) override {
+        // nlohmann reports a valid numeric lexeme outside double's range here,
+        // before number_float() can inspect it. Keep syntax errors on the
+        // malformed-JSON path; only its numeric-overflow code is value loss.
+        if (ex.id == 406)
+            throw error::client_error("JSONB numeric value exceeds the DOM floating range: " + last_token);
+        return false;
+    }
+};
+
+qb::jsonb
+parse_jsonb_checked(std::string_view text) {
+    jsonb_precision_sax validator;
+    if (!nlohmann::json::sax_parse(text.begin(), text.end(), &validator))
+        throw std::runtime_error("Invalid JSONB text");
+    return qb::jsonb(nlohmann::json::parse(text));
+}
+
+} // namespace
+
 void
 TypeConverter<qb::jsonb>::to_binary(const qb::jsonb &value, std::vector<byte> &buffer) {
     // ParamSerializer expects typbinary layout: Int32 byte length of payload,
@@ -333,11 +474,11 @@ TypeConverter<qb::jsonb>::from_binary(std::span<const byte> buffer) {
             throw std::runtime_error("Unsupported JSONB binary format or version");
         }
 
-        std::string json_str(reinterpret_cast<const char *>(buffer.data() + json_off), buffer.size() - json_off);
-
         // jsonb_send carries canonical JSON text after the version byte. Its
         // structure is already unambiguous; preserve arrays of pairs as arrays.
-        return qb::jsonb(nlohmann::json::parse(json_str));
+        return parse_jsonb_checked(std::string_view(reinterpret_cast<const char *>(buffer.data() + json_off), buffer.size() - json_off));
+    } catch (const error::client_error &) {
+        throw;
     } catch (const std::exception &e) {
         throw std::runtime_error(std::string("Failed to parse JSONB data: ") + e.what());
     }
@@ -346,7 +487,9 @@ TypeConverter<qb::jsonb>::from_binary(std::span<const byte> buffer) {
 TypeConverter<qb::jsonb>::value_type
 TypeConverter<qb::jsonb>::from_text(const std::string &text) {
     try {
-        return qb::jsonb(nlohmann::json::parse(text));
+        return parse_jsonb_checked(text);
+    } catch (const error::client_error &) {
+        throw;
     } catch (const std::exception &e) {
         throw std::runtime_error(std::string("Failed to parse JSONB text: ") + e.what());
     }
