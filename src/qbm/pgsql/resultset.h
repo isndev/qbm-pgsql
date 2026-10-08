@@ -563,6 +563,15 @@ public:
                 }
             }
 
+            // SQL NULL is already decided by the field metadata. Decode a
+            // present optional through its contained type so an empty text
+            // value stays present and binary numeric conversion still uses
+            // the column OID, exactly as as<T>() does without the wrapper.
+            if constexpr (detail::ParamUnserializer::is_optional<result_type>::value) {
+                using inner_type = typename result_type::value_type;
+                return result_type{std::in_place, as<inner_type>()};
+            }
+
             // 2. Retrieve the data and format. The converters and the text reader
             //    take std::span<const byte>, so view the row storage in place — no
             //    copy (the old buffer.to_vector() allocated + copied every field).

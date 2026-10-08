@@ -490,7 +490,7 @@ public:
 
         // Value extraction:
         template <typename T>
-        typename std::decay<T>::type as() const; // Throws on NULL if T is not optional
+        typename std::decay<T>::type as() const; // Throws on NULL if T is not optional; optional<T> preserves present empty text and OID-aware numeric conversion
         template <typename T>
         bool to(T &val) const; // For non-optional T, THROWS error::value_is_null on NULL. For std::optional<T>/nullable T, sets the target to null and returns true. The bool return reports parse success, not NULL-ness — use as<std::optional<T>>() or is_null() to detect NULL.
 

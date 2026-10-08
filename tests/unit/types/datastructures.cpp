@@ -157,6 +157,56 @@ TEST(ResultsetPopulated, NullFieldSemantics) {
     EXPECT_EQ(*o_val, "v");
 }
 
+// SQL NULL is metadata, not an empty text payload. The primitive optional
+// converter treats empty text as disengaged when used without field metadata;
+// field::as must preserve the distinction, including resultset::json().
+TEST(ResultsetPopulated, OptionalTextPreservesPresentEmptyValue) {
+    PopulatedResult pr({"present_empty", "sql_null"}, {{"", ""}}, {false, true});
+    resultset       rs = pr.rs();
+
+    EXPECT_FALSE(rs[0][0].is_null());
+    EXPECT_TRUE(rs[0][1].is_null());
+
+    const auto present = rs[0][0].as<std::optional<std::string>>();
+    EXPECT_TRUE(present.has_value());
+    if (present)
+        EXPECT_TRUE(present->empty());
+    EXPECT_FALSE(rs[0][1].as<std::optional<std::string>>().has_value());
+
+    std::optional<std::string> through_to;
+    EXPECT_TRUE(rs[0][0].to(through_to));
+    ASSERT_TRUE(through_to.has_value());
+    EXPECT_TRUE(through_to->empty());
+
+    const auto json = rs.json();
+    ASSERT_EQ(json.size(), 1u);
+    EXPECT_EQ(json[0]["present_empty"], "");
+    EXPECT_TRUE(json[0]["sql_null"].is_null());
+}
+
+// int8 binary bytes are a signed big-endian integer. A requested double must
+// use the field OID before wrapping in optional; reinterpreting these bytes as
+// IEEE-754 yields a different value while appearing to succeed.
+TEST(ResultsetPopulated, OptionalDoubleUsesBinaryColumnOid) {
+    std::string one(8, '\0');
+    one.back() = '\1';
+    PopulatedResult pr({"value"}, {{one}});
+    auto           &desc = pr.impl.row_description()[0];
+    desc.type_oid        = oid::int8;
+    desc.format_code     = protocol_data_format::Binary;
+    resultset rs         = pr.rs();
+
+    EXPECT_DOUBLE_EQ(rs[0][0].as<double>(), 1.0);
+    const auto optional = rs[0][0].as<std::optional<double>>();
+    ASSERT_TRUE(optional.has_value());
+    EXPECT_DOUBLE_EQ(*optional, 1.0);
+
+    std::optional<double> through_to;
+    EXPECT_TRUE(rs[0][0].to(through_to));
+    ASSERT_TRUE(through_to.has_value());
+    EXPECT_DOUBLE_EQ(*through_to, 1.0);
+}
+
 // field::view()/text() zero-copy accessors: bytes for a value, empty for NULL.
 TEST(ResultsetPopulated, FieldViewAndText) {
     PopulatedResult pr({"a", "b"}, {{"hello", ""}}, {false, true});

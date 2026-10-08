@@ -26,6 +26,8 @@
  */
 
 #include <gtest/gtest.h>
+#include <cstddef>
+#include <optional>
 #include <string>
 #include <vector>
 #include <qb/io/async.h>
@@ -213,6 +215,56 @@ TEST_F(WireFormats, Prepared_NoParameters_StillBinaryResults) {
                        [](error::db_error e) { FAIL() << e.what(); })
                     .await());
     EXPECT_TRUE(ok);
+}
+
+TEST_F(WireFormats, PreparedOptionalReadsPreserveSqlPresenceAndBinaryOid) {
+    ASSERT_TRUE(db_->prepare("qb646_text", "SELECT ''::text AS present_empty, NULL::text AS sql_null", type_oid_sequence{}, discard_prepare,
+                             discard_error)
+                    .await());
+    bool text_checked = false;
+    ASSERT_TRUE(db_->execute(
+                       "qb646_text", params{},
+                       [&](transaction &, results r) {
+                           ASSERT_EQ(r.size(), 1u);
+                           ASSERT_EQ(r.columns_size(), 2u);
+                           EXPECT_EQ(r.field(0).format_code, protocol_data_format::Text);
+                           EXPECT_FALSE(r[0][0].is_null());
+                           EXPECT_TRUE(r[0][1].is_null());
+                           const auto present = r[0][0].as<std::optional<std::string>>();
+                           ASSERT_TRUE(present.has_value());
+                           EXPECT_EQ(*present, "");
+                           EXPECT_FALSE(r[0][1].as<std::optional<std::string>>().has_value());
+                           const auto json = r.json();
+                           ASSERT_EQ(json.size(), 1u);
+                           EXPECT_EQ(json[0]["present_empty"], "");
+                           EXPECT_TRUE(json[0]["sql_null"].is_null());
+                           text_checked = true;
+                       },
+                       [](error::db_error e) { FAIL() << e.what(); })
+                    .await());
+    EXPECT_TRUE(text_checked);
+
+    ASSERT_TRUE(db_->prepare("qb646_int8", "SELECT 1::int8 AS binary_one", type_oid_sequence{}, discard_prepare, discard_error).await());
+    bool binary_checked = false;
+    ASSERT_TRUE(db_->execute(
+                       "qb646_int8", params{},
+                       [&](transaction &, results r) {
+                           ASSERT_EQ(r.size(), 1u);
+                           ASSERT_EQ(r.field(0).type_oid, oid::int8);
+                           ASSERT_EQ(r.field(0).format_code, protocol_data_format::Binary);
+                           const auto wire = r[0][0].view();
+                           ASSERT_EQ(wire.size(), 8u);
+                           for (std::size_t i = 0; i < 7; ++i)
+                               EXPECT_EQ(wire[i], std::byte{0});
+                           EXPECT_EQ(wire[7], std::byte{1});
+                           const auto optional = r[0][0].as<std::optional<double>>();
+                           ASSERT_TRUE(optional.has_value());
+                           EXPECT_DOUBLE_EQ(*optional, 1.0);
+                           binary_checked = true;
+                       },
+                       [](error::db_error e) { FAIL() << e.what(); })
+                    .await());
+    EXPECT_TRUE(binary_checked);
 }
 
 TEST_F(WireFormats, Prepared_JsonText_JsonbBinary) {

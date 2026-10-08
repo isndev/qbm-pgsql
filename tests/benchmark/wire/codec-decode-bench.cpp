@@ -33,9 +33,11 @@
  */
 #include <benchmark/benchmark.h>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "../../shared/pg_wire_ground_truth.hpp"
@@ -72,6 +74,36 @@ build_int4_array(int n) {
     return b;
 }
 
+// The protocol layer has already removed the field length prefix. Keep the
+// column metadata and its four value bytes alive outside the timed field read.
+struct Int4FieldFixture {
+    result_impl impl;
+
+    Int4FieldFixture() {
+        field_description desc{};
+        desc.name             = "value";
+        desc.table_oid        = 0;
+        desc.attribute_number = 0;
+        desc.type_oid         = oid::int4;
+        desc.type_size        = 4;
+        desc.type_mod         = -1;
+        desc.format_code      = protocol_data_format::Binary;
+        impl.row_description().push_back(desc);
+
+        auto &row = impl.rows().emplace_back();
+        row.offsets.push_back(0);
+        row.null_map.push_back(false);
+        row.data = hex_to_bytes("0000002a"); // PostgreSQL int4_send(42)
+    }
+};
+
+bool
+is_present_binary_int4_42(const resultset::field &field) {
+    const auto &desc = field.description();
+    return !field.is_null() && desc.type_oid == oid::int4 && desc.type_size == 4 && desc.format_code == protocol_data_format::Binary
+           && field.text() == std::string_view("\x00\x00\x00\x2a", 4);
+}
+
 } // namespace
 
 static void
@@ -88,6 +120,47 @@ BM_DecodeInt4(benchmark::State &state) {
     state.SetItemsProcessed(state.iterations());
 }
 BENCHMARK(BM_DecodeInt4);
+
+// Field-level optional read: the SQL value is present, with a binary INT4 OID.
+// The plain integer read is an unchanged-path witness for the wrapper's cost.
+static void
+BM_FieldInt4Optional(benchmark::State &state) {
+    Int4FieldFixture fixture;
+    resultset        rs(&fixture.impl);
+    const auto       field = rs[0][0];
+    const auto       gate  = field.as<std::optional<integer>>();
+    if (!is_present_binary_int4_42(field) || !gate || *gate != 42) {
+        state.SkipWithError("binary int4 optional field mismatch");
+        return;
+    }
+
+    for (auto _ : state) {
+        auto value = field.as<std::optional<integer>>();
+        benchmark::DoNotOptimize(value);
+    }
+    state.SetItemsProcessed(state.iterations());
+    state.SetBytesProcessed(state.iterations() * 4);
+}
+BENCHMARK(BM_FieldInt4Optional);
+
+static void
+BM_FieldInt4Scalar(benchmark::State &state) {
+    Int4FieldFixture fixture;
+    resultset        rs(&fixture.impl);
+    const auto       field = rs[0][0];
+    if (!is_present_binary_int4_42(field) || field.as<integer>() != 42) {
+        state.SkipWithError("binary int4 scalar field mismatch");
+        return;
+    }
+
+    for (auto _ : state) {
+        integer value = field.as<integer>();
+        benchmark::DoNotOptimize(value);
+    }
+    state.SetItemsProcessed(state.iterations());
+    state.SetBytesProcessed(state.iterations() * 4);
+}
+BENCHMARK(BM_FieldInt4Scalar);
 
 static void
 BM_DecodeInt8(benchmark::State &state) {

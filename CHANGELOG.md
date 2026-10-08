@@ -21,6 +21,10 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Fixed
 
+- **Present empty text and binary numeric values stay correct through `field::as<std::optional<T>>()` (Huly QB-646).**
+  SQL NULL metadata now decides whether the optional is empty; a present value is decoded through `T` with
+  its column format and OID. `results::json()` keeps an empty string as `""` rather than JSON null, and
+  binary `int8` read as `optional<double>` converts numerically instead of reinterpreting its bytes.
 - **Fragmented `ReadyForQuery` completes as soon as its final byte arrives (Huly QB-626).** The
   framer no longer asks for another five bytes after it has already consumed the header; a
   six-byte response split 5+1 or 1+4+1 no longer leaves the next query waiting.

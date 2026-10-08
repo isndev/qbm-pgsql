@@ -306,7 +306,9 @@ safer for overloaded operators and for `NULL` parameters whose type the server c
 
 A **simple** query (`execute("SELECT …")` without a prepared statement) commonly returns text columns (format code 0)
 regardless of OID; `field::as<T>()` branches on the actual `format_code` and routes to `from_text` or `from_binary`
-accordingly, so the same `as<T>()` call works on either path. <!-- src: src/qbm/pgsql/resultset.h:572,621,631 -->
+accordingly, so the same `as<T>()` call works on either path. An `as<std::optional<T>>()` read first checks SQL NULL
+metadata, then decodes a present value as `T`; empty text stays present and binary numeric values keep their
+column-OID conversion. <!-- src: src/qbm/pgsql/resultset.h:556-573,581,630,640 -->
 
 An OID the whitelist does not name — every extension type, `citext` among them — therefore arrives as **text**, which
 `as<std::string>()` reads correctly; there is no "silently classified as binary" direction to guard against. To move a
@@ -382,7 +384,7 @@ row.to(std::tie(a, b, c));
 ```
 
 `row_to_impl` expands into one `as<T>()` per column, matched to the tuple element at the same index — so each element
-is converted per its own declared type. <!-- src: src/qbm/pgsql/resultset.h:863-867,875-879,975-989 -->
+is converted per its own declared type. <!-- src: src/qbm/pgsql/resultset.h:872-876,884-888,984-998 -->
 
 ---
 

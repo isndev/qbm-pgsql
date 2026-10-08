@@ -295,6 +295,9 @@ row.to({"name", "age"}, nm, ag);                         // by column name
 // NULL-safe read — non-optional as<T> on a NULL throws error::value_is_null:
 auto maybe = row["middle_name"].as<std::optional<std::string>>();  // nullopt if NULL
 if (row["middle_name"].is_null()) { /* ... */ }
+
+// A present empty TEXT value stays optional{""}, not nullopt. For binary
+// numeric columns, optional<T> uses the same OID-aware conversion as T.
 ```
 
 **Ownership rule (critical):** `row` and `field` are non-owning views into the
