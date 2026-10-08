@@ -55,7 +55,7 @@ qb::pg::results owned = borrowed.deep_snapshot();   // safe to keep after the ca
 
 The coroutine path does this for you: a successful `co_await` delivers `rs.deep_snapshot()`, so the `Reply<resultset>`
 owns a deep copy and stays valid after the transaction's transient buffers are reused (
-`src/qbm/pgsql/commands.h:1340,1368,1443`).
+`src/qbm/pgsql/commands.h:1340,1368,1461`).
 
 ### `operator bool` reflects rows, not DML success
 
