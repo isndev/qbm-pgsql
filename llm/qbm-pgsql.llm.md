@@ -445,6 +445,12 @@ co_await db.copy_in("COPY t (id, v) FROM STDIN",
 co_await db.copy_in("COPY t (id, v) FROM STDIN", "1\ta\n2\tb\n");   // whole-payload form
 ```
 
+Only one COPY may be active on a connection. An overlapping `copy_in` or
+`copy_out` returns a failed `Reply` without sending SQL or calling its source
+or sink. Await completion before starting the next COPY. Destroying the awaiting
+coroutine detaches its callback immediately while its command keeps the COPY
+reservation until completion; a cancelled COPY IN fails if it later needs data.
+
 > **`copy_in` is NOT constant-memory.** It drains the entire `source` into the
 > output pipe synchronously (bounded only by the write-buffer ceiling). Only
 > `copy_out` and `query_stream` are true constant-memory paths.

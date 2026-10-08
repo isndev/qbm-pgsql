@@ -100,6 +100,7 @@ qpg_itest(datatypes-roundtrip integration/datatypes/datatypes-roundtrip.cpp REQU
 qpg_itest(wire-formats integration/protocol/wire-formats.cpp)
 qpg_itest(listen-notify integration/notify/listen-notify.cpp REQUIRES coroutine)
 qpg_itest(coro-api integration/api/coro-api.cpp REQUIRES coroutine)
+qpg_itest(copy-owner integration/api/copy-owner.cpp REQUIRES coroutine)
 qpg_itest(errors-sqlstate integration/errors/errors-sqlstate.cpp REQUIRES coroutine)
 qpg_itest(database-api-extra integration/api/database-api-extra.cpp REQUIRES coroutine)
 qpg_itest(param-roundtrip integration/serialization/param-roundtrip.cpp REQUIRES coroutine)

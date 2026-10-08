@@ -21,6 +21,14 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Fixed
 
+- **Overlapping COPY calls keep their data with the admitted command (Huly QB-629).** A second
+  `copy_out` or `copy_in` on one connection now fails explicitly before sending SQL or invoking
+  its sink/source. Previously it replaced the first command's callback: the first COPY OUT
+  delivered its rows to the second sink, while the first COPY IN read the second source and
+  loaded the wrong table. A plain COPY query queued ahead cannot borrow a later `copy_in`
+  source. Destroying an awaiting coroutine detaches its callback immediately while its
+  command keeps the COPY reservation until completion; sequential COPY and connection
+  reuse still work.
 - **Present empty text and binary numeric values stay correct through `field::as<std::optional<T>>()` (Huly QB-646).**
   SQL NULL metadata now decides whether the optional is empty; a present value is decoded through `T` with
   its column format and OID. `results::json()` keeps an empty string as `""` rather than JSON null, and
