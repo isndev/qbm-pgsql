@@ -150,7 +150,7 @@ storage; `row` and `field` are non-owning views into it and must not outlive it:
 
 ```mermaid
 flowchart TD
-    RS["results (= detail::resultset)<br/>shared_ptr&lt;const result_impl&gt; — owns the rows"]
+    RS["qb::pg::results (= qb::pg::resultset)<br/>shared_ptr&lt;const result_impl&gt; — owns the rows"]
     RS --> R0["results::row<br/>non-owning view (parent ptr + row index)"]
     R0 --> F0["results::field<br/>non-owning view of one cell"]
     F0 --> AS["field.as&lt;T&gt;() → Text or Binary path per column format_code"]
