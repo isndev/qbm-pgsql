@@ -98,7 +98,7 @@ struct Int4FieldFixture {
 };
 
 bool
-is_present_binary_int4_42(const resultset::field &field) {
+is_present_binary_int4_42(const resultset::row::value_type &field) {
     const auto &desc = field.description();
     return !field.is_null() && desc.type_oid == oid::int4 && desc.type_size == 4 && desc.format_code == protocol_data_format::Binary
            && field.text() == std::string_view("\x00\x00\x00\x2a", 4);
