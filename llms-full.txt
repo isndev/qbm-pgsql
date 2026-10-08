@@ -465,6 +465,8 @@ Only one COPY may be active on a connection. An overlapping `copy_in` or
 or sink. Await completion before starting the next COPY. Destroying the awaiting
 coroutine detaches its callback immediately while its command keeps the COPY
 reservation until completion; a cancelled COPY IN fails if it later needs data.
+If a source cancels its own awaiting coroutine, its returned chunk is discarded
+and the client sends `CopyFail` without calling the source again.
 
 > **`copy_in` is NOT constant-memory.** It drains the entire `source` into the
 > output pipe synchronously (bounded only by the write-buffer ceiling). Only
@@ -752,8 +754,8 @@ public:
         query_stream(std::string sql, std::size_t batch_size, RowFn on_row);
 
     // Connection introspection / control:
-    bool cancel();                                      // out-of-band PostgreSQL CancelRequest (SYNCHRONOUS, ≤2s, plaintext); NOT [[nodiscard]] (pgsql.h:2422-2423)
-    [[nodiscard]] qb::io::async::task<bool> cancel_async(); // the same request, non-blocking, TLS on a secure database (pgsql.h:2467-2468)
+    bool cancel();                                      // out-of-band PostgreSQL CancelRequest (SYNCHRONOUS, ≤2s, plaintext); NOT [[nodiscard]] (pgsql.h:2433-2434)
+    [[nodiscard]] qb::io::async::task<bool> cancel_async(); // the same request, non-blocking, TLS on a secure database (pgsql.h:2478-2479)
     [[nodiscard]] bool in_transaction() const noexcept; // backend session in a transaction block ('T'/'E')
     [[nodiscard]] bool used_channel_binding() const noexcept; // SCRAM-SHA-256-PLUS tls-server-end-point binding negotiated
     [[nodiscard]] std::optional<std::string_view> parameter_status(std::string_view key) const; // PQparameterStatus
@@ -798,7 +800,7 @@ struct tcp {
     - `copy_out(std::string sql, std::function<void(std::string_view)> sink) -> task<Reply<resultset>>`: Runs a `COPY … TO STDOUT` and delivers each `CopyData` chunk to `sink` as it arrives. Streams in **constant memory** (rows are never buffered in a result set). The `string_view` is valid only during the call. Resolves to `ok()` on success.
     - `copy_in(std::string sql, std::function<std::optional<std::string>()> source) -> task<Reply<resultset>>`: Runs a `COPY … FROM STDIN`, calling `source` repeatedly and sending each returned chunk as `CopyData` until it returns `std::nullopt` (then `CopyDone`). A throwing `source` aborts the COPY with `CopyFail`. Resolves to `ok()` (the `COPY n` count) on success; the connection stays usable on error. **NOT constant-memory** — it drains the whole source into the output pipe synchronously (capped by the write-buffer ceiling); only `copy_out` and `query_stream` stream in constant memory.
     - `copy_in(std::string sql, std::string data) -> task<Reply<resultset>>`: Convenience overload that sends the entire `data` payload in one shot.
-    - The connection admits one COPY at a time, in either direction. A second COPY returns a failed `Reply` without sending SQL or invoking its source/sink. Destroying the awaiting coroutine detaches its callback; its command keeps the reservation until completion, so a later COPY cannot answer the old server response.
+    - The connection admits one COPY at a time, in either direction. A second COPY returns a failed `Reply` without sending SQL or invoking its source/sink. Destroying the awaiting coroutine detaches its callback; its command keeps the reservation until completion, so a later COPY cannot answer the old server response. A source that destroys its own waiter causes its returned chunk to be discarded and `CopyFail` to be sent without another source call.
     - `query_stream(std::string sql, std::size_t batch_size, RowFn on_row) -> task<Reply<void>>`: Streams a large result via a server-side `CURSOR` (`DECLARE`/`FETCH`, `batch_size` rows per round trip), invoking `on_row` per row in **constant memory**. Auto-manages a transaction when idle (`BEGIN`/`COMMIT`, `ROLLBACK` on failure); when `in_transaction()` it declares the cursor in the caller's transaction and touches only the cursor. Cursor names are unique per connection (`qb_stream_cursor_<n>`), so streams **may overlap** on one `database` — and because a session has a single transaction, overlapping streams **share** the self-opened block: the first opens it, later ones only join, the last one out `COMMIT`s (or `ROLLBACK`s if any participant failed), so a server error in one stream aborts the block for the others. A caller-opened transaction is recognised as caller-owned only once its `BEGIN` has **completed** (`in_transaction()` mirrors the last `ReadyForQuery`), so do not start a stream while your own `begin()` is still in flight. `on_row` exceptions are rethrown after the cursor is closed and any self-opened transaction rolled back. `batch_size` is clamped to ≥ 1.
 - **Connection introspection / control:**
     - `bool cancel()`: Sends an out-of-band PostgreSQL `CancelRequest` on a short-lived **separate** connection (libpq `PQcancel` style). It is **synchronous / blocking** (capped at ≤ 2s) and plaintext even when the main link is SSL. Surfaces on the in-flight query as `sqlstate::query_canceled` (57014). Note: it briefly blocks the calling thread — prefer `cancel_async()`.
@@ -1038,12 +1040,12 @@ namespace qb::pg {
 
 ### `qb::pg::results` (alias for `qb::pg::detail::resultset`)
 
-Represents the set of rows returned by a query. Provides a container-like interface to access rows. There is no public `qb::pg::resultset`: the class lives in `namespace qb::pg::detail` and the only public spelling is the alias `using results = detail::resultset;` (`qbm/pgsql/src/qbm/pgsql/pgsql.h:2941`). Row and field below are reachable as `qb::pg::results::row` / `qb::pg::results::field`.
+Represents the set of rows returned by a query. Provides a container-like interface to access rows. There is no public `qb::pg::resultset`: the class lives in `namespace qb::pg::detail` and the only public spelling is the alias `using results = detail::resultset;` (`qbm/pgsql/src/qbm/pgsql/pgsql.h:2952`). Row and field below are reachable as `qb::pg::results::row` / `qb::pg::results::field`.
 
 **Definition (`qbm/pgsql/src/qbm/pgsql/resultset.h`):**
 ```cpp
 namespace qb::pg {
-// Public alias (pgsql.h:2941); the class itself is qb::pg::detail::resultset.
+// Public alias (pgsql.h:2952); the class itself is qb::pg::detail::resultset.
 using results = detail::resultset;
 }
 

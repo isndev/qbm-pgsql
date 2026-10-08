@@ -215,6 +215,8 @@ Destroying the awaiting coroutine detaches its source or sink immediately, so it
 captured variables cannot be used later. The connection stays reserved for that
 COPY until the in-flight command finishes; a cancelled COPY IN sends `CopyFail`
 if the server requests data after its source has been detached.
+If the source destroys its own awaiting coroutine while being called, its returned
+chunk is discarded and `CopyFail` ends the COPY without calling that source again.
 The source or sink activates only when that command reaches the wire, so an earlier
 plain SQL command cannot borrow it.
 
@@ -260,7 +262,7 @@ transaction is never joined and never ended by `query_stream`.
 > caller-owned only once its `BEGIN` has **completed** — `in_transaction()` mirrors the last `ReadyForQuery`. Started
 > before that, the stream reads the session as idle and opens (and later ends) a block of its own. `co_await` the
 > `begin()` first.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2280-2400,2294-2312,2314-2317,2372-2392,2080-2083 (in that order: query_stream; the seat/guard bookkeeping; the cursor name; the last-one-out COMMIT/ROLLBACK; in_transaction) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2291-2411,2305-2323,2325-2328,2383-2403,2091-2094 (in that order: query_stream; the seat/guard bookkeeping; the cursor name; the last-one-out COMMIT/ROLLBACK; in_transaction) -->
 
 ---
 
