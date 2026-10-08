@@ -195,13 +195,13 @@ owns the full inventory. The entry for this module is one line:
 > **`pg_reply_awaiter` is not cancellation-aware.** It registers no `on_cancel` hook and consults no token, so
 > `cancel()` — and therefore `kill()` — neither wakes nor unwinds a coroutine parked on `co_await db.query(...)`,
 > `execute`, `prepare`, `begin`, `commit`, or `connect`.
-> <!-- src: qbm/pgsql/src/qbm/pgsql/pg_awaiter.h:94-119 (await_ready false; await_suspend stores the handle and launches the operation — no token, no hook) -->
+> <!-- src: qbm/pgsql/src/qbm/pgsql/pg_awaiter.h:94-120 (await_ready false; await_suspend stores the handle and launches the operation — no token, no hook) -->
 
 The awaiter is a callback bridge and nothing more: `await_ready()` returns `false`, the handle is stored, the operation
 is launched with a completion lambda, and resumption goes through `coro_scheduler().schedule_resume`. What it *does*
 carry is a `shared_ptr<bool> alive` cleared in its destructor, so a completion that arrives after the awaiter is gone is
 a silent no-op instead of a use-after-free.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pg_awaiter.h:80-83 (destructor clears alive), :111-113 (the completion checks it first) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pg_awaiter.h:80-83 (destructor clears alive), :112-114 (the completion checks it first) -->
 
 So a parked `co_await` on this module ends in exactly four ways:
 
@@ -326,7 +326,7 @@ The two arities are fixed and checked at compile time: the success handler is `(
 `(Transaction&)` alone, and the error handler takes `(error::db_error const&)` — one argument, no transaction. The
 shipped no-ops `qb::pg::discard_query` and `qb::pg::discard_error` have exactly those signatures and are the right
 placeholder when you read the side effects elsewhere.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2897-2905 (discard_query_results_t; discard_error_t) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2898-2906 (discard_query_results_t; discard_error_t) -->
 
 `this` is safe in a callback in a way it is not in a coroutine, but only because of a difference worth naming: the
 callback is invoked from the reply path of a connection the actor owns, and the actor's `KillEvent` handler
@@ -359,7 +359,7 @@ here because an actor is where the cost lands.
   a coroutine. Inside its own query or fluent `.then` / `.error` callback, queued failures run after it returns, then teardown
   follows message dispatch (Huly QB-627). Until 3.3 it ran one `EVRUN_NOWAIT` pass after close, which re-entered the
   coroutine scheduler when called from a coroutine (an abort in a debug build — Huly QB-253).
-  <!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2689-2708 (disconnect: immediate or deferred drain, then disconnect_now) -->
+  <!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2690-2709 (disconnect: immediate or deferred drain, then disconnect_now) -->
 
 ---
 

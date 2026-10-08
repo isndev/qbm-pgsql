@@ -1846,6 +1846,7 @@ public:
 
         void
         await_suspend(std::coroutine_handle<> h) {
+            qb::io::async::track_suspension(h, "pgsql connect");
             db.start_connect_from_awaiter(h, valid, timeout);
         }
 

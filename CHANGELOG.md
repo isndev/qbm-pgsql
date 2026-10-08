@@ -7,6 +7,16 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ## [Unreleased]
 
+### Added
+
+- **A coroutine parked on PostgreSQL says so in qb's `CoroutineScheduler::dump()` (Huly QB-71).** `pg_awaiter` (every
+  `pg_reply_awaiter<T>`: a query, an execute, a prepare, a transaction step) and `connect_awaiter` begin their
+  `await_suspend` with `qb::io::async::track_suspension(h, ...)`: with suspension tracking on, the dump shows the
+  coroutine waiting on `"pgsql"` or `"pgsql connect"`, for how long. An awaiter without the call would leave the
+  coroutine with the record of its previous wait, ageing. Off -- the default -- the call is one predictable branch.
+  Pinned by `TheDumpSaysACoroutineWaitsOnAConnectThenAQuery` in `tests/integration/api/coro-api.cpp`; qb's
+  `scripts/check-awaiter-tracking.py`, run over this module from the superproject, refuses an awaiter without it.
+
 ### Changed
 
 - **A multi-statement simple query whose statements return rows of different shapes now fails instead of
