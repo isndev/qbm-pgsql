@@ -22,6 +22,8 @@
 #include "./resultset.h"
 #include <algorithm>
 #include <assert.h>
+#include <cstring>
+#include <limits>
 #include "./protocol.h"
 #include "./result_impl.h"
 
@@ -374,6 +376,52 @@ binary_field_text(const resultset::row::value_type &field) {
     return detail::TypeConverter<T>::to_text(field.as<T>());
 }
 
+std::int32_t
+array_header_int(std::span<const std::byte> wire, std::size_t offset) {
+    if (wire.size() < offset + sizeof(std::int32_t))
+        throw error::client_error("results::json(): truncated binary array header");
+    std::int32_t network;
+    std::memcpy(&network, wire.data() + offset, sizeof(network));
+    return qb::endian::from_big_endian(network);
+}
+
+template <typename T>
+std::string
+binary_array_text(const resultset::row::value_type &field) {
+    // The existing decoder validates element lengths and rejects ndim > 1. Its
+    // std::vector result loses the lower bound, so retain that header metadata
+    // while rendering the same one-dimensional PostgreSQL array literal.
+    std::string text = binary_field_text<std::vector<std::optional<T>>>(field);
+    const auto  wire = field.view();
+    const auto  ndim = array_header_int(wire, 0);
+    if (ndim == 0)
+        return text; // '{}' has no dimension header or lower bound.
+    if (ndim != 1)
+        throw error::field_type_mismatch("results::json(): only one-dimensional binary arrays are supported");
+
+    const auto length = array_header_int(wire, 12);
+    const auto lower  = array_header_int(wire, 16);
+    if (lower == 1)
+        return text;
+    if (length <= 0)
+        throw error::client_error("results::json(): invalid dimension size for a bounded binary array");
+    const std::int64_t upper = static_cast<std::int64_t>(lower) + length - 1;
+    if (upper < std::numeric_limits<std::int32_t>::min() || upper > std::numeric_limits<std::int32_t>::max())
+        throw error::client_error("results::json(): binary array upper bound overflows int32");
+    return "[" + std::to_string(lower) + ":" + std::to_string(upper) + "]=" + text;
+}
+
+std::string
+binary_jsonb_text(const resultset::row::value_type &field) {
+    // PostgreSQL jsonb_send supplies version 1 followed by canonical JSON text.
+    // Parsing through nlohmann changes array-of-pairs shape and can round a
+    // JSONB numeric, so export the server text exactly after checking its version.
+    const auto wire = field.view();
+    if (wire.size() < 2 || wire.front() != std::byte{1})
+        throw error::client_error("results::json(): unsupported JSONB binary version or empty payload");
+    return std::string(reinterpret_cast<const char *>(wire.data() + 1), wire.size() - 1);
+}
+
 std::string
 json_field_text(const resultset::row::value_type &field) {
     if (field.description().format_code == protocol_data_format::Text)
@@ -405,7 +453,7 @@ json_field_text(const resultset::row::value_type &field) {
         case oid::uuid:
             return binary_field_text<qb::uuid>(field);
         case oid::jsonb:
-            return binary_field_text<qb::jsonb>(field);
+            return binary_jsonb_text(field);
         case oid::date:
             return binary_field_text<qb::date>(field);
         case oid::time:
@@ -427,19 +475,19 @@ json_field_text(const resultset::row::value_type &field) {
         // Nullable element vectors preserve SQL NULL elements when rendering the
         // PostgreSQL array literal; a vector<T> would silently lose that state.
         case oid::boolean_array:
-            return binary_field_text<std::vector<std::optional<bool>>>(field);
+            return binary_array_text<bool>(field);
         case oid::int2_array:
-            return binary_field_text<std::vector<std::optional<smallint>>>(field);
+            return binary_array_text<smallint>(field);
         case oid::int4_array:
-            return binary_field_text<std::vector<std::optional<integer>>>(field);
+            return binary_array_text<integer>(field);
         case oid::int8_array:
-            return binary_field_text<std::vector<std::optional<bigint>>>(field);
+            return binary_array_text<bigint>(field);
         case oid::float4_array:
-            return binary_field_text<std::vector<std::optional<float>>>(field);
+            return binary_array_text<float>(field);
         case oid::float8_array:
-            return binary_field_text<std::vector<std::optional<double>>>(field);
+            return binary_array_text<double>(field);
         case oid::text_array:
-            return binary_field_text<std::vector<std::optional<std::string>>>(field);
+            return binary_array_text<std::string>(field);
         default:
             throw error::client_error("results::json(): unsupported binary type OID "
                                       + std::to_string(static_cast<int>(field.description().type_oid)) + " for column '" + field.name() + "'");

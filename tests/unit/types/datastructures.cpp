@@ -448,6 +448,55 @@ TEST(ResultsetPopulated, JsonSerializationPreservesEmptyTextAndRejectsUnknownBin
     EXPECT_EQ(result[0]["unknown"], "raw");
 }
 
+TEST(ResultsetPopulated, JsonSerializationPreservesJsonbWireTextAndArrayLowerBound) {
+    auto array_text = [](std::string_view hex) {
+        const auto bytes = qb::pg::test::hex_to_bytes(hex);
+        return std::string(bytes.begin(), bytes.end());
+    };
+    // PostgreSQL jsonb_send is version 1 followed by its canonical JSON text.
+    // Parsing and dumping this text would change pair arrays and large decimals.
+    PopulatedResult pr({"pairs", "nested", "decimal", "zero_bound", "negative_bound"},
+                       {{std::string("\x01", 1) + "[[1,2]]", std::string("\x01", 1) + "{\"a\": [[1,2]]}",
+                         std::string("\x01", 1) + "12345678901234567890.123456789",
+                         array_text("0000000100000000000000170000000300000000000000040000000100000004000000020000000400000003"),
+                         array_text("00000001000000000000001700000003fffffffe000000040000000100000004000000020000000400000003")}});
+    auto           &desc = pr.impl.row_description();
+    for (std::size_t i = 0; i < 3; ++i) {
+        desc[i].type_oid    = oid::jsonb;
+        desc[i].format_code = protocol_data_format::Binary;
+    }
+    for (std::size_t i = 3; i < 5; ++i) {
+        desc[i].type_oid    = oid::int4_array;
+        desc[i].format_code = protocol_data_format::Binary;
+    }
+
+    const auto j = pr.rs().json();
+    EXPECT_EQ(j[0]["pairs"], "[[1,2]]");
+    EXPECT_EQ(j[0]["nested"], "{\"a\": [[1,2]]}");
+    EXPECT_EQ(j[0]["decimal"], "12345678901234567890.123456789");
+    EXPECT_EQ(j[0]["zero_bound"], "[0:2]={1,2,3}");
+    EXPECT_EQ(j[0]["negative_bound"], "[-2:0]={1,2,3}");
+}
+
+TEST(ResultsetPopulated, JsonSerializationRejectsInvalidJsonbVersionAndArrayBoundOverflow) {
+    PopulatedResult bad_version({"doc"}, {{std::string("\x02", 1) + "[[1,2]]"}});
+    bad_version.impl.row_description()[0].type_oid    = oid::jsonb;
+    bad_version.impl.row_description()[0].format_code = protocol_data_format::Binary;
+    EXPECT_THROW(bad_version.rs().json(), error::client_error);
+
+    const auto bytes = qb::pg::test::hex_to_bytes("000000010000000000000017000000037fffffff000000040000000100000004000000020000000400000003");
+    PopulatedResult overflow({"arr"}, {{std::string(bytes.begin(), bytes.end())}});
+    overflow.impl.row_description()[0].type_oid    = oid::int4_array;
+    overflow.impl.row_description()[0].format_code = protocol_data_format::Binary;
+    EXPECT_THROW(overflow.rs().json(), error::client_error);
+
+    const auto      multidim = qb::pg::test::hex_to_bytes(qb::pg::test::gt::array::int4_2d_2x3);
+    PopulatedResult two_dims({"arr"}, {{std::string(multidim.begin(), multidim.end())}});
+    two_dims.impl.row_description()[0].type_oid    = oid::int4_array;
+    two_dims.impl.row_description()[0].format_code = protocol_data_format::Binary;
+    EXPECT_THROW(two_dims.rs().json(), error::field_type_mismatch);
+}
+
 // ----------------------------------------------------------------------------
 // resultset move semantics / dtor (regression for the P0-17 memory leak)
 // ----------------------------------------------------------------------------

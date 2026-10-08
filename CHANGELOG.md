@@ -27,10 +27,13 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
   binary `int8` read as `optional<double>` converts numerically instead of reinterpreting its bytes.
 - **`results::json()` decodes binary result columns before stringifying them (Huly QB-943).**
   Prepared `int8`, `float8` and other binary columns used to become JSON strings containing
-  PostgreSQL wire bytes. The export keeps its existing string-valued contract: present cells
-  use the column OID's text formatter, SQL NULL is JSON null, empty TEXT is `""`, BYTEA is
-  `\x` hex, and arrays preserve NULL elements. An unknown binary OID now raises a
-  `client_error` instead of silently exporting raw bytes.
+  PostgreSQL wire bytes. The export keeps its existing string-valued contract: scalar
+  values use the column OID's text formatter, JSONB keeps PostgreSQL's canonical text
+  exactly (including pair arrays and arbitrary-precision decimals), SQL NULL is JSON
+  null, and empty TEXT is `""`. BYTEA is `\x` hex; one-dimensional arrays preserve
+  NULL elements and non-1 lower bounds as `[lower:upper]=...`. Unsupported binary OIDs,
+  JSONB versions and overflowing array bounds fail loudly instead of exporting bytes
+  or a changed value.
 - **Fragmented `ReadyForQuery` completes as soon as its final byte arrives (Huly QB-626).** The
   framer no longer asks for another five bytes after it has already consumed the header; a
   six-byte response split 5+1 or 1+4+1 no longer leaves the next query waiting.

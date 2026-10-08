@@ -309,7 +309,7 @@ if (!field.is_null())
 ```
 
 `results::json()` checks SQL NULL directly, so a present empty TEXT value remains `""` while SQL NULL becomes JSON null
-(`resultset.cpp:451-464`).
+(`resultset.cpp:499-512`).
 `field.as<std::optional<T>>()` uses the same NULL metadata; a present value is decoded through `T`, preserving
 empty text and the column-OID conversion for binary numerics (`resultset.h:558-575,597-632`).
 
@@ -327,14 +327,17 @@ See [error_handling.md](./error_handling.md).
 Every present value is a JSON string, including numbers, booleans, JSONB, and arrays; SQL NULL is JSON null:
 
 ```cpp
-<!-- src: qbm/pgsql/src/qbm/pgsql/resultset.cpp:451-464 -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/resultset.cpp:499-512 -->
 qb::json j = rows.json();   // e.g. [{"id":"1","name":"ada"}, ...]
 ```
 
-Text-format columns keep PostgreSQL's text bytes. Binary-format columns are decoded using their OID, then formatted as
-strings with the module's type converters: BYTEA becomes `\x` hex, arrays become PostgreSQL array literals with NULL
-elements preserved, and JSONB becomes compact JSON text. An unsupported binary OID throws `error::client_error` rather
-than placing raw bytes in a JSON string. `field.as<std::string>()` still exposes raw binary bytes when requested directly.
+Text-format columns keep PostgreSQL's text bytes. Binary scalars use their OID's type converter: BYTEA becomes `\x`
+hex. Binary JSONB checks the version byte and copies PostgreSQL's canonical JSON text exactly, including pair arrays,
+whitespace, and long decimals. One-dimensional binary arrays become PostgreSQL array literals with NULL elements and
+non-1 lower bounds preserved (`[0:2]={1,2,3}`); multi-dimensional arrays throw `error::field_type_mismatch` because the
+flat vector decoder cannot represent their shape. Unsupported binary OIDs, malformed JSONB versions and overflowing
+array bounds throw instead of exporting a changed value. `field.as<std::string>()` still exposes raw binary bytes when
+requested directly.
 This export is convenient for diagnostics and admin endpoints; use typed `as<T>()` in hot paths.
 
 ---

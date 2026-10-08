@@ -187,7 +187,7 @@ TEST_F(WireFormats, JsonExportDecodesPreparedBinaryColumns) {
                            EXPECT_TRUE(j[0]["null_text"].is_null());
                            EXPECT_EQ(j[0]["num"], "1.50");
                            EXPECT_EQ(j[0]["bin"], "\\xdead");
-                           EXPECT_EQ(j[0]["doc"], "{\"a\":1}");
+                           EXPECT_EQ(j[0]["doc"], "{\"a\": 1}");
                            EXPECT_EQ(j[0]["arr"], "{1,NULL,3}");
                            prepared_ok = true;
                        },
@@ -211,6 +211,38 @@ TEST_F(WireFormats, JsonExportDecodesPreparedBinaryColumns) {
                        [](error::db_error e) { FAIL() << e.what(); })
                     .await());
     EXPECT_TRUE(simple_ok);
+}
+
+TEST_F(WireFormats, JsonExportPreservesJsonbCanonicalTextAndArrayLowerBound) {
+    ASSERT_TRUE(db_->prepare("json_export_fidelity",
+                             "SELECT '[[1,2]]'::jsonb AS pairs, "
+                             "'{\"nested\": [[1,2]], \"flag\": true}'::jsonb AS doc, "
+                             "'12345678901234567890.123456789'::jsonb AS decimal, "
+                             "'[0:2]={1,2,3}'::int4[] AS bounded, "
+                             "('[[1,2]]'::jsonb)::text AS pairs_text, "
+                             "('{\"nested\": [[1,2]], \"flag\": true}'::jsonb)::text AS doc_text, "
+                             "('12345678901234567890.123456789'::jsonb)::text AS decimal_text, "
+                             "('[0:2]={1,2,3}'::int4[])::text AS bounded_text",
+                             type_oid_sequence{}, discard_prepare, discard_error)
+                    .await());
+
+    bool ok = false;
+    ASSERT_TRUE(db_->execute(
+                       "json_export_fidelity", params{},
+                       [&](transaction &, results r) {
+                           ASSERT_EQ(r.size(), 1u);
+                           for (const char *name : {"pairs", "doc", "decimal", "bounded"})
+                               EXPECT_EQ(r.field(name).format_code, protocol_data_format::Binary);
+                           const auto exported = r.json();
+                           EXPECT_EQ(exported[0]["pairs"], r[0]["pairs_text"].as<std::string>());
+                           EXPECT_EQ(exported[0]["doc"], r[0]["doc_text"].as<std::string>());
+                           EXPECT_EQ(exported[0]["decimal"], r[0]["decimal_text"].as<std::string>());
+                           EXPECT_EQ(exported[0]["bounded"], r[0]["bounded_text"].as<std::string>());
+                           ok = true;
+                       },
+                       [](error::db_error e) { FAIL() << e.what(); })
+                    .await());
+    EXPECT_TRUE(ok);
 }
 
 // Parameter format codes: bound params are sent binary for decodable OIDs and text for
