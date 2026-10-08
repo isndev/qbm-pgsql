@@ -340,7 +340,7 @@ not require actors — but inside `qb::Main` it is what most deployments do, whi
 
 | Area                      | What you get                                                                                                                                                                                                                          |
 |:--------------------------|:--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **Connection**            | Async handshake from a DSN (`tcp://user:pass@host:port[db]`); SCRAM-SHA-256 / MD5 / cleartext auth; per-connection `connect` timeout (`qb::duration`); `disconnect()` + `prepare_reconnect()` to reuse an object; optional keepalive. |
+| **Connection**            | Async handshake from a DSN (`tcp://user:pass@host:port[db]`); SCRAM-SHA-256 / MD5 / cleartext auth; per-connection `connect` timeout (`qb::duration`); `connect()` after `disconnect()` reuses the object, with optional `prepare_reconnect()` for an explicit session reset; optional keepalive. |
 | **TLS**                   | Available when the framework is built with `QB_HAS_SSL` (OpenSSL). The client sends an `SSLRequest` and upgrades the socket via `qb::pg::tcp::ssl::database`. Without SSL, cleartext TCP only.                                        |
 | **Simple & prepared SQL** | `execute` / `query` (simple protocol); `prepare` + parameterized `execute` (extended protocol) with a client-side prepared-statement LRU (local eviction only; no server-side `DEALLOCATE`); `execute_file` / `prepare_file`.         |
 | **Transactions**          | `begin` / `commit` / `rollback`, `transaction_mode` (isolation, read-only, deferrable), nested `savepoint` / `release_savepoint` / `rollback_savepoint`, and the `with_transaction` coroutine wrapper.                                |
@@ -418,8 +418,9 @@ minimal root that adds a qb *source* tree first and this module second.
   yours; inside a handler they freeze every actor on that `VirtualCore`, with no diagnostic.
 - **An unwrapped `co_await` is not interruptible.** `pg_reply_awaiter` registers no cancellation hook, so `kill()`
   neither wakes nor unwinds a coroutine parked on one. Wrap it in `ctx.cancellable(...)` when it runs inside an actor.
-- **Reuse needs a reset.** After `disconnect()`, call `prepare_reconnect()` before `connect()` again on the same
-  `database` object — it re-arms the io layer (resets buffers, closes the fd). Connecting without it is undefined.
+- **Reuse is supported.** After `disconnect()`, `connect()` on the same `database` object opens a fresh socket and
+  handshakes again; the transport path clears stale I/O buffers and protocols. `prepare_reconnect()` is optional but
+  recommended when you also want to close the old fd and clear cached per-backend state before reconnecting.
 - **Connect timeout is not the statement timeout.** The `connect(qb::duration)` timeout bounds the handshake.
   `set_timeout(qb::duration)` arms a server-side `SET LOCAL statement_timeout` on the next `BEGIN` and is cleared at
   `COMMIT` / `ROLLBACK`.

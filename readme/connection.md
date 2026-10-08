@@ -459,9 +459,12 @@ Coroutines awaiting failed queries resume on the caller's next pass. Until 3.3, 
 which aborted a debug build when called from a coroutine (Huly QB-253, QB-627).
 <!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2746-2777 (disconnect) -->
 
-To reuse the **same** object for a new connection, call `prepare_reconnect()` after `disconnect()` and before the next
-`connect()`. It closes the underlying fd, resets the I/O buffers and `qb::io::async::io` disposed state, and clears the
-handshake/connected flags. Do **not** call it while SQL is still queued on this object — drain or fail the queue first.
+The **same** object can call `connect()` after `disconnect()` without a preparation step: it opens a fresh socket,
+clears stale I/O buffers and protocols before installing that transport, and performs a new handshake. This is tested
+with a query that was still queued when the old connection closed. `prepare_reconnect()` remains recommended when you
+also want to close the old fd and clear cached per-backend state before the next `connect()`. Do **not** call it while
+SQL is still queued on this object — drain or fail the queue first.
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:810-837 (on_transport_ready); qbm/pgsql/tests/integration/connection/connection-lifecycle.cpp:228-258 (ReconnectWithoutPrepareReconnectIsUsable) -->
 <!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2702-2744 (prepare_reconnect) -->
 
 ```cpp
@@ -473,7 +476,7 @@ ASSERT_TRUE(qb::io::async::run_sync(db.connect(dsn)));
 
 <!-- src: qbm/pgsql/tests/integration/connection/connection-lifecycle.cpp:160-175 -->
 
-For a fresh connection you do not need `prepare_reconnect()` — a newly constructed client is ready to `connect()`.
+The helper is optional for a reused client and unnecessary for a newly constructed client.
 
 ### Fail-all-on-disconnect
 
@@ -501,8 +504,8 @@ a pending `connect` awaiter with an error.
   `ssl_verify_mode::full` (via the `connect(connection_options)` overload) before connecting. Encryption without
   verification does not protect against an active man-in-the-middle.
 - **Database name uses square brackets.** `…:5432[mydb]`, not `…/mydb`. This is the module's parser convention.
-- **Reuse needs `prepare_reconnect()`.** After `disconnect()`, you must call `prepare_reconnect()` before connecting the
-  *same* object again. Skipping it leaves the I/O layer disposed and the next handshake will not start.
+- **Reuse after `disconnect()` works directly.** A subsequent `connect()` on the *same* object starts a new handshake.
+  Call `prepare_reconnect()` when you also need its explicit fd and per-backend cache reset.
 - **`is_connection_alive()` is local-only.** It reads `SO_ERROR`, not the wire. Use keepalive or treat a query failure
   as the real liveness signal.
 - **Connect-time timeout vs statement timeout are different.** `connect(qb::duration)` and `connect_timeout` bound the

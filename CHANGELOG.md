@@ -21,6 +21,10 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Fixed
 
+- **Reconnect guidance matches the supported client path (Huly QB-202).** Calling
+  `connect()` after `disconnect()` on the same object performs a fresh handshake;
+  `prepare_reconnect()` is an optional explicit fd and per-backend state reset.
+  The README, connection guide, public reference, and header now describe that contract.
 - **Typed JSONB reads reject decimal value changes (Huly QB-945).**
   `field.as<qb::jsonb>()` now throws `client_error` if nlohmann would round a
   PostgreSQL JSONB number, including nested decimals and integers outside its

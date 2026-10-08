@@ -555,9 +555,10 @@ server never sent it. The `string_view` is valid while the connection is alive.
 - `connect()` is an awaiter — `co_await` or `run_sync` it; a discarded
   `db.connect(...)` does nothing. There is no blocking `connect()` and no
   `connect` callback overload.
-- After `disconnect()` you must call `prepare_reconnect()` before re-`connect()`ing
-  the **same** object (it closes the fd, resets buffers/disposed state). Drain or
-  fail pending queries first. If `disconnect()` runs inside one of that connection's
+- After `disconnect()`, `connect()` on the **same** object opens a fresh socket and
+  handshake, clearing stale I/O buffers and protocols. `prepare_reconnect()` is optional
+  for an explicit fd and per-backend state reset; drain or fail pending queries first.
+  If `disconnect()` runs inside one of that connection's
   query or fluent `.then` / `.error` callbacks, queued failures run just after
   the callback returns; new callback commands fail once with a connection error
   and coroutine calls return failed replies meanwhile.
@@ -751,7 +752,7 @@ public:
     [[nodiscard]] connect_awaiter connect(connection_options opts); // carries TLS/keepalive fields the DSN can't
     [[nodiscard]] connect_awaiter connect(std::string const &conn_opts_str, typename QB_IO_::transport_io_type &&raw_io);
     void disconnect();
-    void prepare_reconnect() noexcept; // must precede a re-connect() on the same object
+    void prepare_reconnect() noexcept; // optional explicit fd and per-backend state reset
 
     // Streaming / bulk-load helpers (coroutine; return qb::io::async::task<Reply<T>>):
     [[nodiscard]] qb::io::async::task<Reply<resultset>>
@@ -806,7 +807,7 @@ struct tcp {
 - `connect_awaiter connect(std::string const &conn_opts_str)`: Re-parses the DSN, then connects. DSN form `tcp://[user[:pass]@]host[:port][database]` — the database name is in **square brackets**.
 - `connect_awaiter connect(connection_options opts)`: Connects with a fully-specified options struct. Use this overload (not the DSN string) to set fields the DSN cannot carry — `ssl_verify` (TLS verification level), `ssl_root_cert`/`ssl_cert`/`ssl_key` (optional private-CA + client-cert mTLS PEM paths for `ssl://`), `connect_timeout`, and keepalive. Example: `auto o = connection_options::parse(dsn); o.ssl_verify = ssl_verify_mode::full; o.ssl_root_cert = "ca.pem"; co_await db.connect(o);`.
 - `connect_awaiter connect(qb::duration timeout)`: Connects, overriding the handshake deadline.
-- `void disconnect()`: Marks the connection down and refuses new queries immediately; callback commands receive one connection error and coroutine calls return failed replies. Outside a completion callback, it fails in-flight/queued work and completes io teardown before returning, without a loop pass (safe from a coroutine body). When called inside a query or fluent `.then` / `.error` callback, queued failures run after that callback returns so its transaction owner stays alive; io teardown follows message dispatch. Call `prepare_reconnect()` before re-connecting the same object.
+- `void disconnect()`: Marks the connection down and refuses new queries immediately; callback commands receive one connection error and coroutine calls return failed replies. Outside a completion callback, it fails in-flight/queued work and completes io teardown before returning, without a loop pass (safe from a coroutine body). When called inside a query or fluent `.then` / `.error` callback, queued failures run after that callback returns so its transaction owner stays alive; io teardown follows message dispatch. A later `connect()` on the same object opens a fresh socket and handshake; `prepare_reconnect()` is optional for an explicit fd and per-backend state reset.
 - **Streaming / bulk-load (coroutine, `co_await`-only; each returns `qb::io::async::task<Reply<T>>`):**
     - `copy_out(std::string sql, std::function<void(std::string_view)> sink) -> task<Reply<resultset>>`: Runs a `COPY … TO STDOUT` and delivers each `CopyData` chunk to `sink` as it arrives. Streams in **constant memory** (rows are never buffered in a result set). The `string_view` is valid only during the call. Resolves to `ok()` on success.
     - `copy_in(std::string sql, std::function<std::optional<std::string>()> source) -> task<Reply<resultset>>`: Runs a `COPY … FROM STDIN`, calling `source` repeatedly and sending each returned chunk as `CopyData` until it returns `std::nullopt` (then `CopyDone`). A throwing `source` aborts the COPY with `CopyFail`. Resolves to `ok()` (the `COPY n` count) on success; the connection stays usable on error. **NOT constant-memory** — it drains the whole source into the output pipe synchronously (capped by the write-buffer ceiling); only `copy_out` and `query_stream` stream in constant memory.

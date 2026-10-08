@@ -2700,11 +2700,11 @@ public:
     }
 
     /**
-     * @brief Reset async I/O state after disconnect() so this client can connect() again
+     * @brief Explicitly reset session state before reconnecting this client
      *
-     * `disconnect()` marks the underlying `qb::io::async::io` layer disposed; a new TCP/TLS
-     * handshake must not start until `reset_io_state()` runs. Call `prepare_reconnect()`,
-     * then `co_await connect()` or `run_sync(connect(...))` as usual.
+     * A later `connect()` opens a fresh TCP/TLS transport and resets stale I/O state before
+     * the new handshake. Call this optional helper to close the old fd and clear cached
+     * per-backend state explicitly before `co_await connect()` or `run_sync(connect(...))`.
      *
      * @pre No pending queries on this connection (finish or drain the transaction queue first).
      */
