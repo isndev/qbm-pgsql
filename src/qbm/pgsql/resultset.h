@@ -302,7 +302,9 @@ public:
      *
      * Converts the entire result set to a JSON array of objects where each object
      * represents a row and contains field name/value pairs.
-     * NULL values are represented as JSON null.
+     * Every present value is a JSON string, decoded by column OID when the wire
+     * format is binary. SQL NULL is JSON null; an unsupported binary OID throws
+     * error::client_error instead of exporting raw bytes.
      *
      * @return qb::json JSON array containing the result set data
      */

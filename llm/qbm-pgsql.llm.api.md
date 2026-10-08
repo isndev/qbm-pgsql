@@ -413,7 +413,7 @@ public:
     operator bool() const; // True if not empty
     bool operator!() const; // True if empty
 
-    qb::json json() const; // Convert resultset to JSON array of objects
+    qb::json json() const; // Array of objects; present cells are strings, SQL NULL is JSON null
 
     // Field metadata access:
     row::size_type columns_size() const;

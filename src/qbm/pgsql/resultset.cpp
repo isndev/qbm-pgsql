@@ -366,6 +366,88 @@ resultset::rows_affected() const {
     return pimpl_->rows_affected();
 }
 
+namespace {
+
+template <typename T>
+std::string
+binary_field_text(const resultset::row::value_type &field) {
+    return detail::TypeConverter<T>::to_text(field.as<T>());
+}
+
+std::string
+json_field_text(const resultset::row::value_type &field) {
+    if (field.description().format_code == protocol_data_format::Text)
+        return std::string(field.text());
+
+    if (field.description().format_code != protocol_data_format::Binary)
+        throw error::client_error("results::json(): unsupported result format for column '" + field.name() + "'");
+
+    // Bind requests binary only for the OIDs in common.h's result-format whitelist.
+    // Decode by the column OID before rendering a JSON string; as<std::string>()
+    // deliberately returns the raw bytes for binary fields.
+    switch (field.description().type_oid) {
+        case oid::boolean:
+            return binary_field_text<bool>(field);
+        case oid::int2:
+            return binary_field_text<smallint>(field);
+        case oid::int4:
+            return binary_field_text<integer>(field);
+        case oid::int8:
+            return binary_field_text<bigint>(field);
+        case oid::float4:
+            return binary_field_text<float>(field);
+        case oid::float8:
+            return binary_field_text<double>(field);
+        case oid::numeric:
+            return binary_field_text<detail::numeric>(field);
+        case oid::bytea:
+            return binary_field_text<std::vector<std::byte>>(field);
+        case oid::uuid:
+            return binary_field_text<qb::uuid>(field);
+        case oid::jsonb:
+            return binary_field_text<qb::jsonb>(field);
+        case oid::date:
+            return binary_field_text<qb::date>(field);
+        case oid::time:
+            return binary_field_text<qb::time_of_day>(field);
+        case oid::timetz:
+            return binary_field_text<qb::time_of_day_tz>(field);
+        case oid::timestamp: {
+            // wall_time's canonical text includes UTC's +00; timestamp has no zone.
+            std::string text = binary_field_text<qb::wall_time>(field);
+            if (text.size() < 3 || text.compare(text.size() - 3, 3, "+00") != 0)
+                throw error::client_error("results::json(): timestamp formatter did not produce a UTC suffix");
+            text.resize(text.size() - 3);
+            return text;
+        }
+        case oid::timestamptz:
+            return binary_field_text<qb::wall_time>(field);
+        case oid::interval:
+            return binary_field_text<qb::calendar_interval>(field);
+        // Nullable element vectors preserve SQL NULL elements when rendering the
+        // PostgreSQL array literal; a vector<T> would silently lose that state.
+        case oid::boolean_array:
+            return binary_field_text<std::vector<std::optional<bool>>>(field);
+        case oid::int2_array:
+            return binary_field_text<std::vector<std::optional<smallint>>>(field);
+        case oid::int4_array:
+            return binary_field_text<std::vector<std::optional<integer>>>(field);
+        case oid::int8_array:
+            return binary_field_text<std::vector<std::optional<bigint>>>(field);
+        case oid::float4_array:
+            return binary_field_text<std::vector<std::optional<float>>>(field);
+        case oid::float8_array:
+            return binary_field_text<std::vector<std::optional<double>>>(field);
+        case oid::text_array:
+            return binary_field_text<std::vector<std::optional<std::string>>>(field);
+        default:
+            throw error::client_error("results::json(): unsupported binary type OID "
+                                      + std::to_string(static_cast<int>(field.description().type_oid)) + " for column '" + field.name() + "'");
+    }
+}
+
+} // namespace
+
 qb::json
 resultset::json() const {
     qb::json result = qb::json::array();
@@ -373,16 +455,7 @@ resultset::json() const {
     for (const auto row : *this) {
         qb::json row_obj = qb::json::object();
         for (const auto field : row) {
-            // Unwrap explicitly rather than assigning the optional itself. nlohmann only
-            // learned to serialise std::optional in 3.12, while qb's floor is
-            // `find_package(nlohmann_json 3.11)` (qbDependencies.cmake:401) -- so this one
-            // line silently required a version half a minor above what the build asks for,
-            // and broke on any distro at 3.11.x (measured on Debian's 3.11.3: "no match for
-            // operator=", resultset.cpp:377). It is the ONLY site in the tree that assigned a
-            // raw optional to a json; everywhere else already unwraps with .value(). Same
-            // result either way -- a disengaged optional is null.
-            auto opt              = field.as<std::optional<std::string>>();
-            row_obj[field.name()] = opt ? qb::json(*opt) : qb::json(nullptr);
+            row_obj[field.name()] = field.is_null() ? qb::json(nullptr) : qb::json(json_field_text(field));
         }
         result.push_back(row_obj);
     }

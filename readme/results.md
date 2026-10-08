@@ -26,7 +26,7 @@ is defined as `qb::pg::resultset` (`resultset.h:104`). The form `detail::results
 
 `results` is a row-wise container. Each `results::row` is a container of `results::field` cells. Both `row` and `field`
 are non-owning views into the parent `results` — they hold a pointer plus indices and own no buffer, so they must not
-outlive the `results` object that vended them (`resultset.h:317-319`).
+outlive the `results` object that vended them (`resultset.h:319-321`).
 
 You include nothing extra: `#include <qbm/pgsql/pgsql.h>` pulls `resultset.h` through the transaction stack.
 
@@ -36,7 +36,7 @@ You include nothing extra: `#include <qbm/pgsql/pgsql.h>` pulls `resultset.h` th
 
 ### Ownership: owning vs borrowing result sets
 
-`results` is internally a `std::shared_ptr<const result_impl>` (`resultset.h:833`), so copying one is cheap and copies
+`results` is internally a `std::shared_ptr<const result_impl>` (`resultset.h:835`), so copying one is cheap and copies
 are safe. There are two flavors:
 
 - An **owning** result set holds a real allocation and keeps its rows alive. The default constructor, `deep_snapshot()`,
@@ -67,7 +67,7 @@ use `rows_affected()` (`resultset.h:298`), which returns the count parsed from t
 ### Binary vs text decoding is per column
 
 Each column carries a `field_description::format_code` (`Text` or `Binary`). `field::as<T>()` branches on it: binary
-fields go through `TypeConverter<T>::from_binary`, text fields through `from_text` (`resultset.h:581,630,640`). After an
+fields go through `TypeConverter<T>::from_binary`, text fields through `from_text` (`resultset.h:583-589,632,642`). After an
 extended-query execute, the client rewrites the row description's format codes to match what `Bind` requested, so
 columns from a prepared/parameterized query are often binary while the same columns from a simple query stay text. You
 do not choose the format — `as<T>()` reads it and dispatches correctly.
@@ -199,10 +199,10 @@ A `results::row` is a non-owning, index-based container of fields.
 
 ### Whole-row extraction with `to(...)`
 
-`row::to(...)` fills several typed targets at once. There are positional and named forms (`resultset.h:389-404`):
+`row::to(...)` fills several typed targets at once. There are positional and named forms (`resultset.h:391-406`):
 
 ```cpp
-<!-- src: qbm/pgsql/src/qbm/pgsql/resultset.h:389 -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/resultset.h:391 -->
 // positional: columns 0,1,2 in order
 int         id;
 std::string name;
@@ -218,7 +218,7 @@ row.to({"id", "name", "active"}, id, name, active);
 ```
 
 The named form requires at least as many names as targets, or it throws `error::db_error` with message
-`"Not enough names in row data extraction"` (`resultset.h:966`). Each target decodes through the same path as
+`"Not enough names in row data extraction"` (`resultset.h:968`). Each target decodes through the same path as
 `field::as<T>()`, so a NULL into a non-`std::optional` target throws `value_is_null` (see below).
 
 ### Typed tuples & structured bindings
@@ -270,7 +270,7 @@ A `results::field` is a non-owning view of one cell. Its core members:
 ### Typed conversion: `as<T>()`
 
 `as<T>()` is the primary accessor. It reads the field's `format_code`, picks the binary or text path, and returns
-`std::decay_t<T>` (`resultset.h:551-563`):
+`std::decay_t<T>` (`resultset.h:553-565`):
 
 ```cpp
 <!-- src: qbm/pgsql/tests/integration/datatypes/datatypes-roundtrip.cpp:285-290 -->
@@ -290,10 +290,10 @@ not use them.
 ### NULL handling
 
 A direct `as<T>()` (or `to(T&)`) on a NULL cell, where `T` is not nullable, throws `error::value_is_null(name())` (
-`resultset.h:562`, `resultset.h:661`). To read a possibly-NULL cell without exceptions, extract into `std::optional<U>`:
+`resultset.h:564`, `resultset.h:663`). To read a possibly-NULL cell without exceptions, extract into `std::optional<U>`:
 
 ```cpp
-<!-- src: qbm/pgsql/src/qbm/pgsql/resultset.h:551 -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/resultset.h:553 -->
 // as<optional> — empty when NULL
 std::optional<std::string> maybe = field.as<std::optional<std::string>>();
 if (maybe)
@@ -308,10 +308,10 @@ if (!field.is_null())
     use(field.as<int>());
 ```
 
-`results::json()` uses exactly this pattern internally — it extracts every cell as `std::optional<std::string>`, so NULL
-cells become JSON null while a present empty text cell remains `""` (`resultset.cpp:369-391`). The field's NULL
-bitmap decides presence before the converter reads bytes; `as<std::optional<double>>()` on a binary `int8` column
-also follows the same OID-aware numeric conversion as `as<double>()` (`resultset.h:556-573,593-629`).
+`results::json()` checks SQL NULL directly, so a present empty TEXT value remains `""` while SQL NULL becomes JSON null
+(`resultset.cpp:451-464`).
+`field.as<std::optional<T>>()` uses the same NULL metadata; a present value is decoded through `T`, preserving
+empty text and the column-OID conversion for binary numerics (`resultset.h:558-575,597-632`).
 
 ### Type mismatches
 
@@ -323,23 +323,26 @@ See [error_handling.md](./error_handling.md).
 
 ## JSON export
 
-`results::json()` converts the whole set to a `qb::json` array of objects (one object per row, keyed by column name),
-with NULL rendered as JSON null:
+`results::json()` converts the whole set to a `qb::json` array of objects (one object per row, keyed by column name).
+Every present value is a JSON string, including numbers, booleans, JSONB, and arrays; SQL NULL is JSON null:
 
 ```cpp
-<!-- src: qbm/pgsql/src/qbm/pgsql/resultset.cpp:369-391 -->
-qb::json j = rows.json();   // e.g. [{"id":1,"name":"ada"}, ...]
+<!-- src: qbm/pgsql/src/qbm/pgsql/resultset.cpp:451-464 -->
+qb::json j = rows.json();   // e.g. [{"id":"1","name":"ada"}, ...]
 ```
 
-This is convenient for diagnostics, admin endpoints, or quick serialization. In hot paths prefer typed `as<T>()` —
-`json()` stringifies every cell.
+Text-format columns keep PostgreSQL's text bytes. Binary-format columns are decoded using their OID, then formatted as
+strings with the module's type converters: BYTEA becomes `\x` hex, arrays become PostgreSQL array literals with NULL
+elements preserved, and JSONB becomes compact JSON text. An unsupported binary OID throws `error::client_error` rather
+than placing raw bytes in a JSON string. `field.as<std::string>()` still exposes raw binary bytes when requested directly.
+This export is convenient for diagnostics and admin endpoints; use typed `as<T>()` in hot paths.
 
 ---
 
 ## Pitfalls
 
 - **Views must not outlive the result set.** `row` and `field` are pointers-plus-indices into the parent `results`
-  (`resultset.h:317-319`). Storing a `row` or `field` past the lifetime of the `results` that vended it is a
+  (`resultset.h:319-321`). Storing a `row` or `field` past the lifetime of the `results` that vended it is a
   use-after-free. Copy the data out, or snapshot the whole set with `deep_snapshot()` (`resultset.h:161`).
 - **The callback result set is borrowing.** It does not extend the lifetime of the live row buffer. To retain rows after
   a synchronous success callback returns, call `deep_snapshot()` first (`resultset.cpp:237-244`).
@@ -352,9 +355,9 @@ This is convenient for diagnostics, admin endpoints, or quick serialization. In 
   iterators, different rows — trips an assert (`resultset.cpp:104,189-190`).
 - **Do not share a result set across cores/threads.** Text-format `as<T>()` uses a function-local
   `static ParamUnserializer`; this is safe only because an actor/connection runs on a single `VirtualCore` (one thread).
-  Sharing a `results` across cores is a data race (`resultset.h:638`).
+  Sharing a `results` across cores is a data race (`resultset.h:640`).
 - **NULL into a non-`std::optional` target throws.** Always decode possibly-NULL columns as `std::optional<U>`, or guard
-  with `is_null()` (`resultset.h:562`, `:480`).
+  with `is_null()` (`resultset.h:558`, `:482`).
 - **Retired time tokens are gone.** `timestamptz` maps to `qb::wall_time`; `qb::Timestamp` / `qb::UtcTimestamp` /
   `to_timestamp(...)` no longer exist in this API.
 - **A multi-statement simple query yields ONE result.** `execute("SELECT …; SELECT …", …)` collects every statement's

@@ -571,8 +571,10 @@ server never sent it. The `string_view` is valid while the connection is alive.
   snapshot.
 - **NULL read throws.** `field.as<T>()` on a NULL non-optional `T` throws
   `error::value_is_null`. Read as `std::optional<T>` or check `is_null()`.
-- **`results.json()` stringifies everything** — numbers/bools become JSON
-  strings, not native JSON types.
+- **`results.json()` stringifies every present cell** — numbers/bools become JSON
+  strings, not native JSON types. Binary columns are decoded by OID first; BYTEA
+  uses `\x` hex, arrays use PostgreSQL literals, SQL NULL becomes JSON null,
+  and an unsupported binary OID throws instead of exporting raw bytes.
 - **`execute_file` / `prepare_file` read the file synchronously** (blocking) on
   the I/O thread.
 - **Never use the retired time tokens** (§3.6). `timestamptz`/`timestamp` →

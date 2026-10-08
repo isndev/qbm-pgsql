@@ -157,6 +157,62 @@ TEST_F(WireFormats, Prepared_ResultFormatMatrix) {
     EXPECT_TRUE(ok);
 }
 
+TEST_F(WireFormats, JsonExportDecodesPreparedBinaryColumns) {
+    const std::string sql = "SELECT 1::int8 AS n, 1.5::float8 AS f, true::bool AS b, "
+                            "''::text AS empty, NULL::text AS null_text, 1.50::numeric AS num, "
+                            "decode('dead', 'hex') AS bin, '{\"a\":1}'::jsonb AS doc, "
+                            "ARRAY[1,NULL,3]::int4[] AS arr";
+    ASSERT_TRUE(db_->prepare("json_export", sql, type_oid_sequence{}, discard_prepare, discard_error).await());
+
+    bool prepared_ok = false;
+    ASSERT_TRUE(db_->execute(
+                       "json_export", params{},
+                       [&](transaction &, results r) {
+                           ASSERT_EQ(r.size(), 1u);
+                           EXPECT_EQ(r.field("n").format_code, protocol_data_format::Binary);
+                           EXPECT_EQ(r.field("f").format_code, protocol_data_format::Binary);
+                           EXPECT_EQ(r.field("b").format_code, protocol_data_format::Binary);
+                           EXPECT_EQ(r.field("empty").format_code, protocol_data_format::Text);
+                           EXPECT_EQ(r.field("num").format_code, protocol_data_format::Binary);
+                           EXPECT_EQ(r.field("bin").format_code, protocol_data_format::Binary);
+                           EXPECT_EQ(r.field("doc").format_code, protocol_data_format::Binary);
+                           EXPECT_EQ(r.field("arr").format_code, protocol_data_format::Binary);
+
+                           const auto j = r.json();
+                           ASSERT_EQ(j.size(), 1u);
+                           EXPECT_EQ(j[0]["n"], "1");
+                           EXPECT_EQ(j[0]["f"], "1.5");
+                           EXPECT_EQ(j[0]["b"], "t");
+                           EXPECT_EQ(j[0]["empty"], "");
+                           EXPECT_TRUE(j[0]["null_text"].is_null());
+                           EXPECT_EQ(j[0]["num"], "1.50");
+                           EXPECT_EQ(j[0]["bin"], "\\xdead");
+                           EXPECT_EQ(j[0]["doc"], "{\"a\":1}");
+                           EXPECT_EQ(j[0]["arr"], "{1,NULL,3}");
+                           prepared_ok = true;
+                       },
+                       [](error::db_error e) { FAIL() << e.what(); })
+                    .await());
+    EXPECT_TRUE(prepared_ok);
+
+    bool simple_ok = false;
+    ASSERT_TRUE(db_->execute(
+                       "SELECT 1::int8 AS n, 1.5::float8 AS f, true::bool AS b, ''::text AS empty, NULL::text AS null_text",
+                       [&](transaction &, results r) {
+                           EXPECT_EQ(r.field("n").format_code, protocol_data_format::Text);
+                           const auto j = r.json();
+                           EXPECT_EQ(j[0]["n"], "1");
+                           EXPECT_EQ(j[0]["f"], "1.5");
+                           EXPECT_EQ(j[0]["b"], "t");
+                           EXPECT_EQ(j[0]["empty"], "");
+                           EXPECT_TRUE(j[0]["null_text"].is_null());
+                           simple_ok = true;
+                       },
+                       [](error::db_error e) { FAIL() << e.what(); })
+                    .await());
+    EXPECT_TRUE(simple_ok);
+}
+
 // Parameter format codes: bound params are sent binary for decodable OIDs and text for
 // the rest. Observe indirectly via pg_typeof on the bound value (it must arrive as the
 // declared OID regardless of transmission format) plus a binary read-back.

@@ -19,6 +19,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include "../../shared/pg_wire_ground_truth.hpp"
 #include <qbm/pgsql/pgsql.h>
 
 using namespace qb::pg;
@@ -375,6 +376,76 @@ TEST(ResultsetPopulated, JsonSerialization) {
     ASSERT_EQ(j.size(), 1u);
     EXPECT_EQ(j[0]["id"], "1");
     EXPECT_TRUE(j[0]["name"].is_null());
+}
+
+// Every value below is a PostgreSQL *_send() payload (without the protocol length
+// prefix). json() promises strings, so the expected values are the text spellings,
+// never the raw binary buffer interpreted as a std::string.
+TEST(ResultsetPopulated, JsonSerializationBinaryColumns) {
+    using qb::pg::test::hex_to_bytes;
+    struct Cell {
+        const char *name;
+        oid         type;
+        const char *hex;
+        const char *text;
+    };
+    const Cell cells[] = {
+        {"bool", oid::boolean, "01", "t"},
+        {"int2", oid::int2, "3039", "12345"},
+        {"int4", oid::int4, "fffffff9", "-7"},
+        {"int8", oid::int8, "0000000000000001", "1"},
+        {"float4", oid::float4, "3fc00000", "1.5"},
+        {"float8", oid::float8, "3ff8000000000000", "1.5"},
+        {"numeric", oid::numeric, "000200000000000404d2162e", "1234.5678"},
+        {"bytea", oid::bytea, "dead", "\\xdead"},
+        {"uuid", oid::uuid, "550e8400e29b41d4a716446655440000", "550e8400-e29b-41d4-a716-446655440000"},
+        {"jsonb", oid::jsonb, "017b2261223a317d", "{\"a\":1}"},
+        {"date", oid::date, qb::pg::test::gt::temporal::date_2024_03_15, "2024-03-15"},
+        {"time", oid::time, qb::pg::test::gt::temporal::time_14_30_45, "14:30:45.123456"},
+        {"timetz", oid::timetz, qb::pg::test::gt::temporal::timetz_14_30_45_p02, "14:30:45+02:00"},
+        {"timestamp", oid::timestamp, qb::pg::test::gt::temporal::ts_2024_03_15, "2024-03-15 14:30:45.123456"},
+        {"timestamptz", oid::timestamptz, qb::pg::test::gt::temporal::ts_2024_03_15, "2024-03-15 14:30:45.123456+00"},
+        {"interval", oid::interval, "00000000000000000000000100000000", "1 day 00:00:00"},
+        {"int4_array", oid::int4_array, qb::pg::test::gt::array::int4_1_null_3, "{1,NULL,3}"},
+        {"text_array", oid::text_array, qb::pg::test::gt::array::text_apple_banana, "{\"apple\",\"banana\"}"},
+        {"text_array_null", oid::text_array, "00000001000000010000001900000003000000010000000361206200000003632264ffffffff",
+         "{\"a b\",\"c\\\"d\",NULL}"},
+    };
+
+    std::vector<std::string> names;
+    std::vector<std::string> values;
+    for (const Cell &cell : cells) {
+        names.emplace_back(cell.name);
+        const auto bytes = hex_to_bytes(cell.hex);
+        values.emplace_back(bytes.begin(), bytes.end());
+    }
+    PopulatedResult pr(std::move(names), {std::move(values)});
+    for (std::size_t i = 0; i < std::size(cells); ++i) {
+        pr.impl.row_description()[i].type_oid    = cells[i].type;
+        pr.impl.row_description()[i].format_code = protocol_data_format::Binary;
+    }
+    resultset  rs     = pr.rs();
+    const auto result = rs.json();
+    for (const Cell &cell : cells)
+        EXPECT_EQ(result[0][cell.name], cell.text) << cell.name;
+}
+
+TEST(ResultsetPopulated, JsonSerializationPreservesEmptyTextAndRejectsUnknownBinaryOid) {
+    PopulatedResult pr({"empty", "null", "unknown"}, {{"", "", "raw"}}, {false, true, false});
+    auto           &desc = pr.impl.row_description();
+    desc[2].type_oid     = static_cast<oid>(999999);
+    desc[2].format_code  = protocol_data_format::Binary;
+    resultset rs         = pr.rs();
+
+    EXPECT_EQ(rs[0][0].as<std::string>(), "");
+    EXPECT_TRUE(rs[0][1].is_null());
+    EXPECT_THROW(rs.json(), error::client_error);
+
+    desc[2].format_code = protocol_data_format::Text;
+    const auto result   = rs.json();
+    EXPECT_EQ(result[0]["empty"], "");
+    EXPECT_TRUE(result[0]["null"].is_null());
+    EXPECT_EQ(result[0]["unknown"], "raw");
 }
 
 // ----------------------------------------------------------------------------
