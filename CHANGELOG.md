@@ -31,6 +31,33 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Fixed
 
+- **Reconnect guidance matches the supported client path (Huly QB-202).** Calling
+  ordinary `connect()` after `disconnect()` on the same object performs a fresh handshake;
+  `prepare_reconnect()` is an optional explicit fd and per-backend state reset.
+  The README, connection guide, public reference, and header now describe that contract.
+- **Typed JSONB reads reject decimal value changes (Huly QB-945).**
+  `field.as<qb::jsonb>()` now throws `client_error` if nlohmann would round a
+  PostgreSQL JSONB number, including nested decimals and integers outside its
+  integer ranges and `1e400` beyond the DOM floating range. Malformed JSON
+  keeps its separate parse error; equal decimal values with different spellings remain valid.
+  `field.jsonb_text()` exposes the server's canonical text without parsing or
+  copying, with OID/format/version checks and backing-row lifetime;
+  `jsonb_text_copy()` keeps an owning copy. The `qb::jsonb` layout is unchanged.
+- **Overlapping inline parameterized queries keep their own SQL (Huly QB-106).**
+  `query(sql, args...)` now keeps Parse/Describe and Bind/Execute in one queued command.
+  Two coroutines on one connection can no longer replace the unnamed statement between
+  those phases and return another query's plausible result. The two server round-trips
+  and per-column result formats remain as before.
+- **Overlapping COPY calls keep their data with the admitted command (Huly QB-629).** A second
+  `copy_out` or `copy_in` on one connection now fails explicitly before sending SQL or invoking
+  its sink/source. Previously it replaced the first command's callback: the first COPY OUT
+  delivered its rows to the second sink, while the first COPY IN read the second source and
+  loaded the wrong table. A plain COPY query queued ahead cannot borrow a later `copy_in`
+  source. Destroying an awaiting coroutine detaches its callback immediately while its
+  command keeps the COPY reservation until completion; sequential COPY and connection
+  reuse still work. If a source destroys its own awaiting coroutine inside a callback,
+  the returned chunk is discarded and the command sends one `CopyFail` before any
+  further source call.
 - **Present empty text and binary numeric values stay correct through `field::as<std::optional<T>>()` (Huly QB-646).**
   SQL NULL metadata now decides whether the optional is empty; a present value is decoded through `T` with
   its column format and OID. `results::json()` keeps an empty string as `""` rather than JSON null, and

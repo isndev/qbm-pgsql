@@ -26,7 +26,7 @@ here so you can navigate the implementation — application code never includes 
 - **`type_oid_sequence`.** `using type_oid_sequence = std::vector<oid>` ([`src/qbm/pgsql/common.h`](../src/qbm/pgsql/common.h)). You pass
   one to `prepare()` to declare each parameter's type. <!-- src: src/qbm/pgsql/common.h:527-532 -->
 - **`params`.** `using params = detail::QueryParams` ([`pgsql.h`](../src/qbm/pgsql/pgsql.h)). A heterogeneous container of bind values
-  serialized to PostgreSQL **binary** wire form. <!-- src: pgsql.h:2892 -->
+  serialized to PostgreSQL **binary** wire form. <!-- src: pgsql.h:2961 -->
 - **`type_mapping<T>`.** Compile-time C++-type → OID lookup ([`src/qbm/pgsql/type_mapping.h`](../src/qbm/pgsql/type_mapping.h)). Drives
   `get_type_oid<T>()` and `fill_types<T...>()`. The primary template is **intentionally ill-formed** (a `static_assert`):
   a C++ type with no mapping is a **hard compile error**, not a silent fallback to OID `705` (unknown). Add a
@@ -156,9 +156,36 @@ using namespace qb::pg;
 qb::jsonb doc = result[0][0].as<qb::jsonb>(); // jsonb column, binary on the wire
 ```
 
-`qb::json` / `qb::jsonb` are `nlohmann::json` (see [`qb/json.h`](https://github.com/isndev/qb/blob/main/src/qb/json.h)).
+`qb::json` is `nlohmann::json`; `qb::jsonb` wraps one such DOM (see [`qb/json.h`](https://github.com/isndev/qb/blob/main/src/qb/json.h)).
 The decoders preserve JSON structure: `[[1,2]]` stays an array of arrays. PostgreSQL's binary JSON and JSONB
 payloads carry no marker that would turn a pair array into an object.
+
+`qb::jsonb` keeps its existing DOM layout. A typed JSONB read now throws `error::client_error` if a
+PostgreSQL number would change **decimal value** when parsed into that DOM; this includes integers
+beyond its integer ranges and decimals rounded by `double`, even inside arrays or objects. Equal
+values with different spellings, such as `1.2300` and `1.23`, remain readable. A valid number beyond
+the DOM floating range (for example `1e400`) also throws `client_error`; malformed JSON follows the
+separate `std::runtime_error` parse path. <!-- src: src/qbm/pgsql/type_converter.cpp:393-443 -->
+
+For an exact value, read the server's canonical JSONB text directly from the field:
+
+```cpp
+auto field = result[0][0];
+std::string_view json_text = field.jsonb_text();      // zero-copy; borrows backing row storage
+std::string owned_text = field.jsonb_text_copy();     // safe after result is destroyed
+```
+
+`jsonb_text()` requires a non-NULL JSONB column. It checks the OID, format and binary version,
+removes the binary version byte, and returns a view into the backing row storage. A callback
+`results` object is borrowed: copying that object or retaining its `field` does not keep the
+rows alive after the callback. Take `jsonb_text_copy()` inside the callback, or call
+`deep_snapshot()` and take the view from that owning snapshot. A coroutine reply already owns
+its result snapshot. The field API accepts the server's result payload (version byte plus text);
+the direct converter's legacy four-byte-prefixed compatibility does not extend to fields.
+The text is exact relative to PostgreSQL's canonical `jsonb::text` output, which may already
+differ from the input in spaces, key order or
+duplicate keys. `jsonb_text_copy()` makes an owning copy. SQL NULL throws `value_is_null`; invalid
+OID, format or version throws `client_error`. <!-- src: src/qbm/pgsql/resultset.cpp:185-212,263-275 -->
 
 ### UUID
 
@@ -385,7 +412,7 @@ row.to(std::tie(a, b, c));
 ```
 
 `row_to_impl` expands into one `as<T>()` per column, matched to the tuple element at the same index — so each element
-is converted per its own declared type. <!-- src: src/qbm/pgsql/resultset.h:874-878,886-890,986-1000 -->
+is converted per its own declared type. <!-- src: src/qbm/pgsql/resultset.h:880-884,892-896,992-1006 -->
 
 ---
 

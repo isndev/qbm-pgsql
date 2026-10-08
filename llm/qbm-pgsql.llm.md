@@ -74,9 +74,10 @@ qb-io, not qb-core.
 - **Two interchangeable completion models, same names:**
   - **Coroutine** — single-op overloads **without** callbacks return a
     `[[nodiscard]] pg_reply_awaiter<T>` (`execute`, `query(sql)`, `prepare`,
-    `begin`/`commit`/`rollback`, savepoints, `notify`/`listen`). The helpers that
-    chain several awaits internally — `query(sql, args...)`, `copy_out`,
-    `copy_in`, `query_stream` — instead return `qb::io::async::task<Reply<T>>`.
+    `begin`/`commit`/`rollback`, savepoints, `notify`/`listen`). The inline
+    `query(sql, args...)` returns `qb::io::async::task<Reply<T>>` while admitting
+    Parse/Describe and Bind/Execute as one logical queued command. `copy_out`,
+    `copy_in`, and `query_stream` also return `qb::io::async::task<Reply<T>>`.
     Either way `co_await` yields `Reply<T>` (`T` = `resultset`, `PreparedQuery`,
     or `void`), and nothing happens until you `co_await` it (or `run_sync` it).
     A coroutine parked on one shows as `"pgsql"` in qb's
@@ -330,6 +331,15 @@ C++ ⇄ PostgreSQL via `detail::type_mapping<T>` (OID for params) and
 Binary JSON/JSONB decoding preserves JSON structure: `[[1,2]]` remains an array
 of arrays. A pair-shaped array is never inferred to be an object.
 
+For JSONB, `field.as<qb::jsonb>()` rejects a number that would change decimal
+value in the nlohmann DOM; it throws `error::client_error`, including for a
+nested number. To retain PostgreSQL's exact canonical JSONB text, call
+`field.jsonb_text()` while the backing rows live or `field.jsonb_text_copy()` for
+an owning string. A callback result is borrowed: snapshot it or copy the text
+inside the callback before retaining either. Both methods validate SQL NULL,
+OID, format and binary version. Canonical JSONB text may already differ from
+the original input's spacing and key order.
+
 ```cpp
 // WRITE a timestamptz parameter (qb::wall_time is a UTC instant on system_clock):
 co_await db.prepare("ins_ev", "INSERT INTO ev(at) VALUES ($1)", {oid::timestamptz});
@@ -419,9 +429,10 @@ The `notify` publisher side must use a normal (non-pooled) connection.
 
 ### 3.10 Bulk COPY, streaming, and out-of-band control
 
-These live on `database` in `pgsql.h`. The COPY / streaming helpers chain several
-awaits internally, so they return `qb::io::async::task<Reply<T>>` (still
-`co_await`-only, yielding `Reply<T>`) rather than a `pg_reply_awaiter<T>`.
+These live on `database` in `pgsql.h`. The COPY helpers return
+`qb::io::async::task<Reply<T>>` while awaiting their one queued COPY command;
+streaming helpers may chain operations. Both remain `co_await`-only and yield
+`Reply<T>` rather than exposing a `pg_reply_awaiter<T>`.
 
 **`copy_out(sql, sink)` — `COPY … TO STDOUT`, constant memory.** Runs a
 `COPY … TO STDOUT` and delivers each `CopyData` chunk to `sink` **as it arrives**;
@@ -447,6 +458,14 @@ co_await db.copy_in("COPY t (id, v) FROM STDIN",
     [&]() -> std::optional<std::string> { return next_line(); });  // nullopt to finish
 co_await db.copy_in("COPY t (id, v) FROM STDIN", "1\ta\n2\tb\n");   // whole-payload form
 ```
+
+Only one COPY may be active on a connection. An overlapping `copy_in` or
+`copy_out` returns a failed `Reply` without sending SQL or calling its source
+or sink. Await completion before starting the next COPY. Destroying the awaiting
+coroutine detaches its callback immediately while its command keeps the COPY
+reservation until completion; a cancelled COPY IN fails if it later needs data.
+If a source cancels its own awaiting coroutine, its returned chunk is discarded
+and the client sends `CopyFail` without calling the source again.
 
 > **`copy_in` is NOT constant-memory.** It drains the entire `source` into the
 > output pipe synchronously (bounded only by the write-buffer ceiling). Only
@@ -524,9 +543,10 @@ server never sent it. The `string_view` is valid while the connection is alive.
 - `connect()` is an awaiter — `co_await` or `run_sync` it; a discarded
   `db.connect(...)` does nothing. There is no blocking `connect()` and no
   `connect` callback overload.
-- After `disconnect()` you must call `prepare_reconnect()` before re-`connect()`ing
-  the **same** object (it closes the fd, resets buffers/disposed state). Drain or
-  fail pending queries first. If `disconnect()` runs inside one of that connection's
+- After `disconnect()`, ordinary `connect()` on the **same** object opens a fresh socket and
+  handshake, clearing stale I/O buffers and protocols. `prepare_reconnect()` is optional
+  for an explicit fd and per-backend state reset; drain or fail pending queries first.
+  If `disconnect()` runs inside one of that connection's
   query or fluent `.then` / `.error` callbacks, queued failures run just after
   the callback returns; new callback commands fail once with a connection error
   and coroutine calls return failed replies meanwhile.

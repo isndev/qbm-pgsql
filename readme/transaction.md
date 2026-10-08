@@ -116,10 +116,10 @@ Coroutine results are delivered through `resultset::deep_snapshot()`, so a `Repl
 stays valid after the transaction's transient buffers are reused.
 
 > **Awaiter vs `task`.** The single-op entry points (`execute`, `query(sql)`, `prepare`, `begin`/`commit`/`rollback`,
-> savepoints, `notify`/`listen`) return `pg_reply_awaiter<T>`. The helpers that chain multiple awaits internally —
-`copy_out`, `copy_in`, `query_stream`, and the inline `query(sql, args...)` — return `qb::io::async::task<Reply<T>>`
-> instead. Both are `co_await`-only and yield the same `Reply<T>`, so this distinction does not change how you call
-> them.
+> savepoints, `notify`/`listen`) return `pg_reply_awaiter<T>`. `copy_out`, `copy_in`, `query_stream`, and the inline
+> `query(sql, args...)` return `qb::io::async::task<Reply<T>>` instead. The inline query awaits one queued operation
+> that owns both Parse and Bind; the other helpers may chain operations. Both forms are `co_await`-only and yield
+> the same `Reply<T>`, so this distinction does not change how you call them.
 
 ---
 
@@ -190,7 +190,7 @@ There is no separate "next" type: `then` passes `*parent()`, the parent transact
 
 ## The coroutine transaction block
 
-<!-- src: src/qbm/pgsql/commands.h:1373-1393, tests/integration/api/coro-api.cpp:248-272 -->
+<!-- src: src/qbm/pgsql/commands.h:1466-1486, tests/integration/api/coro-api.cpp:248-272 -->
 
 The coroutine path is imperative: `begin` / `execute` / `commit` (or `rollback`) are explicit, and you branch on `ok()`.
 
@@ -271,7 +271,7 @@ it has no effect on autocommit statements run outside a block.
 
 ## Savepoints
 
-<!-- src: src/qbm/pgsql/commands.h:832-855, src/qbm/pgsql/commands.h:1396-1423, src/qbm/pgsql/commands.h:154-294 -->
+<!-- src: src/qbm/pgsql/commands.h:832-855, src/qbm/pgsql/commands.h:1489-1516, src/qbm/pgsql/commands.h:154-294 -->
 
 **Callback — open a savepoint sub-block:**
 
@@ -305,7 +305,7 @@ else
 **Name validation.** The coroutine `savepoint`, `release_savepoint`, and `rollback_savepoint` reject names that are
 empty, longer than 63 characters, or contain anything other than alphanumerics and underscore
 (`pg_savepoint_name_ok`, `src/qbm/pgsql/commands.h:1268-1278`). An invalid name returns a
-pre-failed awaiter carrying `qb::pg::error::client_error` — no SQL is sent (`src/qbm/pgsql/commands.h:1396-1423`).
+pre-failed awaiter carrying `qb::pg::error::client_error` — no SQL is sent (`src/qbm/pgsql/commands.h:1489-1516`).
 This pre-check is defense-in-depth on top of the identifier quoting above: even the callback path, which does *not*
 pre-validate, cannot be made to inject SQL because the name is always quoted into a single literal identifier.
 
@@ -393,7 +393,7 @@ Key facts to get right:
 
 ## LISTEN / NOTIFY
 
-<!-- src: src/qbm/pgsql/transaction.h:429-493; src/qbm/pgsql/pg_notify_sql.h:25-92; qbm/pgsql/src/qbm/pgsql/pgsql.h:382-392,1931-1942,2719-2853 (in that order: notification; on_incoming_notify; notify_consumer / notify_co_consumer / notify_cb_consumer) -->
+<!-- src: src/qbm/pgsql/transaction.h:429-493; src/qbm/pgsql/pg_notify_sql.h:25-92; qbm/pgsql/src/qbm/pgsql/pgsql.h:382-392,1992-2003,2788-2922 (in that order: notification; on_incoming_notify; notify_consumer / notify_co_consumer / notify_cb_consumer) -->
 
 ### Publishing (NOTIFY)
 
@@ -463,7 +463,7 @@ subscription belongs to the session — `receive()` serves the new connection, u
   `End`/`with_transaction` do it) before sending new commands.
 - **A lost connection fails every pending query automatically.** You do **not** write a disconnect handler. The built-in
   `Database::on(qb::io::async::event::disconnected)` handler calls `fail_all_pending(...)` on the root transaction (
-  `qbm/pgsql/src/qbm/pgsql/pgsql.h:2619`), which drains every queued query and pending sub-transaction so suspended `co_await`
+  `qbm/pgsql/src/qbm/pgsql/pgsql.h:2688`), which drains every queued query and pending sub-transaction so suspended `co_await`
   awaiters resume with `client_error("database disconnected")` instead of hanging forever.
   See [connection.md](./connection.md) (Fail-all-on-disconnect).
 - **Statement timeout below 1 ms vanishes.** A sub-millisecond `set_timeout` truncates to 0 and emits no `SET LOCAL`.

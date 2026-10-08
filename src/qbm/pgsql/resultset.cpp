@@ -181,6 +181,36 @@ resultset::field::text() const {
     return std::string_view(reinterpret_cast<const char *>(&*buffer.begin()), sz);
 }
 
+std::string_view
+resultset::field::jsonb_text() const {
+    if (is_null())
+        throw error::value_is_null(name());
+    if (description().type_oid != oid::jsonb)
+        throw error::client_error("field '" + name() + "' is not JSONB");
+
+    switch (description().format_code) {
+        case protocol_data_format::Text: {
+            const auto value = text();
+            if (value.empty())
+                throw error::client_error("field '" + name() + "' has an empty JSONB text payload");
+            return value;
+        }
+        case protocol_data_format::Binary: {
+            const auto wire = view();
+            if (wire.size() < 2 || wire.front() != std::byte{1})
+                throw error::client_error("field '" + name() + "' has an unsupported JSONB binary version or empty payload");
+            return std::string_view(reinterpret_cast<const char *>(wire.data() + 1), wire.size() - 1);
+        }
+        default:
+            throw error::client_error("field '" + name() + "' has an unsupported JSONB result format");
+    }
+}
+
+std::string
+resultset::field::jsonb_text_copy() const {
+    return std::string(jsonb_text());
+}
+
 //----------------------------------------------------------------------------
 // resultset::const_field_iterator implementation - Bidirectional iterator for fields
 //----------------------------------------------------------------------------
@@ -412,17 +442,6 @@ binary_array_text(const resultset::row::value_type &field) {
 }
 
 std::string
-binary_jsonb_text(const resultset::row::value_type &field) {
-    // PostgreSQL jsonb_send supplies version 1 followed by canonical JSON text.
-    // Parsing through nlohmann changes array-of-pairs shape and can round a
-    // JSONB numeric, so export the server text exactly after checking its version.
-    const auto wire = field.view();
-    if (wire.size() < 2 || wire.front() != std::byte{1})
-        throw error::client_error("results::json(): unsupported JSONB binary version or empty payload");
-    return std::string(reinterpret_cast<const char *>(wire.data() + 1), wire.size() - 1);
-}
-
-std::string
 json_field_text(const resultset::row::value_type &field) {
     if (field.description().format_code == protocol_data_format::Text)
         return std::string(field.text());
@@ -453,7 +472,7 @@ json_field_text(const resultset::row::value_type &field) {
         case oid::uuid:
             return binary_field_text<qb::uuid>(field);
         case oid::jsonb:
-            return binary_jsonb_text(field);
+            return field.jsonb_text_copy();
         case oid::date:
             return binary_field_text<qb::date>(field);
         case oid::time:

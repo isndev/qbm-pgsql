@@ -170,7 +170,8 @@ Parameter OIDs are deduced from the C++ argument types. Internally it runs throu
 binary for the OIDs on `common.h`'s whitelist, text for the rest — instead of the all-text columns a simple query
 returns.
 Cost is two server round-trips (Parse+Describe, then Bind+Execute) — the same as a manual `prepare`+`execute`, but one
-call; it returns **`qb::io::async::task<Reply<resultset>>`**. The overload requires at least one bound argument, so
+call. Both phases stay in one queued command: another coroutine on the connection cannot replace the unnamed statement
+between Parse and Bind. It returns **`qb::io::async::task<Reply<resultset>>`**. The overload requires at least one bound argument, so
 `query(sql)` with no args still resolves to the simple-query awaiter above. For a hot, repeated query prefer a **named**
 `prepare` (one round-trip after the first).
 
@@ -207,6 +208,18 @@ stream — chunks need not align to rows). Both return `Reply<resultset>` (`ok()
 `COPY n` tag; the result set is empty). A failing COPY — bad table, or a `source` that throws — resolves the awaiter
 with the **error** (the client sends `CopyFail`) and leaves the connection usable. A throwing `source` never corrupts
 the protocol stream.
+
+One connection admits one COPY operation at a time. If `copy_in` or `copy_out` is still
+active, another COPY call returns a failed `Reply` without sending its SQL or invoking
+its source or sink. Await the first reply before starting the next COPY on that connection.
+Destroying the awaiting coroutine detaches its source or sink immediately, so its
+captured variables cannot be used later. The connection stays reserved for that
+COPY until the in-flight command finishes; a cancelled COPY IN sends `CopyFail`
+if the server requests data after its source has been detached.
+If the source destroys its own awaiting coroutine while being called, its returned
+chunk is discarded and `CopyFail` ends the COPY without calling that source again.
+The source or sink activates only when that command reaches the wire, so an earlier
+plain SQL command cannot borrow it.
 
 > **`copy_in` is _not_ constant-memory.** Unlike `copy_out`, it does **not** back-pressure on the socket: when the
 `CopyInResponse` arrives it calls `source` in a tight loop and writes every returned chunk into the output pipe *
@@ -250,7 +263,7 @@ transaction is never joined and never ended by `query_stream`.
 > caller-owned only once its `BEGIN` has **completed** — `in_transaction()` mirrors the last `ReadyForQuery`. Started
 > before that, the stream reads the session as idle and opens (and later ends) a block of its own. `co_await` the
 > `begin()` first.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2223-2343,2237-2255,2257-2260,2315-2335,2031-2034 (in that order: query_stream; the seat/guard bookkeeping; the cursor name; the last-one-out COMMIT/ROLLBACK; in_transaction) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2292-2412,2306-2324,2326-2329,2384-2404,2092-2095 (in that order: query_stream; the seat/guard bookkeeping; the cursor name; the last-one-out COMMIT/ROLLBACK; in_transaction) -->
 
 ---
 

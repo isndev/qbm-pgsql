@@ -245,6 +245,58 @@ TEST_F(WireFormats, JsonExportPreservesJsonbCanonicalTextAndArrayLowerBound) {
     EXPECT_TRUE(ok);
 }
 
+TEST_F(WireFormats, JsonbExactTextAndTypedPrecisionInSimpleAndPreparedResults) {
+    const std::string sql = "SELECT '12345678901234567890.123456789'::jsonb AS decimal, "
+                            "'{\"n\":[-12345678901234567890.123456789]}'::jsonb AS nested, "
+                            "'18446744073709551616'::jsonb AS unsigned_boundary, "
+                            "'-9223372036854775809'::jsonb AS signed_boundary, "
+                            "'1e400'::jsonb AS overflow, "
+                            "'1.2300'::jsonb AS scale, "
+                            "('12345678901234567890.123456789'::jsonb)::text AS decimal_text, "
+                            "('{\"n\":[-12345678901234567890.123456789]}'::jsonb)::text AS nested_text, "
+                            "('18446744073709551616'::jsonb)::text AS unsigned_boundary_text, "
+                            "('-9223372036854775809'::jsonb)::text AS signed_boundary_text, "
+                            "('1e400'::jsonb)::text AS overflow_text, "
+                            "('1.2300'::jsonb)::text AS scale_text";
+
+    auto check_result = [&](results r, protocol_data_format format) {
+        ASSERT_EQ(r.size(), 1u);
+        for (const char *name : {"decimal", "nested", "unsigned_boundary", "signed_boundary", "overflow", "scale"}) {
+            auto field = r[0][name];
+            EXPECT_EQ(field.description().format_code, format);
+            EXPECT_EQ(field.jsonb_text(), r[0][std::string(name) + "_text"].as<std::string>());
+            EXPECT_EQ(field.jsonb_text_copy(), field.jsonb_text());
+            if (std::string_view(name) != "scale")
+                EXPECT_THROW((void) field.as<qb::jsonb>(), error::client_error) << name;
+            else
+                EXPECT_NO_THROW((void) field.as<qb::jsonb>());
+        }
+    };
+
+    bool simple_seen = false;
+    ASSERT_TRUE(db_->execute(
+                       sql,
+                       [&](transaction &, results r) {
+                           check_result(r, protocol_data_format::Text);
+                           simple_seen = true;
+                       },
+                       [](error::db_error e) { FAIL() << e.what(); })
+                    .await());
+    EXPECT_TRUE(simple_seen);
+
+    ASSERT_TRUE(db_->prepare("jsonb_precision_exact_text", sql, type_oid_sequence{}, discard_prepare, discard_error).await());
+    bool prepared_seen = false;
+    ASSERT_TRUE(db_->execute(
+                       "jsonb_precision_exact_text", params{},
+                       [&](transaction &, results r) {
+                           check_result(r, protocol_data_format::Binary);
+                           prepared_seen = true;
+                       },
+                       [](error::db_error e) { FAIL() << e.what(); })
+                    .await());
+    EXPECT_TRUE(prepared_seen);
+}
+
 TEST_F(WireFormats, PreparedJsonbFieldPreservesPairArrayShape) {
     ASSERT_TRUE(db_->prepare("jsonb_pair_shape",
                              "SELECT '[[1,2]]'::jsonb AS pairs, "

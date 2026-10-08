@@ -965,6 +965,9 @@ private:
         if (!_current_command)
             _current_command = root_transaction();
         _current_query = _current_command->next_query();
+        // A COPY source/sink is reserved when its coroutine queues SQL, but only
+        // the matching query may use it. An older plain COPY can be ahead of it.
+        _active_copy_operation = (_copy_operation && _copy_operation->query == _current_query) ? _copy_operation : nullptr;
 
         if (_current_query) {
             if (qb::likely(_current_query->is_valid())) {
@@ -1067,10 +1070,43 @@ private:
     bool                       _scram_server_verified = false;
     std::string                _gs2_header;      ///< SCRAM gs2-header chosen at SASL init (`n,,` / `y,,` / `p=tls-server-end-point,,`)
     std::vector<unsigned char> _channel_binding; ///< SCRAM-SHA-256-PLUS channel-binding data (tls-server-end-point); empty when unbound
-    std::function<void(std::string_view)>
-        _copy_out_sink; ///< Active `COPY … TO STDOUT` chunk sink (set for the duration of copy_out); empty otherwise
-    std::function<std::optional<std::string>()>
-         _copy_in_source;  ///< Active `COPY … FROM STDIN` chunk source (returns next chunk, nullopt = done); empty otherwise
+    struct CopyOperation {
+        std::shared_ptr<std::function<void(std::string_view)>>       sink;
+        std::shared_ptr<std::function<std::optional<std::string>()>> source;
+        ISqlQuery                                                   *query{};
+    };
+    // The query callbacks release the reservation. A cancelled coroutine detaches its
+    // user callback immediately, but its SQL may still be in flight and must not let a
+    // later COPY's callback answer the old server response.
+    std::shared_ptr<CopyOperation> _copy_operation;
+    std::shared_ptr<CopyOperation> _active_copy_operation;
+
+    void
+    finish_copy(std::shared_ptr<CopyOperation> const &owner) {
+        if (_active_copy_operation == owner)
+            _active_copy_operation.reset();
+        if (_copy_operation == owner)
+            _copy_operation.reset();
+    }
+
+    [[nodiscard]] pg_reply_awaiter<resultset>
+    execute_copy(std::string sql, std::shared_ptr<CopyOperation> owner) {
+        return pg_reply_awaiter<resultset>{[this, sql = std::move(sql),
+                                            owner = std::move(owner)](pg_coro_complete<resultset> complete) mutable {
+            auto success = [this, owner, complete](Transaction &, resultset rs) mutable {
+                finish_copy(owner);
+                complete(::qb::pg::Reply<resultset>::success(rs.deep_snapshot()));
+            };
+            auto failure = [this, owner, complete](error::db_error const &err) mutable {
+                finish_copy(owner);
+                complete(::qb::pg::Reply<resultset>::failure(err));
+            };
+            using Command = ResultQuery<decltype(success), decltype(failure)>;
+            auto command  = std::make_unique<Command>(this, std::move(sql), std::move(success), std::move(failure));
+            owner->query  = command->next_query();
+            this->push_transaction(std::move(command));
+        }};
+    }
     char _txn_status{'I'}; ///< Last ReadyForQuery transaction status: 'I' idle, 'T' in a block, 'E' failed block
 
 public:
@@ -1627,7 +1663,9 @@ public:
                 return;
             }
         }
-        if (!_copy_in_source) {
+        auto copy   = _active_copy_operation;
+        auto source = copy ? copy->source : nullptr;
+        if (!source || !*source) {
             QB_LOG_WARN("[pgsql] CopyInResponse with no copy_in() source registered; failing the COPY");
             on_error_query(error::client_error{"COPY FROM STDIN requires copy_in() with a data source"});
             send_copy_fail();
@@ -1642,7 +1680,20 @@ public:
             // under the int32 wire length field: a single >2 GiB chunk would otherwise
             // wrap message::length() and desynchronize the stream.
             static constexpr std::size_t kMaxCopyDataBody = 1u << 30; // 1 GiB
-            while (std::optional<std::string> chunk = _copy_in_source()) {
+            while (true) {
+                std::optional<std::string> chunk = (*source)();
+                if (!is_connected_)
+                    return; // the source may have disconnected the session
+                // The source may destroy its own awaiting coroutine. Its scope guard
+                // detaches the callback, but this local shared_ptr keeps the current
+                // invocation alive. Do not call it again or send its returned bytes.
+                if (_active_copy_operation != copy || copy->source != source) {
+                    QB_LOG_WARN("[pgsql] copy_in source detached during callback; aborting the COPY with CopyFail");
+                    send_copy_fail();
+                    return;
+                }
+                if (!chunk)
+                    break;
                 std::string_view rest{*chunk};
                 while (!rest.empty()) { // empty chunk -> skipped; large chunk -> split
                     const std::size_t take = std::min(rest.size(), kMaxCopyDataBody);
@@ -1654,9 +1705,12 @@ public:
             }
         } catch (...) {
             QB_LOG_WARN("[pgsql] copy_in source threw; aborting the COPY with CopyFail");
-            send_copy_fail();
+            if (is_connected_)
+                send_copy_fail();
             return;
         }
+        if (!is_connected_)
+            return;
         message done(copy_done_tag);
         *this << done;
     }
@@ -1704,10 +1758,12 @@ public:
     on_copy_data(message &msg) {
         // During a COPY ... TO STDOUT, hand the opaque payload (one row, or a chunk in
         // binary format) to the active sink without copying. No sink -> drop the chunk.
-        if (_copy_out_sink) {
+        auto copy = _active_copy_operation;
+        auto sink = copy ? copy->sink : nullptr;
+        if (sink && *sink) {
             const std::string_view chunk = msg.remaining();
             if (!chunk.empty())
-                _copy_out_sink(chunk);
+                (*sink)(chunk);
         }
         msg.discard_remaining();
     }
@@ -2131,6 +2187,9 @@ public:
      * payload bytes are the COPY wire bytes in the requested format (text/CSV: one row
      * per chunk ending in `\n`; binary: opaque framed chunks). The `string_view` is valid
      * only for the duration of the call; copy what you need.
+     * Only one COPY operation may be active on a connection. An overlapping `copy_in`
+     * or `copy_out` returns a failed reply without sending its SQL or invoking its
+     * callback; retry it after the first COPY has completed.
      *
      * @param sql  A `COPY … TO STDOUT` statement.
      * @param sink Invoked once per `CopyData` chunk.
@@ -2145,12 +2204,15 @@ public:
      */
     [[nodiscard]] qb::io::async::task<qb::pg::Reply<resultset>>
     copy_out(std::string sql, std::function<void(std::string_view)> sink) {
-        _copy_out_sink = std::move(sink);
-        // RAII clear: also runs if the awaiting coroutine frame is destroyed mid-await
-        // (cancellation / task drop), so the connection never keeps a stale sink whose
-        // captures point at the torn-down frame.
-        auto guard = qb::scope_guard([this] { _copy_out_sink = nullptr; });
-        co_return co_await this->execute(std::string_view{sql});
+        if (_copy_operation)
+            co_return ::qb::pg::Reply<resultset>::failure(error::client_error{"another COPY is active on this connection"});
+        auto owner      = std::make_shared<CopyOperation>();
+        owner->sink     = std::make_shared<std::function<void(std::string_view)>>(std::move(sink));
+        _copy_operation = owner;
+        // A destroyed awaiting frame may own the sink's captures. Detach it now,
+        // while the command keeps the reservation until its query callback runs.
+        auto guard = qb::scope_guard([owner] { owner->sink.reset(); });
+        co_return co_await execute_copy(std::move(sql), owner);
     }
 
     /**
@@ -2163,6 +2225,9 @@ public:
      * complete rows ending in `\n`; binary: the framed binary stream). A chunk does not
      * have to align to row boundaries for text/CSV — the server reassembles the stream.
      * If @p source throws, the COPY is aborted with `CopyFail` and the reply is an error.
+     * An overlapping COPY returns a failed reply without reading @p source. If
+     * the awaiting coroutine is destroyed, its callback is detached while the
+     * command keeps the connection's COPY reservation until it finishes.
      *
      * @return `Reply<resultset>` — `ok()` on success (`COPY n` rows loaded), else the error.
      *
@@ -2173,9 +2238,13 @@ public:
      */
     [[nodiscard]] qb::io::async::task<qb::pg::Reply<resultset>>
     copy_in(std::string sql, std::function<std::optional<std::string>()> source) {
-        _copy_in_source = std::move(source);
-        auto guard      = qb::scope_guard([this] { _copy_in_source = nullptr; }); // see copy_out
-        co_return co_await this->execute(std::string_view{sql});
+        if (_copy_operation)
+            co_return ::qb::pg::Reply<resultset>::failure(error::client_error{"another COPY is active on this connection"});
+        auto owner      = std::make_shared<CopyOperation>();
+        owner->source   = std::make_shared<std::function<std::optional<std::string>()>>(std::move(source));
+        _copy_operation = owner;
+        auto guard      = qb::scope_guard([owner] { owner->source.reset(); });
+        co_return co_await execute_copy(std::move(sql), owner);
     }
 
     /** @brief `COPY … FROM STDIN` convenience: send the whole payload in one shot. */
@@ -2632,11 +2701,11 @@ public:
     }
 
     /**
-     * @brief Reset async I/O state after disconnect() so this client can connect() again
+     * @brief Explicitly reset session state before reconnecting this client
      *
-     * `disconnect()` marks the underlying `qb::io::async::io` layer disposed; a new TCP/TLS
-     * handshake must not start until `reset_io_state()` runs. Call `prepare_reconnect()`,
-     * then `co_await connect()` or `run_sync(connect(...))` as usual.
+     * A later ordinary `connect()` opens a fresh TCP/TLS transport and resets stale I/O state before
+     * the new handshake. Call this optional helper to close the old fd and clear cached
+     * per-backend state explicitly before `co_await connect()` or `run_sync(connect(...))`.
      *
      * @pre No pending queries on this connection (finish or drain the transaction queue first).
      */

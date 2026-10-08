@@ -100,7 +100,7 @@ accepts the usual `--gtest_filter`, `--gtest_list_tests`, and `--gtest_repeat` f
 
 `connection-ssl` is the one conditional suite: it is registered inside an `if (QB_HAS_SSL)` guard, only when
 `QB_HAS_SSL` is set, because it links the `qb::pg::tcp::ssl::database` alias that exists only with
-OpenSSL (<!-- src: qbm/pgsql/tests/CMakeLists.txt:108-110 -->).
+OpenSSL (<!-- src: qbm/pgsql/tests/CMakeLists.txt:109-111 -->).
 
 ## Configuring the server
 

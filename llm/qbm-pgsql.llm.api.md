@@ -19,7 +19,7 @@ This document provides a detailed API reference for the `qb::pg` module, part of
   - [`qb::pg::params` (alias for `qb::pg::detail::QueryParams`)](#qbpgparams-alias-for-qbpgdetailqueryparams)
   - [Prepared Statements (`qb::pg::detail::PreparedQuery`, `qb::pg::detail::PreparedQueryStorage`)](#prepared-statements-qbpgdetailpreparedquery-qbpgdetailpreparedquerystorage)
 - [Result Set Processing](#result-set-processing)
-  - [`qb::pg::results` (alias for `qb::pg::detail::resultset`)](#qbpgresults-alias-for-qbpgdetailresultset)
+  - [`qb::pg::results` (alias for `qb::pg::resultset`)](#qbpgresults-alias-for-qbpgresultset)
   - [`qb::pg::results::row`](#qbpgresultsrow)
   - [`qb::pg::results::field`](#qbpgresultsfield)
   - [`qb::pg::field_description`](#qbpgfield_description)
@@ -45,7 +45,7 @@ This document provides a detailed API reference for the `qb::pg` module, part of
 The `qb::pg` module provides a high-performance, asynchronous C++20/23 client for PostgreSQL databases, designed for integration with the QB Actor Framework. It utilizes `qb-io` for its asynchronous I/O operations. It is a compiled library (**STATIC** by default, **SHARED** when `QB_BUILD_SHARED_LIBS`/`BUILD_SHARED_LIBS` is set; alias `qbm::pgsql`); the umbrella header is `<qbm/pgsql/pgsql.h>`.
 
 Key features include:
-- Two interchangeable completion styles with the **same method names**: a coroutine API (`co_await`-only, yielding `Reply<T>`) and a fluent, callback-based transaction API. The single-op coroutine entry points (`execute`, `query(sql)`, `prepare`, `begin`/`commit`/`rollback`, savepoints, `notify`/`listen`) return `pg_reply_awaiter<T>`; the helpers that chain multiple awaits internally (`query(sql, args...)`, `copy_out`, `copy_in`, `query_stream`) return `qb::io::async::task<Reply<T>>`. Both are `co_await`-only and yield `Reply<T>`.
+- Two interchangeable completion styles with the **same method names**: a coroutine API (`co_await`-only, yielding `Reply<T>`) and a fluent, callback-based transaction API. The single-op coroutine entry points (`execute`, `query(sql)`, `prepare`, `begin`/`commit`/`rollback`, savepoints, `notify`/`listen`) return `pg_reply_awaiter<T>`. Inline `query(sql, args...)` returns `qb::io::async::task<Reply<T>>` and admits Parse/Describe plus Bind/Execute as one logical queued command; `copy_out`, `copy_in`, and `query_stream` also return `qb::io::async::task<Reply<T>>`. All are `co_await`-only and yield `Reply<T>`.
 - TCP and SSL/TLS encrypted connections.
 - Comprehensive transaction management including savepoints.
 - Support for simple and prepared statements with type-safe parameter binding.
@@ -85,7 +85,7 @@ public:
     [[nodiscard]] connect_awaiter connect(connection_options opts); // carries TLS/keepalive fields the DSN can't
     [[nodiscard]] connect_awaiter connect(std::string const &conn_opts_str, typename QB_IO_::transport_io_type &&raw_io);
     void disconnect();
-    void prepare_reconnect() noexcept; // must precede a re-connect() on the same object
+    void prepare_reconnect() noexcept; // optional explicit fd and per-backend state reset
 
     // Streaming / bulk-load helpers (coroutine; return qb::io::async::task<Reply<T>>):
     [[nodiscard]] qb::io::async::task<Reply<resultset>>
@@ -99,8 +99,8 @@ public:
         query_stream(std::string sql, std::size_t batch_size, RowFn on_row);
 
     // Connection introspection / control:
-    bool cancel();                                      // out-of-band PostgreSQL CancelRequest (SYNCHRONOUS, ≤2s, plaintext); NOT [[nodiscard]] (pgsql.h:2365-2366)
-    [[nodiscard]] qb::io::async::task<bool> cancel_async(); // the same request, non-blocking, TLS on a secure database (pgsql.h:2410-2411)
+    bool cancel();                                      // out-of-band PostgreSQL CancelRequest (SYNCHRONOUS, ≤2s, plaintext); NOT [[nodiscard]] (pgsql.h:2434-2435)
+    [[nodiscard]] qb::io::async::task<bool> cancel_async(); // the same request, non-blocking, TLS on a secure database (pgsql.h:2479-2480)
     [[nodiscard]] bool in_transaction() const noexcept; // backend session in a transaction block ('T'/'E')
     [[nodiscard]] bool used_channel_binding() const noexcept; // SCRAM-SHA-256-PLUS tls-server-end-point binding negotiated
     [[nodiscard]] std::optional<std::string_view> parameter_status(std::string_view key) const; // PQparameterStatus
@@ -140,11 +140,12 @@ struct tcp {
 - `connect_awaiter connect(std::string const &conn_opts_str)`: Re-parses the DSN, then connects. DSN form `tcp://[user[:pass]@]host[:port][database]` — the database name is in **square brackets**.
 - `connect_awaiter connect(connection_options opts)`: Connects with a fully-specified options struct. Use this overload (not the DSN string) to set fields the DSN cannot carry — `ssl_verify` (TLS verification level), `ssl_root_cert`/`ssl_cert`/`ssl_key` (optional private-CA + client-cert mTLS PEM paths for `ssl://`), `connect_timeout`, and keepalive. Example: `auto o = connection_options::parse(dsn); o.ssl_verify = ssl_verify_mode::full; o.ssl_root_cert = "ca.pem"; co_await db.connect(o);`.
 - `connect_awaiter connect(qb::duration timeout)`: Connects, overriding the handshake deadline.
-- `void disconnect()`: Marks the connection down and refuses new queries immediately; callback commands receive one connection error and coroutine calls return failed replies. Outside a completion callback, it fails in-flight/queued work and completes io teardown before returning, without a loop pass (safe from a coroutine body). When called inside a query or fluent `.then` / `.error` callback, queued failures run after that callback returns so its transaction owner stays alive; io teardown follows message dispatch. Call `prepare_reconnect()` before re-connecting the same object.
+- `void disconnect()`: Marks the connection down and refuses new queries immediately; callback commands receive one connection error and coroutine calls return failed replies. Outside a completion callback, it fails in-flight/queued work and completes io teardown before returning, without a loop pass (safe from a coroutine body). When called inside a query or fluent `.then` / `.error` callback, queued failures run after that callback returns so its transaction owner stays alive; io teardown follows message dispatch. A later ordinary `connect()` on the same object opens a fresh socket and handshake; `prepare_reconnect()` is optional for an explicit fd and per-backend state reset. The overload taking an existing transport uses that supplied transport.
 - **Streaming / bulk-load (coroutine, `co_await`-only; each returns `qb::io::async::task<Reply<T>>`):**
     - `copy_out(std::string sql, std::function<void(std::string_view)> sink) -> task<Reply<resultset>>`: Runs a `COPY … TO STDOUT` and delivers each `CopyData` chunk to `sink` as it arrives. Streams in **constant memory** (rows are never buffered in a result set). The `string_view` is valid only during the call. Resolves to `ok()` on success.
     - `copy_in(std::string sql, std::function<std::optional<std::string>()> source) -> task<Reply<resultset>>`: Runs a `COPY … FROM STDIN`, calling `source` repeatedly and sending each returned chunk as `CopyData` until it returns `std::nullopt` (then `CopyDone`). A throwing `source` aborts the COPY with `CopyFail`. Resolves to `ok()` (the `COPY n` count) on success; the connection stays usable on error. **NOT constant-memory** — it drains the whole source into the output pipe synchronously (capped by the write-buffer ceiling); only `copy_out` and `query_stream` stream in constant memory.
     - `copy_in(std::string sql, std::string data) -> task<Reply<resultset>>`: Convenience overload that sends the entire `data` payload in one shot.
+    - The connection admits one COPY at a time, in either direction. A second COPY returns a failed `Reply` without sending SQL or invoking its source/sink. Destroying the awaiting coroutine detaches its callback; its command keeps the reservation until completion, so a later COPY cannot answer the old server response. A source that destroys its own waiter causes its returned chunk to be discarded and `CopyFail` to be sent without another source call.
     - `query_stream(std::string sql, std::size_t batch_size, RowFn on_row) -> task<Reply<void>>`: Streams a large result via a server-side `CURSOR` (`DECLARE`/`FETCH`, `batch_size` rows per round trip), invoking `on_row` per row in **constant memory**. Auto-manages a transaction when idle (`BEGIN`/`COMMIT`, `ROLLBACK` on failure); when `in_transaction()` it declares the cursor in the caller's transaction and touches only the cursor. Cursor names are unique per connection (`qb_stream_cursor_<n>`), so streams **may overlap** on one `database` — and because a session has a single transaction, overlapping streams **share** the self-opened block: the first opens it, later ones only join, the last one out `COMMIT`s (or `ROLLBACK`s if any participant failed), so a server error in one stream aborts the block for the others. A caller-opened transaction is recognised as caller-owned only once its `BEGIN` has **completed** (`in_transaction()` mirrors the last `ReadyForQuery`), so do not start a stream while your own `begin()` is still in flight. `on_row` exceptions are rethrown after the cursor is closed and any self-opened transaction rolled back. `batch_size` is clamped to ≥ 1.
 - **Connection introspection / control:**
     - `bool cancel()`: Sends an out-of-band PostgreSQL `CancelRequest` on a short-lived **separate** connection (libpq `PQcancel` style). It is **synchronous / blocking** (capped at ≤ 2s) and plaintext even when the main link is SSL. Surfaces on the in-flight query as `sqlstate::query_canceled` (57014). Note: it briefly blocks the calling thread — prefer `cancel_async()`.
@@ -382,18 +383,13 @@ namespace qb::pg {
 
 ## Result Set Processing
 
-### `qb::pg::results` (alias for `qb::pg::detail::resultset`)
+### `qb::pg::results` (alias for `qb::pg::resultset`)
 
-Represents the set of rows returned by a query. Provides a container-like interface to access rows. There is no public `qb::pg::resultset`: the class lives in `namespace qb::pg::detail` and the only public spelling is the alias `using results = detail::resultset;` (`qbm/pgsql/src/qbm/pgsql/pgsql.h:2884`). Row and field below are reachable as `qb::pg::results::row` / `qb::pg::results::field`.
+Represents the set of rows returned by a query. The class is declared publicly as `qb::pg::resultset` in `resultset.h`; `qb::pg::results` is its public alias (`qbm/pgsql/src/qbm/pgsql/pgsql.h:2953`). Both spellings are valid, with `results` preferred for application code. Row and field are reachable as `qb::pg::results::row` / `qb::pg::results::field`.
 
 **Definition (`qbm/pgsql/src/qbm/pgsql/resultset.h`):**
 ```cpp
 namespace qb::pg {
-// Public alias (pgsql.h:2884); the class itself is qb::pg::detail::resultset.
-using results = detail::resultset;
-}
-
-namespace qb::pg::detail {
 class resultset {
 public:
     // STL-like container typedefs (const_iterator, value_type=row, etc.)
@@ -427,17 +423,17 @@ public:
     // field_buffer at(size_type r, row::size_type c) const;
     // bool is_null(size_type r, row::size_type c) const;
 };
-} // namespace qb::pg::detail
+} // namespace qb::pg
 ```
 
 ### `qb::pg::results::row`
 
-Represents a single row within a `results` set (`qb::pg::detail::resultset::row`). Provides access to individual fields.
+Represents a single row within a `results` set (`qb::pg::resultset::row`). Provides access to individual fields.
 
 **Definition (`qbm/pgsql/src/qbm/pgsql/resultset.h`):**
 ```cpp
-namespace qb::pg::detail {
-class resultset { // public alias: qb::pg::results
+namespace qb::pg {
+class resultset { // also exposed as qb::pg::results
 public:
     class row {
     public:
@@ -466,17 +462,17 @@ public:
         size_type index_of_name(std::string const &name) const;
     };
 };
-} // namespace qb::pg::detail
+} // namespace qb::pg
 ```
 
 ### `qb::pg::results::field`
 
-Represents a single field (column value) within a `results::row` (`qb::pg::detail::resultset::field`).
+Represents a single field (column value) within a `results::row` (`qb::pg::resultset::field`).
 
 **Definition (`qbm/pgsql/src/qbm/pgsql/resultset.h`):**
 ```cpp
-namespace qb::pg::detail {
-class resultset { // public alias: qb::pg::results
+namespace qb::pg {
+class resultset { // also exposed as qb::pg::results
 public:
     class field {
     public:
@@ -487,6 +483,11 @@ public:
         field_description const& description() const;
         bool is_null() const;
         bool empty() const; // (Note: empty() might be misleading, is_null() is primary for null checks)
+        std::span<const std::byte> view() const; // raw wire bytes
+        std::string_view text() const; // raw bytes as characters, including binary version byte
+
+        std::string_view jsonb_text() const; // PostgreSQL canonical JSONB text, borrows backing row storage
+        std::string jsonb_text_copy() const; // owning copy; both validate NULL/OID/format/version
 
         // Value extraction:
         template <typename T>
@@ -494,11 +495,24 @@ public:
         template <typename T>
         bool to(T &val) const; // For non-optional T, THROWS error::value_is_null on NULL. For std::optional<T>/nullable T, sets the target to null and returns true. The bool return reports parse success, not NULL-ness — use as<std::optional<T>>() or is_null() to detect NULL.
 
-        field_buffer input_buffer() const; // Raw data buffer
     };
 };
-} // namespace qb::pg::detail
+} // namespace qb::pg
 ```
+`jsonb_text()` returns PostgreSQL's canonical JSONB text for a non-NULL OID 3802
+field. It validates the result format and version byte, and the view lasts only
+while its backing row storage remains alive. A callback's `results` is borrowed:
+copying it or keeping its `field` does not keep rows alive after the callback.
+Call `jsonb_text_copy()` inside the callback, or take a `deep_snapshot()` and
+read the view from that owning snapshot. Coroutine replies already own their
+result snapshot. The field API expects version-byte-plus-text result bytes;
+the direct converter's legacy four-byte prefix does not apply to fields.
+`as<qb::jsonb>()` throws `error::client_error` when a PostgreSQL JSONB number
+would change decimal value or overflow the nlohmann DOM (`1e400` is a valid
+PostgreSQL JSONB number). Malformed JSON keeps a distinct `std::runtime_error`
+path. Equal values with different spellings such as `1.2300` and `1.23` remain
+readable.
+
 There are **no** global `qb::pg::get<T>(field)` / `qb::pg::get(field, T&)` helpers. Two such
 templates are written in `qbm/pgsql/src/qbm/pgsql/field_handler.h`, but that file is dead — no
 translation unit includes it, it does not compile on its own, and as of 3.0 it is excluded from
