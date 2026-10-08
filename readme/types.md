@@ -165,7 +165,7 @@ PostgreSQL number would change **decimal value** when parsed into that DOM; this
 beyond its integer ranges and decimals rounded by `double`, even inside arrays or objects. Equal
 values with different spellings, such as `1.2300` and `1.23`, remain readable. A valid number beyond
 the DOM floating range (for example `1e400`) also throws `client_error`; malformed JSON follows the
-separate `std::runtime_error` parse path. <!-- src: src/qbm/pgsql/type_converter.cpp:393-396,427-433 -->
+separate `std::runtime_error` parse path. <!-- src: src/qbm/pgsql/type_converter.cpp:393-443 -->
 
 For an exact value, read the server's canonical JSONB text directly from the field:
 
@@ -185,7 +185,7 @@ the direct converter's legacy four-byte-prefixed compatibility does not extend t
 The text is exact relative to PostgreSQL's canonical `jsonb::text` output, which may already
 differ from the input in spaces, key order or
 duplicate keys. `jsonb_text_copy()` makes an owning copy. SQL NULL throws `value_is_null`; invalid
-OID, format or version throws `client_error`. <!-- src: src/qbm/pgsql/resultset.h:708-710; src/qbm/pgsql/resultset.cpp:185-212,263-275 -->
+OID, format or version throws `client_error`. <!-- src: src/qbm/pgsql/resultset.cpp:185-212,263-275 -->
 
 ### UUID
 
