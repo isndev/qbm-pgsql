@@ -87,12 +87,14 @@ qpg_test(system scram-mitm-refuse system/auth/scram-mitm-refuse.cpp EXTRA_LABELS
 # The out-of-band CancelRequest on the wire, cancel_async() next to cancel(), against a fake backend that hands out
 # the BackendKeyData and reads the second connection (Huly QB-113). No daemon.
 qpg_test(system cancel-request-wire system/connection/cancel-request-wire.cpp EXTRA_LABELS connection)
+qpg_test(system inline-query-order system/query/inline-query-order.cpp EXTRA_LABELS protocol coroutine)
 
 # -----------------------------------------------------------------------------
 # INTEGRATION — live postgres:5432 (REQUIRES live, RESOURCE_LOCK)
 # -----------------------------------------------------------------------------
 qpg_itest(connection-lifecycle integration/connection/connection-lifecycle.cpp)
 qpg_itest(queries integration/query/queries-execution.cpp REQUIRES coroutine)
+qpg_itest(inline-query integration/query/inline-query.cpp REQUIRES coroutine)
 qpg_itest(prepared-statements integration/prepared/prepared-statements.cpp REQUIRES coroutine)
 qpg_itest(transaction-basic integration/transaction/transaction-basic.cpp REQUIRES coroutine)
 qpg_itest(transaction-advanced integration/transaction/transaction-advanced.cpp)

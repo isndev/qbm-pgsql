@@ -405,27 +405,27 @@ public:
      * Runs through the UNNAMED prepared statement (`""`), so it does not pollute the
      * prepared-statement cache and keeps full per-column binary result decoding.
      * Parameter OIDs are deduced from the C++ argument types (via `QueryParams`).
-     * Cost is two server round-trips (Parse+Describe, then Bind+Execute) — identical
-     * to a manual `prepare`+`execute`, but a single call. For a hot, repeated query,
-     * prefer a named `prepare` (one round-trip after the first).
+     * Parse+Describe and Bind+Execute are one queued command, so another query cannot
+     * replace the unnamed statement between the two phases. This still costs two
+     * server round-trips. For a hot, repeated query, prefer a named `prepare`.
      *
      * Constrained to at least one bound argument so it never shadows `query(sql)`.
      */
     template <typename First, typename... Rest>
     [[nodiscard]] qb::io::async::task<qb::pg::Reply<resultset>>
     query(std::string sql, First &&first, Rest &&...rest) {
-        QueryParams       qp(std::forward<First>(first), std::forward<Rest>(rest)...);
-        type_oid_sequence oids;
-        oids.reserve(qp.param_types().size());
-        for (integer o : qp.param_types())
-            oids.push_back(static_cast<oid>(o));
-
-        auto prepared = co_await prepare(std::string_view{}, std::string_view{sql}, std::move(oids));
-        if (!prepared)
-            co_return qb::pg::Reply<resultset>::failure(prepared.error());
-        co_return co_await execute(std::string_view{}, std::move(qp));
+        QueryParams qp(std::forward<First>(first), std::forward<Rest>(rest)...);
+        auto        reply = query_inline(std::move(sql), std::move(qp));
+        co_return co_await reply;
     }
 
+private:
+    /**
+     * @brief Queues both wire phases under a single command.
+     */
+    [[nodiscard]] pg_reply_awaiter<resultset> query_inline(std::string sql, QueryParams params);
+
+public:
     /**
      * @brief Sends NOTIFY (publisher side; use a normal `database` connection).
      *

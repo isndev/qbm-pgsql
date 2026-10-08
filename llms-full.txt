@@ -89,9 +89,10 @@ qb-io, not qb-core.
 - **Two interchangeable completion models, same names:**
   - **Coroutine** — single-op overloads **without** callbacks return a
     `[[nodiscard]] pg_reply_awaiter<T>` (`execute`, `query(sql)`, `prepare`,
-    `begin`/`commit`/`rollback`, savepoints, `notify`/`listen`). The helpers that
-    chain several awaits internally — `query(sql, args...)`, `copy_out`,
-    `copy_in`, `query_stream` — instead return `qb::io::async::task<Reply<T>>`.
+    `begin`/`commit`/`rollback`, savepoints, `notify`/`listen`). The inline
+    `query(sql, args...)` returns `qb::io::async::task<Reply<T>>` while admitting
+    Parse/Describe and Bind/Execute as one logical queued command. `copy_out`,
+    `copy_in`, and `query_stream` also return `qb::io::async::task<Reply<T>>`.
     Either way `co_await` yields `Reply<T>` (`T` = `resultset`, `PreparedQuery`,
     or `void`), and nothing happens until you `co_await` it (or `run_sync` it).
   - **Callback** — overloads **with** success/error lambdas return
@@ -692,7 +693,7 @@ This document provides a detailed API reference for the `qb::pg` module, part of
 The `qb::pg` module provides a high-performance, asynchronous C++20/23 client for PostgreSQL databases, designed for integration with the QB Actor Framework. It utilizes `qb-io` for its asynchronous I/O operations. It is a compiled library (**STATIC** by default, **SHARED** when `QB_BUILD_SHARED_LIBS`/`BUILD_SHARED_LIBS` is set; alias `qbm::pgsql`); the umbrella header is `<qbm/pgsql/pgsql.h>`.
 
 Key features include:
-- Two interchangeable completion styles with the **same method names**: a coroutine API (`co_await`-only, yielding `Reply<T>`) and a fluent, callback-based transaction API. The single-op coroutine entry points (`execute`, `query(sql)`, `prepare`, `begin`/`commit`/`rollback`, savepoints, `notify`/`listen`) return `pg_reply_awaiter<T>`; the helpers that chain multiple awaits internally (`query(sql, args...)`, `copy_out`, `copy_in`, `query_stream`) return `qb::io::async::task<Reply<T>>`. Both are `co_await`-only and yield `Reply<T>`.
+- Two interchangeable completion styles with the **same method names**: a coroutine API (`co_await`-only, yielding `Reply<T>`) and a fluent, callback-based transaction API. The single-op coroutine entry points (`execute`, `query(sql)`, `prepare`, `begin`/`commit`/`rollback`, savepoints, `notify`/`listen`) return `pg_reply_awaiter<T>`. Inline `query(sql, args...)` returns `qb::io::async::task<Reply<T>>` and admits Parse/Describe plus Bind/Execute as one logical queued command; `copy_out`, `copy_in`, and `query_stream` also return `qb::io::async::task<Reply<T>>`. All are `co_await`-only and yield `Reply<T>`.
 - TCP and SSL/TLS encrypted connections.
 - Comprehensive transaction management including savepoints.
 - Support for simple and prepared statements with type-safe parameter binding.
