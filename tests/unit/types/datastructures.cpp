@@ -170,8 +170,9 @@ TEST(ResultsetPopulated, OptionalTextPreservesPresentEmptyValue) {
 
     const auto present = rs[0][0].as<std::optional<std::string>>();
     EXPECT_TRUE(present.has_value());
-    if (present)
+    if (present) {
         EXPECT_TRUE(present->empty());
+    }
     EXPECT_FALSE(rs[0][1].as<std::optional<std::string>>().has_value());
 
     std::optional<std::string> through_to;

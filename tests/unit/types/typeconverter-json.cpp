@@ -156,7 +156,7 @@ TEST(TypeConverterJsonbTest, VarlenaBranchAndRoundTrip) {
 }
 
 TEST(TypeConverterJsonbTest, VersionedValuePreservesArrayShape) {
-    for (const std::string &text : {R"([[1,2]])", R"([["k","v"]])", R"([[[1,2]],[[3,4]]])", R"({"a":[[1,2]]})"}) {
+    for (std::string text : {R"([[1,2]])", R"([["k","v"]])", R"([[[1,2]],[[3,4]]])", R"({"a":[[1,2]]})"}) {
         std::vector<byte> wire{static_cast<byte>(1)};
         wire.insert(wire.end(), text.begin(), text.end());
         const auto parsed = TypeConverter<qb::jsonb>::from_binary(wire);
