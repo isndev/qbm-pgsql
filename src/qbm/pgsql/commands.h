@@ -1370,6 +1370,99 @@ Transaction::execute(std::string_view query_name, QueryParams &&params) {
     }};
 }
 
+/** One queued command owns both phases of an inline unnamed query. */
+template <typename CB_SUCCESS, typename CB_ERROR>
+class InlineQuery final : public Transaction {
+    PreparedQuery _query;
+    QueryParams   _params;
+    CB_SUCCESS    _on_success;
+    CB_ERROR      _on_error;
+    result_impl   _results;
+
+public:
+    InlineQuery(Transaction *parent, std::string sql, QueryParams params, CB_SUCCESS &&on_success, CB_ERROR &&on_error)
+        : Transaction(parent)
+        , _query{"", std::move(sql), {}, {}}
+        , _params(std::move(params))
+        , _on_success(std::forward<CB_SUCCESS>(on_success))
+        , _on_error(std::forward<CB_ERROR>(on_error)) {
+        _query.param_types.reserve(_params.param_types().size());
+        for (integer type : _params.param_types())
+            _query.param_types.push_back(static_cast<oid>(type));
+
+        push_query(std::unique_ptr<ISqlQuery>(new ParseQuery(
+            _query,
+            [this]() {
+                try {
+                    if (!_result)
+                        throw error::client_error("invalid row description for inline query");
+                    _query_storage.push(std::move(_query));
+                    // Still inside this command at ReadyForQuery: the driver sends Bind
+                    // before it can admit the next command's Parse.
+                    push_query(std::unique_ptr<ISqlQuery>(new ExecuteQuery(
+                        _query_storage, "", std::move(_params),
+                        [this]() {
+                            try {
+                                _results.row_description() = _query_storage.get("").row_description;
+                                sync_field_format_codes_with_extended_query_bind(_results.row_description());
+                                _on_success(*this, resultset(&_results));
+                                _parent->results() = std::move(_results);
+                            } catch (std::exception const &e) {
+                                _result = false;
+                                _on_error((error::db_error) error::client_error{e.what()});
+                                if (_parent)
+                                    _parent->on_sub_command_status(false);
+                            }
+                        },
+                        [this](auto const &err) {
+                            _result = false;
+                            _on_error(err);
+                            if (_parent)
+                                _parent->on_sub_command_status(false);
+                        })));
+                } catch (std::exception const &e) {
+                    _result = false;
+                    _on_error((error::db_error) error::client_error{e.what()});
+                    if (_parent)
+                        _parent->on_sub_command_status(false);
+                }
+            },
+            [this](auto const &err) {
+                _result = false;
+                _on_error(err);
+                if (_parent)
+                    _parent->on_sub_command_status(false);
+            })));
+    }
+
+    void
+    on_new_row_description(row_description_type &&desc) final {
+        _query.row_description = std::move(desc);
+    }
+
+    void
+    on_new_data_row(row_data &&data) final {
+        _results.rows().push_back(std::move(data));
+    }
+
+    void
+    on_command_complete(const std::string &tag) final {
+        _results.set_command_tag(tag);
+    }
+};
+
+inline pg_reply_awaiter<resultset>
+Transaction::query_inline(std::string sql, QueryParams params) {
+    if (!is_connection_usable())
+        return pg_fail<resultset>(pg_not_connected_error());
+    return pg_reply_awaiter<resultset>{[this, sql = std::move(sql), params = std::move(params)](pg_coro_complete<resultset> complete) mutable {
+        push_transaction(std::unique_ptr<Transaction>(new InlineQuery(
+            this, std::move(sql), std::move(params),
+            [complete](Transaction &, resultset rs) mutable { complete(::qb::pg::Reply<resultset>::success(rs.deep_snapshot())); },
+            [complete](error::db_error const &e) mutable { complete(::qb::pg::Reply<resultset>::failure(e)); })));
+    }};
+}
+
 inline pg_reply_awaiter<resultset>
 Transaction::begin(transaction_mode mode) {
     std::string sql = "BEGIN ";

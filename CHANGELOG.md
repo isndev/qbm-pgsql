@@ -29,6 +29,11 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
   `field.jsonb_text()` exposes the server's canonical text without parsing or
   copying, with OID/format/version checks and backing-row lifetime;
   `jsonb_text_copy()` keeps an owning copy. The `qb::jsonb` layout is unchanged.
+- **Overlapping inline parameterized queries keep their own SQL (Huly QB-106).**
+  `query(sql, args...)` now keeps Parse/Describe and Bind/Execute in one queued command.
+  Two coroutines on one connection can no longer replace the unnamed statement between
+  those phases and return another query's plausible result. The two server round-trips
+  and per-column result formats remain as before.
 - **Present empty text and binary numeric values stay correct through `field::as<std::optional<T>>()` (Huly QB-646).**
   SQL NULL metadata now decides whether the optional is empty; a present value is decoded through `T` with
   its column format and OID. `results::json()` keeps an empty string as `""` rather than JSON null, and

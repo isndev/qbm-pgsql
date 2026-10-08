@@ -170,7 +170,8 @@ Parameter OIDs are deduced from the C++ argument types. Internally it runs throu
 binary for the OIDs on `common.h`'s whitelist, text for the rest — instead of the all-text columns a simple query
 returns.
 Cost is two server round-trips (Parse+Describe, then Bind+Execute) — the same as a manual `prepare`+`execute`, but one
-call; it returns **`qb::io::async::task<Reply<resultset>>`**. The overload requires at least one bound argument, so
+call. Both phases stay in one queued command: another coroutine on the connection cannot replace the unnamed statement
+between Parse and Bind. It returns **`qb::io::async::task<Reply<resultset>>`**. The overload requires at least one bound argument, so
 `query(sql)` with no args still resolves to the simple-query awaiter above. For a hot, repeated query prefer a **named**
 `prepare` (one round-trip after the first).
 

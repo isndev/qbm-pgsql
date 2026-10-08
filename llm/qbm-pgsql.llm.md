@@ -74,9 +74,10 @@ qb-io, not qb-core.
 - **Two interchangeable completion models, same names:**
   - **Coroutine** — single-op overloads **without** callbacks return a
     `[[nodiscard]] pg_reply_awaiter<T>` (`execute`, `query(sql)`, `prepare`,
-    `begin`/`commit`/`rollback`, savepoints, `notify`/`listen`). The helpers that
-    chain several awaits internally — `query(sql, args...)`, `copy_out`,
-    `copy_in`, `query_stream` — instead return `qb::io::async::task<Reply<T>>`.
+    `begin`/`commit`/`rollback`, savepoints, `notify`/`listen`). The inline
+    `query(sql, args...)` returns `qb::io::async::task<Reply<T>>` while admitting
+    Parse/Describe and Bind/Execute as one logical queued command. `copy_out`,
+    `copy_in`, and `query_stream` also return `qb::io::async::task<Reply<T>>`.
     Either way `co_await` yields `Reply<T>` (`T` = `resultset`, `PreparedQuery`,
     or `void`), and nothing happens until you `co_await` it (or `run_sync` it).
   - **Callback** — overloads **with** success/error lambdas return
