@@ -45,7 +45,9 @@ From [`src/qbm/pgsql/commands.h`](../src/qbm/pgsql/commands.h) **`Transaction::e
 
 The overload selects the command type from your lambda's arity via `if constexpr (std::is_invocable_v<...>)`
 ([`commands.h`](../src/qbm/pgsql/commands.h)). Only these two arities are valid; any other success
-signature stops compilation when the selected command instantiates against your callback.
+signature stops compilation at the `execute` call; no command is silently omitted. The same check applies to
+prepared `execute(name, params, ...)`.
+<!-- src: src/qbm/pgsql/commands.h:904-915,1000-1011 -->
 
 **Coroutine:** only **`co_await execute(expr)`** → **`Reply<resultset>`**; no SFINAE split (always a resultset
 payload, possibly empty). Check **`reply.ok()`** before **`reply.result()`**.

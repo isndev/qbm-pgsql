@@ -90,6 +90,11 @@ qb-io, not qb-core.
     when you call `await()` for a synchronous drain + `status` snapshot.
   - Pick one style per call stack. Do **not** drop an undriven coroutine awaiter
     inside a callback body.
+  - Callback `savepoint` contains a failed child after `ROLLBACK TO` and `RELEASE`
+    both succeed. Its error callback runs once; the outer callback transaction
+    continues and may commit. Failed savepoint creation or cleanup aborts the
+    outer block. An exception in `then` becomes a client error visible to a
+    following `error` and to `await()`; it does not undo SQL already committed.
 - **Wire protocol.** Simple-query protocol (`execute`/`query`) sends raw SQL;
   extended-query protocol (`prepare` then parameterized `execute`) does
   Parse/Bind/Execute with **binary** parameters and a **client-side** prepared-

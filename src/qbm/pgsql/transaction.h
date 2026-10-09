@@ -132,6 +132,12 @@ public:
      */
     [[nodiscard]] bool result() const;
 
+    /** Fail this command and expose its error to ancestors without skipping savepoint cleanup. */
+    void fail(error::db_error const &err);
+
+    /** Clear a handled savepoint error on this command and its ancestors. */
+    void clear_error();
+
     /**
      * @brief Gets the parent transaction
      *

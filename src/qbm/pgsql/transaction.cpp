@@ -67,6 +67,19 @@ Transaction::result() const {
     return _result;
 }
 
+void
+Transaction::fail(error::db_error const &err) {
+    _result = false;
+    for (auto *node = this; node; node = node->_parent)
+        node->_error = err;
+}
+
+void
+Transaction::clear_error() {
+    for (auto *node = this; node; node = node->_parent)
+        node->_error = error::db_error{"unknown error"};
+}
+
 Transaction *
 Transaction::parent() const {
     return _parent;

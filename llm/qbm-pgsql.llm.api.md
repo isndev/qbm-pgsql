@@ -161,8 +161,8 @@ struct tcp {
     - `prepare(...)`: Prepares a named SQL statement. Callbacks for success/failure.
     - `execute_file(...)`: Executes SQL commands from a file.
     - `prepare_file(...)`: Prepares SQL commands from a file.
-    - `savepoint(...)`: Creates a savepoint within a transaction.
-    - `then(...)`: Chains an operation to be executed if the previous one succeeds.
+    - `savepoint(...)`: Creates a savepoint within a transaction. A handled child failure rolls back to and releases it, then the outer block continues; failed creation or cleanup aborts the outer block. The savepoint error callback runs once.
+    - `then(...)`: Chains an operation to be executed if the previous one succeeds. A thrown callback becomes a client error visible to `error(...)` and `await()`; completed SQL is not undone.
     - `error(...)`: Registers an error handler for the preceding operation(s).
     - `success(...)`: Registers a success handler (similar to `then`).
     - `await()`: Synchronously waits for the transaction chain to complete. Returns `Transaction::status`.
@@ -265,6 +265,7 @@ namespace qb::pg {
 **Key Fluent API Callbacks:**
 - `on_success` for `begin`, `savepoint`, `prepare`, `execute` (simple query without results): `void(qb::pg::transaction& tr)`
 - `on_success` for `execute` (query with results): `void(qb::pg::transaction& tr, qb::pg::results results)`
+- Any other `execute` success signature fails compilation for both simple and prepared statements.
 - `on_success` for `prepare`: `void(qb::pg::transaction& tr, const qb::pg::detail::PreparedQuery& prepared_query_details)`
 - `on_error` for all operations: `void(const qb::pg::error::db_error& err)`
 - `then`/`success`: `void(qb::pg::transaction& tr)`

@@ -31,6 +31,14 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Fixed
 
+- **Callback savepoint failures stay within their savepoint (Huly QB-625).** Once `SAVEPOINT` succeeds,
+  a failed child rolls back to it and releases it before the outer callback block continues. The
+  savepoint error callback runs once; a failed create or cleanup still aborts the outer block.
+- **A root `then` callback exception is visible (Huly QB-661).** It becomes a client error for
+  the following `error` callback and `await()` status; already completed SQL is not undone.
+- **Invalid `execute` success callbacks fail compilation (Huly QB-624).** Simple and prepared
+  callback calls accept `(Transaction&)` or `(Transaction&, resultset)`; an incompatible
+  signature can no longer compile while silently omitting its query.
 - **Reconnect guidance matches the supported client path (Huly QB-202).** Calling
   ordinary `connect()` after `disconnect()` on the same object performs a fresh handshake;
   `prepare_reconnect()` is an optional explicit fd and per-backend state reset.

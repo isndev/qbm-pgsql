@@ -156,6 +156,7 @@ class EndSavePoint final : public Transaction {
     const std::string _name;                  ///< Savepoint name
     CB_ERROR          _on_error;              ///< Error callback
     bool              _force_rollback{false}; ///< Flag to force rollback
+    bool              _error_reported{false}; ///< The savepoint terminal callback fires once
 
 public:
     /**
@@ -201,6 +202,14 @@ public:
         _force_rollback = true;
     }
 
+    void
+    report_error(error::db_error const &err) {
+        if (!_error_reported) {
+            _error_reported = true;
+            _on_error(err);
+        }
+    }
+
     /**
      * @brief Initiates the savepoint end sequence
      *
@@ -211,14 +220,33 @@ public:
     on_end_savepoint() {
         bool should_release = _result && !_force_rollback;
         push_query(should_release ? std::unique_ptr<ISqlQuery>(new ReleaseSavePointQuery(
-                                        _name, []() {}, [this](auto const &err) { _on_error(err); }))
+                                        _name, []() {},
+                                        [this](auto const &err) {
+                                            _result = false;
+                                            report_error(err);
+                                        }))
                                   : std::unique_ptr<ISqlQuery>(new RollbackSavePointQuery(
                                         _name,
                                         [this]() {
-                                            _on_error((error::db_error) error::query_error("savepoint rollback processed due to a "
-                                                                                           "query failure"));
+                                            // ROLLBACK TO leaves the savepoint defined. Release it
+                                            // before declaring local recovery to the outer block.
+                                            push_query(std::unique_ptr<ISqlQuery>(new ReleaseSavePointQuery(
+                                                _name,
+                                                [this]() {
+                                                    _result = true;
+                                                    clear_error();
+                                                    report_error((error::db_error) error::query_error(
+                                                        "savepoint rollback processed due to a query failure"));
+                                                },
+                                                [this](auto const &err) {
+                                                    _result = false;
+                                                    report_error(err);
+                                                })));
                                         },
-                                        [this](auto const &err) { _on_error(err); })));
+                                        [this](auto const &err) {
+                                            _result = false;
+                                            report_error(err);
+                                        })));
     }
 };
 
@@ -233,8 +261,9 @@ public:
  */
 template <typename CB_SUCCESS, typename CB_ERROR>
 class SavePoint final : public Transaction {
-    EndSavePoint<CB_ERROR> *_end;        ///< End command for this savepoint
-    CB_SUCCESS              _on_success; ///< Success callback
+    EndSavePoint<CB_ERROR> *_end;            ///< End command for this savepoint
+    CB_SUCCESS              _on_success;     ///< Success callback
+    bool                    _created{false}; ///< A failed SAVEPOINT cannot be rolled back to
 
 public:
     /**
@@ -251,18 +280,18 @@ public:
         push_query(std::unique_ptr<ISqlQuery>(new SavePointQuery(
             _end->get_name(),
             [this]() {
+                _created = true;
                 try {
                     _on_success(*this);
                 } catch (std::exception const &e) {
                     _result = false;
                     _end->force_rollback(); // Force rollback on exception
-                    _end->get_error_callback()((error::db_error) error::client_error{e.what()});
+                    _end->report_error((error::db_error) error::client_error{e.what()});
                 }
             },
             [this](auto const &err) {
-                _result = false;        // Mark explicitly as failed on error
-                _end->force_rollback(); // Force rollback on SQL error
-                _end->get_error_callback()(err);
+                _result = false; // Mark explicitly as failed on error
+                _end->report_error(err);
             })));
     }
 
@@ -271,15 +300,20 @@ public:
      */
     void
     on_before_pop() override {
+        if (!_created)
+            return; // SAVEPOINT itself failed: abort the outer transaction
         _end->result(_result);
         _end->on_end_savepoint();
+        // The rollback command is now queued ahead of the outer block's remaining
+        // commands. Its outcome, not the handled child error, decides the outer block.
+        _result = true;
     }
 
     /**
      * @brief Handles sub-command status updates
      *
-     * Updates this savepoint's result status and propagates
-     * the status to the parent transaction.
+     * Updates this savepoint's result status. The parent sees the outcome of
+     * the queued rollback/release cleanup instead of the handled child error.
      *
      * @param status Result status of the sub-command
      */
@@ -289,7 +323,6 @@ public:
         if (!status) {
             _end->force_rollback(); // Force rollback on sub-command failure
         }
-        _parent->on_sub_command_status(status);
     }
 };
 
@@ -488,10 +521,10 @@ public:
             return;
         try {
             _on_success(*(parent()));
+        } catch (std::exception const &e) {
+            parent()->fail(error::client_error{e.what()});
         } catch (...) {
-            if (parent() && parent()->parent()) {
-                parent()->result(false);
-            }
+            parent()->fail(error::client_error{"then callback threw a non-standard exception"});
         }
     }
 };
@@ -878,9 +911,10 @@ Transaction::execute(std::string_view expr, CB_SUCCESS &&on_success, CB_ERROR &&
     } else if constexpr (std::is_invocable_v<CB_SUCCESS, Transaction &>) {
         push_transaction(std::unique_ptr<Transaction>(
             new Query<CB_SUCCESS, CB_ERROR>(this, std::string(expr), std::forward<CB_SUCCESS>(on_success), std::forward<CB_ERROR>(on_error))));
-    } else
-        static_assert("execute call_back requires -> [](qb::pg::transaction &tr, "
-                      "(optional) qb::pg::results res)");
+    } else {
+        static_assert(std::is_invocable_v<CB_SUCCESS, Transaction &, resultset> || std::is_invocable_v<CB_SUCCESS, Transaction &>,
+                      "execute callback must accept (Transaction&) or (Transaction&, resultset)");
+    }
 
     return *this;
 }
@@ -973,9 +1007,10 @@ Transaction::execute(std::string_view query_name, QueryParams &&params, CB_SUCCE
     } else if constexpr (std::is_invocable_v<CB_SUCCESS, Transaction &>) {
         push_transaction(std::unique_ptr<Transaction>(new ExecutePrepared<CB_SUCCESS, CB_ERROR>(
             this, std::string(query_name), std::move(params), std::forward<CB_SUCCESS>(on_success), std::forward<CB_ERROR>(on_error))));
-    } else
-        static_assert("execute call_back requires -> [](qb::pg::transaction &tr, "
-                      "(optional) qb::pg::results res)");
+    } else {
+        static_assert(std::is_invocable_v<CB_SUCCESS, Transaction &, resultset> || std::is_invocable_v<CB_SUCCESS, Transaction &>,
+                      "execute callback must accept (Transaction&) or (Transaction&, resultset)");
+    }
     return *this;
 }
 

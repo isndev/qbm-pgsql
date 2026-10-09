@@ -26,6 +26,7 @@
  */
 
 #include <gtest/gtest.h>
+#include <stdexcept>
 #include <string>
 #include "../../shared/pg_integration_fixture.hpp"
 #include "../../shared/test_config.hpp"
@@ -164,43 +165,45 @@ TEST_F(TransactionBasicTest, NestedSavepointInsert) {
 }
 
 /**
- * @brief Savepoint rollback undoes only the in-savepoint write; outer write survives.
+ * @brief Savepoint rollback undoes its write; an earlier autocommitted write survives.
  *
- * Phase 1 inserts `before_savepoint` outside the failing block, then inside `sp1` inserts
+ * Phase 1 autocommits `before_savepoint` before BEGIN, then inside `sp1` inserts
  * `in_savepoint` and triggers an error (missing table) that rolls the savepoint back. Phase
  * 2 asserts `in_savepoint` is gone and `before_savepoint` remains. Every branch asserts a
  * boolean post-condition (no `std::cout`-only paths).
  */
-TEST_F(TransactionBasicTest, SavepointRollbackPreservesOuterWrite) {
+TEST_F(TransactionBasicTest, SavepointRollbackPreservesEarlierCommittedWrite) {
     ASSERT_TRUE(db_->execute("DELETE FROM test_transactions", discard_query, discard_error).await());
     ASSERT_TRUE(db_->execute("INSERT INTO test_transactions (value) VALUES ('before_savepoint')", discard_query, discard_error).await());
 
-    bool in_savepoint = false;
-    bool error_caught = false;
-    (void) db_
-        ->begin(
-            [&](Transaction &t) {
-                t.savepoint(
-                    "sp1",
-                    [&](Transaction &tr2) {
-                        tr2.execute(
-                            "INSERT INTO test_transactions (value) VALUES ('in_savepoint')",
-                            [&](Transaction &tr3, results) {
-                                in_savepoint = true;
-                                tr3.execute(
-                                    "SELECT * FROM nonexistent_table",
-                                    [](Transaction &, results) { ADD_FAILURE() << "query on missing table must fail"; },
-                                    [&](error::db_error const &e) {
-                                        EXPECT_EQ(e.code, "42P01");
-                                        error_caught = true;
-                                    });
-                            },
-                            [](error::db_error const &e) { ADD_FAILURE() << "savepoint insert failed: " << e.what(); });
-                    },
-                    [](error::db_error const &e) { ADD_FAILURE() << "savepoint create failed: " << e.what(); });
-            },
-            [](error::db_error const &) { /* expected: block fails after the statement error */ })
-        .await();
+    bool in_savepoint     = false;
+    bool error_caught     = false;
+    int  savepoint_errors = 0;
+    auto status           = db_->begin(
+                                   [&](Transaction &t) {
+                             t.savepoint(
+                                 "sp1",
+                                 [&](Transaction &tr2) {
+                                     tr2.execute(
+                                         "INSERT INTO test_transactions (value) VALUES ('in_savepoint')",
+                                         [&](Transaction &tr3, results) {
+                                             in_savepoint = true;
+                                             tr3.execute(
+                                                 "SELECT * FROM nonexistent_table",
+                                                 [](Transaction &, results) { ADD_FAILURE() << "query on missing table must fail"; },
+                                                 [&](error::db_error const &e) {
+                                                     EXPECT_EQ(e.code, "42P01");
+                                                     error_caught = true;
+                                                 });
+                                         },
+                                         [](error::db_error const &e) { ADD_FAILURE() << "savepoint insert failed: " << e.what(); });
+                                 },
+                                 [&](error::db_error const &) { ++savepoint_errors; });
+                                   },
+                                   [](error::db_error const &e) { ADD_FAILURE() << "outer transaction failed: " << e.what(); })
+                                .await();
+    EXPECT_TRUE(status) << status.error().what();
+    EXPECT_EQ(savepoint_errors, 1);
 
     bool verified = false;
     auto verify   = db_->begin(
@@ -223,6 +226,176 @@ TEST_F(TransactionBasicTest, SavepointRollbackPreservesOuterWrite) {
     EXPECT_TRUE(in_savepoint) << "in-savepoint insert never ran";
     EXPECT_TRUE(error_caught) << "savepoint error never fired";
     EXPECT_TRUE(verified) << "verification block never completed";
+}
+
+/** A handled savepoint failure rolls back its body and lets the outer block commit. */
+TEST_F(TransactionBasicTest, FailedSavepointKeepsWriteInsideOuterBegin) {
+    int  savepoint_errors = 0;
+    int  query_errors     = 0;
+    int  outer_errors     = 0;
+    auto st =
+        db_->begin(
+               [&](Transaction &outer) {
+                   outer.execute("INSERT INTO test_transactions (value) VALUES ('outer_before')", discard_query, discard_error);
+                   outer.savepoint(
+                       "failed_child",
+                       [&](Transaction &inner) {
+                           inner.execute("INSERT INTO test_transactions (value) VALUES ('inner_write')", discard_query, discard_error);
+                           inner.execute("SELECT * FROM missing_savepoint_table", discard_query, [&](error::db_error const &e) {
+                               ++query_errors;
+                               EXPECT_EQ(e.code, "42P01");
+                           });
+                       },
+                       [&](error::db_error const &) { ++savepoint_errors; });
+                   outer.savepoint(
+                       "failed_child",
+                       [&](Transaction &reused) {
+                           reused.execute("INSERT INTO test_transactions (value) VALUES ('reused_name')", discard_query, discard_error);
+                           reused.savepoint("nested_child", [&](Transaction &nested) {
+                               nested.execute("INSERT INTO test_transactions (value) VALUES ('nested_write')", discard_query, discard_error);
+                           });
+                       },
+                       [&](error::db_error const &e) { ADD_FAILURE() << e.what(); });
+                   outer.execute("INSERT INTO test_transactions (value) VALUES ('outer_after')", discard_query, discard_error);
+               },
+               [&](error::db_error const &) { ++outer_errors; })
+            .await();
+
+    EXPECT_TRUE(st) << st.error().what();
+    EXPECT_EQ(query_errors, 1);
+    EXPECT_EQ(savepoint_errors, 1);
+    EXPECT_EQ(outer_errors, 0);
+    auto verify = db_->execute("SELECT value FROM test_transactions ORDER BY id", discard_query, discard_error).await();
+    ASSERT_TRUE(verify) << verify.error().what();
+    ASSERT_EQ(verify.results().size(), 4u);
+    EXPECT_EQ(verify.results()[0][0].as<std::string>(), "outer_before");
+    EXPECT_EQ(verify.results()[1][0].as<std::string>(), "reused_name");
+    EXPECT_EQ(verify.results()[2][0].as<std::string>(), "nested_write");
+    EXPECT_EQ(verify.results()[3][0].as<std::string>(), "outer_after");
+}
+
+/** A throwing root Then reports a client failure to Error and await. */
+TEST_F(TransactionBasicTest, RootThenExceptionIsVisible) {
+    int  errors = 0;
+    auto st     = db_->execute("INSERT INTO test_transactions (value) VALUES ('then_committed')", discard_query, discard_error)
+                      .then([](Transaction &) { throw std::runtime_error("root then failed"); })
+                      .error([&](error::db_error const &e) {
+                      ++errors;
+                      EXPECT_NE(std::string(e.what()).find("root then failed"), std::string::npos);
+                      })
+                      .await();
+    EXPECT_FALSE(st);
+    EXPECT_EQ(errors, 1);
+    EXPECT_NE(std::string(st.error().what()).find("root then failed"), std::string::npos);
+    auto committed =
+        db_->execute(
+               "SELECT count(*) FROM test_transactions WHERE value = 'then_committed'", [](Transaction &, results) {}, discard_error)
+            .await();
+    ASSERT_TRUE(committed);
+    EXPECT_EQ(committed.results()[0][0].as<int>(), 1);
+}
+
+/** A throwing Then inside Begin still aborts that block and reports its cause. */
+TEST_F(TransactionBasicTest, NestedThenExceptionAbortsOuterBlock) {
+    int  errors = 0;
+    auto st     = db_->begin([&](Transaction &outer) {
+                     outer.execute("INSERT INTO test_transactions (value) VALUES ('nested_then')", discard_query, discard_error);
+                     outer.then([](Transaction &) { throw std::runtime_error("nested then failed"); });
+                     })
+                      .error([&](error::db_error const &e) {
+                      ++errors;
+                      EXPECT_NE(std::string(e.what()).find("nested then failed"), std::string::npos);
+                      })
+                      .await();
+    EXPECT_FALSE(st);
+    EXPECT_EQ(errors, 1);
+    EXPECT_NE(std::string(st.error().what()).find("nested then failed"), std::string::npos);
+    auto gone = db_->execute(
+                       "SELECT count(*) FROM test_transactions WHERE value = 'nested_then'", [](Transaction &, results) {}, discard_error)
+                    .await();
+    ASSERT_TRUE(gone);
+    EXPECT_EQ(gone.results()[0][0].as<int>(), 0);
+}
+
+/** If ROLLBACK TO itself fails, the outer transaction cannot commit. */
+TEST_F(TransactionBasicTest, FailedSavepointRollbackAbortsOuterBlock) {
+    int  savepoint_errors = 0;
+    int  outer_errors     = 0;
+    auto st               = db_->begin(
+                                   [&](Transaction &outer) {
+                         outer.execute("INSERT INTO test_transactions (value) VALUES ('must_rollback')", discard_query, discard_error);
+                         outer.savepoint(
+                             "released_early",
+                             [&](Transaction &inner) {
+                                 inner.execute("RELEASE SAVEPOINT released_early", discard_query, discard_error);
+                                 inner.execute("SELECT * FROM missing_savepoint_table", discard_query, discard_error);
+                             },
+                             [&](error::db_error const &e) {
+                                 ++savepoint_errors;
+                                 EXPECT_EQ(e.code, "3B001");
+                             });
+                                   },
+                                   [&](error::db_error const &) { ++outer_errors; })
+                                .await();
+    EXPECT_FALSE(st);
+    EXPECT_EQ(savepoint_errors, 1);
+    EXPECT_EQ(outer_errors, 1);
+    auto gone = db_->execute(
+                       "SELECT count(*) FROM test_transactions WHERE value = 'must_rollback'", [](Transaction &, results) {}, discard_error)
+                    .await();
+    ASSERT_TRUE(gone);
+    EXPECT_EQ(gone.results()[0][0].as<int>(), 0);
+}
+
+/** A SAVEPOINT rejected before creation is reported once and leaves no cleanup SQL. */
+TEST_F(TransactionBasicTest, FailedSavepointCreationDoesNotAttemptCleanup) {
+    int  success = 0;
+    int  errors  = 0;
+    auto st      = db_->savepoint(
+                          "outside_transaction", [&](Transaction &) { ++success; },
+                          [&](error::db_error const &e) {
+                         ++errors;
+                         EXPECT_EQ(e.code, "25P01");
+                          })
+                       .await();
+    EXPECT_FALSE(st);
+    EXPECT_EQ(success, 0);
+    EXPECT_EQ(errors, 1);
+    auto next = db_->execute("SELECT 1", discard_query, discard_error).await();
+    EXPECT_TRUE(next) << next.error().what();
+}
+
+/** Both accepted callback signatures enqueue simple and prepared commands. */
+TEST_F(TransactionBasicTest, ExecuteCallbackSignaturesEnqueueWork) {
+    int  callbacks = 0;
+    auto simple    = db_->execute(
+                            "SELECT 1", [&](Transaction &) { ++callbacks; }, discard_error)
+                         .execute(
+                             "SELECT 2",
+                             [&](Transaction &, results r) {
+                              ASSERT_EQ(r.size(), 1u);
+                              EXPECT_EQ(r[0][0].as<int>(), 2);
+                              ++callbacks;
+                             },
+                             discard_error)
+                         .await();
+    ASSERT_TRUE(simple) << simple.error().what();
+    EXPECT_EQ(callbacks, 2);
+
+    ASSERT_TRUE(db_->prepare("callback_signature", "SELECT $1::int + 1", type_oid_sequence{oid::int4}, discard_prepare, discard_error).await());
+    auto prepared = db_->execute(
+                           "callback_signature", params{7}, [&](Transaction &) { ++callbacks; }, discard_error)
+                        .execute(
+                            "callback_signature", params{9},
+                            [&](Transaction &, results r) {
+                                ASSERT_EQ(r.size(), 1u);
+                                EXPECT_EQ(r[0][0].as<int>(), 10);
+                                ++callbacks;
+                            },
+                            discard_error)
+                        .await();
+    ASSERT_TRUE(prepared) << prepared.error().what();
+    EXPECT_EQ(callbacks, 4);
 }
 
 /** @brief Two nested savepoints each commit their insert. */
