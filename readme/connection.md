@@ -485,7 +485,7 @@ handler does more than fail the one in-flight query — it calls `fail_all_pendi
 drains **every** queued query and pending sub-transaction so their callers' awaiters resume with the error instead of
 hanging forever. `fail_all_pending` swaps the queues out before draining, so an error callback that enqueues new work
 does not re-enter the traversal.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2655-2701,2688 (in that order: the on disconnected handler; the fail_all_pending call); qbm/pgsql/src/qbm/pgsql/transaction.h:237; qbm/pgsql/src/qbm/pgsql/transaction.cpp:138-166 -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2655-2701,2688 (in that order: the on disconnected handler; the fail_all_pending call); qbm/pgsql/src/qbm/pgsql/transaction.h:243; qbm/pgsql/src/qbm/pgsql/transaction.cpp:149-177 -->
 
 This also covers a malformed wire message and an unsupported/hostile auth method: both mark the protocol invalid (
 `not_ok()`), which disposes the I/O layer and fires `event::disconnected`, whose handler fails pending work and resumes

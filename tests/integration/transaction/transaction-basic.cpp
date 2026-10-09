@@ -274,6 +274,50 @@ TEST_F(TransactionBasicTest, FailedSavepointKeepsWriteInsideOuterBegin) {
     EXPECT_EQ(verify.results()[3][0].as<std::string>(), "outer_after");
 }
 
+/** A callback exception is reported once, after local cleanup, without aborting BEGIN. */
+TEST_F(TransactionBasicTest, ThrowingSavepointCallbackRecoversOuterBlock) {
+    int  errors = 0;
+    auto st     = db_->begin([&](Transaction &outer) {
+                     outer.savepoint(
+                         "callback_throw", [](Transaction &) { throw std::runtime_error("savepoint callback threw"); },
+                         [&](error::db_error const &e) {
+                             ++errors;
+                             EXPECT_NE(std::string(e.what()).find("savepoint callback threw"), std::string::npos);
+                         });
+                     outer.execute("INSERT INTO test_transactions (value) VALUES ('after_callback_throw')", discard_query, discard_error);
+                     })
+                      .await();
+    EXPECT_TRUE(st) << st.error().what();
+    EXPECT_EQ(errors, 1);
+    auto kept =
+        db_->execute("SELECT count(*) FROM test_transactions WHERE value = 'after_callback_throw'", discard_query, discard_error).await();
+    ASSERT_TRUE(kept);
+    EXPECT_EQ(kept.results()[0][0].as<int>(), 1);
+}
+
+/** Recovering a later savepoint must not erase an earlier root failure in one await. */
+TEST_F(TransactionBasicTest, RecoveredSavepointPreservesEarlierRootError) {
+    int  first_errors     = 0;
+    int  savepoint_errors = 0;
+    auto st               = db_->execute("SELECT 1 / 0", discard_query,
+                                         [&](error::db_error const &e) {
+                               ++first_errors;
+                               EXPECT_EQ(e.code, "22012");
+                                         })
+                                .begin([&](Transaction &outer) {
+                      outer.savepoint(
+                          "after_prior_error",
+                          [&](Transaction &inner) { inner.execute("SELECT * FROM missing_savepoint_table", discard_query, discard_error); },
+                          [&](error::db_error const &) { ++savepoint_errors; });
+                                })
+                                .await();
+    EXPECT_FALSE(st);
+    EXPECT_EQ(first_errors, 1);
+    EXPECT_EQ(savepoint_errors, 1);
+    EXPECT_EQ(st.error().code, "22012") << st.error().what();
+    EXPECT_TRUE(db_->execute("SELECT 1", discard_query, discard_error).await());
+}
+
 /** A throwing root Then reports a client failure to Error and await. */
 TEST_F(TransactionBasicTest, RootThenExceptionIsVisible) {
     int  errors = 0;

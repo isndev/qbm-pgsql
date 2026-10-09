@@ -74,10 +74,21 @@ Transaction::fail(error::db_error const &err) {
         node->_error = err;
 }
 
+Transaction::error_snapshot
+Transaction::snapshot_error_chain() {
+    error_snapshot prior;
+    for (auto *node = this; node; node = node->_parent)
+        if (!node->_result || node->has_error())
+            prior.emplace_back(node, node->_error);
+    return prior;
+}
+
 void
-Transaction::clear_error() {
+Transaction::restore_error_chain(error_snapshot const &prior) {
     for (auto *node = this; node; node = node->_parent)
         node->_error = error::db_error{"unknown error"};
+    for (auto const &[node, err] : prior)
+        node->_error = err;
 }
 
 Transaction *

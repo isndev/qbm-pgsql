@@ -126,7 +126,7 @@ worker core, not where you called `addActor` — so a `database` member, a `uniq
 created inside `onInit()` are all equally correct. Handing an actor a `database` built on another thread is not:
 `Transaction` deletes its copy *and* move constructors, so the type will not let you, and the qb-io object underneath is
 bound to the wrong loop anyway.
-<!-- src: qbm/pgsql/src/qbm/pgsql/transaction.h:83-89 (copy/move deleted) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/transaction.h:84-90 (copy/move deleted) -->
 
 ### `onInit()` is where you connect
 

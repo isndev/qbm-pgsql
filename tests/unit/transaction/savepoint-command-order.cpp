@@ -83,4 +83,27 @@ TEST(SavepointCommandOrder, FailedRollbackReportsOnceAndNeverReleases) {
     EXPECT_EQ(end.next_query(), nullptr);
 }
 
+TEST(SavepointCommandOrder, ThrownCallbackErrorWaitsForCleanup) {
+    PreparedStorage                                      storage;
+    Root                                                 root(storage);
+    int                                                  terminal_errors = 0;
+    std::string                                          reason;
+    std::function<void(qb::pg::error::db_error const &)> on_error = [&](qb::pg::error::db_error const &e) {
+        ++terminal_errors;
+        reason = e.what();
+    };
+    EndSavePoint<decltype(on_error)> end(&root, std::string("callback_throw"), std::move(on_error));
+    end.result(false);
+    end.defer_rollback_error(qb::pg::error::client_error{"callback threw"});
+    end.on_end_savepoint();
+
+    auto rollback = end.pop_query();
+    rollback->on_success();
+    EXPECT_EQ(terminal_errors, 0);
+    auto release = end.pop_query();
+    release->on_success();
+    EXPECT_EQ(terminal_errors, 1);
+    EXPECT_EQ(reason, "callback threw");
+}
+
 } // namespace savepoint_command_order_test

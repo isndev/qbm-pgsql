@@ -24,6 +24,7 @@
 #include "./result_impl.h"
 #include "./resultset.h"
 #include "./transaction.h"
+#include <optional>
 
 namespace qb::pg::detail {
 using namespace qb::pg;
@@ -153,10 +154,12 @@ public:
  */
 template <typename CB_ERROR>
 class EndSavePoint final : public Transaction {
-    const std::string _name;                  ///< Savepoint name
-    CB_ERROR          _on_error;              ///< Error callback
-    bool              _force_rollback{false}; ///< Flag to force rollback
-    bool              _error_reported{false}; ///< The savepoint terminal callback fires once
+    const std::string              _name;                  ///< Savepoint name
+    CB_ERROR                       _on_error;              ///< Error callback
+    bool                           _force_rollback{false}; ///< Flag to force rollback
+    bool                           _error_reported{false}; ///< The savepoint terminal callback fires once
+    std::optional<error::db_error> _rollback_cause;        ///< Callback error held until cleanup finishes
+    error_snapshot                 _prior_errors;          ///< Ancestor errors from before the savepoint body
 
 public:
     /**
@@ -210,6 +213,16 @@ public:
         }
     }
 
+    void
+    defer_rollback_error(error::db_error const &err) {
+        _rollback_cause = err;
+    }
+
+    void
+    capture_prior_errors() {
+        _prior_errors = parent()->snapshot_error_chain();
+    }
+
     /**
      * @brief Initiates the savepoint end sequence
      *
@@ -234,9 +247,12 @@ public:
                                                 _name,
                                                 [this]() {
                                                     _result = true;
-                                                    clear_error();
-                                                    report_error((error::db_error) error::query_error(
-                                                        "savepoint rollback processed due to a query failure"));
+                                                    restore_error_chain(_prior_errors);
+                                                    if (_rollback_cause)
+                                                        report_error(*_rollback_cause);
+                                                    else
+                                                        report_error((error::db_error) error::query_error(
+                                                            "savepoint rollback processed due to a query failure"));
                                                 },
                                                 [this](auto const &err) {
                                                     _result = false;
@@ -281,12 +297,13 @@ public:
             _end->get_name(),
             [this]() {
                 _created = true;
+                _end->capture_prior_errors();
                 try {
                     _on_success(*this);
                 } catch (std::exception const &e) {
                     _result = false;
                     _end->force_rollback(); // Force rollback on exception
-                    _end->report_error((error::db_error) error::client_error{e.what()});
+                    _end->defer_rollback_error((error::db_error) error::client_error{e.what()});
                 }
             },
             [this](auto const &err) {

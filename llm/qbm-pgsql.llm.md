@@ -91,7 +91,7 @@ qb-io, not qb-core.
   - Pick one style per call stack. Do **not** drop an undriven coroutine awaiter
     inside a callback body.
   - Callback `savepoint` contains a failed child after `ROLLBACK TO` and `RELEASE`
-    both succeed. Its error callback runs once; the outer callback transaction
+    both succeed. Its error callback runs once after cleanup; the outer callback transaction
     continues and may commit. Failed savepoint creation or cleanup aborts the
     outer block. An exception in `then` becomes a client error visible to a
     following `error` and to `await()`; it does not undo SQL already committed.

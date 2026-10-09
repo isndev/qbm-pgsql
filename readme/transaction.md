@@ -47,7 +47,7 @@ stateDiagram-v2
 
 ### One object, two queues
 
-<!-- src: src/qbm/pgsql/transaction.h:70-75, src/qbm/pgsql/transaction.cpp:106-140 -->
+<!-- src: src/qbm/pgsql/transaction.h:71-76, src/qbm/pgsql/transaction.cpp:117-151 -->
 
 `Transaction` holds:
 
@@ -66,7 +66,7 @@ flowchart TB
 ```
 
 A command (lifecycle unit) pushes one or more queries (wire units). `Transaction` is **non-copyable and non-movable** —
-the default, copy, and move constructors and assignment operators are all deleted (`src/qbm/pgsql/transaction.h:81-89`). Hold it
+the default, copy, and move constructors and assignment operators are all deleted (`src/qbm/pgsql/transaction.h:82-90`). Hold it
 by reference or pointer; never by value.
 
 ### The loop drives completion
@@ -78,7 +78,7 @@ normal case inside an actor), you do **not** call `await` after every statement.
 
 ### Status and `await`
 
-<!-- src: src/qbm/pgsql/transaction.cpp:205-242, src/qbm/pgsql/transaction.h:734-790 -->
+<!-- src: src/qbm/pgsql/transaction.cpp:216-253, src/qbm/pgsql/transaction.h:740-796 -->
 
 `Transaction::await()` is a **blocking drain on the current thread**: it pumps
 `qb::io::async::listener::current.run(EVRUN_ONCE)` until both queues are empty, then returns a `status` snapshot. It is
@@ -125,7 +125,7 @@ stays valid after the transaction's transient buffers are reused.
 
 ## The callback transaction block: `begin` / `End`
 
-<!-- src: src/qbm/pgsql/commands.h:824-851, src/qbm/pgsql/commands.h:49-158 -->
+<!-- src: src/qbm/pgsql/commands.h:841-865, src/qbm/pgsql/commands.h:41-146 -->
 
 `begin` does **not** take a `commit` callback. It pushes a `Begin` command, which itself queues an `End` command:
 
@@ -145,7 +145,7 @@ path.
 
 **Error routing.** A failed `BeginQuery` routes to the `on_error` you passed to `begin`; commit/rollback failures route
 to the same `End` error callback. If your `on_success` body **throws**, `Begin` catches it, marks the block failed, and
-forwards a `qb::pg::error::client_error` carrying `what()` to `End`'s error callback (`src/qbm/pgsql/commands.h:108-119`).
+forwards a `qb::pg::error::client_error` carrying `what()` to `End`'s error callback (`src/qbm/pgsql/commands.h:110-121`).
 
 ```cpp
 #include <qbm/pgsql/pgsql.h>
@@ -170,7 +170,7 @@ A two-argument `begin(on_success, mode)` overload exists; it installs an empty e
 
 ### `then` / `success` / `error` chaining
 
-<!-- src: src/qbm/pgsql/transaction.h:683-711, src/qbm/pgsql/commands.h:498-584 -->
+<!-- src: src/qbm/pgsql/transaction.h:689-717, src/qbm/pgsql/commands.h:525-611 -->
 
 - `then(cb)` and `success(cb)` (aliases) push a `Then` command. When it is popped, if the parent's result is still
   success, `cb(*parent())` runs with the same `Transaction&` you chained from.
@@ -178,7 +178,7 @@ A two-argument `begin(on_success, mode)` overload exists; it installs an empty e
 - An exception from `then(cb)` becomes a client error on that chain. A following `error(cb)` sees it, and `await()`
   reports failure even when the chain is attached directly to `database`. SQL completed before the callback is not
   undone merely because the callback threw.
-<!-- src: src/qbm/pgsql/commands.h:519-528, src/qbm/pgsql/transaction.cpp:70-74 -->
+<!-- src: src/qbm/pgsql/commands.h:536-545, src/qbm/pgsql/transaction.cpp:70-74 -->
 
 These lambdas execute **when the command is popped during queue draining**, in FIFO order relative to the other
 sub-commands — not inline after the C++ statement. Where you chain matters:
@@ -194,7 +194,7 @@ There is no separate "next" type: `then` passes `*parent()`, the parent transact
 
 ## The coroutine transaction block
 
-<!-- src: src/qbm/pgsql/commands.h:1501-1521, tests/integration/api/coro-api.cpp:248-272 -->
+<!-- src: src/qbm/pgsql/commands.h:1519-1548, tests/integration/api/coro-api.cpp:248-272 -->
 
 The coroutine path is imperative: `begin` / `execute` / `commit` (or `rollback`) are explicit, and you branch on `ok()`.
 
@@ -269,13 +269,13 @@ it has no effect on autocommit statements run outside a block.
 > transaction (`in_transaction()`), it fails fast with a `client_error` rather than sending a second `BEGIN` that
 > PostgreSQL would warn `25001` on and silently flatten (the inner scope's COMMIT/ROLLBACK would end the *outer*
 > transaction, losing isolation). Use savepoints for nested units of work.
-<!-- src: src/qbm/pgsql/with_transaction.h:84-92, src/qbm/pgsql/transaction.h:173-176 -->
+<!-- src: src/qbm/pgsql/with_transaction.h:84-92, src/qbm/pgsql/transaction.h:179-182 -->
 
 ---
 
 ## Savepoints
 
-<!-- src: src/qbm/pgsql/commands.h:865-888, src/qbm/pgsql/commands.h:1524-1551, src/qbm/pgsql/commands.h:154-327 -->
+<!-- src: src/qbm/pgsql/commands.h:884-905, src/qbm/pgsql/commands.h:1542-1578, src/qbm/pgsql/commands.h:156-354 -->
 
 **Callback — open a savepoint sub-block:**
 
@@ -290,13 +290,15 @@ tr.savepoint("sp1",
 
 `savepoint` mirrors `begin`: it pushes a `SavePoint`/`EndSavePoint` pair that issues `SAVEPOINT name` and, on the way
 out, `RELEASE SAVEPOINT name` (success) or `ROLLBACK TO SAVEPOINT name` followed by `RELEASE SAVEPOINT name` (body
-failure). A successful rollback and release contain a child error: the savepoint's error callback fires once, the
-outer callback block continues, and `await()` succeeds if the outer block commits. A failure to create the savepoint,
+failure). A successful rollback and release contain a child error: the savepoint's error callback fires once after
+cleanup (including when the savepoint's success callback throws), the
+outer callback block continues, and `await()` succeeds if the outer block commits with no earlier chain failure.
+An earlier error in the same chain keeps its original status and message. A failure to create the savepoint,
 roll back to it, or release it aborts the outer block. The `name` is **quoted as a SQL
 identifier** (double-quoted, embedded `"` doubled, matching libpq's `PQescapeIdentifier`) before it enters the
 simple-query string — on **both** the callback (`SavePointQuery` / `EndSavePointQuery`) and coroutine paths — so a name
 can never inject a second statement.
-<!-- src: src/qbm/pgsql/commands.h:219-248,300-325, src/qbm/pgsql/queries.h:483-500,538-541,576-579,614-617 -->
+<!-- src: src/qbm/pgsql/commands.h:233-266,319-344, src/qbm/pgsql/transaction.cpp:77-92, src/qbm/pgsql/queries.h:483-500,538-541,576-579,614-617 -->
 
 **Coroutine — explicit control:**
 
@@ -311,8 +313,8 @@ else
 
 **Name validation.** The coroutine `savepoint`, `release_savepoint`, and `rollback_savepoint` reject names that are
 empty, longer than 63 characters, or contain anything other than alphanumerics and underscore
-(`pg_savepoint_name_ok`, `src/qbm/pgsql/commands.h:1303-1313`). An invalid name returns a
-pre-failed awaiter carrying `qb::pg::error::client_error` — no SQL is sent (`src/qbm/pgsql/commands.h:1524-1551`).
+(`pg_savepoint_name_ok`, `src/qbm/pgsql/commands.h:1321-1330`). An invalid name returns a
+pre-failed awaiter carrying `qb::pg::error::client_error` — no SQL is sent (`src/qbm/pgsql/commands.h:1542-1578`).
 This pre-check is defense-in-depth on top of the identifier quoting above: even the callback path, which does *not*
 pre-validate, cannot be made to inject SQL because the name is always quoted into a single literal identifier.
 
@@ -365,7 +367,7 @@ objects.
 
 ## Statement timeout
 
-<!-- src: src/qbm/pgsql/transaction.h:656-681, src/qbm/pgsql/commands.h:1293-1302, src/qbm/pgsql/queries.h:374-407 -->
+<!-- src: src/qbm/pgsql/transaction.h:662-687, src/qbm/pgsql/commands.h:1312-1320, src/qbm/pgsql/queries.h:374-407 -->
 
 `set_timeout(qb::duration)` arms a PostgreSQL `statement_timeout` for the **next** `BEGIN` on this connection. The
 following `begin()` (callback *or* coroutine) appends `; SET LOCAL statement_timeout = N` to the same simple-query
@@ -400,7 +402,7 @@ Key facts to get right:
 
 ## LISTEN / NOTIFY
 
-<!-- src: src/qbm/pgsql/transaction.h:435-499; src/qbm/pgsql/pg_notify_sql.h:25-92; qbm/pgsql/src/qbm/pgsql/pgsql.h:382-392,1992-2003,2788-2922 (in that order: notification; on_incoming_notify; notify_consumer / notify_co_consumer / notify_cb_consumer) -->
+<!-- src: src/qbm/pgsql/transaction.h:441-505; src/qbm/pgsql/pg_notify_sql.h:25-92; qbm/pgsql/src/qbm/pgsql/pgsql.h:382-392,1992-2003,2788-2922 (in that order: notification; on_incoming_notify; notify_consumer / notify_co_consumer / notify_cb_consumer) -->
 
 ### Publishing (NOTIFY)
 

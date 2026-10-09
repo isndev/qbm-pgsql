@@ -33,7 +33,9 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 - **Callback savepoint failures stay within their savepoint (Huly QB-625).** Once `SAVEPOINT` succeeds,
   a failed child rolls back to it and releases it before the outer callback block continues. The
-  savepoint error callback runs once; a failed create or cleanup still aborts the outer block.
+  savepoint error callback runs once after cleanup, including when the body callback throws;
+  a failed create or cleanup still aborts the outer block. A failure already recorded earlier
+  in the same fluent chain keeps its original error after a later savepoint recovers.
 - **A root `then` callback exception is visible (Huly QB-661).** It becomes a client error for
   the following `error` callback and `await()` status; already completed SQL is not undone.
 - **Invalid `execute` success callbacks fail compilation (Huly QB-624).** Simple and prepared

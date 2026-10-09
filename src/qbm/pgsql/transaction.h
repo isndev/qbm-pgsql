@@ -41,6 +41,7 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <vector>
 #include <qb/io/async.h>
 
 #include "./pg_awaiter.h"
@@ -135,8 +136,13 @@ public:
     /** Fail this command and expose its error to ancestors without skipping savepoint cleanup. */
     void fail(error::db_error const &err);
 
-    /** Clear a handled savepoint error on this command and its ancestors. */
-    void clear_error();
+    using error_snapshot = std::vector<std::pair<Transaction *, error::db_error>>;
+
+    /** Preserve prior errors before a savepoint body overwrites the connection error. */
+    [[nodiscard]] error_snapshot snapshot_error_chain();
+
+    /** Restore prior errors after a savepoint body has been rolled back and released. */
+    void restore_error_chain(error_snapshot const &prior);
 
     /**
      * @brief Gets the parent transaction

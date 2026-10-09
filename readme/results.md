@@ -55,7 +55,7 @@ qb::pg::results owned = borrowed.deep_snapshot();   // safe to keep after the ca
 
 The coroutine path does this for you: a successful `co_await` delivers `rs.deep_snapshot()`, so the `Reply<resultset>`
 owns a deep copy and stays valid after the transaction's transient buffers are reused (
-`src/qbm/pgsql/commands.h:1375,1403,1496`).
+`src/qbm/pgsql/commands.h:1392,1420,1513`).
 
 ### `operator bool` reflects rows, not DML success
 
@@ -124,10 +124,10 @@ The `result` here is borrowing. If you need the rows after this lambda returns, 
 ### From `await()` (blocking)
 
 For a blocking drain, pass the discard sentinels and call `await()`. The returned `status` is convertible to `bool`;
-`status.results()` returns the result set for that drain (`transaction.h:782`).
+`status.results()` returns the result set for that drain (`transaction.h:788`).
 
 ```cpp
-<!-- src: qbm/pgsql/src/qbm/pgsql/transaction.h:781-784,802 -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/transaction.h:787-790,808 -->
 #include <qbm/pgsql/pgsql.h>
 
 auto st = db.execute("SELECT 1 AS x", qb::pg::discard_query, qb::pg::discard_error).await();
@@ -139,7 +139,7 @@ if (st) {
 
 `status::operator bool` is truthy only when the batch drained with no failed sub-result and
 `_error.sqlstate == sqlstate::unknown_code` (the success sentinel) — always test it before calling `results()` (
-`transaction.h:771-774`).
+`transaction.h:777-780`).
 
 ---
 

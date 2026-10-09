@@ -80,6 +80,25 @@ qpg_test(unit prepared-storage-lru unit/prepared/prepared-storage-lru.cpp EXTRA_
 qpg_test(unit module-surface unit/misc/module-surface.cpp)
 qpg_test(unit savepoint-command-order unit/transaction/savepoint-command-order.cpp)
 
+# Each deliberately invalid execute form is compiled by CTest in the module's normal
+# build context. A failure only counts when the intended callback diagnostic appears.
+foreach(_kind IN ITEMS simple prepared)
+    set(_target qbm-pgsql-compile-invalid-${_kind}-execute)
+    add_library(${_target} OBJECT EXCLUDE_FROM_ALL negative/execute-callback-signatures.cpp)
+    target_link_libraries(${_target} PRIVATE qbm-pgsql)
+    if(_kind STREQUAL "prepared")
+        target_compile_definitions(${_target} PRIVATE QBM_PGSQL_NEGATIVE_PREPARED=1)
+    endif()
+    add_test(NAME qbm-pgsql-test-unit-invalid-${_kind}-execute-callback
+             COMMAND ${CMAKE_COMMAND}
+                     -DQBM_NEGATIVE_BUILD_DIR=${CMAKE_BINARY_DIR}
+                     -DQBM_NEGATIVE_TARGET=${_target}
+                     -DQBM_NEGATIVE_CONFIG=$<CONFIG>
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/negative/check-execute-callback.cmake)
+    set_tests_properties(qbm-pgsql-test-unit-invalid-${_kind}-execute-callback PROPERTIES
+                         LABELS "tier:unit;module:qbm-pgsql;compile-negative" RUN_SERIAL TRUE TIMEOUT 120)
+endforeach()
+
 # -----------------------------------------------------------------------------
 # SYSTEM — no daemon (network-timing dependent → slow)
 # -----------------------------------------------------------------------------

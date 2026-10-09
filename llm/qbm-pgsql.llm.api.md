@@ -161,7 +161,7 @@ struct tcp {
     - `prepare(...)`: Prepares a named SQL statement. Callbacks for success/failure.
     - `execute_file(...)`: Executes SQL commands from a file.
     - `prepare_file(...)`: Prepares SQL commands from a file.
-    - `savepoint(...)`: Creates a savepoint within a transaction. A handled child failure rolls back to and releases it, then the outer block continues; failed creation or cleanup aborts the outer block. The savepoint error callback runs once.
+    - `savepoint(...)`: Creates a savepoint within a transaction. A handled child failure rolls back to and releases it, then the outer block continues; failed creation or cleanup aborts the outer block. The savepoint error callback runs once after cleanup, including when its success callback throws.
     - `then(...)`: Chains an operation to be executed if the previous one succeeds. A thrown callback becomes a client error visible to `error(...)` and `await()`; completed SQL is not undone.
     - `error(...)`: Registers an error handler for the preceding operation(s).
     - `success(...)`: Registers a success handler (similar to `then`).
