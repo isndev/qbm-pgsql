@@ -16,11 +16,13 @@
 
 #include <cstring>
 #include <gtest/gtest.h>
+#include <istream>
 #include <stdexcept>
 #include <string>
 #include <vector>
 #include "../../shared/pg_wire_ground_truth.hpp"
 #include <qbm/pgsql/pgsql.h>
+#include <qbm/pgsql/util/streambuf.h>
 
 using namespace qb::pg;
 using namespace qb::pg::detail;
@@ -244,6 +246,39 @@ TEST(ResultsetPopulated, RowToMultiTargetAndAsTuple) {
     EXPECT_EQ(only_name, "zoe");
 }
 
+TEST(ResultsetPopulated, NamedRowToRejectsTooFewNamesBeforeWritingTargets) {
+    PopulatedResult pr({"id", "name"}, {{"42", "zoe"}});
+    resultset       rs = pr.rs();
+
+    auto check_short_names = [&](std::initializer_list<std::string> names) {
+        std::string id   = "old-id";
+        std::string name = "old-name";
+        EXPECT_THROW((rs[0].to<std::string, std::string>(names, id, name)), error::db_error);
+        EXPECT_EQ(id, "old-id");
+        EXPECT_EQ(name, "old-name");
+
+        std::tuple<std::string, std::string> tuple{"old-id", "old-name"};
+        EXPECT_THROW((rs[0].to<std::string, std::string>(names, tuple)), error::db_error);
+        EXPECT_EQ(tuple, std::make_tuple("old-id", "old-name"));
+
+        EXPECT_THROW((rs[0].to<std::string, std::string>(names, std::tie(id, name))), error::db_error);
+        EXPECT_EQ(id, "old-id");
+        EXPECT_EQ(name, "old-name");
+    };
+    check_short_names({});
+    check_short_names({"id"});
+
+    std::string unchanged_id = "old-id", unchanged_name = "old-name";
+    EXPECT_THROW(rs[0].to({"id"}, unchanged_id, unchanged_name), error::db_error);
+    EXPECT_EQ(unchanged_id, "old-id");
+    EXPECT_EQ(unchanged_name, "old-name");
+
+    std::string id, name;
+    rs[0].to({"id", "name"}, id, name);
+    EXPECT_EQ(id, "42");
+    EXPECT_EQ(name, "zoe");
+}
+
 // Forward row iteration drives const_row_iterator::advance/compare/operator*.
 TEST(ResultsetPopulated, RowIterationForward) {
     PopulatedResult pr({"id"}, {{"a"}, {"b"}, {"c"}});
@@ -365,6 +400,52 @@ TEST(ResultsetPopulated, AccessorAndIteratorDefaultSurface) {
     resultset::const_field_iterator dead_field{};
     EXPECT_FALSE(dead_row.valid());
     EXPECT_FALSE(dead_field.valid());
+}
+
+TEST(ResultsetPopulated, RowOrdinalDoesNotNarrowAt32768) {
+    PopulatedResult pr({"value"}, std::vector<std::vector<std::string>>(32769, {"x"}));
+    resultset       rs = pr.rs();
+
+    EXPECT_EQ(rs[32767].row_index(), 32767u);
+    EXPECT_EQ(rs[32768].row_index(), 32768u);
+    EXPECT_EQ(rs[32768][0].row_index(), 32768u);
+    EXPECT_EQ(rs[32768] - rs[32767], 1);
+    EXPECT_EQ(rs[32768] - rs[0], 32768);
+    EXPECT_EQ(rs[32767] - rs[32768], -1);
+}
+
+TEST(ResultsetPopulated, InputBufferSeekFromEndUsesPastLastPosition) {
+    std::vector<char>               bytes{'a', 'b', 'c'};
+    qb::util::input_iterator_buffer buffer(bytes.cbegin(), bytes.cend());
+
+    EXPECT_EQ(buffer.pubseekoff(0, std::ios_base::end, std::ios_base::in), std::streampos(3));
+    EXPECT_EQ(buffer.sgetc(), std::char_traits<char>::eof());
+    EXPECT_EQ(buffer.pubseekoff(-1, std::ios_base::end, std::ios_base::in), std::streampos(2));
+    EXPECT_EQ(buffer.sgetc(), 'c');
+    EXPECT_EQ(buffer.pubseekoff(-1, std::ios_base::cur, std::ios_base::in), std::streampos(1));
+    EXPECT_EQ(buffer.sgetc(), 'b');
+    EXPECT_EQ(buffer.pubseekoff(-4, std::ios_base::end, std::ios_base::in), std::streampos(-1));
+    EXPECT_EQ(buffer.sgetc(), 'b');
+    EXPECT_EQ(buffer.pubseekpos(3, std::ios_base::in), std::streampos(3));
+    EXPECT_EQ(buffer.sgetc(), std::char_traits<char>::eof());
+    EXPECT_EQ(buffer.pubseekoff(1, std::ios_base::end, std::ios_base::in), std::streampos(-1));
+    EXPECT_EQ(buffer.sgetc(), std::char_traits<char>::eof());
+
+    std::istream stream(&buffer);
+    stream.seekg(0, std::ios_base::beg);
+    EXPECT_EQ(stream.get(), 'a');
+    stream.seekg(0, std::ios_base::end);
+    EXPECT_EQ(stream.tellg(), std::streampos(3));
+    EXPECT_EQ(stream.peek(), std::char_traits<char>::eof());
+    stream.clear();
+    stream.seekg(-1, std::ios_base::end);
+    EXPECT_EQ(stream.get(), 'c');
+
+    std::vector<char>               empty;
+    qb::util::input_iterator_buffer empty_buffer(empty.cbegin(), empty.cend());
+    EXPECT_EQ(empty_buffer.pubseekoff(0, std::ios_base::end, std::ios_base::in), std::streampos(0));
+    EXPECT_EQ(empty_buffer.sgetc(), std::char_traits<char>::eof());
+    EXPECT_EQ(empty_buffer.pubseekoff(-1, std::ios_base::end, std::ios_base::in), std::streampos(-1));
 }
 
 // resultset::json() materializes rows as an array of {name: value-or-null}.

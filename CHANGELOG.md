@@ -31,6 +31,16 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Fixed
 
+- **Named row extraction rejects too few column names before touching outputs (Huly QB-647).**
+  Variadic `row.to({names...}, targets...)` now throws the same `db_error` as the tuple overload
+  when names run out, instead of reading beyond the initializer list. Zero or one name for
+  two targets leaves both targets unchanged.
+- **Row ordinals remain correct past 32767 rows (Huly QB-648).** `row.row_index()` now returns
+  the result-set row size type rather than the 16-bit column count type; row differences across
+  that boundary no longer wrap.
+- **Input field-buffer seeks from end use the position after the last byte (Huly QB-662).**
+  `seekoff(0, end)` now reaches EOF, `seekoff(-1, end)` reaches the last byte, and out-of-range
+  seeks fail before pointer arithmetic, including on an empty range.
 - **Callback savepoint failures stay within their savepoint (Huly QB-625).** Once `SAVEPOINT` succeeds,
   a failed child rolls back to it and releases it before the outer callback block continues. The
   savepoint error callback runs once after cleanup, including when the body callback throws;

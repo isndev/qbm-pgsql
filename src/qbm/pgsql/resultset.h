@@ -343,7 +343,7 @@ public:
         static const size_type npos;
 
     public:
-        size_type
+        resultset::size_type
         row_index() const /**< Index of the row in the result set */
         {
             return row_index_;
@@ -847,7 +847,7 @@ private:
 
 inline resultset::row::difference_type
 operator-(resultset::row const &a, resultset::row const &b) {
-    return a.row_index() - b.row_index();
+    return static_cast<resultset::row::difference_type>(a.row_index()) - static_cast<resultset::row::difference_type>(b.row_index());
 }
 
 } // namespace pg
@@ -978,6 +978,8 @@ struct field_by_name_extractor<qb::indexes_tuple<Indexes...>, T...> {
 
     static void
     get_values(resultset::row const &row, ::std::initializer_list<::std::string> const &names, T &...val) {
+        if (names.size() < size)
+            throw error::db_error{"Not enough names in row data extraction"};
         qb::expand{row[*(names.begin() + Indexes)].to(val)...};
     }
 };

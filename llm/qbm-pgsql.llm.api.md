@@ -439,7 +439,7 @@ public:
     class row {
     public:
         // STL-like container typedefs for fields (const_iterator, value_type=field, etc.)
-        size_type row_index() const;
+        resultset::size_type row_index() const; // Full row ordinal; row::size_type counts fields
 
         size_type size() const; // Number of fields in the row
         bool empty() const;
@@ -459,8 +459,9 @@ public:
         template <typename... T>
         void to(T&... args) const; // Direct to variables
         // ... named versions: to({"name1", "name2"}, ...) ...
+        // Too few names throw error::db_error before modifying targets.
 
-        size_type index_of_name(std::string const &name) const;
+        resultset::size_type index_of_name(std::string const &name) const;
     };
 };
 } // namespace qb::pg

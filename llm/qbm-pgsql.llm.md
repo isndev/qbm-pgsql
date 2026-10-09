@@ -301,6 +301,9 @@ std::string nm; int ag;
 row.to(nm, ag);                                          // by position
 row.to({"name", "age"}, nm, ag);                         // by column name
 
+// Named extraction needs one name per target; too few names throw db_error
+// before any target is changed. row.row_index() retains full row ordinals.
+
 // NULL-safe read — non-optional as<T> on a NULL throws error::value_is_null:
 auto maybe = row["middle_name"].as<std::optional<std::string>>();  // nullopt if NULL
 if (row["middle_name"].is_null()) { /* ... */ }

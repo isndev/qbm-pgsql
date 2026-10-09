@@ -14,6 +14,7 @@
  */
 #pragma once
 
+#include <limits>
 #include <streambuf>
 #include <vector>
 
@@ -62,7 +63,7 @@ public:
         // valid pointer.
         , start_(s != e ? const_cast<char_type *>(&*s) : nullptr)
         , count_(e - s) {
-        base::setg(start_, start_, start_ + count_);
+        base::setg(start_, start_, end_pointer());
     }
 
     /**
@@ -78,7 +79,7 @@ public:
         , start_(rhs.start_)
         , count_(rhs.count_) {
         auto n = rhs.gptr();
-        base::setg(start_, n, start_ + count_);
+        base::setg(start_, n, end_pointer());
     }
 
     /**
@@ -141,26 +142,29 @@ protected:
     pos_type
     seekoff(off_type off, ios_base::seekdir way, ios_base::openmode which = ios_base::in | ios_base::out) {
         (void) which;
-        char_type *tgt(nullptr);
+        if (count_ > static_cast<size_t>(std::numeric_limits<off_type>::max()))
+            return -1;
+        const off_type end = static_cast<off_type>(count_);
+        off_type       origin;
         switch (way) {
             case ios_base::beg:
-                tgt = start_ + off;
+                origin = 0;
                 break;
             case ios_base::cur:
-                tgt = base::gptr() + off;
+                origin = count_ ? base::gptr() - start_ : 0;
                 break;
             case ios_base::end:
-                tgt = start_ + count_ - 1 + off;
+                origin = end;
                 break;
             default:
-                break;
+                return -1;
         }
-        if (!tgt)
+        if (off < -origin || off > end - origin)
             return -1;
-        if (tgt < start_ || start_ + count_ < tgt)
-            return -1;
-        base::setg(start_, tgt, start_ + count_);
-        return tgt - start_;
+        const auto pos = static_cast<size_t>(origin + off);
+        char_type *tgt = pos ? start_ + pos : start_;
+        base::setg(start_, tgt, end_pointer());
+        return static_cast<off_type>(pos);
     }
 
     /**
@@ -175,15 +179,15 @@ protected:
      */
     pos_type
     seekpos(pos_type pos, ios_base::openmode which = ios_base::in | ios_base::out) {
-        (void) which;
-        char_type *tgt = start_ + pos;
-        if (tgt < start_ || start_ + count_ < tgt)
-            return -1;
-        base::setg(start_, tgt, start_ + count_);
-        return tgt - start_;
+        return seekoff(static_cast<off_type>(pos), ios_base::beg, which);
     }
 
 private:
+    char_type *
+    end_pointer() const {
+        return count_ ? start_ + count_ : start_;
+    }
+
     const_iterator s_;     ///< Iterator to the start of the range
     char_type     *start_; ///< Pointer to the start of the buffer
     size_t         count_; ///< Number of elements in the buffer

@@ -316,6 +316,9 @@ std::string nm; int ag;
 row.to(nm, ag);                                          // by position
 row.to({"name", "age"}, nm, ag);                         // by column name
 
+// Named extraction needs one name per target; too few names throw db_error
+// before any target is changed. row.row_index() retains full row ordinals.
+
 // NULL-safe read — non-optional as<T> on a NULL throws error::value_is_null:
 auto maybe = row["middle_name"].as<std::optional<std::string>>();  // nullopt if NULL
 if (row["middle_name"].is_null()) { /* ... */ }
@@ -1114,7 +1117,7 @@ public:
     class row {
     public:
         // STL-like container typedefs for fields (const_iterator, value_type=field, etc.)
-        size_type row_index() const;
+        resultset::size_type row_index() const; // Full row ordinal; row::size_type counts fields
 
         size_type size() const; // Number of fields in the row
         bool empty() const;
@@ -1134,8 +1137,9 @@ public:
         template <typename... T>
         void to(T&... args) const; // Direct to variables
         // ... named versions: to({"name1", "name2"}, ...) ...
+        // Too few names throw error::db_error before modifying targets.
 
-        size_type index_of_name(std::string const &name) const;
+        resultset::size_type index_of_name(std::string const &name) const;
     };
 };
 } // namespace qb::pg
