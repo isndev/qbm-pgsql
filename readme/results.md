@@ -104,7 +104,7 @@ The success callback receives the result set by value as its second argument. Th
 `error::db_error const&`.
 
 ```cpp
-<!-- src: qbm/pgsql/tests/integration/transaction/transaction-basic.cpp:58-64 -->
+<!-- src: qbm/pgsql/tests/integration/transaction/transaction-basic.cpp:59-65 -->
 #include <qbm/pgsql/pgsql.h>
 
 db.execute(

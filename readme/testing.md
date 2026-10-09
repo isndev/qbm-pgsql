@@ -22,8 +22,8 @@ govern how you run them:
   on at its own root `CMakeLists.txt:38` — named in prose rather than as a `src:` citation, because a
   bare `CMakeLists.txt` token resolves against THIS module and would silently range-check
   `qbm/pgsql/CMakeLists.txt` instead — so a default build already produces the binaries.
-- **Integration suites need a live server.** Eighteen unit suites have no socket, and three system suites
-  (`connect-timeout`, `scram-mitm-refuse`, `cancel-request-wire`) run with no daemon; the integration suites connect to
+- **Integration suites need a live server.** Unit suites and two compile-negative callback checks have no socket, and
+  four system suites (`connect-timeout`, `scram-mitm-refuse`, `cancel-request-wire`, `inline-query-order`) run with no daemon; the integration suites connect to
   PostgreSQL; each gates its fixture on a successful connect and calls `GTEST_SKIP()` when the server is unreachable, so
   the suite passes (as skipped) rather than failing on a machine with no database.
 
@@ -36,15 +36,15 @@ daemon (a connect-to-dead-host timeout), and `integration/` needs a live server.
 
 | Tier        | Suites                                                                                                                                                                                                                                                                              | Server required |
 |-------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------|
-| Unit        | `unserializer-primitives`, `typeconverter-codecs`, `result-format-routing`, `param-serializer-encode`, `typeconverter-{scalar,numeric,temporal,array,json,adversarial}`, `datastructures`, `oid-stream`, `protocol-message-codec`, `identifier-quoting`, `dsn-parse`, `scram-and-cancel`, `prepared-storage-lru`, `module-surface` | No              |
-| System      | `connect-timeout` (connects to a dead host — no daemon, network-timing dependent), `scram-mitm-refuse` (SCRAM mutual-auth refusal, no daemon), `cancel-request-wire` (the out-of-band CancelRequest against a fake backend, `cancel_async()` next to `cancel()`, no daemon)                                                                                                                                      | No              |
-| Integration | `connection-lifecycle`, `queries`, `prepared-statements`, `transaction-basic`, `transaction-advanced`, `datatypes-roundtrip`, `wire-formats`, `listen-notify`, `coro-api`, `errors-sqlstate`, `database-api-extra`, `param-roundtrip`, `resilience`, and `connection-ssl` (TLS only)              | Yes             |
+| Unit        | `unserializer-primitives`, `typeconverter-codecs`, `result-format-routing`, `param-serializer-encode`, `typeconverter-{scalar,numeric,temporal,array,json,adversarial}`, `datastructures`, `oid-stream`, `protocol-message-codec`, `identifier-quoting`, `dsn-parse`, `scram-and-cancel`, `prepared-storage-lru`, `module-surface`, `savepoint-command-order`, and two `invalid-{simple,prepared}-execute-callback` compile-negative checks | No |
+| System      | `connect-timeout` (dead host), `scram-mitm-refuse` (SCRAM refusal), `cancel-request-wire` (fake backend), `inline-query-order` (inline completion); none needs a daemon | No |
+| Integration | `connection-lifecycle`, `queries`, `inline-query`, `prepared-statements`, `transaction-basic`, `transaction-advanced`, `datatypes-roundtrip`, `wire-formats`, `listen-notify`, `coro-api`, `copy-owner`, `errors-sqlstate`, `database-api-extra`, `param-roundtrip`, `resilience`, and `connection-ssl` (TLS only) | Yes |
 
 The unit suites exercise wire-format encoding and decoding, parameter serialization, type conversion, and
 protocol-message framing in isolation — they pass on any host. The integration suites drive a real wire
 handshake, prepared statements, transactions, type round-trips, and asynchronous NOTIFY delivery against a server.
 
-<!-- src: qbm/pgsql/tests/CMakeLists.txt:60-117 -->
+<!-- src: qbm/pgsql/tests/CMakeLists.txt:60-100,102-133 -->
 
 ### How a missing server is handled
 
@@ -100,7 +100,7 @@ accepts the usual `--gtest_filter`, `--gtest_list_tests`, and `--gtest_repeat` f
 
 `connection-ssl` is the one conditional suite: it is registered inside an `if (QB_HAS_SSL)` guard, only when
 `QB_HAS_SSL` is set, because it links the `qb::pg::tcp::ssl::database` alias that exists only with
-OpenSSL (<!-- src: qbm/pgsql/tests/CMakeLists.txt:109-111 -->).
+OpenSSL (<!-- src: qbm/pgsql/tests/CMakeLists.txt:131-133 -->).
 
 ## Configuring the server
 
