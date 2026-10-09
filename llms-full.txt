@@ -1051,8 +1051,9 @@ namespace qb::pg {
   ```
 - **`qb::pg::detail::PreparedQueryStorage` (`qbm/pgsql/src/qbm/pgsql/queries.h`):**
   Manages a collection of `PreparedQuery` objects, typically one per database connection/session. Used internally by `Transaction`.
+  Copies rebuild their own LRU iterators; self-move assignment preserves the cache. `get()` promotes recency even on a const storage object.
   ```cpp
-  class PreparedStorage {      // queries.h:65 — `PreparedQueryStorage` is the ALIAS (queries.h:174)
+  class PreparedStorage {      // queries.h:65 — `PreparedQueryStorage` is the ALIAS (queries.h:181)
   public:
       bool has(std::string_view name) const;
       const PreparedQuery& push(PreparedQuery &&query);

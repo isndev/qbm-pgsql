@@ -298,7 +298,7 @@ roll back to it, or release it aborts the outer block. The `name` is **quoted as
 identifier** (double-quoted, embedded `"` doubled, matching libpq's `PQescapeIdentifier`) before it enters the
 simple-query string — on **both** the callback (`SavePointQuery` / `EndSavePointQuery`) and coroutine paths — so a name
 can never inject a second statement.
-<!-- src: src/qbm/pgsql/commands.h:233-266,319-344, src/qbm/pgsql/transaction.cpp:77-92, src/qbm/pgsql/queries.h:483-500,538-541,576-579,614-617 -->
+<!-- src: src/qbm/pgsql/commands.h:233-266,319-344, src/qbm/pgsql/transaction.cpp:77-92, src/qbm/pgsql/queries.h:490-507,545-548,583-586,621-624 -->
 
 **Coroutine — explicit control:**
 
@@ -367,7 +367,7 @@ objects.
 
 ## Statement timeout
 
-<!-- src: src/qbm/pgsql/transaction.h:662-687, src/qbm/pgsql/commands.h:1312-1320, src/qbm/pgsql/queries.h:374-407 -->
+<!-- src: src/qbm/pgsql/transaction.h:662-687, src/qbm/pgsql/commands.h:1312-1320, src/qbm/pgsql/queries.h:381-414 -->
 
 `set_timeout(qb::duration)` arms a PostgreSQL `statement_timeout` for the **next** `BEGIN` on this connection. The
 following `begin()` (callback *or* coroutine) appends `; SET LOCAL statement_timeout = N` to the same simple-query

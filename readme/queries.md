@@ -126,6 +126,7 @@ callback
 ## Prepared statements
 
 **Storage:** **`PreparedQueryStorage`** LRU in [`src/qbm/pgsql/queries.h`](../src/qbm/pgsql/queries.h).
+Copying a storage value keeps an independent LRU order, and self-move assignment preserves it. A const `get()` still promotes the accessed query.
 
 **Coroutine — prepare + execute**
 

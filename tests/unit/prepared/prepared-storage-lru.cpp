@@ -7,6 +7,7 @@
  *  - `PreparedStorageLRUTest.EvictionPolicy` — capacity, access-promotion, eviction count;
  *  - `PreparedStorageStressTest.HighVolumeEviction` — 1000 inserts / 100-slot cache;
  *  - `PreparedStorageStressTest.AccessPatternPromotion` — accessed entries survive;
+ *  - copied/moved storage keeps its own LRU index, including self-move; const lookup promotes recency;
  *  - `NameCacheTest.LazyInitialization` — REWRITTEN from a zero-assertion placeholder
  *    (`std::cout "placeholder"`) into a real check of `result_impl::column_index_of`'s
  *    lazy O(1) name-cache (built on first lookup; miss → npos).
@@ -162,6 +163,97 @@ TEST(PreparedStorageStress, AccessPatternPromotion) {
     EXPECT_TRUE(storage.has("q5"));
     EXPECT_TRUE(storage.has("q6"));
     EXPECT_EQ(storage.evicted_count(), 2u);
+}
+
+TEST(PreparedStorageLRU, CopyConstructionKeepsQueriesAndOrderIndependent) {
+    PreparedStorage source(2);
+    source.push(make_query("q1", "SELECT 1"));
+    source.push(make_query("q2", "SELECT 2"));
+
+    PreparedStorage copy(source);
+    EXPECT_EQ(copy.get("q1").expression, "SELECT 1"); // promote only in copy
+    source.push(make_query("q1", "SELECT 11"));
+    EXPECT_EQ(copy.get("q1").expression, "SELECT 1");
+    copy.push(make_query("q3", "SELECT 3"));
+    EXPECT_FALSE(copy.has("q2"));
+    EXPECT_TRUE(source.has("q2"));
+    EXPECT_EQ(source.get("q1").expression, "SELECT 11");
+}
+
+TEST(PreparedStorageLRU, CopyAssignmentSurvivesSourceDestruction) {
+    PreparedStorage copy(2);
+    copy.push(make_query("old", "SELECT 9"));
+    {
+        PreparedStorage source(2);
+        source.push(make_query("q1", "SELECT 1"));
+        source.push(make_query("q2", "SELECT 2"));
+        copy = source;
+    }
+
+    EXPECT_FALSE(copy.has("old"));
+    EXPECT_EQ(copy.get("q1").expression, "SELECT 1");
+    copy.push(make_query("q3", "SELECT 3"));
+    EXPECT_FALSE(copy.has("q2"));
+    EXPECT_TRUE(copy.has("q1"));
+    const auto &alias = copy;
+    copy              = alias;
+    EXPECT_EQ(copy.get("q1").expression, "SELECT 1");
+}
+
+TEST(PreparedStorageLRU, ConstLookupPromotesRecency) {
+    PreparedStorage source(2);
+    source.push(make_query("q1", "SELECT 1"));
+    source.push(make_query("q2", "SELECT 2"));
+    const PreparedStorage storage(std::move(source));
+
+    EXPECT_EQ(storage.get("q1").expression, "SELECT 1");
+    PreparedStorage copy(storage);
+    copy.push(make_query("q3", "SELECT 3"));
+    EXPECT_TRUE(copy.has("q1"));
+    EXPECT_FALSE(copy.has("q2"));
+}
+
+TEST(PreparedStorageLRU, MoveConstructionAndAssignmentRetainOrder) {
+    PreparedStorage source(2);
+    source.push(make_query("q1", "SELECT 1"));
+    source.push(make_query("q2", "SELECT 2"));
+    PreparedStorage moved(std::move(source));
+    source.clear();
+    EXPECT_EQ(moved.get("q1").expression, "SELECT 1");
+    moved.push(make_query("q3", "SELECT 3"));
+    EXPECT_FALSE(moved.has("q2"));
+
+    PreparedStorage assigned(1);
+    assigned.push(make_query("old", "SELECT 9"));
+    assigned = std::move(moved);
+    if (moved.has("old")) {
+        ASSERT_EQ(moved.size(), 1u);
+        EXPECT_EQ(moved.get("old").expression, "SELECT 9");
+    }
+    moved.clear();
+    EXPECT_EQ(assigned.max_size(), 2u);
+    EXPECT_EQ(assigned.get("q1").expression, "SELECT 1");
+    EXPECT_TRUE(assigned.has("q3"));
+}
+
+TEST(PreparedStorageLRU, SelfMoveKeepsIndexAndOrderUsable) {
+    PreparedStorage storage(2);
+    storage.push(make_query("q1", "SELECT 1"));
+    storage.push(make_query("q2", "SELECT 2"));
+
+    auto &same = storage;
+    storage    = std::move(same);
+    EXPECT_EQ(storage.size(), 2u);
+    EXPECT_EQ(storage.get("q1").expression, "SELECT 1");
+
+    PreparedStorage copy(storage);
+    copy.push(make_query("q3", "SELECT 3"));
+    EXPECT_TRUE(copy.has("q1"));
+    EXPECT_FALSE(copy.has("q2"));
+
+    storage.push(make_query("q3", "SELECT 3"));
+    EXPECT_TRUE(storage.has("q1"));
+    EXPECT_FALSE(storage.has("q2"));
 }
 
 // ---------------------------------------------------------------------------

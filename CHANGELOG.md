@@ -31,6 +31,14 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Fixed
 
+- **Copies of `PreparedStorage` own their LRU index (Huly QB-649).** A copied cache previously
+  kept list iterators from the source. Copy construction rebuilds the index, and copy assignment
+  leaves the destination intact if building the replacement fails. The database still owns a
+  single cache per connection; this corrects direct use of the storage value type. Move assignment
+  also guards self-move, which otherwise left a populated map with an emptied LRU list.
+- **A const prepared-storage lookup updates recency without casting away const (Huly QB-993).**
+  The LRU list is mutable cache bookkeeping, so `get()` can promote an entry on a genuinely
+  const storage object without modifying a const subobject through `const_cast`.
 - **Named row extraction rejects too few column names before touching outputs (Huly QB-647).**
   Variadic `row.to({names...}, targets...)` now throws the same `db_error` as the tuple overload
   when names run out, instead of reading beyond the initializer list. Zero or one name for

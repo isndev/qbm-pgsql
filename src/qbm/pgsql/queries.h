@@ -71,7 +71,7 @@ class PreparedStorage {
     };
 
     qb::unordered_map<std::string, LruEntry> _prepared_queries; ///< Map of queries
-    std::list<std::string>                   _lru_list;         ///< LRU order list
+    mutable std::list<std::string>           _lru_list;         ///< LRU order list, reordered by get()
     size_t                                   _max_size{100};    ///< Max capacity
     size_t                                   _evicted_count{0}; ///< Stats: evicted
 
@@ -87,6 +87,11 @@ public:
      */
     explicit PreparedStorage(size_t max_size)
         : _max_size(max_size > 0 ? max_size : 100) {}
+
+    PreparedStorage(const PreparedStorage &other);
+    PreparedStorage &operator=(const PreparedStorage &other);
+    PreparedStorage(PreparedStorage &&) = default;
+    PreparedStorage &operator=(PreparedStorage &&other) noexcept;
 
     /**
      * @brief Set maximum cache size (applies to future insertions)
@@ -168,6 +173,8 @@ private:
      * @brief Evict least recently used items if over capacity
      */
     void evict_if_needed();
+
+    void swap(PreparedStorage &other);
 };
 
 // Maintain backward compatibility

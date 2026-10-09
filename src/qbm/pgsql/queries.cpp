@@ -13,9 +13,52 @@
  * @ingroup Pgsql
  */
 #include "./queries.h"
+#include <stdexcept>
 #include <qb/system/endian.h> // qb::endian::from_big_endian
 
 namespace qb::pg::detail {
+
+PreparedStorage::PreparedStorage(const PreparedStorage &other)
+    : _lru_list(other._lru_list)
+    , _max_size(other._max_size)
+    , _evicted_count(other._evicted_count) {
+    _prepared_queries.reserve(other._prepared_queries.size());
+    for (auto it = _lru_list.begin(); it != _lru_list.end(); ++it) {
+        auto source = other._prepared_queries.find(*it);
+        if (source == other._prepared_queries.end())
+            throw std::logic_error("PreparedStorage LRU entry has no matching query");
+        _prepared_queries.emplace(*it, LruEntry{source->second.name, source->second.query, it});
+    }
+}
+
+PreparedStorage &
+PreparedStorage::operator=(const PreparedStorage &other) {
+    if (this != &other) {
+        PreparedStorage copy(other);
+        swap(copy);
+    }
+    return *this;
+}
+
+PreparedStorage &
+PreparedStorage::operator=(PreparedStorage &&other) noexcept {
+    if (this != &other) {
+        _prepared_queries = std::move(other._prepared_queries);
+        _lru_list         = std::move(other._lru_list);
+        _max_size         = other._max_size;
+        _evicted_count    = other._evicted_count;
+    }
+    return *this;
+}
+
+void
+PreparedStorage::swap(PreparedStorage &other) {
+    using std::swap;
+    _prepared_queries.swap(other._prepared_queries);
+    _lru_list.swap(other._lru_list);
+    swap(_max_size, other._max_size);
+    swap(_evicted_count, other._evicted_count);
+}
 
 void
 PreparedStorage::set_max_size(size_t max_size) {
@@ -59,11 +102,10 @@ PreparedStorage::get(std::string_view name) const {
         throw std::out_of_range("Prepared query not found: " + key);
     }
 
-    // Move to front (most recently used) - need to cast away const
-    auto &mutable_this = const_cast<PreparedStorage &>(*this);
-    mutable_this._lru_list.erase(it->second.lru_iter);
-    mutable_this._lru_list.push_front(key);
-    it->second.lru_iter = mutable_this._lru_list.begin();
+    // Recency is observable cache state and may change on a const lookup.
+    _lru_list.erase(it->second.lru_iter);
+    _lru_list.push_front(key);
+    it->second.lru_iter = _lru_list.begin();
 
     return it->second.query;
 }
