@@ -31,6 +31,16 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Fixed
 
+- **Concurrent unverified TLS connects emit one warning without a data race (Huly QB-628).**
+  The warning flag is shared by each TLS client specialization and can be reached from different
+  actor cores; its one-time decision is now atomic. Verified TLS and plain connections do not
+  enter the warning branch, and query execution pays no extra cost.
+- **`notify()` preserves payload text with either PostgreSQL string setting (Huly QB-630).**
+  Both callback and coroutine forms now use a dollar-quoted literal whose first closing match
+  follows the entire payload, including when its suffix overlaps the closing tag. This leaves
+  backslashes, apostrophes, and multibyte characters such as SJIS `表` untouched by SQL escaping,
+  while preserving the callback's single simple-query command.
+  Channel identifiers remain quoted; empty payloads still omit the payload clause.
 - **Copies of `PreparedStorage` own their LRU index (Huly QB-649).** A copied cache previously
   kept list iterators from the source. Copy construction rebuilds the index, and copy assignment
   leaves the destination intact if building the replacement fails. The database still owns a

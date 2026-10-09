@@ -101,7 +101,7 @@ transport aliases in `qb::pg::tcp`:
 The transport is a **compile-time** choice baked into the alias. The connection string scheme (`tcp`, `ssl`, `socket`)
 does **not** switch it: a `tcp://…` string on a `tcp::ssl::database` still negotiates TLS, and an `ssl://…` string on a
 `tcp::database` does **not**. Pick the alias for the security you want; the scheme only feeds host/port resolution.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:704,714 -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:705,715 -->
 
 There are also `notify_cb_consumer` / `notify_co_consumer` aliases for dedicated LISTEN/NOTIFY clients;
 see [queries.md](./queries.md).
@@ -132,7 +132,7 @@ rarely build it by hand — a connection string is parsed into it — but these 
 `connect_timeout` is a `qb::duration` (the framework's `std::chrono`-based duration). A non-positive value falls back to
 the 10 s default. Internally the deadline is converted to libev seconds via `qb::detail::to_ev_seconds`; you never deal
 with that conversion.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:699-702 -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:700-703 -->
 
 > The connection string carries `user`, `password`, `database`, and the `host:port`. The remaining fields (
 `connect_timeout`, `ssl_verify`, keepalive) are **not** expressed in the string — set them on a `connection_options`
@@ -329,7 +329,7 @@ bool ok = qb::io::async::run_sync(db.connect("tcp://user:secret@db.internal:5432
 
 > **Server-certificate verification is OFF by default.** `ssl_verify` defaults to `ssl_verify_mode::none` (≈ libpq
 `sslmode=require`): the link is encrypted but the server's certificate chain and hostname are **not** validated, and the
-client logs a one-time `LOG_WARN` so an unverified secure connection is never silent. Note the scope: SCRAM-SHA-256
+client logs `QB_LOG_WARN` once per TLS client specialization across actor cores. Note the scope: SCRAM-SHA-256
 mutual auth (enforced — see [Startup and authentication](#startup-and-authentication)) still authenticates the *server*
 even here; it is the TLS channel itself and any non-SCRAM auth that stay unprotected against an active MITM. Set
 `ssl_verify = ssl_verify_mode::full` (≈ libpq `verify-full`) on the options before connecting to enable qb-io's chain +
@@ -337,7 +337,7 @@ even here; it is the TLS channel itself and any non-SCRAM auth that stay unprote
 > connect. libpq's intermediate `verify-ca` (chain without hostname) is intentionally not offered: it accepts a valid
 > certificate issued for a *different* host, leaving an active-MITM window. `disable`/`prefer` map to the transport
 > choice — `tcp::database` never sends an SSLRequest; `tcp::ssl::database` requires TLS.
-<!-- src: qbm/pgsql/src/qbm/pgsql/common.h:127-146,173; qbm/pgsql/src/qbm/pgsql/pgsql.h:625-634,725-740 -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/common.h:127-146,173; qbm/pgsql/src/qbm/pgsql/pgsql.h:626-635,726-740 -->
 
 ---
 
@@ -490,7 +490,7 @@ does not re-enter the traversal.
 This also covers a malformed wire message and an unsupported/hostile auth method: both mark the protocol invalid (
 `not_ok()`), which disposes the I/O layer and fires `event::disconnected`, whose handler fails pending work and resumes
 a pending `connect` awaiter with an error.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:339-363 (onMessage noexcept containment -> not_ok) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:340-364 (onMessage noexcept containment -> not_ok) -->
 
 ---
 

@@ -23,7 +23,7 @@ govern how you run them:
   bare `CMakeLists.txt` token resolves against THIS module and would silently range-check
   `qbm/pgsql/CMakeLists.txt` instead — so a default build already produces the binaries.
 - **Integration suites need a live server.** Unit suites and two compile-negative callback checks have no socket, and
-  four system suites (`connect-timeout`, `scram-mitm-refuse`, `cancel-request-wire`, `inline-query-order`) run with no daemon; the integration suites connect to
+  five system suites (`connect-timeout`, `tls-warning-race`, `scram-mitm-refuse`, `cancel-request-wire`, `inline-query-order`) run with no daemon; the integration suites connect to
   PostgreSQL; each gates its fixture on a successful connect and calls `GTEST_SKIP()` when the server is unreachable, so
   the suite passes (as skipped) rather than failing on a machine with no database.
 
@@ -37,14 +37,14 @@ daemon (a connect-to-dead-host timeout), and `integration/` needs a live server.
 | Tier        | Suites                                                                                                                                                                                                                                                                              | Server required |
 |-------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------|
 | Unit        | `unserializer-primitives`, `typeconverter-codecs`, `result-format-routing`, `param-serializer-encode`, `typeconverter-{scalar,numeric,temporal,array,json,adversarial}`, `datastructures`, `oid-stream`, `protocol-message-codec`, `identifier-quoting`, `dsn-parse`, `scram-and-cancel`, `prepared-storage-lru`, `module-surface`, `savepoint-command-order`, and two `invalid-{simple,prepared}-execute-callback` compile-negative checks | No |
-| System      | `connect-timeout` (dead host), `scram-mitm-refuse` (SCRAM refusal), `cancel-request-wire` (fake backend), `inline-query-order` (inline completion); none needs a daemon | No |
+| System      | `connect-timeout` (dead host), `tls-warning-race` (separate TLS clients), `scram-mitm-refuse` (SCRAM refusal), `cancel-request-wire` (fake backend), `inline-query-order` (inline completion); none needs a daemon | No |
 | Integration | `connection-lifecycle`, `queries`, `inline-query`, `prepared-statements`, `transaction-basic`, `transaction-advanced`, `datatypes-roundtrip`, `wire-formats`, `listen-notify`, `coro-api`, `copy-owner`, `errors-sqlstate`, `database-api-extra`, `param-roundtrip`, `resilience`, and `connection-ssl` (TLS only) | Yes |
 
 The unit suites exercise wire-format encoding and decoding, parameter serialization, type conversion, and
 protocol-message framing in isolation — they pass on any host. The integration suites drive a real wire
 handshake, prepared statements, transactions, type round-trips, and asynchronous NOTIFY delivery against a server.
 
-<!-- src: qbm/pgsql/tests/CMakeLists.txt:60-100,102-133 -->
+<!-- src: qbm/pgsql/tests/CMakeLists.txt:60-100,102-134 -->
 
 ### How a missing server is handled
 
@@ -98,9 +98,9 @@ directory (<!-- src: qb/cmake/qbFunctions.cmake:614-616, qb/cmake/qbFunctions.cm
 `GTest::gtest_main` (<!-- src: qb/cmake/qbFunctions.cmake:576-577 -->), so it
 accepts the usual `--gtest_filter`, `--gtest_list_tests`, and `--gtest_repeat` flags.
 
-`connection-ssl` is the one conditional suite: it is registered inside an `if (QB_HAS_SSL)` guard, only when
-`QB_HAS_SSL` is set, because it links the `qb::pg::tcp::ssl::database` alias that exists only with
-OpenSSL (<!-- src: qbm/pgsql/tests/CMakeLists.txt:131-133 -->).
+The TLS suites are conditional: `tls-warning-race` has `REQUIRES ssl`, and `connection-ssl` is registered inside
+`if (QB_HAS_SSL)` with the same gate. They require the `qb::pg::tcp::ssl::database` alias, which exists only with
+OpenSSL (<!-- src: qbm/pgsql/tests/CMakeLists.txt:106,132-134 -->).
 
 ## Configuring the server
 

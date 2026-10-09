@@ -38,14 +38,14 @@ inline constexpr std::size_t notify_payload_max_bytes = 8000;
 [[nodiscard]] std::string quote_notify_identifier(std::string_view ident);
 
 /**
- * @brief Quote a SQL string literal using single quotes.
+ * @brief Quote a PostgreSQL dollar-quoted string literal.
  *
- * Wraps @p s in single quotes and doubles any embedded single-quote
- * character, producing a string literal safe for interpolation into a
- * NOTIFY payload.
+ * Chooses a tag whose first closing match follows all of @p s, even if
+ * its suffix overlaps the closing tag; the payload bytes stay literal
+ * independently of standard_conforming_strings.
  *
  * @param s String to quote.
- * @return The single-quoted, escaped string literal.
+ * @return The dollar-quoted string literal.
  */
 [[nodiscard]] std::string quote_notify_string_literal(std::string_view s);
 
@@ -81,11 +81,11 @@ build_unlisten_all_sql() {
  * @brief Build a NOTIFY statement for the given channel and payload.
  *
  * The channel is quoted as an identifier; when @p payload is non-empty it is
- * appended as a quoted string literal.
+ * appended as a dollar-quoted string literal.
  *
  * @param channel Channel name to notify; quoted as an identifier.
  * @param payload Optional payload; omitted from the statement when empty.
- * @return The complete `NOTIFY "<channel>"[, '<payload>']` statement.
+ * @return The complete `NOTIFY "<channel>"[, $tag$<payload>$tag$]` statement.
  * @throws error::client_error if @p channel is empty, or if @p payload exceeds
  *         ::notify_payload_max_bytes.
  */

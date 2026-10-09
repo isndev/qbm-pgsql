@@ -402,13 +402,15 @@ Key facts to get right:
 
 ## LISTEN / NOTIFY
 
-<!-- src: src/qbm/pgsql/transaction.h:441-505; src/qbm/pgsql/pg_notify_sql.h:25-92; qbm/pgsql/src/qbm/pgsql/pgsql.h:382-392,1992-2003,2788-2922 (in that order: notification; on_incoming_notify; notify_consumer / notify_co_consumer / notify_cb_consumer) -->
+<!-- src: src/qbm/pgsql/transaction.h:441-505; src/qbm/pgsql/pg_notify_sql.h:25-92; qbm/pgsql/src/qbm/pgsql/pgsql.h:383-393,1992-2003,2788-2922 (in that order: notification; on_incoming_notify; notify_consumer / notify_co_consumer / notify_cb_consumer) -->
 
 ### Publishing (NOTIFY)
 
-`notify` builds safe `NOTIFY "channel" [, 'payload']` SQL (the channel is quoted as an identifier and the payload as a
-string literal). Use a **normal** `database` connection to publish, not a connection dedicated to consuming. An empty
-payload omits the payload clause; payloads over `notify_payload_max_bytes` (8000) are rejected with a `client_error`.
+`notify` builds safe `NOTIFY "channel" [, $tag$payload$tag$]` SQL. It quotes the channel as an identifier and chooses
+a dollar-quote tag whose first closing match follows a nonempty payload, even if its suffix overlaps the closing tag.
+Backslashes and quotes stay literal under either `standard_conforming_strings` setting. Use a **normal** `database`
+connection to publish, not a connection dedicated to consuming. An empty payload omits the payload clause; payloads
+over `notify_payload_max_bytes` (8000) are rejected with a `client_error`.
 
 ```cpp
 // Callback

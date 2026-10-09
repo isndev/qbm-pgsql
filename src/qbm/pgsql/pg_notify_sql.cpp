@@ -30,17 +30,21 @@ quote_notify_identifier(std::string_view ident) {
 
 std::string
 quote_notify_string_literal(std::string_view s) {
+    // Dollar-quoted content is literal even when a multibyte character ends in
+    // the byte value of a backslash. Check the completed literal: a payload
+    // ending in "$qb_notify" would otherwise borrow the closing '$' and end early.
+    std::string delimiter = "$qb_notify$";
     std::string out;
-    out.reserve(s.size() + 2);
-    out.push_back('\'');
-    for (char c : s) {
-        if (c == '\'')
-            out.append("''");
-        else
-            out.push_back(c);
+    for (std::size_t suffix = 1;; ++suffix) {
+        out.clear();
+        out.reserve(s.size() + 2 * delimiter.size());
+        out.append(delimiter);
+        out.append(s.data(), s.size());
+        out.append(delimiter);
+        if (out.find(delimiter, delimiter.size()) == delimiter.size() + s.size())
+            return out;
+        delimiter = "$qb_notify_" + std::to_string(suffix) + "$";
     }
-    out.push_back('\'');
-    return out;
 }
 
 std::string

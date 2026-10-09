@@ -103,6 +103,7 @@ endforeach()
 # SYSTEM — no daemon (network-timing dependent → slow)
 # -----------------------------------------------------------------------------
 qpg_test(system connect-timeout system/connection/connect-timeout.cpp EXTRA_LABELS slow)
+qpg_test(system tls-warning-race system/connection/tls-warning-race.cpp REQUIRES ssl EXTRA_LABELS connection)
 qpg_test(system scram-mitm-refuse system/auth/scram-mitm-refuse.cpp EXTRA_LABELS auth)
 # The out-of-band CancelRequest on the wire, cancel_async() next to cancel(), against a fake backend that hands out
 # the BackendKeyData and reads the second connection (Huly QB-113). No daemon.

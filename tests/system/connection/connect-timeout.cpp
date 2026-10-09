@@ -103,6 +103,7 @@ TEST(ConnectTimeout, SslBadTlsMaterialFailsClosed) {
     opts.ssl_key         = "qb-nonexistent-client.key";
     EXPECT_FALSE(qb::io::async::run_sync(db->connect(opts))) << "a bad TLS material path must fail the connect closed";
 }
+
 #endif
 
 int

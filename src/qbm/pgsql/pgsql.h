@@ -85,6 +85,7 @@
  */
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <coroutine>
 #include <cstdint>
@@ -729,9 +730,8 @@ private:
                 // untrusted network. SCRAM-SHA-256 mutual auth (enforced since the P1 fix) still
                 // authenticates the server, but non-SCRAM auth and the TLS channel itself are
                 // unprotected. Surface it ONCE so an unverified secure connection is never silent.
-                static bool warned_unverified_tls = false;
-                if (!warned_unverified_tls) {
-                    warned_unverified_tls = true;
+                static std::atomic<bool> warned_unverified_tls{false};
+                if (!warned_unverified_tls.exchange(true, std::memory_order_relaxed)) {
                     QB_LOG_WARN("[pgsql] TLS WITHOUT certificate verification (ssl_verify=none): the server "
                                 "certificate chain/hostname is NOT verified. Set ssl_verify_mode::full to "
                                 "authenticate the server (or rely on SCRAM-SHA-256 mutual auth).");

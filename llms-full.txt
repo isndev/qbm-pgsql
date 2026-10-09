@@ -172,7 +172,7 @@ carry TLS fields). User-defined literals: `"...dsn..."_pg → connection_options
 
 **TLS verification — `ssl_verify_mode { none, full }`.** `none` (default) is
 encrypt-only with no certificate check (≈ libpq `sslmode=require`), and logs a
-one-time warning; `full` verifies the chain **and** hostname (≈ libpq
+one-time warning per TLS client specialization across actor cores; `full` verifies the chain **and** hostname (≈ libpq
 `verify-full`). Note that even under `none`, SCRAM-SHA-256 still mutually
 authenticates the *server* (see §2) — it is the TLS channel and any non-SCRAM
 auth that stay unauthenticated. libpq's intermediate
@@ -428,8 +428,14 @@ callback are wrapped as `error::client_error`.
 
 Plain database: `notify` / `listen` / `unlisten` / `unlisten_all` (callback or
 `co_await` → `Reply<void>`); incoming NOTIFY is only logged unless you set
-`db.on_incoming_notify([](qb::pg::notification&& n){ ... })`. For a queue-based
-consumer use the dedicated client:
+`db.on_incoming_notify([](qb::pg::notification&& n){ ... })`.
+
+Outbound `notify` quotes the channel as a SQL identifier and uses a dollar-quoted literal whose
+first closing match follows each nonempty payload, including a suffix overlapping the closing
+tag. It keeps backslashes and multibyte text literal under either `standard_conforming_strings`
+setting.
+
+For a queue-based consumer use the dedicated client:
 
 ```cpp
 qb::pg::tcp::notify_co_consumer sub;                     // alias: notify_cb_consumer (same type)

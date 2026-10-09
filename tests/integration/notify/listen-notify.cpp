@@ -31,6 +31,7 @@
 #include <chrono>
 #include <gtest/gtest.h>
 #include <string>
+#include <vector>
 #include <qb/io/async.h>
 #include <qb/io/async/coroutine.h>
 #include <qb/io/async/coroutine/utils.h>
@@ -91,6 +92,112 @@ TEST_F(ListenNotify, Notify_Coro_WithAndWithoutPayload) {
 
 TEST_F(ListenNotify, Notify_Coro_ViaRunSyncOnAwaiter) {
     ASSERT_TRUE(qb::io::async::run_sync(pub_->notify(std::string(kChan), "direct-awaiter")));
+}
+
+TEST_F(ListenNotify, NotifyPayloadBytesSurviveBothStringSettingsAndPublicForms) {
+    const std::string              channel = "qb_pgsql_notify_\"quoted";
+    const std::vector<std::string> payloads{
+        "literal\\nsequence", "apostrophe's", "trailing\\", "actual\nnewline", "$qb_notify$inside$qb_notify_1$", ""
+    };
+    std::vector<std::string> received;
+    pub_->on_incoming_notify([&](qb::pg::notification &&n) {
+        if (n.channel == channel)
+            received.push_back(std::move(n.payload));
+    });
+    ASSERT_TRUE(pub_->listen(channel, discard_query, discard_error).await());
+
+    for (bool standard_strings : {false, true}) {
+        ASSERT_TRUE(pub_->execute(standard_strings ? "SET standard_conforming_strings = on" : "SET standard_conforming_strings = off",
+                                  discard_query, discard_error)
+                        .await());
+        for (const std::string &payload : payloads) {
+            for (bool coroutine_form : {false, true}) {
+                const std::size_t next = received.size() + 1;
+                if (coroutine_form)
+                    ASSERT_TRUE(qb::io::async::run_sync(pub_->notify(channel, payload)));
+                else
+                    ASSERT_TRUE(pub_->notify(channel, payload, discard_query, discard_error).await());
+                ASSERT_TRUE(pump_until([&] { return received.size() >= next; }, kDeadline))
+                    << "missing NOTIFY with standard_conforming_strings=" << standard_strings;
+                ASSERT_EQ(received.size(), next);
+                EXPECT_EQ(received.back(), payload)
+                    << "payload changed under standard_conforming_strings=" << standard_strings << " (coroutine=" << coroutine_form << ')';
+            }
+        }
+    }
+
+    pub_->on_incoming_notify({});
+    ASSERT_TRUE(pub_->unlisten(channel, discard_query, discard_error).await());
+}
+
+TEST_F(ListenNotify, NotifyDelimiterBoundaryOverlapKeepsPayloadLiteral) {
+    const std::string              channel = "qb_pgsql_notify_overlap";
+    const std::vector<std::string> payloads{"abc$qb_notify", "$qb_notify$abc$qb_notify_1"};
+    std::vector<std::string>       received;
+    pub_->on_incoming_notify([&](qb::pg::notification &&n) {
+        if (n.channel == channel)
+            received.push_back(std::move(n.payload));
+    });
+    ASSERT_TRUE(pub_->listen(channel, discard_query, discard_error).await());
+
+    for (bool standard_strings : {false, true}) {
+        ASSERT_TRUE(pub_->execute(standard_strings ? "SET standard_conforming_strings = on" : "SET standard_conforming_strings = off",
+                                  discard_query, discard_error)
+                        .await());
+        for (const std::string &payload : payloads) {
+            for (bool coroutine_form : {false, true}) {
+                const std::size_t next = received.size() + 1;
+                const bool sent = coroutine_form ? static_cast<bool>(qb::io::async::run_sync(pub_->notify(channel, payload)))
+                                                 : static_cast<bool>(pub_->notify(channel, payload, discard_query, discard_error).await());
+                EXPECT_TRUE(sent) << "delimiter-boundary NOTIFY failed with standard_conforming_strings=" << standard_strings
+                                  << " (coroutine=" << coroutine_form << ')';
+                if (!sent)
+                    continue;
+                ASSERT_TRUE(pump_until([&] { return received.size() >= next; }, kDeadline));
+                ASSERT_EQ(received.size(), next);
+                EXPECT_EQ(received.back(), payload)
+                    << "delimiter-boundary payload changed under standard_conforming_strings=" << standard_strings
+                    << " (coroutine=" << coroutine_form << ')';
+            }
+        }
+    }
+
+    pub_->on_incoming_notify({});
+    ASSERT_TRUE(pub_->unlisten(channel, discard_query, discard_error).await());
+}
+
+TEST_F(ListenNotify, NotifyPreservesSjisMultibyteTrailingBackslash) {
+    const std::string        channel = "qb_pgsql_notify_sjis";
+    const std::string        payload{static_cast<char>(0x95), static_cast<char>(0x5c)}; // 表 in SJIS
+    std::vector<std::string> received;
+    pub_->on_incoming_notify([&](qb::pg::notification &&n) {
+        if (n.channel == channel)
+            received.push_back(std::move(n.payload));
+    });
+    ASSERT_TRUE(pub_->execute("SET client_encoding = SJIS", discard_query, discard_error).await());
+    ASSERT_TRUE(pub_->listen(channel, discard_query, discard_error).await());
+
+    for (bool standard_strings : {false, true}) {
+        ASSERT_TRUE(pub_->execute(standard_strings ? "SET standard_conforming_strings = on" : "SET standard_conforming_strings = off",
+                                  discard_query, discard_error)
+                        .await());
+        for (bool coroutine_form : {false, true}) {
+            const std::size_t next = received.size() + 1;
+            const bool        sent = coroutine_form ? static_cast<bool>(qb::io::async::run_sync(pub_->notify(channel, payload)))
+                                                    : static_cast<bool>(pub_->notify(channel, payload, discard_query, discard_error).await());
+            EXPECT_TRUE(sent) << "SJIS NOTIFY failed under standard_conforming_strings=" << standard_strings << " (coroutine=" << coroutine_form
+                              << ')';
+            if (!sent)
+                continue;
+            ASSERT_TRUE(pump_until([&] { return received.size() >= next; }, kDeadline));
+            ASSERT_EQ(received.size(), next);
+            EXPECT_EQ(received.back(), payload) << "SJIS payload changed under standard_conforming_strings=" << standard_strings
+                                                << " (coroutine=" << coroutine_form << ')';
+        }
+    }
+
+    pub_->on_incoming_notify({});
+    ASSERT_TRUE(pub_->unlisten(channel, discard_query, discard_error).await());
 }
 
 TEST_F(ListenNotify, Listen_Unlisten_Coro_ViaRunSync) {
