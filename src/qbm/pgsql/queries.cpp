@@ -73,11 +73,9 @@ PreparedStorage::push(PreparedQuery &&query) {
     // Check if already exists - update it and move to front
     auto it = _prepared_queries.find(key);
     if (it != _prepared_queries.end()) {
-        // Move to front (most recently used)
-        _lru_list.erase(it->second.lru_iter);
-        _lru_list.push_front(key);
-        it->second.lru_iter = _lru_list.begin();
-        it->second.query    = std::move(query);
+        // Relink the existing node; its stored iterator stays valid.
+        _lru_list.splice(_lru_list.begin(), _lru_list, it->second.lru_iter);
+        it->second.query = std::move(query);
         return it->second.query;
     }
 
@@ -103,9 +101,7 @@ PreparedStorage::get(std::string_view name) const {
     }
 
     // Recency is observable cache state and may change on a const lookup.
-    _lru_list.erase(it->second.lru_iter);
-    _lru_list.push_front(key);
-    it->second.lru_iter = _lru_list.begin();
+    _lru_list.splice(_lru_list.begin(), _lru_list, it->second.lru_iter);
 
     return it->second.query;
 }

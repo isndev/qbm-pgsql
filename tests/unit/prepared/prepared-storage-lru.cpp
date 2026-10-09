@@ -18,14 +18,52 @@
  */
 
 #include <gtest/gtest.h>
+#include <cstdlib>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <qbm/pgsql/pgsql.h>
+
+namespace {
+thread_local bool fail_next_allocation = false;
+}
+
+// This test binary contains only the prepared-storage and name-cache unit tests.
+// The fault is armed only around one cache call on the current thread.
+void *
+operator new(std::size_t size) {
+    if (fail_next_allocation) {
+        fail_next_allocation = false;
+        throw std::bad_alloc{};
+    }
+    if (void *memory = std::malloc(size == 0 ? 1 : size))
+        return memory;
+    throw std::bad_alloc{};
+}
+
+void
+operator delete(void *memory) noexcept {
+    std::free(memory);
+}
+
+void
+operator delete(void *memory, std::size_t) noexcept {
+    std::free(memory);
+}
 
 using namespace qb::pg;
 using namespace qb::pg::detail;
 
 namespace {
+
+struct FailNextAllocation {
+    FailNextAllocation() {
+        fail_next_allocation = true;
+    }
+    ~FailNextAllocation() {
+        fail_next_allocation = false;
+    }
+};
 
 /// Build a minimal PreparedQuery (name + SQL only; types/row-description empty).
 [[nodiscard]] PreparedQuery
@@ -211,6 +249,56 @@ TEST(PreparedStorageLRU, ConstLookupPromotesRecency) {
     copy.push(make_query("q3", "SELECT 3"));
     EXPECT_TRUE(copy.has("q1"));
     EXPECT_FALSE(copy.has("q2"));
+}
+
+TEST(PreparedStorageLRU, ConstLookupPromotionSurvivesAllocationFailure) {
+    PreparedStorage source(2);
+    source.push(make_query("a", "SELECT 1"));
+    source.push(make_query("b", "SELECT 2"));
+    const PreparedStorage &storage = source;
+
+    bool threw = false;
+    {
+        FailNextAllocation fault;
+        try {
+            (void) storage.get("a");
+        } catch (const std::bad_alloc &) {
+            threw = true;
+        }
+    }
+    ASSERT_FALSE(threw);
+    EXPECT_EQ(storage.size(), 2u);
+
+    PreparedStorage copy(storage);
+    copy.push(make_query("c", "SELECT 3"));
+    EXPECT_TRUE(copy.has("a"));
+    EXPECT_FALSE(copy.has("b"));
+    EXPECT_TRUE(copy.has("c"));
+}
+
+TEST(PreparedStorageLRU, ExistingPushPromotionSurvivesAllocationFailure) {
+    PreparedStorage storage(2);
+    storage.push(make_query("a", "SELECT 1"));
+    storage.push(make_query("b", "SELECT 2"));
+    auto replacement = make_query("a", "SELECT 11");
+
+    bool threw = false;
+    {
+        FailNextAllocation fault;
+        try {
+            (void) storage.push(std::move(replacement));
+        } catch (const std::bad_alloc &) {
+            threw = true;
+        }
+    }
+    ASSERT_FALSE(threw);
+    EXPECT_EQ(storage.size(), 2u);
+    EXPECT_EQ(storage.get("a").expression, "SELECT 11");
+
+    storage.push(make_query("c", "SELECT 3"));
+    EXPECT_TRUE(storage.has("a"));
+    EXPECT_FALSE(storage.has("b"));
+    EXPECT_TRUE(storage.has("c"));
 }
 
 TEST(PreparedStorageLRU, MoveConstructionAndAssignmentRetainOrder) {
