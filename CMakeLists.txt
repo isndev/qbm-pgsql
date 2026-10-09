@@ -94,7 +94,7 @@ qb_register_module(
         # field_handler.h is dead and broken, and it was shipped to every consumer anyway.
         # Dead: no TU in this module, in the superproject, in the examples or in any test
         # includes it -- the live decode path is resultset.h's merged tail (field::as<T> at
-        # resultset.h:552, resultset::row::to at resultset.h:975). Broken: compiled alone it
+        # resultset.h:554, resultset::row::to at resultset.h:994). Broken: compiled alone it
         # produces 11 errors under clang 17 (`typename specifier refers to non-type member
         # 'field' in 'qb::pg::resultset'` x6, `no member named 'deserialize' in
         # ParamUnserializer`, `inline declaration of 'to' follows non-inline definition` x2,

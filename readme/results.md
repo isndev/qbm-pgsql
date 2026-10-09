@@ -360,7 +360,7 @@ This export is convenient for diagnostics and admin endpoints; use typed `as<T>(
   `static ParamUnserializer`; this is safe only because an actor/connection runs on a single `VirtualCore` (one thread).
   Sharing a `results` across cores is a data race (`resultset.h:640`).
 - **NULL into a non-`std::optional` target throws.** Always decode possibly-NULL columns as `std::optional<U>`, or guard
-  with `is_null()` (`resultset.h:558`, `:482`).
+  with `is_null()` (`resultset.h:558-565`, `:482`).
 - **Retired time tokens are gone.** `timestamptz` maps to `qb::wall_time`; `qb::Timestamp` / `qb::UtcTimestamp` /
   `to_timestamp(...)` no longer exist in this API.
 - **A multi-statement simple query yields ONE result.** `execute("SELECT …; SELECT …", …)` collects every statement's
