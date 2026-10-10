@@ -79,7 +79,7 @@ function(qpg_itest NAME RELPATH)
             RESOURCE_LOCK qb_pgsql_integration)
 endfunction()
 # qb_register_module_test then applies it via
-# set_tests_properties(... PROPERTIES RESOURCE_LOCK ...) (src: qb/cmake/qbFunctions.cmake:718-720).
+# set_tests_properties(... PROPERTIES RESOURCE_LOCK ...) (src: qb/cmake/qbFunctions.cmake:742-744).
 ```
 
 `connection-ssl` joins the same lock when it is built. CTest will not run two `qb_pgsql_integration` holders
@@ -90,12 +90,12 @@ or across machines — point each runner at its own database, or run them sequen
 
 `qb_register_module_test` names each CTest entry and binary
 `qbm-pgsql-test-<tier>-<name>` — for example `qbm-pgsql-test-integration-connection-lifecycle`
-(<!-- src: qb/cmake/qbFunctions.cmake:1163-1164, qb/cmake/qbFunctions.cmake:1190-1193 -->) — and places the executable in
+(<!-- src: qb/cmake/qbFunctions.cmake:1185-1186, qb/cmake/qbFunctions.cmake:1212-1215 -->) — and places the executable in
 `${CMAKE_BINARY_DIR}/bin/tests` with that directory as its working
-directory (<!-- src: qb/cmake/qbFunctions.cmake:614-616, qb/cmake/qbFunctions.cmake:706-708 -->). Each test carries `tier:<tier>` and
+directory (<!-- src: qb/cmake/qbFunctions.cmake:638-639, qb/cmake/qbFunctions.cmake:730-732 -->). Each test carries `tier:<tier>` and
 `module:qbm-pgsql` CTest labels plus a per-tier timeout (unit 60 s, integration 300 s)
-(<!-- src: qb/cmake/qbFunctions.cmake:368-380, qb/cmake/qbFunctions.cmake:712-717 -->). Each binary links
-`GTest::gtest_main` (<!-- src: qb/cmake/qbFunctions.cmake:576-577 -->), so it
+(<!-- src: qb/cmake/qbFunctions.cmake:374-386, qb/cmake/qbFunctions.cmake:736-741 -->). Each binary links
+`GTest::gtest_main` (<!-- src: qb/cmake/qbFunctions.cmake:600-601 -->), so it
 accepts the usual `--gtest_filter`, `--gtest_list_tests`, and `--gtest_repeat` flags.
 
 The TLS suites are conditional: `tls-warning-race` has `REQUIRES ssl`, and `connection-ssl` is registered inside
