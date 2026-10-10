@@ -18,23 +18,37 @@
  */
 
 #include <gtest/gtest.h>
+#include <cstddef>
 #include <cstdlib>
 #include <new>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <qbm/pgsql/pgsql.h>
 
 namespace {
-thread_local bool fail_next_allocation = false;
-}
+// The fault: once armed, let `allocations_to_pass` allocations through and fail the next one. A countdown, not
+// "the next allocation", because the cache builds a std::string key before it touches its LRU list, and where a
+// std::string allocates even when short -- MSVC's iterator debugging gives every string a container proxy -- that
+// key, not the promotion, would absorb the fault. `key_allocations()` measures what the key costs in this build.
+thread_local bool        fail_armed          = false;
+thread_local std::size_t allocations_to_pass = 0;
+thread_local bool        counting            = false;
+thread_local std::size_t allocations_counted = 0;
+} // namespace
 
 // This test binary contains only the prepared-storage and name-cache unit tests.
 // The fault is armed only around one cache call on the current thread.
 void *
 operator new(std::size_t size) {
-    if (fail_next_allocation) {
-        fail_next_allocation = false;
-        throw std::bad_alloc{};
+    if (counting)
+        ++allocations_counted;
+    if (fail_armed) {
+        if (allocations_to_pass == 0) {
+            fail_armed = false;
+            throw std::bad_alloc{};
+        }
+        --allocations_to_pass;
     }
     if (void *memory = std::malloc(size == 0 ? 1 : size))
         return memory;
@@ -56,12 +70,29 @@ using namespace qb::pg::detail;
 
 namespace {
 
+/// Allocations a std::string copy of `name` costs in this build: 0 for a name the small-string buffer holds, 1
+/// under MSVC's iterator debugging (the container proxy). PreparedStorage::get and ::push build such a key first.
+[[nodiscard]] std::size_t
+key_allocations(std::string_view name) {
+    allocations_counted = 0;
+    counting            = true;
+    {
+        std::string          key(name);
+        volatile std::size_t sink = key.size();
+        (void) sink;
+    }
+    counting = false;
+    return allocations_counted;
+}
+
+/// Fail the first allocation after `pass` others, for the lifetime of this object.
 struct FailNextAllocation {
-    FailNextAllocation() {
-        fail_next_allocation = true;
+    explicit FailNextAllocation(std::size_t pass) {
+        allocations_to_pass = pass;
+        fail_armed          = true;
     }
     ~FailNextAllocation() {
-        fail_next_allocation = false;
+        fail_armed = false;
     }
 };
 
@@ -259,7 +290,7 @@ TEST(PreparedStorageLRU, ConstLookupPromotionSurvivesAllocationFailure) {
 
     bool threw = false;
     {
-        FailNextAllocation fault;
+        FailNextAllocation fault(key_allocations("a")); // the key may allocate; the promotion must not
         try {
             (void) storage.get("a");
         } catch (const std::bad_alloc &) {
@@ -284,7 +315,7 @@ TEST(PreparedStorageLRU, ExistingPushPromotionSurvivesAllocationFailure) {
 
     bool threw = false;
     {
-        FailNextAllocation fault;
+        FailNextAllocation fault(key_allocations("a")); // the key may allocate; the promotion must not
         try {
             (void) storage.push(std::move(replacement));
         } catch (const std::bad_alloc &) {
