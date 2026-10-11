@@ -309,9 +309,10 @@ BM_JsonbTypedRead(benchmark::State &state) {
     const std::string text = jsonb_document(static_cast<int>(state.range(0)));
     JsonbFieldFixture fixture(text);
     resultset         result(&fixture.impl);
-    const auto        field = result[0][0];
-    if (field.as<qb::jsonb>().is_null()) {
-        state.SkipWithError("JSONB typed read lost its value");
+    const auto        field    = result[0][0];
+    const auto        expected = qb::json::parse(text);
+    if (field.as<qb::jsonb>().unwrap() != expected) {
+        state.SkipWithError("JSONB typed read differs from the complete wire document");
         return;
     }
 
