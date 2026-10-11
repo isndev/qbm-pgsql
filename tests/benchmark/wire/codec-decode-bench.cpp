@@ -121,6 +121,11 @@ jsonb_document(int shape) {
             return "1e400";
         case 5:
             return "[[1,2],[3,4]]";
+        // Existing unit literals: numeric loss after representable values.
+        case 6:
+            return "[0.1,12345678901234567890.123456789]";
+        case 7:
+            return R"({"prefix":[0.1,1.5],"loss":1e-400})";
         default:
             return {};
     }
@@ -473,16 +478,26 @@ BENCHMARK(BM_JsonbTextCopy)->Arg(0)->Arg(1)->Arg(2)->Arg(3)->Arg(4);
 // Keep the rejection path measurable without claiming a successful typed read.
 static void
 BM_JsonbTypedRejected(benchmark::State &state) {
-    const std::string text = jsonb_document(static_cast<int>(state.range(0)));
-    JsonbFieldFixture fixture(text);
-    resultset         result(&fixture.impl);
-    const auto        field = result[0][0];
+    const int              shape = static_cast<int>(state.range(0));
+    const std::string      text  = jsonb_document(shape);
+    JsonbFieldFixture      fixture(text);
+    resultset              result(&fixture.impl);
+    const auto             field           = result[0][0];
+    const std::string_view rejected_lexeme = shape == 6   ? std::string_view{"12345678901234567890.123456789"}
+                                             : shape == 7 ? std::string_view{"1e-400"}
+                                                          : std::string_view{text};
+    const std::string      expected_error  = std::string(shape == 4 ? "JSONB numeric value exceeds the DOM floating range: "
+                                                                    : "JSONB numeric value cannot be represented without decimal rounding: ")
+                                             + std::string(rejected_lexeme);
     try {
         (void) field.as<qb::jsonb>();
         state.SkipWithError("unrepresentable JSONB number was accepted");
         return;
-    } catch (const error::client_error &) {
-        // Expected. An unrelated parse failure must not produce a timing.
+    } catch (const error::client_error &e) {
+        if (std::string_view(e.what()) != expected_error) {
+            state.SkipWithError("JSONB rejection did not report the expected numeric lexeme");
+            return;
+        }
     }
 
     for (auto _ : state) {
@@ -497,7 +512,7 @@ BM_JsonbTypedRejected(benchmark::State &state) {
     state.SetItemsProcessed(state.iterations());
     state.SetBytesProcessed(state.iterations() * static_cast<std::int64_t>(text.size()));
 }
-BENCHMARK(BM_JsonbTypedRejected)->Arg(3)->Arg(4);
+BENCHMARK(BM_JsonbTypedRejected)->Arg(3)->Arg(4)->Arg(6)->Arg(7);
 #endif
 
 BENCHMARK_MAIN();
