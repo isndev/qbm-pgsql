@@ -347,6 +347,9 @@ an owning string. A callback result is borrowed: snapshot it or copy the text
 inside the callback before retaining either. Both methods validate SQL NULL,
 OID, format and binary version. Canonical JSONB text may already differ from
 the original input's spacing and key order.
+A typed read may allocate a DOM prefix before a later numeric or syntax rejection.
+Compatibility configurations retain the checked public parser; canonical-text access
+avoids DOM construction. The API and ownership rules are unchanged.
 
 ```cpp
 // WRITE a timestamptz parameter (qb::wall_time is a UTC instant on system_clock):

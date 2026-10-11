@@ -36,7 +36,7 @@ You include nothing extra: `#include <qbm/pgsql/pgsql.h>` pulls `resultset.h` th
 
 ### Ownership: owning vs borrowing result sets
 
-`results` is internally a `std::shared_ptr<const result_impl>` (`resultset.h:841`), so copying one is cheap and copies
+`results` is internally a `std::shared_ptr<const result_impl>` (`resultset.h:851`), so copying one is cheap and copies
 are safe. There are two flavors:
 
 - An **owning** result set holds a real allocation and keeps its rows alive. The default constructor, `deep_snapshot()`,
@@ -67,7 +67,7 @@ use `rows_affected()` (`resultset.h:298`), which returns the count parsed from t
 ### Binary vs text decoding is per column
 
 Each column carries a `field_description::format_code` (`Text` or `Binary`). `field::as<T>()` branches on it: binary
-fields go through `TypeConverter<T>::from_binary`, text fields through `from_text` (`resultset.h:583-589,632,642`). After an
+fields go through `TypeConverter<T>::from_binary`, text fields through `from_text` (`resultset.h:594-600,643,653`). After an
 extended-query execute, the client rewrites the row description's format codes to match what `Bind` requested, so
 columns from a prepared/parameterized query are often binary while the same columns from a simple query stay text. You
 do not choose the format — `as<T>()` reads it and dispatches correctly.
@@ -218,7 +218,7 @@ row.to({"id", "name", "active"}, id, name, active);
 ```
 
 The named form requires at least as many names as targets, or it throws `error::db_error` with message
-`"Not enough names in row data extraction"` before changing any target (`resultset.h:973-983`). Each target decodes through the same path as
+`"Not enough names in row data extraction"` before changing any target (`resultset.h:983-993`). Each target decodes through the same path as
 `field::as<T>()`, so a NULL into a non-`std::optional` target throws `value_is_null` (see below).
 
 ### Typed tuples & structured bindings
@@ -290,7 +290,7 @@ not use them.
 ### NULL handling
 
 A direct `as<T>()` (or `to(T&)`) on a NULL cell, where `T` is not nullable, throws `error::value_is_null(name())` (
-`resultset.h:564`, `resultset.h:663`). To read a possibly-NULL cell without exceptions, extract into `std::optional<U>`:
+`resultset.h:564`, `resultset.h:673`). To read a possibly-NULL cell without exceptions, extract into `std::optional<U>`:
 
 ```cpp
 <!-- src: qbm/pgsql/src/qbm/pgsql/resultset.h:553 -->
@@ -311,7 +311,7 @@ if (!field.is_null())
 `results::json()` checks SQL NULL directly, so a present empty TEXT value remains `""` while SQL NULL becomes JSON null
 (`resultset.cpp:518-531`).
 `field.as<std::optional<T>>()` uses the same NULL metadata; a present value is decoded through `T`, preserving
-empty text and the column-OID conversion for binary numerics (`resultset.h:558-575,597-632`).
+empty text and the column-OID conversion for binary numerics (`resultset.h:558-586,608-643`).
 
 ### Type mismatches
 
@@ -358,7 +358,7 @@ This export is convenient for diagnostics and admin endpoints; use typed `as<T>(
   iterators, different rows — trips an assert (`resultset.cpp:106,221-222`).
 - **Do not share a result set across cores/threads.** Text-format `as<T>()` uses a function-local
   `static ParamUnserializer`; this is safe only because an actor/connection runs on a single `VirtualCore` (one thread).
-  Sharing a `results` across cores is a data race (`resultset.h:640`).
+  Sharing a `results` across cores is a data race (`resultset.h:651`).
 - **NULL into a non-`std::optional` target throws.** Always decode possibly-NULL columns as `std::optional<U>`, or guard
   with `is_null()` (`resultset.h:558-565`, `:482`).
 - **Retired time tokens are gone.** `timestamptz` maps to `qb::wall_time`; `qb::Timestamp` / `qb::UtcTimestamp` /

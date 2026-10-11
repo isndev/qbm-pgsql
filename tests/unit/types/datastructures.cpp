@@ -17,6 +17,7 @@
 #include <cstring>
 #include <gtest/gtest.h>
 #include <istream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -148,6 +149,12 @@ TEST(ResultsetPopulated, NullFieldSemantics) {
     EXPECT_EQ(rs[0][0].as<std::optional<std::string>>().value(), "v");
     EXPECT_FALSE(rs[0][1].as<std::optional<std::string>>().has_value());
 
+    const auto nested = rs[0][0].as<std::optional<std::optional<std::string>>>();
+    ASSERT_TRUE(nested.has_value());
+    ASSERT_TRUE(nested->has_value());
+    EXPECT_EQ(**nested, "v");
+    EXPECT_FALSE(rs[0][1].as<std::optional<std::optional<std::string>>>().has_value());
+
     // as<T>() on a NULL non-nullable target throws value_is_null.
     EXPECT_THROW(rs[0][1].as<std::string>(), qb::pg::error::value_is_null);
 
@@ -177,6 +184,12 @@ TEST(ResultsetPopulated, OptionalTextPreservesPresentEmptyValue) {
     }
     EXPECT_FALSE(rs[0][1].as<std::optional<std::string>>().has_value());
 
+    const auto nested = rs[0][0].as<std::optional<std::optional<std::string>>>();
+    ASSERT_TRUE(nested.has_value());
+    ASSERT_TRUE(nested->has_value());
+    EXPECT_TRUE((**nested).empty());
+    EXPECT_FALSE(rs[0][1].as<std::optional<std::optional<std::string>>>().has_value());
+
     std::optional<std::string> through_to;
     EXPECT_TRUE(rs[0][0].to(through_to));
     ASSERT_TRUE(through_to.has_value());
@@ -204,6 +217,11 @@ TEST(ResultsetPopulated, OptionalDoubleUsesBinaryColumnOid) {
     const auto optional = rs[0][0].as<std::optional<double>>();
     ASSERT_TRUE(optional.has_value());
     EXPECT_DOUBLE_EQ(*optional, 1.0);
+
+    const auto nested = rs[0][0].as<std::optional<std::optional<double>>>();
+    ASSERT_TRUE(nested.has_value());
+    ASSERT_TRUE(nested->has_value());
+    EXPECT_DOUBLE_EQ(**nested, 1.0);
 
     std::optional<double> through_to;
     EXPECT_TRUE(rs[0][0].to(through_to));

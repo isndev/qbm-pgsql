@@ -19,6 +19,12 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Changed
 
+- **Typed JSONB decoding combines precision validation and DOM construction where supported (Huly QB-945).**
+  Audited nlohmann versions and configurations reuse its DOM builder and numeric formatter.
+  Other configurations keep the checked public parser and its position metadata.
+  Value/error contracts, public API and carrier layout remain unchanged. A later rejected
+  number can follow allocation of a DOM prefix, which is destroyed during unwinding.
+
 - **A multi-statement simple query whose statements return rows of different shapes now fails instead of
   mixing them (Huly QB-122).** `execute("SELECT …; SELECT …", …)` collected every statement's rows into ONE
   result under the LAST RowDescription, undocumented: the earlier statement's rows were then decoded against
@@ -30,6 +36,10 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
   `readme/results.md` and the llm gotchas.
 
 ### Fixed
+
+- **Present optional field reads check SQL NULL once (Huly QB-646).** Scalar and optional
+  reads share the format- and OID-aware conversion after the public NULL decision.
+  Empty text stays present; SQL NULL, nested optionals and typed errors keep their contract.
 
 - **Concurrent unverified TLS connects emit one warning without a data race (Huly QB-628).**
   The warning flag is shared by each TLS client specialization and can be reached from different

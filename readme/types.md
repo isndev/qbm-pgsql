@@ -161,11 +161,18 @@ The decoders preserve JSON structure: `[[1,2]]` stays an array of arrays. Postgr
 payloads carry no marker that would turn a pair array into an object.
 
 `qb::jsonb` keeps its existing DOM layout. A typed JSONB read now throws `error::client_error` if a
-PostgreSQL number would change **decimal value** when parsed into that DOM; this includes integers
-beyond its integer ranges and decimals rounded by `double`, even inside arrays or objects. Equal
+PostgreSQL number would change **decimal value** when parsed into that DOM; this includes out-of-range integers
+whose decimal value changes and decimals rounded by `double`, even inside arrays or objects. Equal
 values with different spellings, such as `1.2300` and `1.23`, remain readable. A valid number beyond
 the DOM floating range (for example `1e400`) also throws `client_error`; malformed JSON follows the
-separate `std::runtime_error` parse path. <!-- src: src/qbm/pgsql/type_converter.cpp:393-443 -->
+separate `std::runtime_error` parse path. <!-- src: src/qbm/pgsql/type_converter.cpp:465-564 -->
+
+Typed decoding validates each floating lexeme while building the DOM in supported
+nlohmann configurations. Other versions or configurations retain the checked public
+parser with the same value and error contract. A later rejection may follow allocation
+of an owning DOM prefix; that prefix is destroyed and never returned. Exact canonical
+text access avoids DOM construction. Library and consumer JSON build flags must agree.
+<!-- src: src/qbm/pgsql/type_converter.cpp:518-564 -->
 
 For an exact value, read the server's canonical JSONB text directly from the field:
 
@@ -336,7 +343,7 @@ A **simple** query (`execute("SELECT …")` without a prepared statement) common
 regardless of OID; `field::as<T>()` branches on the actual `format_code` and routes to `from_text` or `from_binary`
 accordingly, so the same `as<T>()` call works on either path. An `as<std::optional<T>>()` read first checks SQL NULL
 metadata, then decodes a present value as `T`; empty text stays present and binary numeric values keep their
-column-OID conversion. <!-- src: src/qbm/pgsql/resultset.h:558-575,583,632,642 -->
+column-OID conversion. <!-- src: src/qbm/pgsql/resultset.h:558-586,594,643,653 -->
 
 An OID the whitelist does not name — every extension type, `citext` among them — therefore arrives as **text**, which
 `as<std::string>()` reads correctly; there is no "silently classified as binary" direction to guard against. To move a
@@ -412,7 +419,7 @@ row.to(std::tie(a, b, c));
 ```
 
 `row_to_impl` expands into one `as<T>()` per column, matched to the tuple element at the same index — so each element
-is converted per its own declared type. <!-- src: src/qbm/pgsql/resultset.h:880-884,892-896,994-1008 -->
+is converted per its own declared type. <!-- src: src/qbm/pgsql/resultset.h:890-894,902-906,1004-1018 -->
 
 ---
 

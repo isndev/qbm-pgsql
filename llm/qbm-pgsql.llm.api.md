@@ -514,7 +514,8 @@ the direct converter's legacy four-byte prefix does not apply to fields.
 would change decimal value or overflow the nlohmann DOM (`1e400` is a valid
 PostgreSQL JSONB number). Malformed JSON keeps a distinct `std::runtime_error`
 path. Equal values with different spellings such as `1.2300` and `1.23` remain
-readable.
+readable. A rejected input may already have allocated an owning DOM prefix; unwinding
+destroys it and never returns it. Canonical-text accessors retain their ownership rules.
 
 There are **no** global `qb::pg::get<T>(field)` / `qb::pg::get(field, T&)` helpers. Two such
 templates are written in `qbm/pgsql/src/qbm/pgsql/field_handler.h`, but that file is dead — no

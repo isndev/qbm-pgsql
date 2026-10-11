@@ -14,10 +14,53 @@
  * Licensed under the Apache License, Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0)
  * @ingroup Pgsql
  */
+// Conservatively retain the public path for preconfigured or modified JSON builds.
+#if defined(JSON_ASSERT) || defined(JSON_PRIVATE_UNLESS_TESTED) || defined(NLOHMANN_JSON_NAMESPACE) || defined(NLOHMANN_JSON_NAMESPACE_BEGIN) \
+    || defined(NLOHMANN_JSON_NAMESPACE_END) || defined(JSON_NOEXCEPTION) || defined(JSON_NO_IO) || defined(JSON_THROW_USER)                   \
+    || defined(JSON_TRY_USER) || defined(JSON_CATCH_USER) || defined(JSON_INTERNAL_CATCH_USER) || defined(JSON_TESTS_PRIVATE)                 \
+    || defined(JSON_USE_SIMDUTF) || defined(JSON_STRICT_NUL_HANDLING)                                                                         \
+    || (defined(JSON_USE_IMPLICIT_CONVERSIONS) && JSON_USE_IMPLICIT_CONVERSIONS != 1)                                                         \
+    || (defined(JSON_USE_LEGACY_DISCARDED_VALUE_COMPARISON) && JSON_USE_LEGACY_DISCARDED_VALUE_COMPARISON != 0)                               \
+    || (defined(JSON_DISABLE_ENUM_SERIALIZATION) && JSON_DISABLE_ENUM_SERIALIZATION != 0)                                                     \
+    || (defined(NLOHMANN_JSON_NAMESPACE_NO_VERSION) && NLOHMANN_JSON_NAMESPACE_NO_VERSION != 0)
+#define QBM_PGSQL_JSONB_CUSTOM_JSON_CONFIG 1
+#else
+#define QBM_PGSQL_JSONB_CUSTOM_JSON_CONFIG 0
+#endif
+
 #include "./type_converter.h"
 
 #include <cmath>
 #include <cstdint>
+#include <utility>
+
+// Audited upstream releases only; a newer patch or minor keeps the public path.
+#if NLOHMANN_JSON_VERSION_MAJOR == 3                                                                                  \
+    && ((NLOHMANN_JSON_VERSION_MINOR == 11                                                                            \
+         && (NLOHMANN_JSON_VERSION_PATCH == 0 || NLOHMANN_JSON_VERSION_PATCH == 1 || NLOHMANN_JSON_VERSION_PATCH == 2 \
+             || NLOHMANN_JSON_VERSION_PATCH == 3))                                                                    \
+        || (NLOHMANN_JSON_VERSION_MINOR == 12 && NLOHMANN_JSON_VERSION_PATCH == 0))
+#define QBM_PGSQL_JSONB_AUDITED_VERSION 1
+#else
+#define QBM_PGSQL_JSONB_AUDITED_VERSION 0
+#endif
+
+// Position metadata needs public parse's lexer. Other unreviewed configurations
+// and QBM_PGSQL_JSONB_FORCE_PUBLIC (for a modified dependency) also stay public.
+#if QBM_PGSQL_JSONB_AUDITED_VERSION && !QBM_PGSQL_JSONB_CUSTOM_JSON_CONFIG                                                         \
+    && (!defined(QBM_PGSQL_JSONB_FORCE_PUBLIC) || QBM_PGSQL_JSONB_FORCE_PUBLIC == 0)                                               \
+    && (!defined(JSON_DIAGNOSTIC_POSITIONS) || JSON_DIAGNOSTIC_POSITIONS == 0) && (JSON_DIAGNOSTICS == 0 || JSON_DIAGNOSTICS == 1) \
+    && (!defined(JSON_USE_IMPLICIT_CONVERSIONS) || JSON_USE_IMPLICIT_CONVERSIONS == 1)                                             \
+    && (!defined(JSON_USE_LEGACY_DISCARDED_VALUE_COMPARISON) || JSON_USE_LEGACY_DISCARDED_VALUE_COMPARISON == 0)                   \
+    && (!defined(NLOHMANN_JSON_NAMESPACE_NO_VERSION) || NLOHMANN_JSON_NAMESPACE_NO_VERSION == 0)
+#define QBM_PGSQL_JSONB_USE_AUDITED_INTERNALS 1
+#else
+#define QBM_PGSQL_JSONB_USE_AUDITED_INTERNALS 0
+#endif
+
+#if QBM_PGSQL_JSONB_USE_AUDITED_INTERNALS
+#include <optional>
+#endif
 #include <qb/system/parse.h> // qb::to_number (locale-free, throw-free string->number)
 
 namespace qb::pg::detail {
@@ -307,6 +350,31 @@ TypeConverter<qb::json>::from_text(const std::string &text) {
 
 namespace {
 
+#if QBM_PGSQL_JSONB_USE_AUDITED_INTERNALS
+// Implementation details are isolated here, never in an installed header.
+// One formatter per document; no shared state or cache of previously seen values.
+class jsonb_float_formatter {
+    using serializer_type = nlohmann::detail::serializer<nlohmann::json>;
+    nlohmann::json::string_t       _rendered;
+    std::optional<serializer_type> _serializer; // destroyed before its output string
+
+public:
+    jsonb_float_formatter()                                         = default;
+    jsonb_float_formatter(const jsonb_float_formatter &)            = delete;
+    jsonb_float_formatter &operator=(const jsonb_float_formatter &) = delete;
+
+    const nlohmann::json::string_t &
+    render(nlohmann::json::number_float_t number) {
+        if (!_serializer)
+            _serializer.emplace(nlohmann::detail::output_adapter<char, nlohmann::json::string_t>(_rendered), ' ',
+                                nlohmann::json::error_handler_t::strict);
+        _rendered.clear();
+        _serializer->dump(nlohmann::json(number), false, false, 0);
+        return _rendered;
+    }
+};
+#endif
+
 // Compare decimal VALUES, not JSON spellings: 1.2300, 1.23 and 123e-2 all
 // normalize to the same coefficient and base-10 exponent. The SAX callback
 // supplies the original lexeme even when an overflowing integer became double.
@@ -373,6 +441,10 @@ normalize_decimal(std::string_view text) {
 }
 
 struct jsonb_precision_sax : nlohmann::json_sax<nlohmann::json> {
+#if QBM_PGSQL_JSONB_USE_AUDITED_INTERNALS
+    jsonb_float_formatter _formatter;
+#endif
+
     bool
     null() override {
         return true;
@@ -391,9 +463,18 @@ struct jsonb_precision_sax : nlohmann::json_sax<nlohmann::json> {
     }
     bool
     number_float(number_float_t number, const string_t &lexeme) override {
+#if QBM_PGSQL_JSONB_USE_AUDITED_INTERNALS
+        if (std::isfinite(number)) {
+            const auto &rendered = _formatter.render(number);
+            if (lexeme == rendered || normalize_decimal(lexeme) == normalize_decimal(rendered))
+                return true;
+        }
+        throw error::client_error("JSONB numeric value cannot be represented without decimal rounding: " + lexeme);
+#else
         if (!std::isfinite(number) || normalize_decimal(lexeme) != normalize_decimal(nlohmann::json(number).dump()))
             throw error::client_error("JSONB numeric value cannot be represented without decimal rounding: " + lexeme);
         return true;
+#endif
     }
     bool
     string(string_t &) override {
@@ -424,7 +505,7 @@ struct jsonb_precision_sax : nlohmann::json_sax<nlohmann::json> {
         return true;
     }
     bool
-    parse_error(std::size_t, const std::string &last_token, const nlohmann::detail::exception &ex) override {
+    parse_error(std::size_t, const std::string &last_token, const nlohmann::json::exception &ex) override {
         // nlohmann reports a valid numeric lexeme outside double's range here,
         // before number_float() can inspect it. Keep syntax errors on the
         // malformed-JSON path; only its numeric-overflow code is value loss.
@@ -434,15 +515,59 @@ struct jsonb_precision_sax : nlohmann::json_sax<nlohmann::json> {
     }
 };
 
+#if QBM_PGSQL_JSONB_USE_AUDITED_INTERNALS
+#if NLOHMANN_JSON_VERSION_MINOR == 11
+using jsonb_dom_sax_base = nlohmann::detail::json_sax_dom_parser<nlohmann::json>;
+#else // The exact-version gate above leaves only 3.12.0 here.
+using jsonb_input_adapter = decltype(nlohmann::detail::input_adapter(static_cast<const char *>(nullptr), static_cast<const char *>(nullptr)));
+using jsonb_dom_sax_base  = nlohmann::detail::json_sax_dom_parser<nlohmann::json, jsonb_input_adapter>;
+#endif
+
+struct jsonb_precision_dom_sax : jsonb_dom_sax_base {
+    jsonb_precision_sax _precision;
+
+    explicit jsonb_precision_dom_sax(nlohmann::json &root)
+        : jsonb_dom_sax_base(root, false) {}
+
+    bool
+    number_float(number_float_t number, const string_t &lexeme) {
+        if (!_precision.number_float(number, lexeme))
+            return false;
+        return jsonb_dom_sax_base::number_float(number, lexeme);
+    }
+
+    bool
+    parse_error(std::size_t position, const std::string &last_token, const nlohmann::json::exception &ex) {
+        if (ex.id == 406)
+            return _precision.parse_error(position, last_token, ex);
+        return jsonb_dom_sax_base::parse_error(position, last_token, ex);
+    }
+};
+#endif
+
 qb::jsonb
 parse_jsonb_checked(std::string_view text) {
+#if QBM_PGSQL_JSONB_USE_AUDITED_INTERNALS
+    nlohmann::json          root;
+    jsonb_precision_dom_sax parser(root);
+    const auto             *first = text.data();
+    const auto             *last  = text.empty() ? first : first + text.size();
+    if (!nlohmann::json::sax_parse(first, last, &parser))
+        throw std::runtime_error("Invalid JSONB text");
+    return qb::jsonb(std::move(root));
+#else
     jsonb_precision_sax validator;
     if (!nlohmann::json::sax_parse(text.begin(), text.end(), &validator))
         throw std::runtime_error("Invalid JSONB text");
     return qb::jsonb(nlohmann::json::parse(text));
+#endif
 }
 
 } // namespace
+
+#undef QBM_PGSQL_JSONB_USE_AUDITED_INTERNALS
+#undef QBM_PGSQL_JSONB_AUDITED_VERSION
+#undef QBM_PGSQL_JSONB_CUSTOM_JSON_CONFIG
 
 void
 TypeConverter<qb::jsonb>::to_binary(const qb::jsonb &value, std::vector<byte> &buffer) {

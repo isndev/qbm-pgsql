@@ -15,10 +15,15 @@
  * without replacing the first command's sink or source.
  */
 #include <gtest/gtest.h>
+#include <algorithm>
+#include <cstddef>
 #include <coroutine>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
+#include <utility>
 #include <qb/io/async/coroutine.h>
 #include <qb/io/async/coroutine/utils.h>
 #include "../../shared/pg_integration_fixture.hpp"
@@ -273,6 +278,58 @@ TEST_F(CopyOwner, SourceCancelsItsOwnWaiterWithoutAnotherCallback) {
         db_->copy_out("COPY qb_copy_owner_self_cancel TO STDOUT", [&bytes](std::string_view chunk) { bytes.append(chunk); }));
     EXPECT_TRUE(read.ok());
     EXPECT_TRUE(bytes.empty()) << "the cancelled source chunk must not be sent before CopyFail";
+}
+
+qb::io::async::task<Reply<resultset>>
+copy_in_chunked(database *db, std::string payload, std::size_t *calls) {
+    qb::io::async::pin_frame_copy(payload); // Keep the by-value frame convention before constructing its callback.
+    co_return co_await db->copy_in("COPY qb_copy_owner_chunks (v) FROM STDIN",
+                                   [data = std::move(payload), calls, offset = std::size_t{0}]() mutable -> std::optional<std::string> {
+                                       ++*calls;
+                                       if (offset == data.size())
+                                           return std::nullopt;
+                                       const auto take  = std::min(std::size_t{1024}, data.size() - offset);
+                                       auto       chunk = data.substr(offset, take);
+                                       offset += take;
+                                       return chunk;
+                                   });
+}
+
+TEST_F(CopyOwner, SequentialChunkedCopiesKeepEveryByteAndLeaveTheConnectionReusable) {
+    std::string payload;
+    for (int row = 0; row < 1024; ++row) {
+        const auto digits = std::to_string(row);
+        payload.append(4 - digits.size(), '0');
+        payload.append(digits);
+        payload.append(59, static_cast<char>('a' + row % 26));
+        payload.push_back('\n');
+    }
+    ASSERT_EQ(payload.size(), 64u * 1024u);
+    ASSERT_TRUE(qb::io::async::run_sync(db_->query("CREATE TEMP TABLE qb_copy_owner_chunks (v text)")).ok());
+    std::size_t total_calls = 0;
+    std::size_t total_bytes = 0;
+    for (int round = 0; round < 2; ++round) {
+        ASSERT_TRUE(qb::io::async::run_sync(db_->query("TRUNCATE qb_copy_owner_chunks")).ok());
+        std::size_t calls = 0;
+        auto        added = qb::io::async::run_sync(copy_in_chunked(db_.get(), payload, &calls));
+        ASSERT_TRUE(added.ok());
+        EXPECT_EQ(added.result().rows_affected(), 1024);
+        EXPECT_EQ(calls, 65u);
+        std::string bytes;
+        auto        read = qb::io::async::run_sync(db_->copy_out("COPY (SELECT v FROM qb_copy_owner_chunks ORDER BY left(v, 4)::int) TO STDOUT",
+                                                                 [&bytes](std::string_view chunk) { bytes.append(chunk); }));
+        ASSERT_TRUE(read.ok());
+        EXPECT_EQ(read.result().rows_affected(), 1024);
+        EXPECT_EQ(bytes, payload);
+        total_calls += calls;
+        total_bytes += bytes.size();
+        auto after = qb::io::async::run_sync(db_->query("SELECT $1::int + 1", 10));
+        ASSERT_TRUE(after.ok());
+        ASSERT_EQ(after.result().size(), 1u);
+        EXPECT_EQ(after.result()[0][0].as<int>(), 11);
+    }
+    EXPECT_EQ(total_calls, 130u);
+    EXPECT_EQ(total_bytes, 2u * payload.size());
 }
 
 } // namespace copy_owner_test

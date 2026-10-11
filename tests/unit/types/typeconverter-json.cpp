@@ -194,6 +194,221 @@ TEST(TypeConverterJsonbTest, RejectsDecimalValueChangesWithoutRejectingEquivalen
     }
 }
 
+// Matching dump spellings take the equality shortcut; all nodes still survive.
+TEST(TypeConverterJsonbTest, MatchingFloatSpellingsPreserveCompleteDocument) {
+    for (const std::string text : {"0.1", "1.5", "-0.5", "[0.1,1.5,-0.5]", R"({"n":[0.1,1.5,-0.5]})"}) {
+        const auto        expected = qb::json::parse(text);
+        std::vector<byte> wire{static_cast<byte>(1)};
+        wire.insert(wire.end(), text.begin(), text.end());
+        EXPECT_EQ(TypeConverter<qb::jsonb>::from_text(text).unwrap(), expected);
+        EXPECT_EQ(TypeConverter<qb::jsonb>::from_binary(wire).unwrap(), expected);
+    }
+}
+
+// Rewriting scale/exponent is permitted only when the decimal value is unchanged.
+TEST(TypeConverterJsonbTest, EquivalentFloatSpellingsAndStableOverflowRemainReadable) {
+    struct Case {
+        const char *text;
+        const char *dump;
+    };
+    for (const auto &value : {
+             Case{"0.10", "0.1"},
+             Case{"1.2300", "1.23"},
+             Case{"123e-2", "1.23"},
+             Case{"1e3", "1000.0"},
+             Case{"1e-3", "0.001"},
+             Case{"-0.000", "-0.0"},
+             Case{"0e400", "0.0"},
+             Case{"100000000000000000000", "1e+20"},
+         }) {
+        const std::string text = value.text;
+        std::vector<byte> wire{static_cast<byte>(1)};
+        wire.insert(wire.end(), text.begin(), text.end());
+        EXPECT_EQ(TypeConverter<qb::jsonb>::from_text(text).dump(), value.dump) << text;
+        EXPECT_EQ(TypeConverter<qb::jsonb>::from_binary(wire).dump(), value.dump) << text;
+    }
+}
+
+TEST(TypeConverterJsonbTest, UnderflowAndLossAfterMatchingValuesStillHaveTypedError) {
+    for (const std::string text : {
+             "1e-400",
+             "-1e-400",
+             R"({"prefix":[0.1,1.5],"loss":1e-400})",
+             "[0.1,12345678901234567890.123456789]",
+         }) {
+        std::vector<byte> wire{static_cast<byte>(1)};
+        wire.insert(wire.end(), text.begin(), text.end());
+        EXPECT_THROW((void) TypeConverter<qb::jsonb>::from_text(text), error::client_error) << text;
+        EXPECT_THROW((void) TypeConverter<qb::jsonb>::from_binary(wire), error::client_error) << text;
+    }
+}
+
+TEST(TypeConverterJsonbTest, NoDigitDocumentsPreserveEveryNode) {
+    const auto check = [](const std::string &text) {
+        const auto        expected = qb::json::parse(text);
+        std::vector<byte> wire{static_cast<byte>(1)};
+        wire.insert(wire.end(), text.begin(), text.end());
+        EXPECT_EQ(TypeConverter<qb::jsonb>::from_text(text).unwrap(), expected) << text;
+        EXPECT_EQ(TypeConverter<qb::jsonb>::from_binary(wire).unwrap(), expected) << text;
+    };
+    for (const std::string text : {
+             "null",
+             "true",
+             "false",
+             "{}",
+             "[]",
+             R"("plain")",
+             R"("\uABCD")",
+             R"([["k","v"]])",
+             R"({"items":[true,false,null],"line":"a\nb","quote":"\"","slash":"\\"})",
+         })
+        check(text);
+    check("{\"payload\":\"" + std::string(8192, 'x') + "\",\"items\":[true,null]}");
+}
+
+TEST(TypeConverterJsonbTest, InvalidNoDigitInputKeepsSameMalformedDataError) {
+    for (const std::string &text : std::vector<std::string>{
+             "",
+             " \t\n",
+             "{broken",
+             "[true,]",
+             "[null",
+             R"("\uZZZZ")",
+             std::string{'"', static_cast<char>(0xff), '"'},
+             std::string("\"ab") + '\0' + "cd\"",
+         }) {
+        const auto check = [&](auto &&decode, const std::string &expected_message) {
+            try {
+                (void) decode();
+                FAIL() << "malformed JSONB was accepted";
+            } catch (const error::client_error &e) {
+                FAIL() << "syntax error was classified as numeric loss: " << e.what();
+            } catch (const std::runtime_error &e) {
+                EXPECT_EQ(e.what(), expected_message);
+            }
+        };
+        check([&] { return TypeConverter<qb::jsonb>::from_text(text); }, "Failed to parse JSONB text: Invalid JSONB text");
+        std::vector<byte> wire{static_cast<byte>(1)};
+        wire.insert(wire.end(), text.begin(), text.end());
+        check([&] { return TypeConverter<qb::jsonb>::from_binary(wire); },
+              text.empty() ? "Failed to parse JSONB data: Invalid JSONB binary format: buffer too small"
+                           : "Failed to parse JSONB data: Invalid JSONB text");
+    }
+}
+
+TEST(TypeConverterJsonbTest, DigitsInStringsRemainStringsAndLateNumbersStayChecked) {
+    const auto check = [](const std::string &text) {
+        const auto        expected = qb::json::parse(text);
+        std::vector<byte> wire{static_cast<byte>(1)};
+        wire.insert(wire.end(), text.begin(), text.end());
+        EXPECT_EQ(TypeConverter<qb::jsonb>::from_text(text).unwrap(), expected);
+        EXPECT_EQ(TypeConverter<qb::jsonb>::from_binary(wire).unwrap(), expected);
+    };
+    for (const std::string text : {
+             R"({"0":"0123456789","looks_numeric":"1e400"})",
+             R"("\u0031")",
+             R"({"escaped_quote":"a\"1e400","number":1.2300})",
+         })
+        check(text);
+    const std::string prefix = "{\"payload\":\"" + std::string(8192, 'x') + "\",\"n\":";
+    check(prefix + "1.2300}");
+    for (const std::string number : {"1e-400", "18446744073709551616", "12345678901234567890.123456789"}) {
+        const std::string text = prefix + number + '}';
+        std::vector<byte> wire{static_cast<byte>(1)};
+        wire.insert(wire.end(), text.begin(), text.end());
+        EXPECT_THROW((void) TypeConverter<qb::jsonb>::from_text(text), error::client_error);
+        EXPECT_THROW((void) TypeConverter<qb::jsonb>::from_binary(wire), error::client_error);
+    }
+}
+
+TEST(TypeConverterJsonbTest, NestedDiagnosticsAndPositionsMatchPublicParser) {
+    const std::string text =
+        R"({"duplicate":{"first":[1,2]},"duplicate":{"second":[3,4]},"object":{"array":[{"leaf":1.5,"pairs":[["k","v"]],"unicode":"\uABCD"}]}})";
+    const qb::json    expected = qb::json::parse(text);
+    std::vector<byte> wire{static_cast<byte>(1)};
+    wire.insert(wire.end(), text.begin(), text.end());
+
+    const auto check = [&](const qb::jsonb &decoded) {
+        EXPECT_EQ(decoded.unwrap(), expected);
+        EXPECT_EQ(decoded.dump(), expected.dump());
+        const auto check_positions = [&](auto &&self, const qb::json &actual, const qb::json &reference) -> void {
+#if NLOHMANN_JSON_VERSION_MAJOR == 3 && NLOHMANN_JSON_VERSION_MINOR >= 12
+#if defined(JSON_DIAGNOSTIC_POSITIONS) && JSON_DIAGNOSTIC_POSITIONS
+            EXPECT_EQ(actual.start_pos(), reference.start_pos());
+            EXPECT_EQ(actual.end_pos(), reference.end_pos());
+#endif
+#endif
+            if (reference.is_array()) {
+                ASSERT_TRUE(actual.is_array());
+                ASSERT_EQ(actual.size(), reference.size());
+                for (std::size_t i = 0; i < reference.size(); ++i)
+                    self(self, actual.at(i), reference.at(i));
+            } else if (reference.is_object()) {
+                ASSERT_TRUE(actual.is_object());
+                for (auto it = reference.begin(); it != reference.end(); ++it)
+                    self(self, actual.at(it.key()), it.value());
+            }
+        };
+        check_positions(check_positions, decoded.unwrap(), expected);
+
+        const auto diagnostic = [](const qb::json &value) {
+            try {
+                (void) value.at("object").at("array").at(0).at("leaf").get<std::string>();
+                ADD_FAILURE() << "diagnostic fixture did not throw";
+                return std::string{};
+            } catch (const qb::json::exception &e) {
+                return std::string(e.what());
+            }
+        };
+        EXPECT_EQ(diagnostic(decoded.unwrap()), diagnostic(expected));
+    };
+    check(TypeConverter<qb::jsonb>::from_text(text));
+    check(TypeConverter<qb::jsonb>::from_binary(wire));
+}
+
+// The sanitizer profiles must exercise unwinding of large/deep prefixes, including
+// destruction of an overwritten duplicate subtree, without returning a partial DOM.
+TEST(TypeConverterJsonbTest, RepeatedLateLossAndSyntaxPrefixesReleaseOwnedDom) {
+    std::string deep = R"({"leaf":[0.1,1.5,"text"]})";
+    for (int i = 0; i < 24; ++i)
+        deep = std::string{"{\"next\":["} + deep + "]}";
+    const std::string large(8192, 'x');
+    const std::string prefix = "{\"prefix\":{\"text\":\"" + large + "\",\"deep\":" + deep + "},\"replace\":{\"text\":\"" + large
+                               + "\"},\"replace\":{\"items\":[true,null,1.5]},";
+    const std::string loss   = prefix + "\"last\":1e-400}";
+    const std::string syntax = prefix + "\"last\":[true,";
+    std::vector<byte> loss_wire{static_cast<byte>(1)};
+    loss_wire.insert(loss_wire.end(), loss.begin(), loss.end());
+    std::vector<byte> syntax_wire{static_cast<byte>(1)};
+    syntax_wire.insert(syntax_wire.end(), syntax.begin(), syntax.end());
+
+    for (int repetition = 0; repetition < 128; ++repetition) {
+        EXPECT_THROW((void) TypeConverter<qb::jsonb>::from_text(loss), error::client_error);
+        EXPECT_THROW((void) TypeConverter<qb::jsonb>::from_binary(loss_wire), error::client_error);
+        const auto check_syntax = [](auto &&decode) {
+            try {
+                (void) decode();
+                FAIL() << "malformed JSONB was accepted";
+            } catch (const error::client_error &e) {
+                FAIL() << "syntax was classified as numeric loss: " << e.what();
+            } catch (const std::runtime_error &) {
+                // Distinct malformed-data path, including after a constructed prefix.
+            }
+        };
+        check_syntax([&] { return TypeConverter<qb::jsonb>::from_text(syntax); });
+        check_syntax([&] { return TypeConverter<qb::jsonb>::from_binary(syntax_wire); });
+    }
+
+    // Both duplicate occurrences must be checked even when the second overwrites
+    // the first in the final DOM; overwriting cannot hide a lossy source number.
+    for (const std::string text : {R"({"n":1e-400,"n":1.5})", R"({"n":1.5,"n":1e-400})"}) {
+        std::vector<byte> wire{static_cast<byte>(1)};
+        wire.insert(wire.end(), text.begin(), text.end());
+        EXPECT_THROW((void) TypeConverter<qb::jsonb>::from_text(text), error::client_error);
+        EXPECT_THROW((void) TypeConverter<qb::jsonb>::from_binary(wire), error::client_error);
+    }
+}
+
 TEST(TypeConverterJsonbTest, NumericOverflowHasTypedErrorButMalformedJsonStaysDistinct) {
     const auto binary = [](std::string_view text) {
         std::vector<byte> wire{static_cast<byte>(1)};
