@@ -117,8 +117,12 @@ jsonb_document(int shape) {
         }
         case 3:
             return "12345678901234567890.123456789";
-        default:
+        case 4:
             return "1e400";
+        case 5:
+            return "[[1,2],[3,4]]";
+        default:
+            return {};
     }
 }
 
@@ -137,6 +141,44 @@ struct JsonbFieldFixture {
         row.null_map.push_back(false);
         row.data.push_back(static_cast<byte>(1));
         row.data.insert(row.data.end(), text.begin(), text.end());
+    }
+};
+
+// A text-format export keeps the same bytes on both sides of QB-943. SQL NULL
+// and present empty text are distinct, even though neither contributes bytes.
+struct TextExportFixture {
+    result_impl impl;
+
+    TextExportFixture() {
+        for (const char *name : {"name", "absent", "present_empty"}) {
+            field_description desc{};
+            desc.name        = name;
+            desc.type_oid    = oid::text;
+            desc.format_code = protocol_data_format::Text;
+            impl.row_description().push_back(std::move(desc));
+        }
+        auto &row    = impl.rows().emplace_back();
+        row.offsets  = {0, 3, 3};
+        row.null_map = {false, true, false};
+        for (char c : std::string_view("Ada"))
+            row.data.push_back(static_cast<byte>(c));
+    }
+};
+
+struct BinaryExportFixture {
+    result_impl impl;
+
+    BinaryExportFixture() {
+        field_description desc{};
+        desc.name        = "count";
+        desc.type_oid    = oid::int4;
+        desc.type_size   = 4;
+        desc.format_code = protocol_data_format::Binary;
+        impl.row_description().push_back(std::move(desc));
+        auto &row = impl.rows().emplace_back();
+        row.offsets.push_back(0);
+        row.null_map.push_back(false);
+        row.data = hex_to_bytes("0000002a"); // int4_send(42)
     }
 };
 
@@ -323,7 +365,66 @@ BM_JsonbTypedRead(benchmark::State &state) {
     state.SetItemsProcessed(state.iterations());
     state.SetBytesProcessed(state.iterations() * static_cast<std::int64_t>(text.size()));
 }
-BENCHMARK(BM_JsonbTypedRead)->Arg(0)->Arg(1)->Arg(2);
+BENCHMARK(BM_JsonbTypedRead)->Arg(0)->Arg(1)->Arg(2)->Arg(5);
+
+static void
+BM_JsonExportText(benchmark::State &state) {
+    TextExportFixture fixture;
+    resultset         result(&fixture.impl);
+    const qb::json    expected = qb::json::array({qb::json{{"name", "Ada"}, {"absent", nullptr}, {"present_empty", ""}}});
+    if (result.json() != expected) {
+        state.SkipWithError("TEXT result export changed a value, SQL NULL, or present empty text");
+        return;
+    }
+    for (auto _ : state) {
+        auto value = result.json();
+        benchmark::DoNotOptimize(value);
+    }
+    state.SetItemsProcessed(state.iterations());
+    state.SetBytesProcessed(state.iterations() * 3);
+}
+BENCHMARK(BM_JsonExportText);
+
+static void
+BM_JsonExportInt4Binary(benchmark::State &state) {
+    BinaryExportFixture fixture;
+    resultset           result(&fixture.impl);
+    const qb::json      expected = qb::json::array({qb::json{{"count", "42"}}});
+    if (result.json() != expected) {
+        state.SkipWithError("binary INT4 result export did not render decimal 42");
+        return;
+    }
+    for (auto _ : state) {
+        auto value = result.json();
+        benchmark::DoNotOptimize(value);
+    }
+    state.SetItemsProcessed(state.iterations());
+    state.SetBytesProcessed(state.iterations() * 4);
+}
+BENCHMARK(BM_JsonExportInt4Binary);
+
+// PostgreSQL JSON (unlike JSONB) has no version byte. A pair-shaped JSON array
+// must remain an array; the old heuristic converted it into an object.
+static void
+BM_JsonPairArrayDecode(benchmark::State &state) {
+    constexpr std::string_view text = "[[1,2],[3,4]]";
+    std::vector<byte>          wire;
+    wire.reserve(text.size());
+    for (char c : text)
+        wire.push_back(static_cast<byte>(c));
+    const auto expected = qb::json::parse(text);
+    if (TypeConverter<qb::json>::from_binary(wire) != expected) {
+        state.SkipWithError("binary JSON pair array became an object or lost a value");
+        return;
+    }
+    for (auto _ : state) {
+        auto value = TypeConverter<qb::json>::from_binary(wire);
+        benchmark::DoNotOptimize(value);
+    }
+    state.SetItemsProcessed(state.iterations());
+    state.SetBytesProcessed(state.iterations() * static_cast<std::int64_t>(wire.size()));
+}
+BENCHMARK(BM_JsonPairArrayDecode);
 
 #ifndef QB945_BASELINE
 static void
