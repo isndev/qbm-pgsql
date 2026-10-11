@@ -16,6 +16,8 @@
  * checked before publishing work counters. No concurrent, cancelled or rejected COPY
  * supplies a comparable timing. The fixed COPY corpus is 1024 distinct 64-byte text rows.
  *
+ * Live operations use elapsed time for calibration and throughput: waiting for
+ * PostgreSQL is part of the operation. Client CPU time is reported separately.
  * Requires QB_PG_DSN. An unavailable daemon or failed fixture calls SkipWithError before
  * any work counter is emitted. All coroutine helpers and their fixture types have named
  * namespace linkage. The same fixture must be compiled into control and candidate.
@@ -249,13 +251,13 @@ static void
 BM_AdhocInsert(benchmark::State &state) {
     run_insert(state, false);
 }
-BENCHMARK(BM_AdhocInsert);
+BENCHMARK(BM_AdhocInsert)->UseRealTime();
 
 static void
 BM_PreparedInsert(benchmark::State &state) {
     run_insert(state, true);
 }
-BENCHMARK(BM_PreparedInsert);
+BENCHMARK(BM_PreparedInsert)->UseRealTime();
 
 static void
 BM_RowDecodeRate(benchmark::State &state) {
@@ -293,7 +295,7 @@ BM_RowDecodeRate(benchmark::State &state) {
     }
     state.SetItemsProcessed(decoded);
 }
-BENCHMARK(BM_RowDecodeRate)->Arg(100)->Arg(1000);
+BENCHMARK(BM_RowDecodeRate)->Arg(100)->Arg(1000)->UseRealTime();
 
 static void
 BM_CopyInSequential(benchmark::State &state) {
