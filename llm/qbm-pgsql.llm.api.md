@@ -153,6 +153,9 @@ struct tcp {
     - `bool cancel()`: Sends an out-of-band PostgreSQL `CancelRequest` on a short-lived **separate** connection (libpq `PQcancel` style). It is **synchronous / blocking** (capped at ≤ 2s) and plaintext even when the main link is SSL. Surfaces on the in-flight query as `sqlstate::query_canceled` (57014). Note: it briefly blocks the calling thread — prefer `cancel_async()`.
     - `[[nodiscard]] task<bool> cancel_async()`: The same `CancelRequest`, driven by the async connector the session connects through (`qb::io::async::tcp::connect`, or the STARTTLS connector + `postgres_ssl_negotiator` for a secure database: SSLRequest → `'S'` → TLS, never a plaintext fallback), the coroutine suspended meanwhile — nothing blocks the loop. Same connect budget as `cancel()` (`connect_timeout` capped at 2 s), same verdict, same `false` meaning "not delivered" (never connected, unreachable, TLS declined/failed, budget exhausted). `co_await db.cancel_async()` from a timer coroutine, an actor, or a second connection's trigger. (Huly QB-113)
     - `bool in_transaction() const noexcept`: True when the backend session is in a transaction block (`'T'`) or a failed transaction block (`'E'`); false when idle (`'I'`).
+    - Packet-write readiness in `cancel_async()`: native TLS `WANT_READ` waits for read only;
+      other native TLS/plain writes wait for write. Custom secure transports without native
+      TLS state retain the combined read/write fallback (`pgsql.h:2587-2598`).
     - `bool used_channel_binding() const noexcept`: True when **SCRAM-SHA-256-PLUS** with `tls-server-end-point` channel binding was negotiated (only over TLS, when the server offers the `-PLUS` mechanism).
     - `std::optional<std::string_view> parameter_status(std::string_view key) const`: Value of a server `ParameterStatus` report (libpq `PQparameterStatus`); e.g. `"server_version"`, `"server_encoding"`, `"TimeZone"`. `std::nullopt` if the key was never reported.
     - `int server_version() const`: Server version as a libpq-style integer (`PQserverVersion`), e.g. `160002` for 16.2. Returns 0 if the `server_version` parameter is unknown.
@@ -163,6 +166,12 @@ struct tcp {
     - `prepare(...)`: Prepares a named SQL statement. Callbacks for success/failure.
     - `execute_file(...)`: Executes SQL commands from a file.
     - `prepare_file(...)`: Prepares SQL commands from a file.
+    - `notify(channel, payload={}) -> pg_reply_awaiter<void>` or `notify(channel, payload, success, error)`:
+      payloads must contain fewer than 8,000 bytes. A 7,999-byte payload is accepted; 8,000 bytes or more
+      fail locally before SQL is queued, with `error::client_error` and `code == "00000"`.
+      The callback form invokes its error callback and rethrows; the coroutine form returns a failed `Reply<void>`
+      (`src/qbm/pgsql/transaction.h:447-459`, `src/qbm/pgsql/pg_notify_sql.cpp:65-74`,
+      `src/qbm/pgsql/error.cpp:132-143`, `src/qbm/pgsql/commands.h:1249-1256,1626-1628`).
     - `savepoint(...)`: Creates a savepoint within a transaction. A handled child failure rolls back to and releases it, then the outer block continues; failed creation or cleanup aborts the outer block. The savepoint error callback runs once after cleanup, including when its success callback throws.
     - `then(...)`: Chains an operation to be executed if the previous one succeeds. A thrown callback becomes a client error visible to `error(...)` and `await()`; completed SQL is not undone.
     - `error(...)`: Registers an error handler for the preceding operation(s).
@@ -389,7 +398,7 @@ namespace qb::pg {
 
 ### `qb::pg::results` (alias for `qb::pg::resultset`)
 
-Represents the set of rows returned by a query. The class is declared publicly as `qb::pg::resultset` in `resultset.h`; `qb::pg::results` is its public alias (`qbm/pgsql/src/qbm/pgsql/pgsql.h:3005`). Both spellings are valid, with `results` preferred for application code. Row and field are reachable as `qb::pg::results::row` / `qb::pg::results::field`.
+Represents the set of rows returned by a query. The class is declared publicly as `qb::pg::resultset` in `resultset.h`; `qb::pg::results` is its public alias (`qbm/pgsql/src/qbm/pgsql/pgsql.h:3016`). Both spellings are valid, with `results` preferred for application code. Row and field are reachable as `qb::pg::results::row` / `qb::pg::results::field`.
 
 **Definition (`qbm/pgsql/src/qbm/pgsql/resultset.h`):**
 ```cpp

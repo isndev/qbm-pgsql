@@ -44,7 +44,7 @@ using namespace qb::pg;
 using qb::pg::test::dsn_tcp_string;
 using qb::pg::test::pump_until;
 
-namespace {
+namespace listen_notify_test {
 
 constexpr std::string_view kChan     = "qb_pgsql_notify_test_ch";
 constexpr std::string_view kChan2    = "qb_pgsql_notify_test_ch2";
@@ -72,7 +72,32 @@ protected:
     }
 };
 
-} // namespace
+std::string
+notify_boundary_payload(bool multibyte) {
+    if (!multibyte)
+        return std::string(7999, 'a');
+    std::string payload;
+    payload.reserve(7999);
+    for (int i = 0; i < 3999; ++i)
+        payload.append("\xc3\xa9"); // UTF-8: two bytes per code point.
+    payload.push_back('a');
+    return payload;
+}
+
+class NotifyCallbackGuard {
+    qb::pg::tcp::database &db_;
+
+public:
+    explicit NotifyCallbackGuard(qb::pg::tcp::database &db)
+        : db_(db) {}
+    ~NotifyCallbackGuard() {
+        db_.on_incoming_notify({});
+    }
+};
+
+} // namespace listen_notify_test
+
+using namespace listen_notify_test;
 
 // ---------------------------------------------------------------------------
 // notify() / listen() basic awaitable + callback surfaces
@@ -638,6 +663,107 @@ TEST(ListenNotifyTwoConnections, PeerNotifyDoesNotBreakListener) {
 // channel name. Callback forms invoke on_error AND rethrow; coroutine forms
 // surface it as a failed Reply (the build-throws -> pg_fail_void path).
 // ---------------------------------------------------------------------------
+
+TEST_F(ListenNotify, NotifyPayloadByteBoundary_CallbackRejects8000Locally) {
+    ASSERT_TRUE(pub_->execute("SET client_encoding = UTF8", discard_query, discard_error).await());
+    std::string server_encoding;
+    ASSERT_TRUE(pub_->execute(
+                        "SHOW server_encoding", [&](qb::pg::transaction &, resultset rows) { server_encoding = rows[0][0].as<std::string>(); },
+                        discard_error)
+                    .await());
+    ASSERT_EQ(server_encoding, "UTF8") << "the boundary fixture requires equal client/server byte encodings";
+
+    const std::string        channel = "qb_pgsql_notify_byte_cb";
+    std::vector<std::string> received;
+    NotifyCallbackGuard      callback_guard(*pub_);
+    pub_->on_incoming_notify([&](qb::pg::notification &&n) {
+        if (n.channel == channel)
+            received.push_back(std::move(n.payload));
+    });
+    ASSERT_TRUE(pub_->listen(channel, discard_query, discard_error).await());
+
+    for (bool multibyte : {false, true}) {
+        SCOPED_TRACE(multibyte ? "UTF8 multibyte bytes" : "ASCII bytes");
+        const std::string accepted = notify_boundary_payload(multibyte);
+        ASSERT_EQ(accepted.size(), 7999u);
+        const std::size_t next = received.size() + 1;
+        ASSERT_TRUE(pub_->notify(channel, accepted, discard_query, discard_error).await());
+        ASSERT_TRUE(pump_until([&] { return received.size() >= next; }, kDeadline));
+        ASSERT_EQ(received.size(), next);
+        EXPECT_EQ(received.back(), accepted) << "all 7999 payload bytes must arrive intact";
+
+        const std::string rejected = accepted + 'a';
+        ASSERT_EQ(rejected.size(), 8000u);
+        int                  error_calls        = 0;
+        int                  success_calls      = 0;
+        bool                 threw_client_error = false;
+        std::string          error_code;
+        qb::pg::transaction *pending = nullptr;
+        try {
+            pending = &pub_->notify(
+                channel, rejected, [&](qb::pg::transaction &, resultset) { ++success_calls; },
+                [&](error::db_error const &e) {
+                    ++error_calls;
+                    error_code = e.code;
+                });
+        } catch (error::client_error const &) {
+            threw_client_error = true;
+        }
+        // Assert BEFORE driving I/O: a later server rejection is not local validation.
+        // client_error uses the existing local sentinel code "00000", not an empty code.
+        EXPECT_TRUE(threw_client_error);
+        EXPECT_EQ(error_calls, 1);
+        EXPECT_EQ(error_code, "00000");
+        EXPECT_EQ(success_calls, 0);
+        if (pending)
+            (void) pending->await(); // Drain the deliberately accepted base request before reusing the connection.
+        EXPECT_TRUE(pub_->execute("SELECT 1", discard_query, discard_error).await());
+        EXPECT_EQ(received.size(), next) << "the rejected payload must not generate a notification";
+    }
+    ASSERT_TRUE(pub_->unlisten(channel, discard_query, discard_error).await());
+}
+
+TEST_F(ListenNotify, NotifyPayloadByteBoundary_CoroutineRejects8000Locally) {
+    ASSERT_TRUE(pub_->execute("SET client_encoding = UTF8", discard_query, discard_error).await());
+    std::string server_encoding;
+    ASSERT_TRUE(pub_->execute(
+                        "SHOW server_encoding", [&](qb::pg::transaction &, resultset rows) { server_encoding = rows[0][0].as<std::string>(); },
+                        discard_error)
+                    .await());
+    ASSERT_EQ(server_encoding, "UTF8") << "the boundary fixture requires equal client/server byte encodings";
+
+    const std::string        channel = "qb_pgsql_notify_byte_coro";
+    std::vector<std::string> received;
+    NotifyCallbackGuard      callback_guard(*pub_);
+    pub_->on_incoming_notify([&](qb::pg::notification &&n) {
+        if (n.channel == channel)
+            received.push_back(std::move(n.payload));
+    });
+    ASSERT_TRUE(qb::io::async::run_sync(pub_->listen(channel)));
+
+    for (bool multibyte : {false, true}) {
+        SCOPED_TRACE(multibyte ? "UTF8 multibyte bytes" : "ASCII bytes");
+        const std::string accepted = notify_boundary_payload(multibyte);
+        ASSERT_EQ(accepted.size(), 7999u);
+        const std::size_t next = received.size() + 1;
+        ASSERT_TRUE(qb::io::async::run_sync(pub_->notify(channel, accepted)));
+        ASSERT_TRUE(pump_until([&] { return received.size() >= next; }, kDeadline));
+        ASSERT_EQ(received.size(), next);
+        EXPECT_EQ(received.back(), accepted);
+
+        const std::string rejected = accepted + 'a';
+        ASSERT_EQ(rejected.size(), 8000u);
+        auto reply = qb::io::async::run_sync(pub_->notify(channel, rejected));
+        EXPECT_FALSE(reply.ok());
+        if (!reply.ok()) {
+            EXPECT_EQ(reply.error().code, "00000") << "server SQLSTATE " << reply.error().code << " is not local payload validation";
+            EXPECT_EQ(std::string(reply.error().what()), "NOTIFY payload exceeds maximum length");
+        }
+        EXPECT_TRUE(pub_->execute("SELECT 1", discard_query, discard_error).await());
+        EXPECT_EQ(received.size(), next) << "the rejected payload must not generate a notification";
+    }
+    ASSERT_TRUE(qb::io::async::run_sync(pub_->unlisten(channel)));
+}
 
 TEST_F(ListenNotify, EmptyChannel_CallbackForms_InvokeErrorAndThrow) {
     bool notify_err = false, listen_err = false, unlisten_err = false;

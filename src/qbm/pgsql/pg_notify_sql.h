@@ -22,7 +22,7 @@
 
 namespace qb::pg::detail {
 
-/// PostgreSQL NOTIFY payload size limit (bytes); see server docs.
+/// Exclusive PostgreSQL NOTIFY payload size limit (bytes); see server docs.
 inline constexpr std::size_t notify_payload_max_bytes = 8000;
 
 /**
@@ -86,8 +86,8 @@ build_unlisten_all_sql() {
  * @param channel Channel name to notify; quoted as an identifier.
  * @param payload Optional payload; omitted from the statement when empty.
  * @return The complete `NOTIFY "<channel>"[, $tag$<payload>$tag$]` statement.
- * @throws error::client_error if @p channel is empty, or if @p payload exceeds
- *         ::notify_payload_max_bytes.
+ * @throws error::client_error if @p channel is empty, or if @p payload has
+ *         ::notify_payload_max_bytes bytes or more.
  */
 [[nodiscard]] std::string build_notify_sql(std::string_view channel, std::string_view payload);
 

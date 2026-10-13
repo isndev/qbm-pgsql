@@ -424,6 +424,12 @@ Outbound `notify` quotes the channel as a SQL identifier and uses a dollar-quote
 first closing match follows each nonempty payload, including a suffix overlapping the closing
 tag. It keeps backslashes and multibyte text literal under either `standard_conforming_strings`
 setting.
+The payload limit is exclusive and measured in bytes: 7,999 bytes are accepted, while
+8,000 or more fail locally before SQL is queued. The failure is `error::client_error`
+with the existing `code == "00000"`. The callback form invokes its error callback and
+rethrows that error; the coroutine form returns a failed `Reply<void>`
+(`src/qbm/pgsql/pg_notify_sql.cpp:65-74`, `src/qbm/pgsql/error.cpp:132-143`,
+`src/qbm/pgsql/commands.h:1249-1256,1626-1628`).
 
 For a queue-based consumer use the dedicated client:
 
@@ -544,6 +550,9 @@ the 16 bytes without blocking. Same connect budget (`connect_timeout` capped at
 2 s), same verdict (57014), same `false` = "not delivered". Fire it from a timer
 coroutine, an actor, or a second connection's trigger; reach for `cancel()` only
 where no coroutine can run.
+During the packet write, a native TLS `WANT_READ` waits for readability alone;
+otherwise native TLS and plain writes wait for writability. A custom secure transport
+without native TLS state keeps the combined read/write fallback (`pgsql.h:2587-2598`).
 
 **Connection introspection (all `[[nodiscard]]`, libpq-style):**
 

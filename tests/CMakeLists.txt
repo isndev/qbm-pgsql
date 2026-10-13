@@ -108,6 +108,10 @@ qpg_test(system scram-mitm-refuse system/auth/scram-mitm-refuse.cpp EXTRA_LABELS
 # The out-of-band CancelRequest on the wire, cancel_async() next to cancel(), against a fake backend that hands out
 # the BackendKeyData and reads the second connection (Huly QB-113). No daemon.
 qpg_test(system cancel-request-wire system/connection/cancel-request-wire.cpp EXTRA_LABELS connection)
+if (QB_HAS_SSL AND TARGET qbm-pgsql-test-system-cancel-request-wire)
+    # Reuse qb's TLS resources and teardown rendezvous without assuming checkout layout.
+    target_include_directories(qbm-pgsql-test-system-cancel-request-wire PRIVATE "${QB_ROOT_DIR}/tests/io/shared")
+endif ()
 qpg_test(system inline-query-order system/query/inline-query-order.cpp EXTRA_LABELS protocol coroutine)
 
 # -----------------------------------------------------------------------------

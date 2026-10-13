@@ -9,7 +9,7 @@
 
 /**
  * @file benchmark/wire/param-encode-bench.cpp
- * @brief google-benchmark harness for the qbm-pgsql parameter encode hot path.
+ * @brief google-benchmark harness for parameter encoding and NOTIFY SQL construction.
  *
  * Every parameterized statement (`db.query(sql, args...)`, `execute(stmt, params)`) builds
  * its Bind-message parameter block through `ParamSerializer::serialize_params` — once per
@@ -20,20 +20,24 @@
  *   - serialize_params of a 1000-element int4[] (the array-header + per-element encode +
  *     buffer growth path in add_vector).
  *   - serialize_params of a wide NUMERIC (decode_pg_numeric's inverse, set_var_from_str).
+ *   - build_notify_sql with valid ASCII/UTF-8 payloads, including the 7999-byte boundary.
  *
  * Daemon-free. Param sets mirror the constructions in the unit serializer suite
  * (`unit/serialization/param-serializer-encode.cpp`). Setup (the argument values) is built
  * once outside the loop; the serializer is reset()-and-refilled per iteration so growth is
- * measured. ONE out-of-loop correctness gate per benchmark (state.SkipWithError). No
+ * measured. Out-of-loop correctness gates report mismatches through state.SkipWithError. No
  * EXPECT_LT duration assertions.
  *
  * @ingroup Pgsql
  */
 #include <benchmark/benchmark.h>
+#include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 
+#include <qbm/pgsql/pg_notify_sql.h>
 #include <qbm/pgsql/pgsql.h>
 
 using namespace qb::pg;
@@ -141,5 +145,68 @@ BM_EncodeTextOnly(benchmark::State &state) {
     state.SetItemsProcessed(state.iterations() * 3);
 }
 BENCHMARK(BM_EncodeTextOnly);
+
+// Only SQL construction is measured: no database, socket, callback or coroutine.
+// Both comparison roles accept these payloads and produce the same literal bytes;
+// rejection at 8000 bytes belongs to correctness tests, not an equivalent-work pair.
+static void
+BM_BuildNotifySql(benchmark::State &state) {
+    const auto payload_bytes = state.range(0);
+    const auto utf8          = state.range(1);
+    if ((payload_bytes != 16 && payload_bytes != 512 && payload_bytes != 7999) || (utf8 != 0 && utf8 != 1)) {
+        state.SkipWithError("unsupported NOTIFY payload fixture");
+        return;
+    }
+
+    const auto  bytes = static_cast<std::size_t>(payload_bytes);
+    std::string channel{"qb_notify_bench"};
+    std::string payload;
+    payload.reserve(bytes);
+    if (utf8) {
+        // U+00E9 is two UTF-8 bytes. Keep complete code points; an odd byte count
+        // ends in ASCII, so 7999 bytes never contains a truncated UTF-8 character.
+        for (std::size_t i = 0; i < bytes / 2; ++i)
+            payload.append("\xC3\xA9");
+        if (bytes % 2)
+            payload.push_back('x');
+    } else {
+        payload.assign(bytes, 'x');
+    }
+    // Independent oracle: no quoting helper is reused to derive the expectation.
+    const std::string expected = "NOTIFY \"qb_notify_bench\", $qb_notify$" + payload + "$qb_notify$";
+    auto              sql      = build_notify_sql(channel, payload);
+    if (payload.size() != bytes || sql != expected) {
+        state.SkipWithError("NOTIFY payload size or exact SQL bytes mismatch");
+        return;
+    }
+
+    for (auto _ : state) {
+        benchmark::DoNotOptimize(channel);
+        benchmark::DoNotOptimize(payload);
+        sql = build_notify_sql(channel, payload);
+        benchmark::DoNotOptimize(sql.data());
+        benchmark::DoNotOptimize(sql.size());
+        benchmark::ClobberMemory();
+    }
+    if (sql != expected) {
+        state.SkipWithError("NOTIFY exact SQL bytes changed after timed loop");
+        return;
+    }
+    if (state.iterations() > std::numeric_limits<std::int64_t>::max() / payload_bytes) {
+        state.SkipWithError("NOTIFY payload byte counter overflow");
+        return;
+    }
+    state.SetItemsProcessed(state.iterations());
+    state.SetBytesProcessed(state.iterations() * payload_bytes);
+}
+BENCHMARK(BM_BuildNotifySql)
+    ->Args({16, 0})
+    ->Args({512, 0})
+    ->Args({7999, 0})
+    ->Args({16, 1})
+    ->Args({512, 1})
+    ->Args({7999, 1})
+    ->ArgNames({"payload_bytes", "utf8"})
+    ->Unit(benchmark::kNanosecond);
 
 BENCHMARK_MAIN();

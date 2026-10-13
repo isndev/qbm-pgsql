@@ -65,7 +65,7 @@ std::string
 build_notify_sql(std::string_view channel, std::string_view payload) {
     if (channel.empty())
         throw error::client_error{"NOTIFY channel name cannot be empty"};
-    if (payload.size() > notify_payload_max_bytes)
+    if (payload.size() >= notify_payload_max_bytes)
         throw error::client_error{"NOTIFY payload exceeds maximum length"};
     std::string sql = std::string("NOTIFY ") + quote_notify_identifier(channel);
     if (!payload.empty())

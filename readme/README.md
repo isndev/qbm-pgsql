@@ -46,7 +46,7 @@ other actor on it stops with you — silently, because nothing in the framework 
 **Building from source:** configure the qb-dev superproject; its qb module loader registers qbm-pgsql. The module's
 `CMakeLists.txt` is not standalone-configurable because it needs qb's development-time CMake helpers.
 
-<!-- src: qbm/pgsql/README.md:188-190 -->
+<!-- src: qbm/pgsql/README.md:364-366 -->
 
 ```cmake
 add_subdirectory(qb)                                   # the framework first

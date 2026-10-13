@@ -26,10 +26,15 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <coroutine>
 #include <cstdint>
 #include <cstring>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -41,11 +46,18 @@
 
 #include "../../shared/pg_fake_backend.h"
 
+#ifdef QB_HAS_SSL
+#include <qb/io/tcp/ssl/socket.h>
+#include <qb/io/transport/stcp.h>
+#include <openssl/err.h>
+#include "ssl_fixtures.h"
+#endif
+
 using namespace qb::pg;
 using namespace qb::pg::test::fake;
 using namespace std::chrono_literals;
 
-namespace {
+namespace cancel_request_wire_test {
 
 constexpr std::uint32_t kBackendPid    = 4242;
 constexpr std::uint32_t kBackendSecret = 0x0BADF00Du;
@@ -130,7 +142,9 @@ expect_cancel_request(const std::vector<std::uint8_t> &bytes) {
     EXPECT_EQ(get_i32(bytes.data() + 12), kBackendSecret) << "the secret the session was handed";
 }
 
-} // namespace
+} // namespace cancel_request_wire_test
+
+using namespace cancel_request_wire_test;
 
 TEST(PgsqlCancelWire, CancelAsyncSendsTheCancelRequestOnASecondConnectionWithoutBlockingTheLoop) {
     qb::io::async::init();
@@ -213,3 +227,402 @@ TEST(PgsqlCancelWire, NeverConnectedReportsFalseAndOpensNothing) {
     EXPECT_LE(qb::io::socket::handle_read_ready(listener.native_handle(), 100ms), 0);
     listener.disconnect();
 }
+
+#ifdef QB_HAS_SSL
+namespace cancel_request_wire_test {
+
+struct CancelTlsRetryProbe {
+    bool          request_renegotiation       = false;
+    bool          renegotiation_armed         = false;
+    bool          initial_handshake_complete  = false;
+    bool          native_write_wanted_read    = false;
+    bool          blocked_socket_writable     = false;
+    bool          blocked_socket_not_readable = false;
+    std::size_t   write_calls                 = 0;
+    std::size_t   successful_write_calls      = 0;
+    std::size_t   want_read_calls             = 0;
+    std::size_t   want_write_calls            = 0;
+    std::size_t   failed_write_calls          = 0;
+    int           last_write_errno            = 0;
+    unsigned long last_write_ssl_error        = 0;
+    std::size_t   accepted_bytes              = 0;
+    long          completed_renegotiations    = 0;
+};
+
+// The existing Database<transport> extension point owns this test socket. The
+// application write itself still calls qb's native SSL_write path; no return or
+// OpenSSL rwstate is fabricated. A fresh TLS 1.2 renegotiation makes that write
+// require peer input while the ordinary TCP descriptor remains writable.
+class CancelRetrySocket : public qb::io::tcp::ssl::socket {
+    static qb::io::ssl::Context
+    tls12(qb::io::ssl::Context tls) {
+        tls.min_version(qb::io::ssl::TlsVersion::v1_2).max_version(qb::io::ssl::TlsVersion::v1_2);
+        return tls;
+    }
+
+public:
+    inline static thread_local CancelTlsRetryProbe *probe = nullptr;
+
+    CancelRetrySocket() = default;
+    explicit CancelRetrySocket(qb::io::ssl::Context tls)
+        : qb::io::tcp::ssl::socket(tls12(std::move(tls))) {}
+    CancelRetrySocket(CancelRetrySocket &&)            = default;
+    CancelRetrySocket &operator=(CancelRetrySocket &&) = default;
+
+    int
+    write(const void *data, std::size_t size) noexcept {
+        const auto *bytes = static_cast<const std::uint8_t *>(data);
+        if (!probe || size != 16 || get_i32(bytes) != 16u || get_i32(bytes + 4) != 80877102u)
+            return qb::io::tcp::ssl::socket::write(data, size);
+        ++probe->write_calls;
+        if (probe->request_renegotiation && probe->write_calls == 1) {
+            probe->initial_handshake_complete = handshake_complete();
+            probe->renegotiation_armed =
+                probe->initial_handshake_complete && SSL_version(ssl_handle()) == TLS1_2_VERSION && SSL_renegotiate(ssl_handle()) == 1;
+            if (!probe->renegotiation_armed)
+                return -1;
+        }
+        const int n = qb::io::tcp::ssl::socket::write(data, size);
+        if (n < 0) {
+            ++probe->failed_write_calls;
+            probe->last_write_errno     = qb::io::socket::get_last_errno();
+            probe->last_write_ssl_error = ERR_peek_last_error();
+        }
+        if (n == 0 && SSL_want_read(ssl_handle())) {
+            ++probe->want_read_calls;
+            probe->native_write_wanted_read = true;
+            if (probe->write_calls == 1) {
+                probe->blocked_socket_writable     = qb::io::socket::handle_write_ready(native_handle(), 0ms) > 0;
+                probe->blocked_socket_not_readable = qb::io::socket::handle_read_ready(native_handle(), 0ms) == 0;
+            }
+        } else if (n == 0 && SSL_want_write(ssl_handle())) {
+            ++probe->want_write_calls;
+        } else if (n > 0) {
+            ++probe->successful_write_calls;
+            probe->accepted_bytes += static_cast<std::size_t>(n);
+            probe->completed_renegotiations = SSL_total_renegotiations(ssl_handle());
+        }
+        return n;
+    }
+};
+
+struct CancelTlsPeerReadProbe {
+    std::size_t   read_calls            = 0;
+    std::size_t   successful_read_calls = 0;
+    std::size_t   want_read_calls       = 0;
+    std::size_t   want_write_calls      = 0;
+    std::size_t   failed_read_calls     = 0;
+    std::size_t   accepted_bytes        = 0;
+    int           last_read_errno       = 0;
+    unsigned long last_read_ssl_error   = 0;
+    bool          readiness_wait_failed = false;
+};
+
+std::string
+tls_error_text(unsigned long code) {
+    char text[256]{};
+    ERR_error_string_n(code, text, sizeof text);
+    return text;
+}
+
+class CancelRetryTransport : public qb::io::stream<CancelRetrySocket> {
+public:
+    static constexpr bool
+    is_secure() noexcept {
+        return true;
+    }
+};
+
+using CancelRetryDatabase = qb::pg::detail::Database<CancelRetryTransport, void>;
+
+bool
+wait_tls_io(qb::io::tcp::ssl::socket &socket, std::chrono::steady_clock::time_point deadline) {
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= deadline)
+        return false;
+    const auto remaining = std::chrono::duration_cast<qb::duration>(deadline - now);
+    return (SSL_want_write(socket.ssl_handle()) ? qb::io::socket::handle_write_ready(socket.native_handle(), remaining)
+                                                : qb::io::socket::handle_read_ready(socket.native_handle(), remaining))
+           > 0;
+}
+
+bool
+tls_recv_exact(qb::io::tcp::ssl::socket &socket, std::uint8_t *bytes, std::size_t size, CancelTlsPeerReadProbe *probe = nullptr) {
+    const auto  deadline = std::chrono::steady_clock::now() + 5s;
+    std::size_t got      = 0;
+    while (got < size) {
+        const int n = socket.read(bytes + got, size - got);
+        if (probe) {
+            ++probe->read_calls;
+            if (n < 0) {
+                ++probe->failed_read_calls;
+                probe->last_read_errno     = qb::io::socket::get_last_errno();
+                probe->last_read_ssl_error = ERR_peek_last_error();
+            } else if (n > 0) {
+                ++probe->successful_read_calls;
+                probe->accepted_bytes += static_cast<std::size_t>(n);
+            } else if (SSL_want_read(socket.ssl_handle())) {
+                ++probe->want_read_calls;
+            } else if (SSL_want_write(socket.ssl_handle())) {
+                ++probe->want_write_calls;
+            }
+        }
+        if (n < 0)
+            return false;
+        if (n > 0)
+            got += static_cast<std::size_t>(n);
+        else if (!wait_tls_io(socket, deadline)) {
+            if (probe)
+                probe->readiness_wait_failed = true;
+            return false;
+        }
+    }
+    return true;
+}
+
+bool
+tls_send_all(qb::io::tcp::ssl::socket &socket, const std::vector<std::uint8_t> &bytes) {
+    const auto  deadline = std::chrono::steady_clock::now() + 5s;
+    std::size_t sent     = 0;
+    while (sent < bytes.size()) {
+        const int n = socket.write(bytes.data() + sent, bytes.size() - sent);
+        if (n < 0)
+            return false;
+        if (n > 0)
+            sent += static_cast<std::size_t>(n);
+        else if (!wait_tls_io(socket, deadline))
+            return false;
+    }
+    return true;
+}
+
+class CancelTlsPeer {
+    qb::io::tcp::listener             listener_;
+    qb::io::ssl::Context              tls_;
+    std::thread                       worker_;
+    std::mutex                        mutex_;
+    std::condition_variable           condition_;
+    bool                              release_response_ = false;
+    qb::io::test::teardown_rendezvous teardown_;
+
+    bool
+    accept_tls(qb::io::tcp::ssl::socket &out) {
+        if (qb::io::socket::handle_read_ready(listener_.native_handle(), 5s) <= 0)
+            return false;
+        qb::io::tcp::socket plain;
+        if (listener_.accept(plain) != qb::io::SocketStatus::Done)
+            return false;
+        if (plain.set_nonblocking(true) != 0)
+            return false;
+        std::uint8_t request[8];
+        if (!recv_exact(plain, request, sizeof request) || get_i32(request) != 8u || get_i32(request + 4) != 80877103u
+            || qb::io::socket::handle_write_ready(plain.native_handle(), 5s) <= 0 || !send_all(plain, std::vector<std::uint8_t>{'S'}))
+            return false;
+        SSL *ssl = SSL_new(tls_.native());
+        if (!ssl)
+            return false;
+        SSL_set_accept_state(ssl);
+        out = qb::io::tcp::ssl::socket{ssl, plain};
+        if (out.set_nonblocking(true) != 0)
+            return false;
+        const auto deadline = std::chrono::steady_clock::now() + 5s;
+        for (;;) {
+            const int step = out.handshake_status();
+            if (step != 0)
+                return step == 1;
+            if (!wait_tls_io(out, deadline))
+                return false;
+        }
+    }
+
+    void
+    run() {
+        qb::io::tcp::ssl::socket session;
+        qb::io::tcp::ssl::socket cancel;
+        if (!accept_tls(session))
+            return;
+        std::uint8_t length[4];
+        if (!tls_recv_exact(session, length, sizeof length))
+            return;
+        const auto startup_size = get_i32(length);
+        if (startup_size < 8u || startup_size > 65536u)
+            return;
+        std::vector<std::uint8_t> startup(startup_size - 4u);
+        if (!tls_recv_exact(session, startup.data(), startup.size()))
+            return;
+        std::vector<std::uint8_t> ok;
+        put_i32(ok, 0);
+        std::vector<std::uint8_t> key;
+        put_i32(key, kBackendPid);
+        put_i32(key, kBackendSecret);
+        if (!tls_send_all(session, backend_msg('R', ok)) || !tls_send_all(session, backend_msg('K', key))
+            || !tls_send_all(session, backend_msg('Z', std::vector<std::uint8_t>{'I'})) || !accept_tls(cancel))
+            return;
+        // Hold ALL application/renegotiation reads until the test has observed
+        // the native read demand and inspected a fixed number of loop turns.
+        {
+            std::unique_lock lock(mutex_);
+            if (!condition_.wait_for(lock, 5s, [&] { return release_response_; }))
+                return;
+        }
+        std::uint8_t packet[16];
+        if (tls_recv_exact(cancel, packet, sizeof packet, &cancel_reads)) {
+            bytes.assign(packet, packet + sizeof packet);
+            received = true;
+        }
+        teardown_.server_done();
+        (void) teardown_.wait_client();
+    }
+
+public:
+    bool                      received = false;
+    std::vector<std::uint8_t> bytes;
+    CancelTlsPeerReadProbe    cancel_reads;
+
+    CancelTlsPeer()
+        : tls_(qb::io::ssl::Context::server(qb::io::test::ssl_resource_path("cert.pem"), qb::io::test::ssl_resource_path("key.pem"))) {
+        tls_.min_version(qb::io::ssl::TlsVersion::v1_2).max_version(qb::io::ssl::TlsVersion::v1_2);
+#ifdef SSL_OP_ALLOW_CLIENT_RENEGOTIATION
+        if (tls_.ok())
+            SSL_CTX_set_options(tls_.native(), SSL_OP_ALLOW_CLIENT_RENEGOTIATION);
+#endif
+    }
+
+    ~CancelTlsPeer() {
+        release_response();
+        teardown_.release_all();
+        if (worker_.joinable())
+            worker_.join();
+        listener_.disconnect();
+    }
+
+    bool
+    start() {
+        if (!tls_.ok() || listener_.listen_v4(0, "127.0.0.1") != qb::io::SocketStatus::Done)
+            return false;
+        worker_ = std::thread([this] { run(); });
+        return true;
+    }
+
+    std::uint16_t
+    port() const {
+        return listener_.local_endpoint().port();
+    }
+
+    void
+    release_response() {
+        {
+            std::lock_guard lock(mutex_);
+            release_response_ = true;
+        }
+        condition_.notify_one();
+    }
+
+    void
+    finish() {
+        teardown_.client_done();
+        if (worker_.joinable())
+            worker_.join();
+    }
+};
+
+template <typename Predicate>
+bool
+pump_cancel_until(Predicate predicate) {
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (!predicate() && std::chrono::steady_clock::now() < deadline) {
+        qb::io::async::run(EVRUN_NOWAIT);
+        qb::io::async::coro_scheduler().run_ready();
+        std::this_thread::yield();
+    }
+    return predicate();
+}
+
+qb::io::async::task<void>
+record_tls_cancel(CancelRetryDatabase *db, bool *delivered, bool *done, std::shared_ptr<std::coroutine_handle<>> slot) {
+    qb::io::async::detail::worker_lease::slot_guard guard(std::move(slot));
+    *delivered = co_await db->cancel_async();
+    *done      = true;
+}
+
+void
+check_tls_cancel_write(bool renegotiate) {
+    ASSERT_TRUE(qb::io::test::require_ssl_files());
+    qb::io::async::listener::current.clear();
+    CancelTlsRetryProbe probe;
+    probe.request_renegotiation = renegotiate;
+    struct ProbeScope {
+        explicit ProbeScope(CancelTlsRetryProbe &value) {
+            CancelRetrySocket::probe = &value;
+        }
+        ~ProbeScope() {
+            CancelRetrySocket::probe = nullptr;
+        }
+    } scope(probe);
+    CancelTlsPeer peer;
+    ASSERT_TRUE(peer.start());
+    CancelRetryDatabase db;
+    auto                opts = connection_options::parse("tcp://test:test@127.0.0.1:" + std::to_string(peer.port()) + "[test]");
+    opts.ssl_verify          = ssl_verify_mode::none;
+    ASSERT_TRUE(qb::io::async::run_sync(db.connect(opts)));
+    ASSERT_TRUE(pump_cancel_until([&] { return db.backend_pid() == static_cast<int>(kBackendPid); }));
+
+    bool                                done      = false;
+    bool                                delivered = false;
+    qb::io::async::detail::worker_lease cancellation;
+    cancellation.start(record_tls_cancel(&db, &delivered, &done, cancellation.slot()));
+    ASSERT_TRUE(pump_cancel_until([&] { return probe.write_calls != 0 || done; }));
+    if (renegotiate) {
+        ASSERT_TRUE(probe.initial_handshake_complete);
+        ASSERT_TRUE(probe.renegotiation_armed) << "native TLS 1.2 fixture failed to arm renegotiation";
+        ASSERT_TRUE(probe.native_write_wanted_read) << "fixture did not obtain SSL_write WANT_READ; no readiness verdict is valid";
+        ASSERT_TRUE(probe.blocked_socket_writable) << "fixture lacks the opposing writable-readiness control";
+        ASSERT_TRUE(probe.blocked_socket_not_readable) << "peer input was not actually withheld at the first blocked write";
+        const auto blocked_calls = probe.write_calls;
+        SCOPED_TRACE("native WANT_READ calls=" + std::to_string(probe.want_read_calls) + "; blocked write calls="
+                     + std::to_string(blocked_calls) + "; TCP writable=" + std::to_string(probe.blocked_socket_writable)
+                     + "; TCP unreadable=" + std::to_string(probe.blocked_socket_not_readable));
+        for (int turn = 0; turn < 8; ++turn) {
+            qb::io::async::run(EVRUN_NOWAIT);
+            qb::io::async::coro_scheduler().run_ready();
+        }
+        EXPECT_EQ(probe.write_calls, blocked_calls) << "cancel write retried without any peer read progress";
+        EXPECT_FALSE(done) << "cancel ended while its real TLS write still requires the withheld peer response";
+    }
+    peer.release_response();
+    ASSERT_TRUE(pump_cancel_until([&] { return done; }));
+    SCOPED_TRACE("cancel writes=" + std::to_string(probe.write_calls) + "; successful=" + std::to_string(probe.successful_write_calls)
+                 + "; WANT_READ=" + std::to_string(probe.want_read_calls) + "; WANT_WRITE=" + std::to_string(probe.want_write_calls)
+                 + "; failed=" + std::to_string(probe.failed_write_calls) + "; errno=" + std::to_string(probe.last_write_errno)
+                 + "; OpenSSL=" + tls_error_text(probe.last_write_ssl_error));
+    EXPECT_TRUE(delivered);
+    EXPECT_EQ(probe.accepted_bytes, 16u);
+    if (renegotiate)
+        EXPECT_EQ(probe.completed_renegotiations, 1) << "the withheld native read demand must resolve through the peer handshake";
+    if (!renegotiate) {
+        EXPECT_EQ(probe.write_calls, 1u);
+        EXPECT_EQ(probe.want_read_calls, 0u);
+    }
+    peer.finish();
+    SCOPED_TRACE("peer cancel reads=" + std::to_string(peer.cancel_reads.read_calls) + "; successful="
+                 + std::to_string(peer.cancel_reads.successful_read_calls) + "; WANT_READ=" + std::to_string(peer.cancel_reads.want_read_calls)
+                 + "; WANT_WRITE=" + std::to_string(peer.cancel_reads.want_write_calls) + "; failed="
+                 + std::to_string(peer.cancel_reads.failed_read_calls) + "; bytes=" + std::to_string(peer.cancel_reads.accepted_bytes)
+                 + "; wait failed=" + std::to_string(peer.cancel_reads.readiness_wait_failed) + "; errno="
+                 + std::to_string(peer.cancel_reads.last_read_errno) + "; OpenSSL=" + tls_error_text(peer.cancel_reads.last_read_ssl_error));
+    ASSERT_TRUE(peer.received);
+    expect_cancel_request(peer.bytes);
+    db.disconnect();
+    qb::io::async::listener::current.clear();
+}
+
+} // namespace cancel_request_wire_test
+
+TEST(PgsqlCancelWire, TlsCancelWriteWaitsForNativeReadDemand) {
+    check_tls_cancel_write(true);
+}
+
+TEST(PgsqlCancelWire, TlsCancelWriteWithoutReadDemandDeliversExactlyOnce) {
+    check_tls_cancel_write(false);
+}
+#endif // QB_HAS_SSL
