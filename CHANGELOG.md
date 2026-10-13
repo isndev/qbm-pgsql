@@ -37,6 +37,19 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Fixed
 
+- **System and integration test fixtures keep workers and coroutine state alive on fatal exits (Huly QB-406, QB-412).**
+  CancelRequest workers join before listener state dies; the resilience fixture destroys
+  suspended frames before releasing the database and its result flags.
+- **The connect timeout suite distinguishes a real handshake deadline from native errors (Huly QB-439).**
+  A silent loopback backend accepts StartupMessage and stays open until the configured timer
+  ends the attempt. Bad TLS material now targets a local listener that detects fallback TCP.
+- **API documentation checks reject comment-only names and invalid later citations (Huly QB-561, QB-562).**
+  The shipped guard indexes C++ code without comments or literals and examines every
+  citation on a line before accepting it.
+- **Scheduled tests and documentation checks select their intended inputs (Huly QB-558–560, QB-621).**
+  Nightly uses paired `develop` branches, doc-lint triggers on checker and workflow edits,
+  the pull request template points to the public superbuild recipe, and clang-tidy includes
+  module headers.
 - **Present optional field reads check SQL NULL once (Huly QB-646).** Scalar and optional
   reads share the format- and OID-aware conversion after the public NULL decision.
   Empty text stays present; SQL NULL, nested optionals and typed errors keep their contract.
@@ -106,9 +119,11 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
   loaded the wrong table. A plain COPY query queued ahead cannot borrow a later `copy_in`
   source. Destroying an awaiting coroutine detaches its callback immediately while its
   command keeps the COPY reservation until completion; sequential COPY and connection
-  reuse still work. COPY OUT retains its active sink through each invocation, including
-  when that sink destroys its own waiter or disconnects the connection; later chunks cannot
-  invoke the detached sink. It retains no extra command-owner reference per chunk.
+  reuse still work. COPY OUT keeps its active sink and owned captures alive through each
+  invocation, including when that sink destroys its own waiter or disconnects the connection;
+  later chunks cannot invoke the detached sink. Ordinary chunk delivery borrows the operation
+  and sink without copying either shared owner; cancellation or completion during the call
+  retains the needed ownership in the outermost invocation until it returns, including nested calls.
   If a source destroys its own awaiting coroutine inside a callback,
   the returned chunk is discarded and the command sends one `CopyFail` before any
   further source call.

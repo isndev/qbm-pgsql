@@ -217,7 +217,7 @@ The second row is the one to build on, and it is measured rather than asserted. 
 on `SELECT pg_sleep(30)`, and requires the `co_await` to resume with a failed reply — "a hang here is the actual hazard,
 since the caller has no other way to learn the socket is gone". It then requires `is_connected()` to go false, so the
 next query fails fast instead of enqueuing work on a dead socket.
-<!-- src: qbm/pgsql/tests/integration/resilience/coro-cancel-and-connection-loss.cpp:243-246 -->
+<!-- src: qbm/pgsql/tests/integration/resilience/coro-cancel-and-connection-loss.cpp:246-249 -->
 
 The third row is measured too, and its subtlety is worth the paragraph. qb's coroutine frames come from a pooled
 freelist, so destroying a parked frame returns the block for the *next* spawn to reuse; an un-retracted completion would
@@ -225,7 +225,7 @@ then resume somebody else's coroutine. `CoroutineDestroyedWhileParkedOnLiveQuery
 wake six seconds early — and it also checks the connection afterwards, which is the fact you need: **abandoning a reply
 does not desync the stream.** The orphaned reply is consumed and dropped, and the next `co_await` on that connection
 gets its own.
-<!-- src: qbm/pgsql/tests/integration/resilience/coro-cancel-and-connection-loss.cpp:170-226 -->
+<!-- src: qbm/pgsql/tests/integration/resilience/coro-cancel-and-connection-loss.cpp:178-229 -->
 
 ### Making a query interruptible
 
@@ -299,7 +299,7 @@ database instead:
 - `disconnect()` — dropping the session rolls the open transaction back server-side, which is the second thing the
   resilience suite measures: after the backend is terminated mid-transaction, the uncommitted row is invisible from a
   third connection.
-  <!-- src: qbm/pgsql/tests/integration/resilience/coro-cancel-and-connection-loss.cpp:298-304 -->
+  <!-- src: qbm/pgsql/tests/integration/resilience/coro-cancel-and-connection-loss.cpp:299-305 -->
 
 ---
 
@@ -326,7 +326,7 @@ The two arities are fixed and checked at compile time: the success handler is `(
 `(Transaction&)` alone, and the error handler takes `(error::db_error const&)` — one argument, no transaction. The
 shipped no-ops `qb::pg::discard_query` and `qb::pg::discard_error` have exactly those signatures and are the right
 placeholder when you read the side effects elsewhere.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2967-2975 (discard_query_results_t; discard_error_t) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:3019-3027 (discard_query_results_t; discard_error_t) -->
 
 `this` is safe in a callback in a way it is not in a coroutine, but only because of a difference worth naming: the
 callback is invoked from the reply path of a connection the actor owns, and the actor's `KillEvent` handler
@@ -359,7 +359,7 @@ here because an actor is where the cost lands.
   a coroutine. Inside its own query or fluent `.then` / `.error` callback, queued failures run after it returns, then teardown
   follows message dispatch (Huly QB-627). Until 3.3 it ran one `EVRUN_NOWAIT` pass after close, which re-entered the
   coroutine scheduler when called from a coroutine (an abort in a debug build — Huly QB-253).
-  <!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2759-2778 (disconnect: immediate or deferred drain, then disconnect_now) -->
+  <!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2811-2830 (disconnect: immediate or deferred drain, then disconnect_now) -->
 
 ---
 

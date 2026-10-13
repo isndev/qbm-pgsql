@@ -221,10 +221,13 @@ COPY until the in-flight command finishes; a cancelled COPY IN sends `CopyFail`
 if the server requests data after its source has been detached.
 If the source destroys its own awaiting coroutine while being called, its returned
 chunk is discarded and `CopyFail` ends the COPY without calling that source again.
-The current COPY OUT sink invocation retains its callable and owned captures until it returns,
+The current COPY OUT sink and its owned captures stay alive until the invocation returns,
 even if it destroys its own waiter or disconnects; detaching the sink prevents later invocations.
-Only the sink is retained per chunk, while the command keeps ownership of the COPY reservation.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:1758-1768 (on_copy_data) -->
+Ordinary chunk delivery borrows the operation and callable without copying either shared owner.
+If cancellation detaches the sink or completion releases the operation during a call, ownership
+is retained in that operation's outermost sink invocation until it returns. Nested calls share
+that retention. This protects owned captures; it does not extend the lifetime of borrowed data.
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:1073-1112,1120-1137,1805-1821,2258-2267 (CopyOperation / SinkInvocation / detach_sink; finish_copy; on_copy_data; copy_out) -->
 The source or sink activates only when that command reaches the wire, so an earlier
 plain SQL command cannot borrow it.
 
@@ -270,7 +273,7 @@ transaction is never joined and never ended by `query_stream`.
 > caller-owned only once its `BEGIN` has **completed** — `in_transaction()` mirrors the last `ReadyForQuery`. Started
 > before that, the stream reads the session as idle and opens (and later ends) a block of its own. `co_await` the
 > `begin()` first.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2292-2412,2306-2324,2326-2329,2384-2404,2082-2090 (in that order: query_stream; the seat/guard bookkeeping; the cursor name; the last-one-out COMMIT/ROLLBACK; in_transaction) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2344-2464,2358-2376,2378-2381,2436-2456,2134-2142 (in that order: query_stream; the seat/guard bookkeeping; the cursor name; the last-one-out COMMIT/ROLLBACK; in_transaction) -->
 
 ---
 

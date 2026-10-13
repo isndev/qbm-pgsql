@@ -1071,9 +1071,44 @@ private:
     std::string                _gs2_header;      ///< SCRAM gs2-header chosen at SASL init (`n,,` / `y,,` / `p=tls-server-end-point,,`)
     std::vector<unsigned char> _channel_binding; ///< SCRAM-SHA-256-PLUS channel-binding data (tls-server-end-point); empty when unbound
     struct CopyOperation {
+        struct SinkInvocation {
+            CopyOperation                                         &owner;
+            std::shared_ptr<CopyOperation>                         owner_pin;
+            std::shared_ptr<std::function<void(std::string_view)>> sink_pin;
+            bool                                                   outermost;
+
+            explicit SinkInvocation(CopyOperation &operation) noexcept
+                : owner(operation)
+                , outermost(!owner.sink_invocation) {
+                if (outermost)
+                    owner.sink_invocation = this;
+            }
+
+            ~SinkInvocation() noexcept {
+                // Clear the stack pointer before either pin releases a callback or
+                // operation. Nested calls share the outermost invocation's lifetime.
+                if (outermost)
+                    owner.sink_invocation = nullptr;
+            }
+
+            SinkInvocation(SinkInvocation const &)            = delete;
+            SinkInvocation &operator=(SinkInvocation const &) = delete;
+        };
+
         std::shared_ptr<std::function<void(std::string_view)>>       sink;
         std::shared_ptr<std::function<std::optional<std::string>()>> source;
         ISqlQuery                                                   *query{};
+        SinkInvocation                                              *sink_invocation{};
+
+        void
+        detach_sink() noexcept {
+            if (!sink)
+                return;
+            if (sink_invocation)
+                sink_invocation->sink_pin = std::move(sink);
+            else
+                sink.reset();
+        }
     };
     // The query callbacks release the reservation. A cancelled coroutine detaches its
     // user callback immediately, but its SQL may still be in flight and must not let a
@@ -1083,9 +1118,21 @@ private:
 
     void
     finish_copy(std::shared_ptr<CopyOperation> const &owner) {
-        if (_active_copy_operation == owner)
+        // Snapshot identity before moving a connection-owned handle: owner may
+        // alias it. Retention is only needed when completion re-enters a sink.
+        auto *const copy       = owner.get();
+        auto *const invocation = copy->sink_invocation;
+        if (invocation && !invocation->owner_pin) {
+            if (_active_copy_operation.get() == copy)
+                invocation->owner_pin = std::move(_active_copy_operation);
+            else if (_copy_operation.get() == copy)
+                invocation->owner_pin = std::move(_copy_operation);
+            else
+                invocation->owner_pin = owner;
+        }
+        if (_active_copy_operation.get() == copy)
             _active_copy_operation.reset();
-        if (_copy_operation == owner)
+        if (_copy_operation.get() == copy)
             _copy_operation.reset();
     }
 
@@ -1758,12 +1805,17 @@ public:
     on_copy_data(message &msg) {
         // During a COPY ... TO STDOUT, hand the opaque payload (one row, or a chunk in
         // binary format) to the active sink without copying. No sink -> drop the chunk.
-        // Retain the sink through callback re-entry; the active owner is only read before the call.
-        auto sink = _active_copy_operation ? _active_copy_operation->sink : nullptr;
+        // The operation owns the callable through ordinary rows. Detachment moves
+        // its strong handle into the outermost invocation only on cancellation;
+        // finish_copy retains the operation there before clearing its owners.
+        auto *const copy = _active_copy_operation.get();
+        auto *const sink = copy ? copy->sink.get() : nullptr;
         if (sink && *sink) {
             const std::string_view chunk = msg.remaining();
-            if (!chunk.empty())
+            if (!chunk.empty()) {
+                typename CopyOperation::SinkInvocation invocation(*copy);
                 (*sink)(chunk);
+            }
         }
         msg.discard_remaining();
     }
@@ -2211,7 +2263,7 @@ public:
         _copy_operation = owner;
         // A destroyed awaiting frame may own the sink's captures. Detach it now,
         // while the command keeps the reservation until its query callback runs.
-        auto guard = qb::scope_guard([owner] { owner->sink.reset(); });
+        auto guard = qb::scope_guard([owner] { owner->detach_sink(); });
         co_return co_await execute_copy(std::move(sql), owner);
     }
 

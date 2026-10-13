@@ -1474,15 +1474,15 @@ TEST_F(PgsqlCoroApiTest, ConcurrentQueryStreamsDoNotCollideOnTheCursorName) {
     bool          in_txn_after = true;
 
     const bool ok = qb::io::async::run_sync([&]() -> qb::io::async::task<bool> {
-        auto [r_long, r_short] = co_await qb::io::async::when_all(
-            [&]() -> qb::io::async::task<bool> {
-                auto r = co_await db_->query_stream("SELECT g FROM generate_series(1, 800) g", 8, [&](auto) { ++long_rows; });
-                co_return r.ok();
-            }(),
-            [&]() -> qb::io::async::task<bool> {
-                auto r = co_await db_->query_stream("SELECT g FROM generate_series(1, 5) g", 3, [&](auto) { ++short_rows; });
-                co_return r.ok();
-            }());
+        auto read_long = [&]() -> qb::io::async::task<bool> {
+            auto r = co_await db_->query_stream("SELECT g FROM generate_series(1, 800) g", 8, [&](auto) { ++long_rows; });
+            co_return r.ok();
+        };
+        auto read_short = [&]() -> qb::io::async::task<bool> {
+            auto r = co_await db_->query_stream("SELECT g FROM generate_series(1, 5) g", 3, [&](auto) { ++short_rows; });
+            co_return r.ok();
+        };
+        auto [r_long, r_short] = co_await qb::io::async::when_all(read_long(), read_short());
         // Both streams are done, so the block they shared must be closed — exactly once.
         in_txn_after = db_->in_transaction();
         co_return r_long &&r_short;
@@ -1507,18 +1507,18 @@ TEST_F(PgsqlCoroApiTest, ConcurrentQueryStreamsInsideCallerTransactionLeaveItOpe
         auto begun = co_await db_->begin();
         if (!begun.ok())
             co_return false;
-        auto [ra, rb] = co_await qb::io::async::when_all(
-            [&]() -> qb::io::async::task<bool> {
-                auto r = co_await db_->query_stream("SELECT g FROM generate_series(1, 400) g", 8, [&](auto) { ++a_rows; });
-                co_return r.ok();
-            }(),
-            [&]() -> qb::io::async::task<bool> {
-                auto r = co_await db_->query_stream("SELECT g FROM generate_series(1, 5) g", 3, [&](auto) { ++b_rows; });
-                co_return r.ok();
-            }());
-        still_in_txn = db_->in_transaction();
-        auto c       = co_await db_->commit();
-        committed    = c.ok();
+        auto read_a = [&]() -> qb::io::async::task<bool> {
+            auto r = co_await db_->query_stream("SELECT g FROM generate_series(1, 400) g", 8, [&](auto) { ++a_rows; });
+            co_return r.ok();
+        };
+        auto read_b = [&]() -> qb::io::async::task<bool> {
+            auto r = co_await db_->query_stream("SELECT g FROM generate_series(1, 5) g", 3, [&](auto) { ++b_rows; });
+            co_return r.ok();
+        };
+        auto [ra, rb] = co_await qb::io::async::when_all(read_a(), read_b());
+        still_in_txn  = db_->in_transaction();
+        auto c        = co_await db_->commit();
+        committed     = c.ok();
         co_return ra &&rb;
     }());
 

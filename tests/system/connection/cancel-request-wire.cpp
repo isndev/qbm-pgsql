@@ -139,8 +139,10 @@ TEST(PgsqlCancelWire, CancelAsyncSendsTheCancelRequestOnASecondConnectionWithout
     const std::uint16_t port = listener.local_endpoint().port();
     ASSERT_NE(port, 0);
 
-    CancelWire  res;
-    std::thread backend(run_cancel_backend, std::ref(listener), &res);
+    CancelWire res;
+    // A fatal assertion below returns from TestBody. Keep the worker join owned by
+    // scope while listener and result storage are still alive.
+    std::jthread backend(run_cancel_backend, std::ref(listener), &res);
 
     bool delivered = false;
     int  ticks     = 0;
@@ -178,8 +180,8 @@ TEST(PgsqlCancelWire, BlockingCancelSendsTheSameBytes) {
     const std::uint16_t port = listener.local_endpoint().port();
     ASSERT_NE(port, 0);
 
-    CancelWire  res;
-    std::thread backend(run_cancel_backend, std::ref(listener), &res);
+    CancelWire   res;
+    std::jthread backend(run_cancel_backend, std::ref(listener), &res);
 
     bool delivered = false;
     {

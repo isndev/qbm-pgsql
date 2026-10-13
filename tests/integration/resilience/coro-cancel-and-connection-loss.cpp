@@ -95,8 +95,8 @@ pump_until(Pred &&pred, std::chrono::milliseconds budget = std::chrono::millisec
  * Deliberately NOT an immediately-invoked lambda: `task`'s `initial_suspend` is
  * `suspend_always`, so a `spawn(lambda(){...}())` closure is already destroyed by the time the
  * body runs (see qb/scripts/check-spawn-dangling-closure.py). Everything this needs is a
- * by-value parameter, and the pointers all address locals in the TEST body, which outlives the
- * frame in every case here.
+ * by-value parameter, and the pointers address fixture-owned flags. TearDown
+ * destroys suspended frames before those flags and the database are released.
  */
 qb::io::async::task<void>
 park_on_query(qb::pg::tcp::database *db, std::string sql, bool *resumed, bool *reply_ok) {
@@ -110,6 +110,13 @@ park_on_query(qb::pg::tcp::database *db, std::string sql, bool *resumed, bool *r
 /// Integration fixture: connect-or-skip, then a clean work table.
 class PgsqlResilienceTest : public qb::pg::test::PgIntegrationTest {
 protected:
+    bool orphan_resumed_  = false;
+    bool orphan_reply_ok_ = false;
+    bool heir_resumed_    = false;
+    bool heir_reply_ok_   = false;
+    bool resumed_         = false;
+    bool reply_ok_        = true;
+
     void
     SetUp() override {
         qb::pg::test::PgIntegrationTest::SetUp(); // connect-or-skip
@@ -128,6 +135,7 @@ protected:
     TearDown() override {
         if (db_) {
             db_->disconnect();
+            qb::io::async::listener::current.reset_coro_scheduler();
             db_.reset();
         }
         // The table outlives the connection it was made on, so drop it from a fresh session.
@@ -168,11 +176,8 @@ protected:
  * It reports that rather than passing quietly.
  */
 TEST_F(PgsqlResilienceTest, CoroutineDestroyedWhileParkedOnLiveQuery) {
-    bool orphan_resumed  = false;
-    bool orphan_reply_ok = false;
-
     auto orphan =
-        qb::io::async::coro_scheduler().spawn_tracked(park_on_query(db_.get(), "SELECT pg_sleep(2)", &orphan_resumed, &orphan_reply_ok));
+        qb::io::async::coro_scheduler().spawn_tracked(park_on_query(db_.get(), "SELECT pg_sleep(2)", &orphan_resumed_, &orphan_reply_ok_));
     ASSERT_TRUE(orphan) << "spawn_tracked returned an empty handle — nothing was parked";
     void *const orphan_frame = orphan.address();
 
@@ -192,9 +197,7 @@ TEST_F(PgsqlResilienceTest, CoroutineDestroyedWhileParkedOnLiveQuery) {
     qb::io::async::coro_scheduler().cancel_spawned(orphan);
 
     // Recycle it under an innocent coroutine.
-    bool heir_resumed  = false;
-    bool heir_reply_ok = false;
-    auto heir = qb::io::async::coro_scheduler().spawn_tracked(park_on_query(db_.get(), "SELECT pg_sleep(8)", &heir_resumed, &heir_reply_ok));
+    auto heir = qb::io::async::coro_scheduler().spawn_tracked(park_on_query(db_.get(), "SELECT pg_sleep(8)", &heir_resumed_, &heir_reply_ok_));
     ASSERT_TRUE(heir);
     EXPECT_EQ(heir.address(), orphan_frame)
         << "the coroutine frame pool did not hand the cancelled frame back to the next spawn, so the recycled-frame hazard is NOT "
@@ -205,15 +208,15 @@ TEST_F(PgsqlResilienceTest, CoroutineDestroyedWhileParkedOnLiveQuery) {
     while (std::chrono::steady_clock::now() < checkpoint)
         qb::io::async::run(EVRUN_NOWAIT);
 
-    EXPECT_FALSE(orphan_resumed) << "the destroyed coroutine was resumed";
-    EXPECT_FALSE(heir_resumed) << "a reply belonging to a coroutine that no longer exists resumed the coroutine that inherited its "
-                                  "frame — six seconds before its own query could possibly have answered";
+    EXPECT_FALSE(orphan_resumed_) << "the destroyed coroutine was resumed";
+    EXPECT_FALSE(heir_resumed_) << "a reply belonging to a coroutine that no longer exists resumed the coroutine that inherited its "
+                                   "frame — six seconds before its own query could possibly have answered";
 
     // The heir must still get its own, correct completion, on a connection still in sync.
-    ASSERT_TRUE(pump_until([&] { return heir_resumed; }, std::chrono::milliseconds(20000)))
+    ASSERT_TRUE(pump_until([&] { return heir_resumed_; }, std::chrono::milliseconds(20000)))
         << "the surviving coroutine never resumed: swallowing the orphaned reply desynced the protocol stream";
-    EXPECT_TRUE(heir_reply_ok) << "the surviving coroutine resumed with a failure";
-    EXPECT_FALSE(orphan_resumed);
+    EXPECT_TRUE(heir_reply_ok_) << "the surviving coroutine resumed with a failure";
+    EXPECT_FALSE(orphan_resumed_);
 
     EXPECT_TRUE(db_->is_connected()) << "swallowing the orphaned reply took the connection down with it";
     EXPECT_EQ(db_->backend_pid(), target) << "the client silently reconnected instead of keeping the session";
@@ -258,9 +261,7 @@ TEST_F(PgsqlResilienceTest, ServerSideBackendTerminationFailsTheInFlightQuery) {
     ASSERT_TRUE(ins.ok()) << ins.error().what();
 
     // Park on a query that cannot finish on its own.
-    bool resumed  = false;
-    bool reply_ok = true;
-    auto handle   = qb::io::async::coro_scheduler().spawn_tracked(park_on_query(db_.get(), "SELECT pg_sleep(30)", &resumed, &reply_ok));
+    auto handle = qb::io::async::coro_scheduler().spawn_tracked(park_on_query(db_.get(), "SELECT pg_sleep(30)", &resumed_, &reply_ok_));
     ASSERT_TRUE(handle);
 
     auto killer = std::make_unique<qb::pg::tcp::database>();
@@ -278,9 +279,9 @@ TEST_F(PgsqlResilienceTest, ServerSideBackendTerminationFailsTheInFlightQuery) {
     ASSERT_TRUE(killed.ok()) << killed.error().what();
 
     // The awaiting coroutine must be woken by the disconnect, not left parked forever.
-    ASSERT_TRUE(pump_until([&] { return resumed; })) << "the coroutine parked on the killed connection never resumed: a caller has no "
-                                                        "other way to learn the socket is gone, so this is an unbounded hang";
-    EXPECT_FALSE(reply_ok) << "the query on a terminated backend reported success";
+    ASSERT_TRUE(pump_until([&] { return resumed_; })) << "the coroutine parked on the killed connection never resumed: a caller has no "
+                                                         "other way to learn the socket is gone, so this is an unbounded hang";
+    EXPECT_FALSE(reply_ok_) << "the query on a terminated backend reported success";
 
     // `pg_terminate_backend` sends an ErrorResponse (57P01) and THEN closes the socket, so the
     // failed reply above arrives one or more loop turns BEFORE the FIN. Pump for the close
