@@ -106,7 +106,10 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
   loaded the wrong table. A plain COPY query queued ahead cannot borrow a later `copy_in`
   source. Destroying an awaiting coroutine detaches its callback immediately while its
   command keeps the COPY reservation until completion; sequential COPY and connection
-  reuse still work. If a source destroys its own awaiting coroutine inside a callback,
+  reuse still work. COPY OUT retains its active sink through each invocation, including
+  when that sink destroys its own waiter or disconnects the connection; later chunks cannot
+  invoke the detached sink. It retains no extra command-owner reference per chunk.
+  If a source destroys its own awaiting coroutine inside a callback,
   the returned chunk is discarded and the command sends one `CopyFail` before any
   further source call.
 - **Present empty text and binary numeric values stay correct through `field::as<std::optional<T>>()` (Huly QB-646).**

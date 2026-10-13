@@ -1758,8 +1758,8 @@ public:
     on_copy_data(message &msg) {
         // During a COPY ... TO STDOUT, hand the opaque payload (one row, or a chunk in
         // binary format) to the active sink without copying. No sink -> drop the chunk.
-        auto copy = _active_copy_operation;
-        auto sink = copy ? copy->sink : nullptr;
+        // Retain the sink through callback re-entry; the active owner is only read before the call.
+        auto sink = _active_copy_operation ? _active_copy_operation->sink : nullptr;
         if (sink && *sink) {
             const std::string_view chunk = msg.remaining();
             if (!chunk.empty())

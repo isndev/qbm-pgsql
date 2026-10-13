@@ -221,6 +221,10 @@ COPY until the in-flight command finishes; a cancelled COPY IN sends `CopyFail`
 if the server requests data after its source has been detached.
 If the source destroys its own awaiting coroutine while being called, its returned
 chunk is discarded and `CopyFail` ends the COPY without calling that source again.
+The current COPY OUT sink invocation retains its callable and owned captures until it returns,
+even if it destroys its own waiter or disconnects; detaching the sink prevents later invocations.
+Only the sink is retained per chunk, while the command keeps ownership of the COPY reservation.
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:1758-1768 (on_copy_data) -->
 The source or sink activates only when that command reaches the wire, so an earlier
 plain SQL command cannot borrow it.
 

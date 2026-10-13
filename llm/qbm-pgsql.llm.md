@@ -483,6 +483,10 @@ coroutine detaches its callback immediately while its command keeps the COPY
 reservation until completion; a cancelled COPY IN fails if it later needs data.
 If a source cancels its own awaiting coroutine, its returned chunk is discarded
 and the client sends `CopyFail` without calling the source again.
+COPY OUT retains the currently invoked sink and its owned captures until return, even if it
+destroys its own waiter or disconnects. Detached sinks receive no later chunk; the per-chunk
+handler retains the sink only, with command ownership and reservation unchanged.
+_(src/qbm/pgsql/pgsql.h:1758-1768)_
 
 > **`copy_in` is NOT constant-memory.** It drains the entire `source` into the
 > output pipe synchronously (bounded only by the write-buffer ceiling). Only

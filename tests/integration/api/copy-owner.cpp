@@ -109,6 +109,24 @@ copy_in_source_cancels_waiter(database *db, std::coroutine_handle<> *handle, int
     co_return;
 }
 
+qb::io::async::task<void>
+copy_out_sink_cancels_waiter(database *db, std::coroutine_handle<> *handle, std::shared_ptr<int> lifetime, int *sink_calls,
+                             bool *capture_retained, bool *resumed, bool disconnect) {
+    qb::io::async::pin_frame_copy(lifetime);
+    (void) co_await db->copy_out("COPY (SELECT 'orphan' FROM generate_series(1, 3)) TO STDOUT",
+                                 [db, handle, sink_calls, capture_retained, lifetime = std::move(lifetime), disconnect](std::string_view) {
+                                     ++*sink_calls;
+                                     qb::io::async::coro_scheduler().cancel_spawned(*handle);
+                                     if (disconnect)
+                                         db->disconnect();
+                                     // Both the waiting frame and, on disconnect, the admitted
+                                     // command have gone. This invocation still owns its captures.
+                                     *capture_retained = *lifetime == 629;
+                                 });
+    *resumed = true;
+    co_return;
+}
+
 class CopyOwner : public qb::pg::test::PgIntegrationTest {};
 
 TEST_F(CopyOwner, OverlappingCopyOutKeepsFirstSinkAndRejectsSecond) {
@@ -278,6 +296,58 @@ TEST_F(CopyOwner, SourceCancelsItsOwnWaiterWithoutAnotherCallback) {
         db_->copy_out("COPY qb_copy_owner_self_cancel TO STDOUT", [&bytes](std::string_view chunk) { bytes.append(chunk); }));
     EXPECT_TRUE(read.ok());
     EXPECT_TRUE(bytes.empty()) << "the cancelled source chunk must not be sent before CopyFail";
+}
+
+TEST_F(CopyOwner, SinkCancelsItsOwnWaiterWithoutAnotherCallback) {
+    int                     sink_calls       = 0;
+    bool                    capture_retained = false, resumed = false;
+    auto                    token = std::make_shared<int>(629);
+    std::weak_ptr<int>      lifetime{token};
+    std::coroutine_handle<> handle;
+    handle = qb::io::async::coro_scheduler().spawn_tracked(
+        copy_out_sink_cancels_waiter(db_.get(), &handle, std::move(token), &sink_calls, &capture_retained, &resumed, false));
+    ASSERT_TRUE(handle);
+
+    // The SELECT queues behind COPY: its completion proves the remaining chunks
+    // and ReadyForQuery were drained after the sink detached itself.
+    auto after = qb::io::async::run_sync(db_->query("SELECT 1"));
+    EXPECT_TRUE(after.ok());
+    EXPECT_EQ(sink_calls, 1);
+    EXPECT_TRUE(capture_retained) << "destroying the waiter must not destroy the sink while it is running";
+    EXPECT_TRUE(lifetime.expired()) << "the sink's captures must be released after the last invocation returns";
+    EXPECT_FALSE(resumed);
+
+    std::string bytes;
+    auto        read =
+        qb::io::async::run_sync(db_->copy_out("COPY (SELECT 'after') TO STDOUT", [&bytes](std::string_view chunk) { bytes.append(chunk); }));
+    EXPECT_TRUE(read.ok());
+    EXPECT_EQ(bytes, "after\n");
+}
+
+TEST_F(CopyOwner, SinkCancellationAndDisconnectKeepTheRunningCallbackAlive) {
+    int                     sink_calls       = 0;
+    bool                    capture_retained = false, resumed = false;
+    auto                    token = std::make_shared<int>(629);
+    std::weak_ptr<int>      lifetime{token};
+    std::coroutine_handle<> handle;
+    handle = qb::io::async::coro_scheduler().spawn_tracked(
+        copy_out_sink_cancels_waiter(db_.get(), &handle, std::move(token), &sink_calls, &capture_retained, &resumed, true));
+    ASSERT_TRUE(handle);
+
+    auto queued = qb::io::async::run_sync(db_->query("SELECT 1"));
+    EXPECT_FALSE(queued.ok()) << "the sink's disconnect must fail the query queued behind COPY";
+    EXPECT_FALSE(db_->is_connection_usable());
+    EXPECT_EQ(sink_calls, 1);
+    EXPECT_TRUE(capture_retained) << "releasing the admitted command must not destroy its running sink";
+    EXPECT_TRUE(lifetime.expired());
+    EXPECT_FALSE(resumed);
+
+    ASSERT_TRUE(qb::pg::test::pg_try_connect(*db_));
+    std::string bytes;
+    auto        read = qb::io::async::run_sync(
+        db_->copy_out("COPY (SELECT 'reconnected') TO STDOUT", [&bytes](std::string_view chunk) { bytes.append(chunk); }));
+    EXPECT_TRUE(read.ok());
+    EXPECT_EQ(bytes, "reconnected\n");
 }
 
 qb::io::async::task<Reply<resultset>>

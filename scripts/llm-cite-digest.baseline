@@ -17,6 +17,7 @@ llm/qbm-pgsql.llm.api.md	pgsql.h:2479-2480	14276ca02568	[[nodiscard]] qb::io::as
 llm/qbm-pgsql.llm.api.md	qbm/pgsql/src/qbm/pgsql/pgsql.h:2953-2953	3e2a63be5571	using results = detail::resultset;
 llm/qbm-pgsql.llm.api.md	queries.h:181-181	ab6ca6aa9ac4	using PreparedQueryStorage = PreparedStorage;
 llm/qbm-pgsql.llm.api.md	queries.h:65-65	e0fb44c50b81	class PreparedStorage {
+llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/pgsql.h:1758-1768	658af3915537	on_copy_data(message &msg) {
 llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/type_mapping.h:58-63	1d898ef4b879	template <typename T, typename Enable = void>
 llm/qbm-pgsql.llm.api.md	type_converter.h:1019-1019	f35a19148070	struct TypeConverter<std::chrono::duration<Rep, Period>> {
 llm/qbm-pgsql.llm.api.md	type_converter.h:1131-1131	2ea2442b025a	struct TypeConverter<std::string> {
@@ -28,3 +29,4 @@ llm/qbm-pgsql.llm.api.md	type_converter.h:132-132	5055bd28810c	public:
 llm/qbm-pgsql.llm.api.md	type_converter.h:1322-1322	83990a235a8d	struct TypeConverter<qb::calendar_interval> {
 llm/qbm-pgsql.llm.api.md	type_converter.h:1347-1347	f295c514857a	struct TypeConverter<std::vector<std::byte>> {
 llm/qbm-pgsql.llm.api.md	type_converter.h:686-687	e9e35cf613f8	static void
+llm/qbm-pgsql.llm.md	src/qbm/pgsql/pgsql.h:1758-1768	658af3915537	on_copy_data(message &msg) {
