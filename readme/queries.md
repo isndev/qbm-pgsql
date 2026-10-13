@@ -12,7 +12,7 @@ SQL-facing operation.
 
 **Include:** `#include <qbm/pgsql/pgsql.h>` — public surface is in namespace `qb::pg`.
 
-`qbm-pgsql` is a compiled static library (`qbm::pgsql`); link it with `target_link_libraries(app PRIVATE qbm::pgsql)`.
+`qbm-pgsql` is a compiled library (static or shared, `qbm::pgsql`); link it with `target_link_libraries(app PRIVATE qbm::pgsql)`.
 It is not header-only.
 
 ---

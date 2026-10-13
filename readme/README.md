@@ -20,8 +20,9 @@ directly — connection handshake and authentication, simple and prepared statem
 decoding, type mapping, and LISTEN/NOTIFY — over a single non-blocking TCP (or TLS) session. The public surface lives in
 the `qb::pg` namespace; `qb::pg::detail` holds the implementation. The umbrella header is `<qbm/pgsql/pgsql.h>`.
 
-The module is a **compiled static library**, not header-only. The build registers it through `qb_register_module` with a
-`SOURCES` list of seventeen translation units (`qbm/pgsql/CMakeLists.txt:72-89`), so consuming it links a real archive
+The module is a **compiled static or shared library**, not header-only. The build registers it through
+`qb_register_module` with a `SOURCES` list of seventeen translation units (`qbm/pgsql/CMakeLists.txt:72-89`), so
+consuming it links a real target
 under the alias `qbm::pgsql`. It compiles at C++20 by default and C++23 when `QB_CXX_STANDARD=23`; the standard is
 governed by the framework, not the module, and propagates to consumers as a compile feature.
 
@@ -42,7 +43,8 @@ other actor on it stops with you — silently, because nothing in the framework 
 
 ## Integration in one place
 
-You consume qbm-pgsql through the qb module loader, not `find_package`:
+**Building from source:** configure the qb-dev superproject; its qb module loader registers qbm-pgsql. The module's
+`CMakeLists.txt` is not standalone-configurable because it needs qb's development-time CMake helpers.
 
 <!-- src: qbm/pgsql/README.md:188-190 -->
 
@@ -53,6 +55,20 @@ qb_load_modules("${CMAKE_CURRENT_SOURCE_DIR}/qbm")     # discovers and adds qbm 
 target_link_libraries(your_app PRIVATE qbm::pgsql)     # links qb::core PUBLIC, qb::io transitively
 ```
 
+**Consuming an installed package:** build and install the superproject's `package` preset, set `CMAKE_PREFIX_PATH` to
+that installation prefix, then link the exported target:
+
+```sh
+cmake --preset package
+cmake --build --preset package
+cmake --install build/presets/package --prefix <prefix>
+```
+
+```cmake
+find_package(qbm-pgsql CONFIG REQUIRED)                # resolves installed qb through find_dependency(qb)
+target_link_libraries(your_app PRIVATE qbm::pgsql)
+```
+
 ```cpp
 #include <qbm/pgsql/pgsql.h>   // connection, transactions, Reply, with_transaction, types, discards
 ```
@@ -61,7 +77,7 @@ target_link_libraries(your_app PRIVATE qbm::pgsql)     # links qb::core PUBLIC, 
 `qb::io` transitively. At the API level the client depends on qb-io (`qb::io::async`, the TCP/TLS transport, the
 coroutine `task`, `run_sync`); qb-core is required only when you hold a `database` inside an actor. The module's
 `CMakeLists.txt` guards on `QB_FOUND` and returns early if the framework is absent, so `add_subdirectory(qb)` must come
-first.
+first in the source path. The installed package config resolves qb for consumers.
 
 ## A note on TLS and time
 

@@ -37,6 +37,10 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Fixed
 
+- **The PostgreSQL guides use the binary NUMERIC marker and document installed package consumption (Huly QB-689, QB-694).**
+  The prepared-statement recipe binds `qb::pg::detail::numeric` for OID 1700 and decodes the result with the matching
+  converter; a plain decimal string is not binary NUMERIC. The integration page covers source and installed CMake
+  targets, including the dependency on an installed qb package.
 - **System and integration test fixtures keep workers and coroutine state alive on fatal exits (Huly QB-406, QB-412).**
   CancelRequest workers join before listener state dies; the resilience fixture destroys
   suspended frames before releasing the database and its result flags.
