@@ -65,11 +65,23 @@ recv_exact(qb::io::tcp::socket &s, std::uint8_t *buf, std::size_t n, qb::duratio
     return true;
 }
 
-/// True when the peer sends NOTHING within `timeout` (EOF or silence) -- the negative of recv_exact.
-[[nodiscard]] inline bool
-peer_stays_silent(qb::io::tcp::socket &s, qb::duration timeout) {
-    std::uint8_t one = 0;
-    return !recv_exact(s, &one, 1, timeout);
+/// Outcome of one bounded read, keeping EOF distinct from a quiet open peer.
+enum class peer_read_outcome { data, eof, timeout, error };
+
+[[nodiscard]] inline peer_read_outcome
+read_one(qb::io::tcp::socket &s, qb::duration timeout) {
+    std::uint8_t one   = 0;
+    const int    ready = qb::io::socket::handle_read_ready(s.native_handle(), timeout);
+    if (ready == 0)
+        return peer_read_outcome::timeout;
+    if (ready < 0)
+        return peer_read_outcome::error;
+    const int n = s.read(&one, 1);
+    if (n == 0)
+        return peer_read_outcome::eof;
+    if (n < 0)
+        return peer_read_outcome::error;
+    return peer_read_outcome::data;
 }
 
 /// Send every byte of `m` (blocking socket).

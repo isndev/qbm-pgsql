@@ -24,6 +24,7 @@
 
 #include <chrono>
 #include <gtest/gtest.h>
+#include <stdexcept>
 #include <string>
 #include <vector>
 #include "../../shared/pg_wire_ground_truth.hpp"
@@ -36,8 +37,15 @@ using qb::pg::test::hex_to_bytes;
 // to_binary emits [4-byte length prefix][value]; the wire field is value-only.
 static std::vector<byte>
 strip_prefix(std::vector<byte> b) {
+    if (b.size() < sizeof(integer))
+        throw std::out_of_range("binary value is shorter than its length prefix");
     b.erase(b.begin(), b.begin() + sizeof(integer));
     return b;
+}
+
+TEST(TypeConverterTemporalFixture, StripPrefixRejectsShortBuffers) {
+    EXPECT_THROW((void) strip_prefix({}), std::out_of_range);
+    EXPECT_THROW((void) strip_prefix(std::vector<byte>(sizeof(integer) - 1, byte{})), std::out_of_range);
 }
 
 // ----------------------------------------------------------------------------

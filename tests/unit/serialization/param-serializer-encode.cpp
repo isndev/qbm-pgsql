@@ -33,6 +33,7 @@
 #include <cstring>
 #include <limits>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -60,7 +61,8 @@ namespace {
 template <typename T>
 T
 read_be(const std::vector<byte> &buf, std::size_t off) {
-    EXPECT_GE(buf.size(), off + sizeof(T));
+    if (off > buf.size() || sizeof(T) > buf.size() - off)
+        throw std::out_of_range("read_be exceeds the parameter buffer");
     T v{};
     std::memcpy(&v, buf.data() + off, sizeof(T));
     return qb::endian::from_big_endian(v);
@@ -84,7 +86,8 @@ read_be_double(const std::vector<byte> &buf, std::size_t off) {
 
 std::string
 read_str(const std::vector<byte> &buf, std::size_t off, std::size_t len) {
-    EXPECT_GE(buf.size(), off + len);
+    if (off > buf.size() || len > buf.size() - off)
+        throw std::out_of_range("read_str exceeds the parameter buffer");
     return std::string(buf.begin() + off, buf.begin() + off + len);
 }
 
@@ -98,6 +101,17 @@ protected:
     }
     std::unique_ptr<ParamSerializer> serializer;
 };
+
+TEST(ParamSerializerWireReaders, RejectShortBuffersBeforeReading) {
+    const std::vector<byte> empty;
+    const std::vector<byte> short_integer(sizeof(integer) - 1, byte{});
+    const std::vector<byte> short_string(2, byte{});
+
+    EXPECT_THROW((void) read_be<integer>(empty, 0), std::out_of_range);
+    EXPECT_THROW((void) read_be<integer>(short_integer, 0), std::out_of_range);
+    EXPECT_THROW((void) read_be<integer>(short_integer, short_integer.size() + 1), std::out_of_range);
+    EXPECT_THROW((void) read_str(short_string, 1, 2), std::out_of_range);
+}
 
 // ===========================================================================
 // Scalar encoders — OID + length + exact value bytes.
