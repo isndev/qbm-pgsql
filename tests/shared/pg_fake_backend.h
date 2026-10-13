@@ -79,8 +79,11 @@ read_one(qb::io::tcp::socket &s, qb::duration timeout) {
     const int n = s.read(&one, 1);
     if (n == 0)
         return peer_read_outcome::eof;
-    if (n < 0)
-        return peer_read_outcome::error;
+    if (n < 0) {
+        // qb::io::tcp::socket::read() maps recv()==0 to -1 and clears the
+        // native error. Capture it immediately to distinguish EOF from RST.
+        return qb::io::socket::get_last_errno() == 0 ? peer_read_outcome::eof : peer_read_outcome::error;
+    }
     return peer_read_outcome::data;
 }
 
