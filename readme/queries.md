@@ -305,6 +305,11 @@ db.prepare_file("mig", std::filesystem::path{"mig.sql"},
 
 ## NOTIFY (publisher)
 
+The payload must contain fewer than 8,000 bytes. Both public forms accept 7,999 bytes and reject 8,000 bytes or more
+locally before SQL is queued, with `client_error` (`code == "00000"`). Empty payloads still omit the payload clause.
+The callback form invokes its error callback and rethrows; the coroutine form returns a failed `Reply<void>`.
+<!-- src: src/qbm/pgsql/pg_notify_sql.cpp:65-74; src/qbm/pgsql/error.cpp:132-143; src/qbm/pgsql/commands.h:1249-1256,1626-1628 -->
+
 **Coroutine**
 
 ```cpp

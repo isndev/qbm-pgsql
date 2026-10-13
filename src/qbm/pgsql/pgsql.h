@@ -2532,7 +2532,18 @@ public:
                     break;
 #endif
             }
-            co_await qb::io::async::wait_for_io(sock.native_handle(), EV_READ | EV_WRITE);
+            int events = EV_WRITE; // A plain would-block write needs output capacity, not input.
+            if constexpr (transport_sock::is_secure()) {
+                events = EV_READ | EV_WRITE; // Preserve custom transports without native TLS state.
+#ifdef QB_HAS_SSL
+                if constexpr (requires { SSL_want_read(sock.ssl_handle()); }) {
+                    const auto *ssl = sock.ssl_handle();
+                    // A TLS write can need peer input; watching the writable TCP fd then spins.
+                    events = ssl && SSL_want_read(ssl) ? EV_READ : EV_WRITE;
+                }
+#endif
+            }
+            co_await qb::io::async::wait_for_io(sock.native_handle(), events);
         }
         sock.disconnect();
         co_return sent == pkt.size();

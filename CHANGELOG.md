@@ -50,6 +50,14 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
   Nightly uses paired `develop` branches, doc-lint triggers on checker and workflow edits,
   the pull request template points to the public superbuild recipe, and clang-tidy includes
   module headers.
+- **NOTIFY rejects payloads at the server's byte boundary (Huly QB-996).** Both callback
+  and coroutine forms accept 7,999 bytes and reject 8,000 bytes or more locally, before
+  queuing SQL. The local `client_error` retains its existing code `"00000"`; the connection
+  remains usable and no notification is published for the rejected payload.
+- **Async cancellation waits for the socket direction TLS needs (Huly QB-1001).** A native
+  TLS write that needs peer input now waits for readability alone instead of repeatedly
+  waking on a writable socket. Plain writes wait for writability; custom secure transports
+  without native TLS state keep the combined read/write fallback.
 - **Present optional field reads check SQL NULL once (Huly QB-646).** Scalar and optional
   reads share the format- and OID-aware conversion after the public NULL decision.
   Empty text stays present; SQL NULL, nested optionals and typed errors keep their contract.

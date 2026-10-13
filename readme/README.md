@@ -44,7 +44,7 @@ other actor on it stops with you — silently, because nothing in the framework 
 
 You consume qbm-pgsql through the qb module loader, not `find_package`:
 
-<!-- src: qbm/pgsql/README.md:188-190 -->
+<!-- src: qbm/pgsql/README.md:364-366 -->
 
 ```cmake
 add_subdirectory(qb)                                   # the framework first

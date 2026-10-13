@@ -44,7 +44,7 @@ The unit suites exercise wire-format encoding and decoding, parameter serializat
 protocol-message framing in isolation — they pass on any host. The integration suites drive a real wire
 handshake, prepared statements, transactions, type round-trips, and asynchronous NOTIFY delivery against a server.
 
-<!-- src: qbm/pgsql/tests/CMakeLists.txt:60-100,102-134 -->
+<!-- src: qbm/pgsql/tests/CMakeLists.txt:60-100,102-138 -->
 
 ### How a missing server is handled
 
@@ -100,7 +100,7 @@ accepts the usual `--gtest_filter`, `--gtest_list_tests`, and `--gtest_repeat` f
 
 The TLS suites are conditional: `tls-warning-race` has `REQUIRES ssl`, and `connection-ssl` is registered inside
 `if (QB_HAS_SSL)` with the same gate. They require the `qb::pg::tcp::ssl::database` alias, which exists only with
-OpenSSL (<!-- src: qbm/pgsql/tests/CMakeLists.txt:106,132-134 -->).
+OpenSSL (<!-- src: qbm/pgsql/tests/CMakeLists.txt:106,136-138 -->).
 
 ## Configuring the server
 
