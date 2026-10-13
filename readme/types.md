@@ -75,7 +75,7 @@ share an identical micros-since-2000 wire layout. <!-- src: src/qbm/pgsql/type_c
 #include <qbm/pgsql/pgsql.h>
 using namespace qb::pg;
 
-// Read a timestamptz column. (src: tests/integration/datatypes/datatypes-roundtrip.cpp:404)
+// Read a timestamptz column. (src: tests/integration/datatypes/datatypes-roundtrip.cpp:406)
 qb::wall_time created = result[0][0].as<qb::wall_time>();
 ```
 
