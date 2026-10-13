@@ -382,8 +382,9 @@ TEST_F(CopyOwner, NestedSinkCancellationKeepsOuterCaptureAndReleasesItBeforeComm
                               auto other = db->copy_out("COPY (SELECT 'other') TO STDOUT", [&other_calls](std::string_view) { ++other_calls; });
                               other.handle().resume();
                               EXPECT_TRUE(other.done());
-                              if (other.done())
+                              if (other.done()) {
                                   EXPECT_FALSE(other.await_resume().ok());
+                              }
                           }
                       }));
     // Start the owned task without a listener pass, then dispatch two local chunks.
@@ -459,16 +460,18 @@ TEST_F(CopyOwner, SinkRejectsReentrantCopyInAndCopyOutBeforeAnotherListenerPass)
             auto out = db->copy_out("COPY (SELECT 'other') TO STDOUT", [&other_sink_calls](std::string_view) { ++other_sink_calls; });
             out.handle().resume();
             EXPECT_TRUE(out.done());
-            if (out.done())
+            if (out.done()) {
                 EXPECT_FALSE(out.await_resume().ok());
+            }
             auto in = db->copy_in("COPY qb_copy_owner_unused FROM STDIN", [&other_source_calls]() -> std::optional<std::string> {
                 ++other_source_calls;
                 return std::nullopt;
             });
             in.handle().resume();
             EXPECT_TRUE(in.done());
-            if (in.done())
+            if (in.done()) {
                 EXPECT_FALSE(in.await_resume().ok());
+            }
         }));
     EXPECT_TRUE(reply.ok());
     EXPECT_EQ(sink_calls, 3);
@@ -509,8 +512,9 @@ TEST_F(CopyOwner, ThrowingSinkUnwindsPinsAndFailsPendingQueriesWithOrWithoutCanc
         EXPECT_TRUE(capture_retained);
         EXPECT_TRUE(lifetime.expired());
         EXPECT_EQ(resumed, !cancel);
-        if (resumed)
+        if (resumed) {
             EXPECT_FALSE(ok);
+        }
         ASSERT_TRUE(qb::pg::test::pg_try_connect(*db_));
         std::string bytes;
         auto        read = qb::io::async::run_sync(

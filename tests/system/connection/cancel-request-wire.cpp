@@ -597,8 +597,9 @@ check_tls_cancel_write(bool renegotiate) {
                  + "; OpenSSL=" + tls_error_text(probe.last_write_ssl_error));
     EXPECT_TRUE(delivered);
     EXPECT_EQ(probe.accepted_bytes, 16u);
-    if (renegotiate)
+    if (renegotiate) {
         EXPECT_EQ(probe.completed_renegotiations, 1) << "the withheld native read demand must resolve through the peer handshake";
+    }
     if (!renegotiate) {
         EXPECT_EQ(probe.write_calls, 1u);
         EXPECT_EQ(probe.want_read_calls, 0u);
