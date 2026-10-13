@@ -37,6 +37,12 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Fixed
 
+- **System and integration test fixtures keep workers and coroutine state alive on fatal exits (Huly QB-406, QB-412).**
+  CancelRequest workers join before listener state dies; the resilience fixture destroys
+  suspended frames before releasing the database and its result flags.
+- **The connect timeout suite distinguishes a real handshake deadline from native errors (Huly QB-439).**
+  A silent loopback backend accepts StartupMessage and stays open until the configured timer
+  ends the attempt. Bad TLS material now targets a local listener that detects fallback TCP.
 - **API documentation checks reject comment-only names and invalid later citations (Huly QB-561, QB-562).**
   The shipped guard indexes C++ code without comments or literals and examines every
   citation on a line before accepting it.
