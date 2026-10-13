@@ -124,8 +124,10 @@ using namespace qb::pg;             // database, results, params, oid, Reply, ..
 
 `connect()` returns an awaiter — there is **no** blocking `bool connect()` and
 **no** `connect(on_ok, on_err)` callback overload. Drive it with `co_await` or
-`run_sync`. Result is `bool` (`true` once the handshake reached
-`ReadyForQuery`).
+`run_sync`. Result is `bool`: `true` is delivered when `AuthenticationOk` is
+processed. Resumption is deferred to the coroutine scheduler, so the remaining
+startup frames, including `ReadyForQuery`, are normally processed before user
+code runs; that ordering is not the success condition itself.
 
 ```cpp
 qb::io::async::init();

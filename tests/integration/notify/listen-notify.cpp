@@ -285,17 +285,18 @@ TEST_F(ListenNotify, CbConsumer_AfterUnlisten_NoDelivery) {
 
 TEST_F(ListenNotify, CbConsumer_OtherChannel_NoCallback) {
     std::atomic<int>                hits{0};
+    std::string                     unexpected_channel;
     qb::pg::tcp::notify_cb_consumer sub{dsn_tcp_string()};
     sub.on_notify([&](qb::pg::notification &&n) {
-        if (n.channel == std::string(kChan))
-            hits.fetch_add(1, std::memory_order_relaxed);
+        unexpected_channel = std::move(n.channel);
+        hits.fetch_add(1, std::memory_order_relaxed);
     });
     ASSERT_TRUE(qb::io::async::run_sync(sub.connect(dsn_tcp_string())));
     ASSERT_TRUE(sub.listen(std::string(kChan), discard_query, discard_error).await());
     ASSERT_TRUE(pub_->notify(std::string(kOther), "noise", discard_query, discard_error).await());
 
     qb::pg::test::pump_for(std::chrono::milliseconds(300));
-    EXPECT_EQ(hits.load(std::memory_order_relaxed), 0);
+    EXPECT_EQ(hits.load(std::memory_order_relaxed), 0) << "unexpected callback for channel " << unexpected_channel;
     sub.disconnect();
 }
 
@@ -514,10 +515,13 @@ TEST_F(ListenNotify, CoConsumer_ReceiveNulloptAfterDisconnect) {
 // the dropped handler. Tested at N=2 (not just the legacy N=1) to exercise the boundary.
 TEST_F(ListenNotify, CoConsumer_CapacityTwo_DropBoundary) {
     std::atomic<int>                dropped{0};
+    std::string                     dropped_payload;
     qb::pg::tcp::notify_co_consumer sub(dsn_tcp_string(), /*capacity*/ 2);
     sub.on_notify_dropped([&](qb::pg::notification &&n) {
-        if (n.channel == std::string(kChan))
+        if (n.channel == std::string(kChan)) {
+            dropped_payload = std::move(n.payload);
             dropped.fetch_add(1, std::memory_order_relaxed);
+        }
     });
 
     ASSERT_TRUE(qb::io::async::run_sync([&]() -> qb::io::async::task<bool> {
@@ -532,13 +536,17 @@ TEST_F(ListenNotify, CoConsumer_CapacityTwo_DropBoundary) {
         co_return true;
     }()));
 
-    // Drain the subscriber socket so all three NotificationResponses reach the queue
-    // before the first receive() pulls one and frees a slot.
-    qb::pg::test::pump_for(std::chrono::milliseconds(300));
+    // The drop callback is the causal barrier: do not free a queue slot until the
+    // third notification has actually reached the subscriber and overflowed it.
+    ASSERT_TRUE(pump_until([&] { return dropped.load(std::memory_order_relaxed) >= 1; }, kDeadline))
+        << "the third notification never overflowed the capacity-two queue";
+    EXPECT_EQ(dropped.load(std::memory_order_relaxed), 1);
+    EXPECT_EQ(dropped_payload, "three");
 
     ASSERT_TRUE(qb::io::async::run_sync([&]() -> qb::io::async::task<bool> {
-        auto first = co_await sub.receive();
-        co_return first.has_value() && first->payload == "one" && dropped.load(std::memory_order_relaxed) == 1;
+        auto first  = co_await sub.receive();
+        auto second = co_await sub.receive();
+        co_return first.has_value() && second.has_value() && first->payload == "one" && second->payload == "two";
     }()));
     sub.disconnect();
 }

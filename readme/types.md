@@ -11,7 +11,7 @@ inbound for result columns (`field::as<T>()`).
 `field_type_mismatch`)
 
 **Include:** `#include <qbm/pgsql/pgsql.h>` — the public surface (`params`, `oid`, `type_oid_sequence`, `results`) is in
-namespace `qb::pg`. `qbm-pgsql` is a compiled static library (`qbm::pgsql`); link it with
+namespace `qb::pg`. `qbm-pgsql` is a compiled library (static or shared, `qbm::pgsql`); link it with
 `target_link_libraries(app PRIVATE qbm::pgsql)`. It is not header-only.
 
 The serialization machinery (`TypeConverter`, `ParamSerializer`, `FieldHandler`) lives under `src/` and is referenced
@@ -75,7 +75,7 @@ share an identical micros-since-2000 wire layout. <!-- src: src/qbm/pgsql/type_c
 #include <qbm/pgsql/pgsql.h>
 using namespace qb::pg;
 
-// Read a timestamptz column. (src: tests/integration/datatypes/datatypes-roundtrip.cpp:404)
+// Read a timestamptz column. (src: tests/integration/datatypes/datatypes-roundtrip.cpp:406)
 qb::wall_time created = result[0][0].as<qb::wall_time>();
 ```
 
@@ -361,8 +361,8 @@ The temporal and exact-decimal types below **do** have a `type_mapping<T>` speci
 `fill_types<T...>()` return the OID listed here — they auto-deduce correctly and do **not** fall back to `705`. The civil
 types' specializations live in [`src/qbm/pgsql/type_mapping.h`](../src/qbm/pgsql/type_mapping.h); `numeric`'s lives in
 [`src/qbm/pgsql/type_converter.h`](../src/qbm/pgsql/type_converter.h) (next to its declaration). They are gathered here because they are the
-non-scalar mappings most worth knowing — and because the **`numeric`-as-string idiom below is the one case that needs an
-explicit OID** (a `std::string` deduces to `text`/25, so you override it with `oid::numeric`):
+non-scalar mappings most worth knowing. A `std::string` binds as `text`/25; declaring a NUMERIC parameter OID does
+not convert its bytes into PostgreSQL's binary NUMERIC layout. Use the exact-decimal marker for that layout:
 
 | C++ type                             | PostgreSQL            | OID  | Notes                                                                                                                                                                                                               |
 |:-------------------------------------|:----------------------|:----:|:--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -375,21 +375,28 @@ explicit OID** (a `std::string` deduces to `text`/25, so you override it with `o
 
 <!-- src: src/qbm/pgsql/type_mapping.h:148-168; src/qbm/pgsql/type_converter.h:1191-1194 -->
 
-The `qb::*` civil types are public (`qb` namespace, `qb/system/time.h`). For exact decimals, most teams skip the marker
-type and bind a decimal **string** with the `numeric` OID, then read the column with `field.as<std::string>()`:
+The `qb::*` civil types are public (`qb` namespace, `qb/system/time.h`). For an exact-decimal prepared parameter, bind
+`qb::pg::detail::numeric`: its `TypeConverter` writes the binary NUMERIC header and digits, and its `type_mapping`
+declares OID 1700. Read a binary NUMERIC result with the same marker's `.str()`:
 
 ```cpp
 #include <qbm/pgsql/pgsql.h>
 using namespace qb::pg;
 
-auto pr = co_await db.prepare("ins_amt",
-    "INSERT INTO ledger (amount) VALUES ($1)",
-    type_oid_sequence{oid::numeric});             // declare NUMERIC explicitly
-auto ex = co_await db.execute("ins_amt", params{std::string{"1234.5600"}});
+auto pr = co_await db.prepare("read_amt",
+    "SELECT $1::numeric AS amount",
+    type_oid_sequence{oid::numeric});
+if (!pr.ok()) co_return; // handle pr.error() in application code
 
-// Read it back as an exact string; convert in your domain layer.
-std::string amount = row[0].as<std::string>();
+auto ex = co_await db.execute("read_amt", params{detail::numeric{"1234.5600"}});
+if (!ex.ok()) co_return; // handle ex.error() in application code
+if (ex.result().size() == 1) {
+    std::string amount = ex.result()[0][0].as<detail::numeric>().str(); // "1234.5600"
+}
 ```
+
+For a text parameter instead, prepare it as `oid::text`, cast `$1::numeric` in SQL, and select the result as
+`::text` before reading `as<std::string>()`. `std::string` bytes themselves are not binary NUMERIC.
 
 > **Contract reminder.** `from_binary` receives the field **value bytes only** — the per-field 4-byte length prefix is
 > stripped by the protocol layer before `TypeConverter` is called. `to_binary` writes the prefixed form

@@ -622,20 +622,33 @@ TEST_F(SslWorkload, QueryStreamCursorOverTls) {
 }
 
 TEST_F(SslWorkload, QueryStreamInExistingTxnOverTls) {
-    bool committed = false, streamed = false;
+    bool prepared = false, streamed = false, still_in_txn = false, rolled_back = false, witness_absent = false;
     int  count = 0;
     qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
-        if (!(co_await db_->begin()).ok())
+        auto table = co_await db_->query("CREATE TEMP TABLE qb_tls_stream_txn_probe (v integer) ON COMMIT PRESERVE ROWS");
+        if (!table.ok())
             co_return;
-        auto r   = co_await db_->query_stream("SELECT g FROM generate_series(1, 100) g", 10, [&](auto) { ++count; });
-        streamed = r.ok();
-        // query_stream must NOT have closed the outer transaction; commit must still work.
-        committed = (co_await db_->commit()).ok();
+        auto clear = co_await db_->query("TRUNCATE qb_tls_stream_txn_probe");
+        if (!clear.ok() || !(co_await db_->begin()).ok())
+            co_return;
+        auto inserted = co_await db_->query("INSERT INTO qb_tls_stream_txn_probe VALUES (17)");
+        if (!inserted.ok())
+            co_return;
+        prepared       = true;
+        auto r         = co_await db_->query_stream("SELECT g FROM generate_series(1, 100) g", 10, [&](auto) { ++count; });
+        streamed       = r.ok();
+        still_in_txn   = db_->in_transaction();
+        rolled_back    = (co_await db_->rollback()).ok();
+        auto witness   = co_await db_->query("SELECT COUNT(*) FROM qb_tls_stream_txn_probe WHERE v = 17");
+        witness_absent = witness.ok() && witness.result().size() == 1u && witness.result()[0][0].as<std::int64_t>() == 0;
         co_return;
     }());
+    ASSERT_TRUE(prepared) << "failed to establish the caller-owned transaction witness";
     EXPECT_TRUE(streamed);
     EXPECT_EQ(count, 100);
-    EXPECT_TRUE(committed) << "query_stream over TLS wrongly ended the outer transaction";
+    EXPECT_TRUE(still_in_txn) << "query_stream over TLS ended the caller-owned transaction";
+    EXPECT_TRUE(rolled_back);
+    EXPECT_TRUE(witness_absent) << "the write before query_stream survived ROLLBACK, so the stream committed the outer transaction";
 }
 
 // --------------------------------------------------------------------------------------

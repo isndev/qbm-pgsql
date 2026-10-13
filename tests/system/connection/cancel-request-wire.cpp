@@ -10,8 +10,8 @@
  * -- then accepts the SECOND connection the cancel opens and reads what it carries. What is pinned:
  *   - `cancel_async()` delivers exactly the 16-byte CancelRequest (length 16, code 80877102, the
  *     pid and the secret the backend handed out) and reports true;
- *   - it does so WITHOUT blocking the loop: a callback deferred to the loop's next turn before the
- *     cancel runs before the cancel completes, which the blocking `cancel()` can never let happen;
+ *   - it does so WITHOUT blocking the loop: a callback armed after the cancel coroutine starts runs
+ *     while that operation is suspended, which the blocking `cancel()` can never let happen;
  *   - `cancel()` sends the same bytes (the two variants share the packet) -- so a caller moving
  *     from the blocking to the non-blocking form changes nothing on the wire;
  *   - both report false, and open no socket, on a never-connected database.
@@ -51,11 +51,11 @@ constexpr std::uint32_t kBackendPid    = 4242;
 constexpr std::uint32_t kBackendSecret = 0x0BADF00Du;
 
 struct CancelWire {
-    std::atomic<bool>         session_up{false};  ///< the fake answered the startup (Ok + K + Z)
-    std::atomic<bool>         second_conn{false}; ///< the cancel connection was accepted
-    std::atomic<bool>         got_16{false};      ///< 16 bytes arrived on it
-    std::atomic<bool>         then_eof{false};    ///< and nothing followed (the client closed)
-    std::vector<std::uint8_t> bytes;              ///< what arrived on the cancel connection
+    std::atomic<bool>              session_up{false};                       ///< the fake answered the startup (Ok + K + Z)
+    std::atomic<bool>              second_conn{false};                      ///< the cancel connection was accepted
+    std::atomic<bool>              got_16{false};                           ///< 16 bytes arrived on it
+    std::atomic<peer_read_outcome> close_outcome{peer_read_outcome::error}; ///< EOF, silence, data or error after the packet
+    std::vector<std::uint8_t>      bytes;                                   ///< what arrived on the cancel connection
 };
 
 // Accept the session, hand out the key, then accept the cancel connection and record its bytes.
@@ -101,8 +101,8 @@ run_cancel_backend(qb::io::tcp::listener &listener, CancelWire *res) {
     std::uint8_t buf[16];
     if (recv_exact(cancel, buf, sizeof buf)) {
         res->bytes.assign(buf, buf + sizeof buf);
-        res->got_16   = true;
-        res->then_eof = peer_stays_silent(cancel, 500ms);
+        res->got_16        = true;
+        res->close_outcome = read_one(cancel, 500ms);
     }
     cancel.disconnect();
     session.disconnect();
@@ -145,22 +145,23 @@ TEST(PgsqlCancelWire, CancelAsyncSendsTheCancelRequestOnASecondConnectionWithout
     std::jthread backend(run_cancel_backend, std::ref(listener), &res);
 
     bool delivered = false;
-    int  ticks     = 0;
     {
         qb::pg::tcp::database db;
         ASSERT_TRUE(open_session(db, port)) << "the fake backend's AuthenticationOk + BackendKeyData never made a session";
         EXPECT_TRUE(res.session_up.load());
 
-        // Liveness witness: a deferred callback runs on the loop's next turn. A cancel that blocked
-        // the loop until its socket was connected and written would finish before that turn.
-        bool ticked_before_cancel_completed = false;
-        qb::io::async::defer([&] { ++ticks; });
+        // Arm the witness only after this coroutine has started the operation. The defer is
+        // therefore causally inside the cancel interval, rather than an earlier callback that
+        // run_sync could drain before entering cancel_async at all.
+        bool cancel_started = false, cancel_completed = false, ticked_during_cancel = false;
         delivered = qb::io::async::run_sync([&]() -> qb::io::async::task<bool> {
-            const bool ok                  = co_await db.cancel_async();
-            ticked_before_cancel_completed = ticks > 0;
+            cancel_started = true;
+            qb::io::async::defer([&] { ticked_during_cancel = cancel_started && !cancel_completed; });
+            const bool ok    = co_await db.cancel_async();
+            cancel_completed = true;
             co_return ok;
         }());
-        EXPECT_TRUE(ticked_before_cancel_completed) << "cancel_async() completed before the loop ran anything else: it blocked";
+        EXPECT_TRUE(ticked_during_cancel) << "the loop made no independent progress while cancel_async() was in flight";
         db.disconnect();
     }
     backend.join();
@@ -170,7 +171,7 @@ TEST(PgsqlCancelWire, CancelAsyncSendsTheCancelRequestOnASecondConnectionWithout
     ASSERT_TRUE(res.second_conn.load()) << "no second connection reached the backend";
     ASSERT_TRUE(res.got_16.load()) << "the cancel connection did not carry 16 bytes";
     expect_cancel_request(res.bytes);
-    EXPECT_TRUE(res.then_eof.load()) << "the cancel connection carried more than the CancelRequest, or stayed open";
+    EXPECT_EQ(res.close_outcome.load(), peer_read_outcome::eof) << "the client must close after the CancelRequest; timeout/silence is not EOF";
 }
 
 TEST(PgsqlCancelWire, BlockingCancelSendsTheSameBytes) {
@@ -196,7 +197,7 @@ TEST(PgsqlCancelWire, BlockingCancelSendsTheSameBytes) {
     EXPECT_TRUE(delivered);
     ASSERT_TRUE(res.got_16.load());
     expect_cancel_request(res.bytes);
-    EXPECT_TRUE(res.then_eof.load());
+    EXPECT_EQ(res.close_outcome.load(), peer_read_outcome::eof);
 }
 
 TEST(PgsqlCancelWire, NeverConnectedReportsFalseAndOpensNothing) {

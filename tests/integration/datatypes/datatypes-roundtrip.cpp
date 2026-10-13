@@ -394,7 +394,9 @@ constexpr long long kFixedUtcMicros  = kFixedUtcSeconds * 1000000LL + 789000LL;
 TEST_F(DataTypesRoundTrip, Timestamp_FixedInstant_SecondTolerance) {
     const qb::wall_time ts = qb::wall_from_unix_seconds(kFixedUtcSeconds) + std::chrono::microseconds(789000);
 
-    ASSERT_TRUE(db_->prepare("ts_ins", "SELECT $1::timestamp AS t", type_oid_sequence{oid::timestamp}, discard_prepare, discard_error).await());
+    ASSERT_TRUE(db_->prepare("ts_ins", "SELECT $1::timestamp AS t, ($1::timestamp)::text AS t_text", type_oid_sequence{oid::timestamp},
+                             discard_prepare, discard_error)
+                    .await());
     bool ok = false;
     ASSERT_TRUE(db_->execute(
                        "ts_ins", params(ts),
@@ -408,23 +410,15 @@ TEST_F(DataTypesRoundTrip, Timestamp_FixedInstant_SecondTolerance) {
                            const long long got_us = static_cast<long long>(qb::unix_micros(got));
                            EXPECT_LE(std::llabs(got_us - kFixedUtcMicros), 1000000LL);
                            EXPECT_EQ(qb::unix_micros(got) % 1000000, 789000u);
+                           // Independent server oracle over the SAME bound value. A symmetric
+                           // client encoder/decoder epoch error can pass the binary round-trip,
+                           // but it cannot make PostgreSQL render the wrong instant as this text.
+                           EXPECT_EQ(r[0][1].as<std::string>(), "2023-01-15 12:34:56.789");
                            ok = true;
                        },
                        [](error::db_error e) { FAIL() << e.what(); })
                     .await());
     EXPECT_TRUE(ok);
-
-    // Server ground truth: with TZ=UTC the rendered text is exact and stable.
-    bool gt = false;
-    ASSERT_TRUE(db_->execute(
-                       "SELECT (TIMESTAMP '2023-01-15 12:34:56.789')::text",
-                       [&](transaction &, results r) {
-                           EXPECT_EQ(r[0][0].as<std::string>(), "2023-01-15 12:34:56.789");
-                           gt = true;
-                       },
-                       [](error::db_error e) { FAIL() << e.what(); })
-                    .await());
-    EXPECT_TRUE(gt);
 }
 
 TEST_F(DataTypesRoundTrip, TimestampTZ_FixedInstant_SecondTolerance) {

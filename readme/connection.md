@@ -55,12 +55,6 @@ if (!qb::io::async::run_sync(db.connect("tcp://user:secret@localhost:5432[mydb]"
 Every `run_sync` on this page is the second case. Inside an actor it blocks the `VirtualCore` instead of your own
 thread, and nothing reports it — [actors.md](./actors.md#bridging-to-synchronous-code) has the mechanism.
 
-`qb::pg::init()` is an optional forward-compatibility initialization hook. It currently performs no required setup — the
-field-reader's `ParamUnserializer` is statically constructed, so row decoding works without it (
-the [README](../README.md) quickstart and the test suite never call it). Call it once at startup if you want to be
-explicit; it is a no-op today, reserved for future per-process type-table setup.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.cpp:194-201 (qb::pg::init → detail::initialize_field_reader); qbm/pgsql/src/qbm/pgsql/field_reader_integration.cpp -->
-
 The handshake `connect()` drives, end to end:
 
 ```mermaid
@@ -414,11 +408,14 @@ request was sent, `false` if the client never finished a handshake (no key yet) 
 coroutine, a separate actor, a second connection watching `pg_stat_activity`:
 
 ```cpp
-// Abort a query that runs too long: a watchdog coroutine on the same loop.
-qb::io::async::coro_scheduler().spawn([&db]() -> qb::io::async::task<void> {
+// A named coroutine: its database reference is a parameter stored in the frame.
+qb::io::async::task<void> cancel_after(qb::pg::tcp::database &db) {
     co_await qb::io::async::sleep(std::chrono::seconds(2));
     co_await db.cancel_async(); // suspends while the cancel connection comes up; the loop keeps running
-}());
+}
+
+// Abort a query that runs too long: a watchdog coroutine on the same loop.
+qb::io::async::coro_scheduler().spawn(cancel_after(db));
 auto r = co_await db.query("SELECT slow_report()");
 if (!r.ok() && r.error().sqlstate == qb::pg::sqlstate::query_canceled)
     handle_timeout();

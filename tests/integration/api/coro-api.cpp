@@ -980,19 +980,33 @@ TEST_F(PgsqlCoroApiTest, QueryStreamLargeResult) {
 
 // Inside an existing transaction, query_stream must NOT commit/rollback it.
 TEST_F(PgsqlCoroApiTest, QueryStreamInsideTransaction) {
-    std::uint64_t count = 0;
-    bool          ok = false, committed = false;
+    std::uint64_t count    = 0;
+    bool          prepared = false, ok = false, still_in_txn = false, rolled_back = false, witness_absent = false;
     qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
-        (void) co_await db_->begin();
-        auto r    = co_await db_->query_stream("SELECT g FROM generate_series(1, 100) g", 10, [&](auto) { ++count; });
-        ok        = r.ok();
-        auto c    = co_await db_->commit();
-        committed = c.ok();
+        auto table = co_await db_->query("CREATE TEMP TABLE qb_coro_stream_txn_probe (v integer) ON COMMIT PRESERVE ROWS");
+        if (!table.ok())
+            co_return;
+        auto clear = co_await db_->query("TRUNCATE qb_coro_stream_txn_probe");
+        if (!clear.ok() || !(co_await db_->begin()).ok())
+            co_return;
+        auto inserted = co_await db_->query("INSERT INTO qb_coro_stream_txn_probe VALUES (23)");
+        if (!inserted.ok())
+            co_return;
+        prepared       = true;
+        auto r         = co_await db_->query_stream("SELECT g FROM generate_series(1, 100) g", 10, [&](auto) { ++count; });
+        ok             = r.ok();
+        still_in_txn   = db_->in_transaction();
+        rolled_back    = (co_await db_->rollback()).ok();
+        auto witness   = co_await db_->query("SELECT COUNT(*) FROM qb_coro_stream_txn_probe WHERE v = 23");
+        witness_absent = witness.ok() && witness.result().size() == 1u && witness.result()[0][0].as<std::int64_t>() == 0;
         co_return;
     }());
+    ASSERT_TRUE(prepared) << "failed to establish the caller-owned transaction witness";
     EXPECT_TRUE(ok);
     EXPECT_EQ(count, 100u);
-    EXPECT_TRUE(committed);
+    EXPECT_TRUE(still_in_txn) << "query_stream ended the caller-owned transaction";
+    EXPECT_TRUE(rolled_back);
+    EXPECT_TRUE(witness_absent) << "the write before query_stream survived ROLLBACK, so the stream committed the outer transaction";
 }
 
 // A failing stream resolves with an error and leaves the connection usable.

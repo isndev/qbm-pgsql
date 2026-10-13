@@ -37,6 +37,10 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Fixed
 
+- **The PostgreSQL guides use the binary NUMERIC marker and document installed package consumption (Huly QB-689, QB-694).**
+  The prepared-statement recipe binds `qb::pg::detail::numeric` for OID 1700 and decodes the result with the matching
+  converter; a plain decimal string is not binary NUMERIC. The integration page covers source and installed CMake
+  targets, including the dependency on an installed qb package.
 - **System and integration test fixtures keep workers and coroutine state alive on fatal exits (Huly QB-406, QB-412).**
   CancelRequest workers join before listener state dies; the resilience fixture destroys
   suspended frames before releasing the database and its result flags.
@@ -179,6 +183,8 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
   where it installs the new transport (qb-io's `reset_for_reconnect()`).
 
 ### Documentation
+
+- **Connection and quickstart guidance now follows the public API and coroutine lifetime rules (Huly QB-690, QB-691, QB-693, QB-695, QB-622).** The connect reference names `AuthenticationOk` as the success transition, removes an undeclared `qb::pg::init`, gives the cancel watchdog a named coroutine frame, points `main.cpp` at the complete standalone program, and keeps the support policy version-independent.
 
 - **The stale `@todo COPY` comment in `pgsql.h` is gone (Huly QB-120)** -- it said COPY was "not a product
   feature yet" while `copy_in` / `copy_out` ship and are tested; the comment now says what is supported and

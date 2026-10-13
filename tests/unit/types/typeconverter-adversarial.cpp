@@ -45,6 +45,7 @@
 #include <limits>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <vector>
 #include "../../shared/pg_wire_ground_truth.hpp"
@@ -59,9 +60,15 @@ using qb::pg::test::hex_to_bytes;
 // the wire field bytes that from_binary actually receives.
 static std::vector<byte>
 strip_prefix(std::vector<byte> b) {
-    EXPECT_GE(b.size(), sizeof(integer));
+    if (b.size() < sizeof(integer))
+        throw std::out_of_range("binary value is shorter than its length prefix");
     b.erase(b.begin(), b.begin() + sizeof(integer));
     return b;
+}
+
+TEST(TCAdversarialFixture, StripPrefixRejectsShortBuffers) {
+    EXPECT_THROW((void) strip_prefix({}), std::out_of_range);
+    EXPECT_THROW((void) strip_prefix(std::vector<byte>(sizeof(integer) - 1, byte{})), std::out_of_range);
 }
 
 // ============================================================================
