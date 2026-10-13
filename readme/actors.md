@@ -217,7 +217,7 @@ The second row is the one to build on, and it is measured rather than asserted. 
 on `SELECT pg_sleep(30)`, and requires the `co_await` to resume with a failed reply — "a hang here is the actual hazard,
 since the caller has no other way to learn the socket is gone". It then requires `is_connected()` to go false, so the
 next query fails fast instead of enqueuing work on a dead socket.
-<!-- src: qbm/pgsql/tests/integration/resilience/coro-cancel-and-connection-loss.cpp:243-246 -->
+<!-- src: qbm/pgsql/tests/integration/resilience/coro-cancel-and-connection-loss.cpp:246-249 -->
 
 The third row is measured too, and its subtlety is worth the paragraph. qb's coroutine frames come from a pooled
 freelist, so destroying a parked frame returns the block for the *next* spawn to reuse; an un-retracted completion would
@@ -225,7 +225,7 @@ then resume somebody else's coroutine. `CoroutineDestroyedWhileParkedOnLiveQuery
 wake six seconds early — and it also checks the connection afterwards, which is the fact you need: **abandoning a reply
 does not desync the stream.** The orphaned reply is consumed and dropped, and the next `co_await` on that connection
 gets its own.
-<!-- src: qbm/pgsql/tests/integration/resilience/coro-cancel-and-connection-loss.cpp:170-226 -->
+<!-- src: qbm/pgsql/tests/integration/resilience/coro-cancel-and-connection-loss.cpp:178-229 -->
 
 ### Making a query interruptible
 
@@ -299,7 +299,7 @@ database instead:
 - `disconnect()` — dropping the session rolls the open transaction back server-side, which is the second thing the
   resilience suite measures: after the backend is terminated mid-transaction, the uncommitted row is invisible from a
   third connection.
-  <!-- src: qbm/pgsql/tests/integration/resilience/coro-cancel-and-connection-loss.cpp:298-304 -->
+  <!-- src: qbm/pgsql/tests/integration/resilience/coro-cancel-and-connection-loss.cpp:299-305 -->
 
 ---
 
