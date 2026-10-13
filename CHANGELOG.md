@@ -37,6 +37,9 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Fixed
 
+- **API documentation checks reject comment-only names and invalid later citations (Huly QB-561, QB-562).**
+  The shipped guard indexes C++ code without comments or literals and examines every
+  citation on a line before accepting it.
 - **Scheduled tests and documentation checks select their intended inputs (Huly QB-558–560, QB-621).**
   Nightly uses paired `develop` branches, doc-lint triggers on checker and workflow edits,
   the pull request template points to the public superbuild recipe, and clang-tidy includes
