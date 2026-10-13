@@ -37,6 +37,10 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Fixed
 
+- **Scheduled tests and documentation checks select their intended inputs (Huly QB-558–560, QB-621).**
+  Nightly uses paired `develop` branches, doc-lint triggers on checker and workflow edits,
+  the pull request template points to the public superbuild recipe, and clang-tidy includes
+  module headers.
 - **Present optional field reads check SQL NULL once (Huly QB-646).** Scalar and optional
   reads share the format- and OID-aware conversion after the public NULL decision.
   Empty text stays present; SQL NULL, nested optionals and typed errors keep their contract.
