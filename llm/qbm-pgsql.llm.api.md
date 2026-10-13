@@ -78,7 +78,8 @@ public:
     // connect() returns a [[nodiscard]] awaiter — drive it with `co_await` or
     // `qb::io::async::run_sync(...)`. There is NO blocking `bool connect()` and NO
     // `connect(on_ok, on_err)` callback overload. The awaiter resolves to `bool`
-    // (true once the handshake reached ReadyForQuery).
+    // (true when AuthenticationOk is processed; coroutine resumption is deferred,
+    // so later startup frames are normally consumed before user code runs).
     [[nodiscard]] connect_awaiter connect();
     [[nodiscard]] connect_awaiter connect(qb::duration timeout);
     [[nodiscard]] connect_awaiter connect(std::string const &conn_opts_str);

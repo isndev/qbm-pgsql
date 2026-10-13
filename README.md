@@ -304,7 +304,7 @@ target_link_libraries(hello_pgsql PRIVATE qbm::pgsql)
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build && ./build/hello_pgsql
 ```
 
-`main.cpp` is the actor of the first section above, with `#include <qbm/pgsql/pgsql.h>`. The actor engine's measurements are in
+`main.cpp` can be the complete program in [Outside an actor: connect, query, transact](#outside-an-actor-connect-query-transact), which includes its own `main()`. The actor in the first section is a class fragment intended for an existing qb application. The actor engine's measurements are in
 [qb's README](https://github.com/isndev/qb#measured); this module publishes no throughput figure yet.
 
 ## What this module is

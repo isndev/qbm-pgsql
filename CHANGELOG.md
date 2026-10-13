@@ -175,6 +175,8 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Documentation
 
+- **Connection and quickstart guidance now follows the public API and coroutine lifetime rules (Huly QB-690, QB-691, QB-693, QB-695, QB-622).** The connect reference names `AuthenticationOk` as the success transition, removes an undeclared `qb::pg::init`, gives the cancel watchdog a named coroutine frame, points `main.cpp` at the complete standalone program, and keeps the support policy version-independent.
+
 - **The stale `@todo COPY` comment in `pgsql.h` is gone (Huly QB-120)** -- it said COPY was "not a product
   feature yet" while `copy_in` / `copy_out` ship and are tested; the comment now says what is supported and
   that CopyBoth is not.
