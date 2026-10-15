@@ -486,6 +486,50 @@ TEST_F(ConnectionLifecycle, ConnectionPool_Coroutine) {
                                             "returned the decoded value 1";
 }
 
+// --------------------------------------------------------------------------------------
+// Disconnect ends the server backend (Huly QB-1060)
+// --------------------------------------------------------------------------------------
+
+/**
+ * @brief After disconnect(), the server reads EOF and its backend exits -- while the Database
+ *        object is still alive.
+ *
+ * qb-io's standalone dispose() used to leave the socket untouched: the backend kept running
+ * until the Database was destroyed. Since QB-1060 a disconnect the object asked for shuts the
+ * sending side down (the descriptor stays until destruction or the next connect), so the
+ * backend sees EOF and leaves pg_stat_activity. The bound is the server's reaction to an EOF on
+ * an idle connection -- milliseconds -- given a loaded host's margin; db_ is kept alive across
+ * the whole check, since destroying it would close the socket on any qb.
+ */
+TEST_F(ConnectionLifecycle, DisconnectEndsTheServerBackend) {
+    ASSERT_TRUE(qb::io::async::run_sync(db_->connect(dsn_tcp_string())));
+    const int pid = db_->backend_pid();
+    ASSERT_GT(pid, 0);
+
+    auto observer = std::make_unique<qb::pg::tcp::database>();
+    ASSERT_TRUE(qb::io::async::run_sync(observer->connect(dsn_tcp_string())));
+    const auto count_sql = "SELECT count(*)::int FROM pg_stat_activity WHERE pid = " + std::to_string(pid);
+    // How many times the backend is listed once `until` holds or 10 s have passed; -1 if the query fails.
+    const auto listed = [&](int until) {
+        return qb::io::async::run_sync([&]() -> qb::io::async::task<int> {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+            for (;;) {
+                auto       reply = co_await observer->query(count_sql);
+                const auto count = reply.ok() && reply.result().size() == 1u ? reply.result()[0][0].as<int>() : -1;
+                if (count == until || std::chrono::steady_clock::now() >= deadline)
+                    co_return count;
+                co_await qb::io::async::sleep(std::chrono::milliseconds(20));
+            }
+        }());
+    };
+    ASSERT_EQ(listed(1), 1) << "the backend of the connected Database must be listed";
+
+    db_->disconnect();
+    EXPECT_EQ(listed(0), 0) << "backend " << pid << " still listed 10 s after Database::disconnect(): the socket was not ended";
+    ASSERT_TRUE(db_) << "the Database outlives the check";
+    observer->disconnect();
+}
+
 int
 main(int argc, char **argv) {
     qb::io::async::init();

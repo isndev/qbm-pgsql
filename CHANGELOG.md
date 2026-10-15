@@ -37,6 +37,11 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Fixed
 
+- **`Database::disconnect()` ends the server backend (with qb's Huly QB-1060).** qb-io's standalone
+  `dispose()` left the socket untouched, so the backend lived until the `Database` was destroyed. With
+  qb's fix the sending side is shut down at teardown, the server reads EOF and the backend leaves
+  `pg_stat_activity`; the descriptor is released at destruction or the next `connect()`. Pinned by
+  `ConnectionLifecycle.DisconnectEndsTheServerBackend`.
 - **A row difference holds any two row ordinals (Huly QB-986).** `resultset::difference_type` -- and with it
   `row::difference_type`, the type of `row_a - row_b` -- was a 32-bit `integer` while its own row iterator already
   measured distances in `std::ptrdiff_t`. Row ordinals are 32-bit unsigned, so past `INT32_MAX` they converted to
