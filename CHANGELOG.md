@@ -37,6 +37,12 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Fixed
 
+- **A row difference holds any two row ordinals (Huly QB-986).** `resultset::difference_type` -- and with it
+  `row::difference_type`, the type of `row_a - row_b` -- was a 32-bit `integer` while its own row iterator already
+  measured distances in `std::ptrdiff_t`. Row ordinals are 32-bit unsigned, so past `INT32_MAX` they converted to
+  negative values and the subtraction overflowed. The container's `difference_type` is now the iterator's
+  `std::ptrdiff_t`, which a `static_assert` requires to be wider than an ordinal; widening is source compatible, and
+  the iterators, whose `advance()` already took `std::ptrdiff_t`, are unchanged.
 - **The PostgreSQL guides use the binary NUMERIC marker and document installed package consumption (Huly QB-689, QB-694).**
   The prepared-statement recipe binds `qb::pg::detail::numeric` for OID 1700 and decodes the result with the matching
   converter; a plain decimal string is not binary NUMERIC. The integration page covers source and installed CMake

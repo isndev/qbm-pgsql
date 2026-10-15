@@ -105,8 +105,8 @@ class resultset {
 public:
     //@{
     /** @name Size types definitions */
-    typedef uinteger size_type;
-    typedef integer  difference_type;
+    typedef uinteger       size_type;
+    typedef std::ptrdiff_t difference_type; ///< The row iterator's: holds any two row ordinals' difference
     //@}
 
     class row;
@@ -857,6 +857,7 @@ private:
 
 inline resultset::row::difference_type
 operator-(resultset::row const &a, resultset::row const &b) {
+    static_assert(sizeof(resultset::difference_type) > sizeof(resultset::size_type), "a row ordinal difference must be representable");
     return static_cast<resultset::row::difference_type>(a.row_index()) - static_cast<resultset::row::difference_type>(b.row_index());
 }
 

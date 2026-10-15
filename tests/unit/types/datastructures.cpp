@@ -14,12 +14,16 @@
  * Licensed under the Apache License, Version 2.0 (the "License").
  */
 
+#include <cstdint>
 #include <cstring>
 #include <gtest/gtest.h>
 #include <istream>
+#include <iterator>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 #include "../../shared/pg_wire_ground_truth.hpp"
 #include <qbm/pgsql/pgsql.h>
@@ -430,6 +434,36 @@ TEST(ResultsetPopulated, RowOrdinalDoesNotNarrowAt32768) {
     EXPECT_EQ(rs[32768] - rs[32767], 1);
     EXPECT_EQ(rs[32768] - rs[0], 32768);
     EXPECT_EQ(rs[32767] - rs[32768], -1);
+}
+
+// A row ordinal is a resultset::size_type (32-bit unsigned), so the difference of two spans
+// +-(2^32 - 1) -- more than a 32-bit difference_type holds (Huly QB-986): past INT32_MAX the
+// ordinals wrapped negative and the subtraction overflowed. The container's difference_type is
+// its iterator's. These rows carry an ordinal and no result set: no row is allocated.
+TEST(ResultsetPopulated, RowDifferenceSpansTheWholeOrdinalRange) {
+    struct ordinal_row : resultset::row {
+        explicit ordinal_row(resultset::size_type ordinal)
+            : resultset::row(nullptr, ordinal) {}
+    };
+    const auto delta = [](resultset::size_type a, resultset::size_type b) {
+        return static_cast<long long>(ordinal_row{a} - ordinal_row{b});
+    };
+    constexpr resultset::size_type last  = std::numeric_limits<resultset::size_type>::max();
+    constexpr resultset::size_type above = resultset::size_type{std::numeric_limits<std::int32_t>::max()} + 1;
+
+    constexpr bool container_matches_iterator =
+        std::is_same_v<resultset::difference_type, std::iterator_traits<resultset::const_iterator>::difference_type>;
+    constexpr bool row_matches_container = std::is_same_v<resultset::row::difference_type, resultset::difference_type>;
+    EXPECT_TRUE(container_matches_iterator);
+    EXPECT_TRUE(row_matches_container);
+    EXPECT_EQ(delta(last, 0), 4294967295LL);
+    EXPECT_EQ(delta(0, last), -4294967295LL);
+    EXPECT_EQ(delta(last, last - 1), 1);
+    EXPECT_EQ(delta(above, above - 1), 1);
+    EXPECT_EQ(delta(above, 0), 2147483648LL);
+    EXPECT_EQ(delta(0, above), -2147483648LL);
+    EXPECT_EQ(delta(above, 1), 2147483647LL);
+    EXPECT_EQ(delta(1, above), -2147483647LL);
 }
 
 TEST(ResultsetPopulated, InputBufferSeekFromEndUsesPastLastPosition) {

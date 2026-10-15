@@ -452,6 +452,7 @@ public:
     public:
         // STL-like container typedefs for fields (const_iterator, value_type=field, etc.)
         resultset::size_type row_index() const; // Full row ordinal; row::size_type counts fields
+        // row_a - row_b -> resultset::difference_type (std::ptrdiff_t, the row iterator's): any two ordinals' distance
 
         size_type size() const; // Number of fields in the row
         bool empty() const;

@@ -426,7 +426,7 @@ row.to(std::tie(a, b, c));
 ```
 
 `row_to_impl` expands into one `as<T>()` per column, matched to the tuple element at the same index — so each element
-is converted per its own declared type. <!-- src: src/qbm/pgsql/resultset.h:890-894,902-906,1004-1018 -->
+is converted per its own declared type. <!-- src: src/qbm/pgsql/resultset.h:891-895,903-907,1005-1019 -->
 
 ---
 

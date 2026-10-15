@@ -195,6 +195,9 @@ A `results::row` is a non-owning, index-based container of fields.
   subsequent indexed access throws `std::out_of_range`.
 - `row.size()`, `row.empty()`, `row.begin()`/`row.end()` — field container interface.
 - `row.row_index()` — this row's 0-based index in the result set, including rows past 32767 (`resultset.h:346-349`).
+- `row_a - row_b` — the signed distance between two rows' ordinals, a `resultset::difference_type`: `std::ptrdiff_t`,
+  the row iterator's own, which holds the difference of any two 32-bit ordinals (it was 32-bit before Huly QB-986,
+  wrapping past `INT32_MAX`).
 - `row.index_of_name(name)` — shortcut to the parent's `index_of_name`.
 
 ### Whole-row extraction with `to(...)`
@@ -218,7 +221,7 @@ row.to({"id", "name", "active"}, id, name, active);
 ```
 
 The named form requires at least as many names as targets, or it throws `error::db_error` with message
-`"Not enough names in row data extraction"` before changing any target (`resultset.h:983-993`). Each target decodes through the same path as
+`"Not enough names in row data extraction"` before changing any target (`resultset.h:984-994`). Each target decodes through the same path as
 `field::as<T>()`, so a NULL into a non-`std::optional` target throws `value_is_null` (see below).
 
 ### Typed tuples & structured bindings
