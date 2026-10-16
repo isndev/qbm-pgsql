@@ -682,7 +682,7 @@ and multi-dimensional arrays throw `error::field_type_mismatch`.
 without DOM conversion; the array literal preserves NULL elements and lower bounds.
 Temporary element views are internal to that rendering call; the exported JSON owns its strings.
 No public array converter for `std::vector<std::string_view>` is provided.
-<!-- src: src/qbm/pgsql/resultset.cpp:448-468; src/qbm/pgsql/type_converter.h:1782-1786 -->
+<!-- src: src/qbm/pgsql/resultset.cpp:449-469; src/qbm/pgsql/type_converter.h:1782-1786 -->
 
 `TypeConverter<qb::wall_time>::to_text` keeps UTC text and its `+00` suffix. Years 1970–9999
 use a stack formatter over the existing qb calendar; other years retain the previous formatter.

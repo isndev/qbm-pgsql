@@ -502,14 +502,37 @@ TEST(ResultsetPopulated, InputBufferSeekFromEndUsesPastLastPosition) {
 
 // resultset::json() materializes rows as an array of {name: value-or-null}.
 TEST(ResultsetPopulated, JsonSerialization) {
-    PopulatedResult pr({"id", "name"}, {{"1", ""}}, {false, true});
-    resultset       rs = pr.rs();
+    const std::string long_text(256, 'x');
+    const qb::json    expected =
+        qb::json::array({qb::json{{"id", "1"}, {"name", nullptr}, {"note", ""}}, qb::json{{"id", "2"}, {"name", long_text}, {"note", "tail"}}});
+    qb::json first;
+    qb::json second;
+    {
+        PopulatedResult pr({"id", "name", "note"}, {{"1", "", ""}, {"2", long_text, "tail"}}, {false, true, false, false, false, false});
+        const resultset rs = pr.rs();
+        first              = rs.json();
+        second             = rs.json();
+        EXPECT_EQ(first, expected);
+        EXPECT_EQ(second, expected);
 
-    qb::json j = rs.json();
-    ASSERT_TRUE(j.is_array());
-    ASSERT_EQ(j.size(), 1u);
-    EXPECT_EQ(j[0]["id"], "1");
-    EXPECT_TRUE(j[0]["name"].is_null());
+        // Repeated exports must not consume the borrowed source rows or metadata.
+        ASSERT_EQ(rs.size(), 2u);
+        ASSERT_EQ(rs.columns_size(), 3u);
+        EXPECT_EQ(rs.field_name(0), "id");
+        EXPECT_EQ(rs.field_name(1), "name");
+        EXPECT_EQ(rs.field_name(2), "note");
+        EXPECT_EQ(rs[0][0].as<std::string>(), "1");
+        EXPECT_TRUE(rs[0][1].is_null());
+        EXPECT_EQ(rs[0][2].as<std::string>(), "");
+        EXPECT_EQ(rs[1][0].as<std::string>(), "2");
+        EXPECT_EQ(rs[1][1].as<std::string>(), long_text);
+        EXPECT_EQ(rs[1][2].as<std::string>(), "tail");
+    }
+    // Both projections own their rows and long strings after the source dies.
+    EXPECT_EQ(first, expected);
+    EXPECT_EQ(second, expected);
+    first[0]["id"] = "changed";
+    EXPECT_EQ(second, expected);
 }
 
 // Every value below is a PostgreSQL *_send() payload (without the protocol length

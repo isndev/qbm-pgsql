@@ -34,6 +34,8 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
   and a stack buffer for years 1970–9999; other years keep the previous formatter. JSON/JSONB array projection
   borrows element text only while rendering, and quoted strings are appended in runs between escapes.
   The final result owns its text; public types, scale, special values, NULLs and wire-format selection are unchanged.
+  Completed JSON row objects move into the output array instead of copying their keys and strings.
+  Repeated exports preserve the source result and each returned projection remains independently owned.
 
 - **Typed JSONB decoding combines precision validation and DOM construction where supported (Huly QB-945).**
   Audited nlohmann versions and configurations reuse its DOM builder and numeric formatter.

@@ -354,7 +354,7 @@ The projection's temporary element views borrow the field only during rendering;
 JSON owns its strings. This does not add a public `std::vector<std::string_view>` array result
 type. NUMERIC remains an owning decimal-string carrier; its integer limb formatter and internal
 array rendering avoid intermediate string copies without changing its value or scale.
-<!-- src: src/qbm/pgsql/resultset.cpp:448-468; src/qbm/pgsql/type_converter.cpp:703-761,896-915; src/qbm/pgsql/type_converter.h:1718-1719 -->
+<!-- src: src/qbm/pgsql/resultset.cpp:449-469; src/qbm/pgsql/type_converter.cpp:703-761,896-915; src/qbm/pgsql/type_converter.h:1718-1719 -->
 
 `qb::wall_time` text remains UTC with `+00` and six fractional digits when a fraction is present.
 Years 1970–9999 use the existing qb calendar and a stack formatter; pre-1970 and later years keep
@@ -661,7 +661,8 @@ server never sent it. The `string_view` is valid while the connection is alive.
   BYTEA uses `\x` hex, one-dimensional arrays preserve NULL elements and non-1
   lower bounds (`[lower:upper]=...`), and SQL NULL becomes JSON null. A
   multi-dimensional array or unsupported binary OID throws instead of exporting
-  a changed value.
+  a changed value. Each exported row owns its values and moves into the output array;
+  repeated exports preserve the source. <!-- src: src/qbm/pgsql/resultset.cpp:555-568 -->
 - **`execute_file` / `prepare_file` read the file synchronously** (blocking) on
   the I/O thread.
 - **Never use the retired time tokens** (§3.6). `timestamptz`/`timestamp` →

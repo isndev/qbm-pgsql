@@ -197,7 +197,7 @@ the direct converter's legacy four-byte-prefixed compatibility does not extend t
 The text is exact relative to PostgreSQL's canonical `jsonb::text` output, which may already
 differ from the input in spaces, key order or
 duplicate keys. `jsonb_text_copy()` makes an owning copy. SQL NULL throws `value_is_null`; invalid
-OID, format or version throws `client_error`. <!-- src: src/qbm/pgsql/resultset.cpp:185-212,263-275 -->
+OID, format or version throws `client_error`. <!-- src: src/qbm/pgsql/resultset.cpp:186-213,264-276 -->
 
 ### UUID
 

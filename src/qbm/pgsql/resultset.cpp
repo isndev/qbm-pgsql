@@ -24,6 +24,7 @@
 #include <assert.h>
 #include <cstring>
 #include <limits>
+#include <utility>
 #include "./protocol.h"
 #include "./result_impl.h"
 
@@ -560,7 +561,7 @@ resultset::json() const {
         for (const auto field : row) {
             row_obj[field.name()] = field.is_null() ? qb::json(nullptr) : qb::json(json_field_text(field));
         }
-        result.push_back(row_obj);
+        result.push_back(std::move(row_obj));
     }
 
     return result;

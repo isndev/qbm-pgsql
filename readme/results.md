@@ -41,7 +41,7 @@ are safe. There are two flavors:
 
 - An **owning** result set holds a real allocation and keeps its rows alive. The default constructor, `deep_snapshot()`,
   and the coroutine path all produce owning result sets.
-- A **borrowing** result set wraps a caller-owned `result_impl` with a no-op deleter (`resultset.cpp:263-267`). It
+- A **borrowing** result set wraps a caller-owned `result_impl` with a no-op deleter (`resultset.cpp:264-268`). It
   observes the live row buffer but neither frees nor extends it. The result set handed to a synchronous success callback
   is borrowing.
 
@@ -180,9 +180,9 @@ for (qb::pg::results::row const &row : rows) {
 qb::pg::results::row first = rows.at(0);          // checked
 ```
 
-`index_of_name(name)` returns the column index, or `results::npos` if the name is absent (`resultset.cpp:350-359`) —
+`index_of_name(name)` returns the column index, or `results::npos` if the name is absent (`resultset.cpp:351-360`) —
 useful for a presence check that does not throw. `field(name)` (metadata-by-name) instead throws `std::runtime_error`
-when the name is missing (`resultset.cpp:367-376`).
+when the name is missing (`resultset.cpp:368-377`).
 
 ---
 
@@ -190,7 +190,7 @@ when the name is missing (`resultset.cpp:367-376`).
 
 A `results::row` is a non-owning, index-based container of fields.
 
-- `row[i]` — field by 0-based index; throws `std::out_of_range` if out of range (`resultset.cpp:80`).
+- `row[i]` — field by 0-based index; throws `std::out_of_range` if out of range (`resultset.cpp:81`).
 - `row["name"]` — field by case-sensitive column name. If the name is unknown, `index_of_name` returns `npos` and the
   subsequent indexed access throws `std::out_of_range`.
 - `row.size()`, `row.empty()`, `row.begin()`/`row.end()` — field container interface.
@@ -312,7 +312,7 @@ if (!field.is_null())
 ```
 
 `results::json()` checks SQL NULL directly, so a present empty TEXT value remains `""` while SQL NULL becomes JSON null
-(`resultset.cpp:554-567`).
+(`resultset.cpp:555-568`).
 `field.as<std::optional<T>>()` uses the same NULL metadata; a present value is decoded through `T`, preserving
 empty text and the column-OID conversion for binary numerics (`resultset.h:558-586,608-643`).
 
@@ -330,7 +330,7 @@ See [error_handling.md](./error_handling.md).
 Every present value is a JSON string, including numbers, booleans, JSONB, and arrays; SQL NULL is JSON null:
 
 ```cpp
-<!-- src: qbm/pgsql/src/qbm/pgsql/resultset.cpp:554-567 -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/resultset.cpp:555-568 -->
 qb::json j = rows.json();   // e.g. [{"id":"1","name":"ada"}, ...]
 ```
 
@@ -346,8 +346,9 @@ reads element text directly from the wire, checking each JSONB version byte, and
 literal. Decimal precision, whitespace and nested JSON shape remain intact; JSON `null` is a present element,
 distinct from SQL NULL. This text export does not use the typed JSONB DOM conversion or its numeric-loss rejection.
 Internally, element views borrow the field storage only during rendering. The returned JSON owns its strings,
-so those temporary views impose no lifetime requirement on the exported value and add no public array view type.
-<!-- src: src/qbm/pgsql/resultset.cpp:448-468,554-567 -->
+so those temporary views impose no lifetime requirement on the exported value and add no public array view type. Each completed row object is moved into the output array,
+avoiding a deep copy of its keys and strings. Repeated exports leave the source result unchanged.
+<!-- src: src/qbm/pgsql/resultset.cpp:449-469,555-568 -->
 Binary `timestamptz` values, including elements of `timestamptz[]`, render in UTC with a `+00` suffix,
 independently of the session `TimeZone`. Text-format results retain the server's session-formatted representation;
 the exact-text guarantee above applies to JSON/JSONB element content and to preserved array bounds.
@@ -363,14 +364,14 @@ This export is convenient for diagnostics and admin endpoints; use typed `as<T>(
   (`resultset.h:319-321`). Storing a `row` or `field` past the lifetime of the `results` that vended it is a
   use-after-free. Copy the data out, or snapshot the whole set with `deep_snapshot()` (`resultset.h:161`).
 - **The callback result set is borrowing.** It does not extend the lifetime of the live row buffer. To retain rows after
-  a synchronous success callback returns, call `deep_snapshot()` first (`resultset.cpp:269-277`).
+  a synchronous success callback returns, call `deep_snapshot()` first (`resultset.cpp:270-278`).
 - **`operator[]`, `front()`, `back()` assert; they do not throw.** `results::operator[]` only asserts on an out-of-range
   index (UB in a release build past the end); `front()`/`back()` assert on an empty set. Use `at()` for a checked row,
-  and guard `front()`/`back()` with `empty()` or `operator bool` (`resultset.cpp:310-329`).
+  and guard `front()`/`back()` with `empty()` or `operator bool` (`resultset.cpp:311-330`).
 - **`operator bool` is a row-presence test, not DML success.** A successful DML statement with no returned rows is
   falsy. Use `rows_affected()` to detect an effect (`resultset.h:268,298`).
 - **Iterators are bidirectional, not random-access.** Comparing iterators from different result sets — or, for field
-  iterators, different rows — trips an assert (`resultset.cpp:106,221-222`).
+  iterators, different rows — trips an assert (`resultset.cpp:107,222-223`).
 - **Do not share a result set across cores/threads.** Text-format `as<T>()` uses a function-local
   `static ParamUnserializer`; this is safe only because an actor/connection runs on a single `VirtualCore` (one thread).
   Sharing a `results` across cores is a data race (`resultset.h:651`).
