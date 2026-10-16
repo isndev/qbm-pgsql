@@ -24,7 +24,7 @@ here so you can navigate the implementation — application code never includes 
 - **OID.** A PostgreSQL type identifier from the `pg_type` catalog (e.g. `23` = `int4`, `1184` = `timestamptz`).
   `qbm-pgsql` models the common ones as `enum class qb::pg::oid` ([`src/qbm/pgsql/pg_types.h`](../src/qbm/pgsql/pg_types.h)).
 - **`type_oid_sequence`.** `using type_oid_sequence = std::vector<oid>` ([`src/qbm/pgsql/common.h`](../src/qbm/pgsql/common.h)). You pass
-  one to `prepare()` to declare each parameter's type. <!-- src: src/qbm/pgsql/common.h:527-532 -->
+  one to `prepare()` to declare each parameter's type. <!-- src: src/qbm/pgsql/common.h:532-537 -->
 - **`params`.** `using params = detail::QueryParams` ([`pgsql.h`](../src/qbm/pgsql/pgsql.h)). A heterogeneous container of bind values
   serialized to PostgreSQL **binary** wire form. <!-- src: pgsql.h:3024 -->
 - **`type_mapping<T>`.** Compile-time C++-type → OID lookup ([`src/qbm/pgsql/type_mapping.h`](../src/qbm/pgsql/type_mapping.h)). Drives
@@ -75,7 +75,7 @@ share an identical micros-since-2000 wire layout. <!-- src: src/qbm/pgsql/type_c
 #include <qbm/pgsql/pgsql.h>
 using namespace qb::pg;
 
-// Read a timestamptz column. (src: tests/integration/datatypes/datatypes-roundtrip.cpp:406)
+// Read a timestamptz column. (src: tests/integration/datatypes/datatypes-roundtrip.cpp:407)
 qb::wall_time created = result[0][0].as<qb::wall_time>();
 ```
 
@@ -129,6 +129,11 @@ rather than silently truncating. <!-- src: src/qbm/pgsql/type_converter.h:384-39
 `float` / `double` carry `NaN`, `Infinity`, and `-Infinity` correctly in both binary and
 text. <!-- src: src/qbm/pgsql/type_converter.h:527-563 -->
 
+The NUMERIC binary decoder retains scale and its existing special-value behavior. It formats limbs with integer
+conversion and transfers the finished decimal string into the owning `numeric` carrier; the public value remains
+an owned string. Array rendering reads that carrier directly without an intermediate text copy.
+<!-- src: src/qbm/pgsql/type_converter.cpp:703-761,896-915; src/qbm/pgsql/type_converter.h:1718-1719 -->
+
 ### Text and binary blobs
 
 - **Strings.** `std::string`, `std::string_view`, `const char*`, and `char[N]` all map to `text` (25). UTF-8 bytes are
@@ -165,14 +170,14 @@ PostgreSQL number would change **decimal value** when parsed into that DOM; this
 whose decimal value changes and decimals rounded by `double`, even inside arrays or objects. Equal
 values with different spellings, such as `1.2300` and `1.23`, remain readable. A valid number beyond
 the DOM floating range (for example `1e400`) also throws `client_error`; malformed JSON follows the
-separate `std::runtime_error` parse path. <!-- src: src/qbm/pgsql/type_converter.cpp:465-564 -->
+separate `std::runtime_error` parse path. <!-- src: src/qbm/pgsql/type_converter.cpp:508-607 -->
 
 Typed decoding validates each floating lexeme while building the DOM in supported
 nlohmann configurations. Other versions or configurations retain the checked public
 parser with the same value and error contract. A later rejection may follow allocation
 of an owning DOM prefix; that prefix is destroyed and never returned. Exact canonical
 text access avoids DOM construction. Library and consumer JSON build flags must agree.
-<!-- src: src/qbm/pgsql/type_converter.cpp:518-564 -->
+<!-- src: src/qbm/pgsql/type_converter.cpp:561-607 -->
 
 For an exact value, read the server's canonical JSONB text directly from the field:
 
@@ -201,7 +206,7 @@ OID, format or version throws `client_error`. <!-- src: src/qbm/pgsql/resultset.
 buffer. <!-- src: src/qbm/pgsql/type_converter.h:696-770 -->
 
 ```cpp
-qb::uuid id = result[0][0].as<qb::uuid>(); // src: tests/integration/datatypes/datatypes-roundtrip.cpp:357
+qb::uuid id = result[0][0].as<qb::uuid>(); // src: tests/integration/datatypes/datatypes-roundtrip.cpp:358
 ```
 
 ### Arrays
@@ -213,7 +218,7 @@ specializations), and a column whose array can hold NULL elements is read as `st
 same specialisations, for every element type below, on both the result and the parameter side (a `nullopt` element
 binds as the NULL element, has-null flag raised). The TEXT format (a column served by the simple query protocol) is
 parsed and rendered too: `from_text` reads the `{a,"b c",NULL}` literal with its quoting and escapes, `to_text` writes
-it. <!-- src: src/qbm/pgsql/param_serializer.h:579-605; src/qbm/pgsql/type_converter.h:1403-1767 -->
+it. <!-- src: src/qbm/pgsql/param_serializer.h:579-605; src/qbm/pgsql/type_converter.h:1404-1786 -->
 
 ```cpp
 #include <qbm/pgsql/pgsql.h>
@@ -235,6 +240,18 @@ Supported element types and their array OIDs:
 | `float`                | `float4[]`       |   1021    |
 | `double`               | `float8[]`       |   1022    |
 | `std::string`          | `text[]`         |   1009    |
+| `qb::uuid`             | `uuid[]`         |   2951    |
+| `qb::wall_time`        | `timestamptz[]`  |   1185    |
+| `qb::pg::detail::numeric` | `numeric[]`   |   1231    |
+| `qb::json`             | `json[]`         |    199    |
+| `qb::jsonb`            | `jsonb[]`        |   3807    |
+
+All the array types above use binary results for prepared queries; simple queries return
+text. Timestamp and JSON/JSONB elements are quoted when rendered as array text, with embedded
+quotes and backslashes escaped. In `std::vector<std::optional<qb::json>>` (or `qb::jsonb`),
+a JSON `null` is a present JSON value; only an empty optional is a SQL NULL element.
+An empty vector binds an empty array, not a SQL NULL array.
+<!-- src: src/qbm/pgsql/common.h:440-453; src/qbm/pgsql/type_converter.h:1678-1726 -->
 
 Limits:
 
@@ -242,9 +259,10 @@ Limits:
   throws `field_type_mismatch`: a flat `std::vector<T>` cannot hold its shape, and until 3.2 the decoder flattened it
   row-major in silence. Unnest it in SQL (`ARRAY(SELECT unnest(col))`) or read the column as text. The send path
   declares a 1-D array. <!-- src: src/qbm/pgsql/type_converter.h:1427-1430 -->
-- **Decoding covers the element types above; binding goes further.** `as<std::vector<T>>()` decodes those seven. A
+- **Decoding covers the element types above; binding goes further.** `as<std::vector<T>>()` decodes the listed types. A
   `std::vector<T>` *parameter* binds for any element type with a scalar converter and a PostgreSQL array companion —
-  `uuid`, `numeric`, `json` / `jsonb`, the date and time types as well (`src/qbm/pgsql/pg_types.h:335-380`) — as its
+  including `qb::date`, `qb::time_of_day`, `qb::time_of_day_tz` and `qb::calendar_interval`
+  (`src/qbm/pgsql/pg_types.h:335-380`) — as its
   concrete array type; only an element with no array companion throws `std::invalid_argument` at bind time (no
   `anyarray` fallback). Reading one of those other arrays back has no `as<std::vector<T>>()` decoder yet.
 - **`std::vector<char>` / `std::vector<unsigned char>` / `std::vector<std::byte>` stay on the `bytea` path**, not the
@@ -253,7 +271,7 @@ Limits:
   element, and until 3.2 it default-constructed the slot (`{1,NULL,3}` read as `{1,0,3}`). Read the column as
   `std::vector<std::optional<T>>` and the element is `std::nullopt`. A malformed value (a truncated header, an element
   running past the buffer, an unterminated literal) throws `client_error`, never an empty or partial vector.
-  <!-- src: src/qbm/pgsql/type_converter.h:1449-1456, :1636-1645 -->
+  <!-- src: src/qbm/pgsql/type_converter.h:1449-1456, :1637-1646 -->
 
 To declare an array parameter type explicitly in `prepare`, pass the array OID (the `oid` enum carries `*_array`
 members, e.g. `oid::int4_array`).
@@ -293,7 +311,7 @@ only). <!-- src: src/qbm/pgsql/type_mapping.h:171-174; src/qbm/pgsql/type_conver
 #include <qbm/pgsql/pgsql.h>
 using namespace qb::pg;
 
-// src: tests/integration/datatypes/datatypes-roundtrip.cpp:350 (brace-init of oid)
+// src: tests/integration/datatypes/datatypes-roundtrip.cpp:351 (brace-init of oid)
 auto pr = co_await db.prepare(
     "ins",
     "INSERT INTO t (n, label, at) VALUES ($1, $2, $3)",
@@ -324,17 +342,18 @@ safer for overloaded operators and for `NULL` parameters whose type the server c
 - **Result columns:** chosen per column by `type_oid_prefers_binary_result_format(oid)` ([
   `src/qbm/pgsql/common.h`](../src/qbm/pgsql/common.h)). After `Bind`, the client patches each `RowDescription` column's `format_code` to
   match what it requested, via `sync_field_format_codes_with_extended_query_bind` (because `Describe('S')` always
-  reports `0`). <!-- src: src/qbm/pgsql/common.h:404-464 -->
-    - **Binary on the wire** (format code 1) is an **opt-in whitelist**, not a catch-all: exactly the 23 OIDs this
-      module has a verified `from_binary` decoder for — `bool`, `int2`, `int4`, `int8`, `float4`, `float8`, `numeric`,
-      `bytea`, `uuid`, `jsonb`, `timestamp`, `timestamptz`, `date`, `time`, `timetz`, `interval`, and the seven 1-D
+  reports `0`). <!-- src: src/qbm/pgsql/common.h:417-469 -->
+    - **Binary on the wire** (format code 1) is an **opt-in whitelist** of OIDs with a `from_binary` decoder:
+      `bool`, `int2`, `int4`, `int8`, `float4`, `float8`, `numeric`,
+      `bytea`, `uuid`, `jsonb`, `timestamp`, `timestamptz`, `date`, `time`, `timetz`, `interval`, and the 1-D
       array OIDs (`boolean_array`, `int2_array`, `int4_array`, `int8_array`, `float4_array`, `float8_array`,
-      `text_array`). <!-- src: src/qbm/pgsql/common.h:417-448 -->
+      `text_array`, `uuid_array`, `timestamptz_array`, `numeric_array`, `json_array`, `jsonb_array`).
+      <!-- src: src/qbm/pgsql/common.h:417-453 -->
     - **Text on the wire** (format code 0) is the **default**, reached by the `switch`'s `default:` arm: every OID the
       list above does not name — `text`, `varchar`, `bpchar`, `name`, `unknown`, `xml`, `cstring`, `json`, `tsvector`,
       `tsquery`, `gtsvector`, the `reg*` catalog types, `money` (`cash`), the network / bit / geometric / range types,
       and every extension OID. These decode through the text path so they match `std::string` consumption.
-      <!-- src: src/qbm/pgsql/common.h:449-452 -->
+      <!-- src: src/qbm/pgsql/common.h:454-457 -->
 
   The polarity matters: this is deliberately the inverse of a denylist, so a type the module cannot decode in binary
   degrades to its readable text form instead of letting raw binary bytes reach the `std::string` decoder.

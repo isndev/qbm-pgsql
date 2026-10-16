@@ -18,6 +18,7 @@
  * Licensed under the Apache License, Version 2.0 (the "License").
  */
 
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -45,6 +46,11 @@ TEST(TypeConverterArrayOid, KnownArrayOids) {
     EXPECT_EQ(TypeConverter<std::vector<float>>::get_oid(), 1021);
     EXPECT_EQ(TypeConverter<std::vector<double>>::get_oid(), 1022);
     EXPECT_EQ(TypeConverter<std::vector<std::string>>::get_oid(), 1009);
+    EXPECT_EQ(TypeConverter<std::vector<qb::uuid>>::get_oid(), 2951);
+    EXPECT_EQ(TypeConverter<std::vector<qb::wall_time>>::get_oid(), 1185);
+    EXPECT_EQ(TypeConverter<std::vector<numeric>>::get_oid(), 1231);
+    EXPECT_EQ(TypeConverter<std::vector<qb::json>>::get_oid(), 199);
+    EXPECT_EQ(TypeConverter<std::vector<qb::jsonb>>::get_oid(), 3807);
     // bytea (std::vector<std::byte>) is NOT an array — it maps to bytea (17).
     EXPECT_EQ(TypeConverter<std::vector<std::byte>>::get_oid(), static_cast<integer>(oid::bytea));
 }
@@ -338,6 +344,121 @@ TEST(TypeConverterArrayText, RendersAndRoundTrips) {
     const OI ints{1, std::nullopt, 3};
     EXPECT_EQ(TypeConverter<OI>::to_text(ints), "{1,NULL,3}");
     EXPECT_EQ(TypeConverter<OI>::from_text("{1,NULL,3}"), ints);
+}
+
+// The five additional result codecs use the existing scalar and array helpers.
+// Keep their wire witnesses independent of encode_pg_array: every value below is
+// an explicit PostgreSQL array_send payload, including the element OID and NULL.
+TEST(TypeConverterArrayBinary, ExtendedElementsAgainstWireValues) {
+    auto check = []<typename T>(const T &value, const char *hex, const char *empty_hex) {
+        SCOPED_TRACE(TypeConverter<T>::get_oid());
+        const auto                          wire = hex_to_bytes(hex);
+        const std::vector<std::optional<T>> expected{value, std::nullopt};
+        EXPECT_EQ(decode_pg_array<std::optional<T>>(wire), expected);
+        EXPECT_THROW(decode_pg_array<T>(wire), error::value_is_null);
+        EXPECT_EQ(encode_pg_array(expected), wire);
+        using NullableConverter = TypeConverter<std::vector<std::optional<T>>>;
+        using PlainConverter    = TypeConverter<std::vector<T>>;
+        EXPECT_EQ(NullableConverter::get_oid(), PlainConverter::get_oid());
+        EXPECT_EQ(NullableConverter::from_binary(wire), expected);
+        EXPECT_THROW(PlainConverter::from_binary(wire), error::value_is_null);
+        std::vector<byte> encoded;
+        NullableConverter::to_binary(expected, encoded);
+        ASSERT_EQ(encoded.size(), wire.size() + sizeof(integer));
+        integer length;
+        std::memcpy(&length, encoded.data(), sizeof(length));
+        EXPECT_EQ(qb::endian::from_big_endian(length), static_cast<integer>(wire.size()));
+        EXPECT_EQ(std::vector<byte>(encoded.begin() + sizeof(integer), encoded.end()), wire);
+        auto present_only = wire;
+        present_only[15]  = static_cast<byte>(1);     // one element in the dimension
+        present_only.resize(present_only.size() - 4); // remove the final NULL length
+        EXPECT_EQ(decode_pg_array<T>(present_only), (std::vector<T>{value}));
+        EXPECT_EQ(PlainConverter::from_binary(present_only), (std::vector<T>{value}));
+        EXPECT_TRUE(decode_pg_array<T>(hex_to_bytes(empty_hex)).empty());
+        EXPECT_TRUE(decode_pg_array<std::optional<T>>(hex_to_bytes(empty_hex)).empty());
+        EXPECT_TRUE(PlainConverter::from_binary(hex_to_bytes(empty_hex)).empty());
+        EXPECT_TRUE(NullableConverter::from_binary(hex_to_bytes(empty_hex)).empty());
+        EXPECT_TRUE(PlainConverter::from_text("{}").empty());
+        EXPECT_TRUE(NullableConverter::from_text("{}").empty());
+        EXPECT_EQ(parse_pg_array_text<std::optional<T>>("{NULL}"), (std::vector<std::optional<T>>{std::nullopt}));
+        EXPECT_THROW(parse_pg_array_text<T>("{NULL}"), error::value_is_null);
+        EXPECT_EQ(NullableConverter::from_text("{NULL}"), (std::vector<std::optional<T>>{std::nullopt}));
+        EXPECT_THROW(PlainConverter::from_text("{NULL}"), error::value_is_null);
+        auto truncated = wire;
+        truncated.pop_back(); // an incomplete NULL length is malformed, not an empty element
+        EXPECT_THROW(decode_pg_array<std::optional<T>>(truncated), error::client_error);
+    };
+    check(TypeConverter<qb::uuid>::from_text("00112233-4455-6677-8899-aabbccddeeff"),
+          "000000010000000100000b8600000002000000010000001000112233445566778899aabbccddeeffffffffff", "000000000000000000000b86");
+    check(qb::wall_from_unix_seconds(946684800), "0000000100000001000004a00000000200000001000000080000000000000000ffffffff",
+          "0000000000000000000004a0");
+    check(numeric("42"), "0000000100000001000006a400000002000000010000000a0001000000000000002affffffff", "0000000000000000000006a4");
+    check(qb::json::parse("[1,2]"), "0000000100000001000000720000000200000001000000055b312c325dffffffff", "000000000000000000000072");
+    check(qb::jsonb(qb::json::parse("[1,2]")), "000000010000000100000eda000000020000000100000006015b312c325dffffffff",
+          "000000000000000000000eda");
+}
+
+TEST(TypeConverterArrayText, ExtendedWallTimeElementsAreQuoted) {
+    using Values = std::vector<std::optional<qb::wall_time>>;
+    const Values      input{qb::wall_from_unix_seconds(946684800), std::nullopt, qb::wall_from_unix_seconds(0) - std::chrono::microseconds(1)};
+    const std::string expected = R"({"2000-01-01 00:00:00+00",NULL,"1969-12-31 23:59:59.999999+00"})";
+    EXPECT_EQ(render_pg_array_text(input), expected);
+    EXPECT_EQ(TypeConverter<Values>::to_text(input), expected);
+    EXPECT_EQ(TypeConverter<Values>::from_text(expected), input);
+    EXPECT_EQ(parse_pg_array_text<std::optional<qb::wall_time>>(expected), input);
+    EXPECT_EQ(parse_pg_array_text<std::optional<qb::wall_time>>(render_pg_array_text(input)), input);
+    // Session offsets change the spelling, not the UTC instants or our canonical renderer.
+    const std::string offset_text = R"({"2000-01-01 05:30:00+05:30",NULL,"1969-12-31 15:59:59.999999-08"})";
+    const auto        normalized  = TypeConverter<Values>::from_text(offset_text);
+    EXPECT_EQ(normalized, input);
+    EXPECT_EQ(TypeConverter<Values>::to_text(normalized), expected);
+}
+
+TEST(TypeConverterArrayText, ExtendedJsonElementsPreserveNullAndEscapes) {
+    auto check = []<typename T>() {
+        SCOPED_TRACE(TypeConverter<T>::get_oid());
+        using Values = std::vector<std::optional<T>>;
+        const Values input{
+            T(qb::json::parse(R"({"a":"x,y {z} \"q\" \\tail"})")),
+            T(qb::json::parse("[[1,2],3]")),
+            T(qb::json::parse("null")),
+            std::nullopt,
+            T(qb::json("NULL")),
+            T(qb::json(42))
+        };
+        const auto rendered = render_pg_array_text(input);
+        EXPECT_EQ(TypeConverter<Values>::to_text(input), rendered);
+        // JSON null is a present JSON value. It must not become the array's SQL NULL marker.
+        EXPECT_EQ(render_pg_array_text(std::vector<T>{T(qb::json::parse("null"))}), R"({"null"})");
+        EXPECT_NO_THROW({
+            EXPECT_EQ(parse_pg_array_text<std::optional<T>>(rendered), input);
+            EXPECT_EQ(TypeConverter<Values>::from_text(rendered), input);
+            // Read only the PostgreSQL array grammar, without a JSON parser: each
+            // present element must retain the exact scalar JSON text and its quoting.
+            const auto payloads = parse_pg_array_text<std::optional<std::string>>(rendered);
+            ASSERT_EQ(payloads.size(), input.size());
+            for (std::size_t i = 0; i < input.size(); ++i) {
+                ASSERT_EQ(payloads[i].has_value(), input[i].has_value()) << i;
+                if (input[i])
+                    EXPECT_EQ(*payloads[i], TypeConverter<T>::to_text(*input[i])) << i;
+            }
+        });
+    };
+    check.template operator()<qb::json>();
+    check.template operator()<qb::jsonb>();
+}
+
+TEST(TypeConverterArrayText, ExtendedUuidAndNumericKeepScalarValues) {
+    const auto                                 uuid = TypeConverter<qb::uuid>::from_text("00112233-4455-6677-8899-aabbccddeeff");
+    const std::vector<std::optional<qb::uuid>> uuids{uuid, std::nullopt};
+    EXPECT_EQ(parse_pg_array_text<std::optional<qb::uuid>>(render_pg_array_text(uuids)), uuids);
+    const std::vector<std::optional<numeric>> numbers{numeric("12345678901234567890.1250"), std::nullopt, numeric("-0.0001")};
+    EXPECT_EQ(parse_pg_array_text<std::optional<numeric>>(render_pg_array_text(numbers)), numbers);
+    EXPECT_EQ(render_pg_array_text(std::vector<qb::uuid>{}), "{}");
+    EXPECT_EQ(render_pg_array_text(std::vector<numeric>{}), "{}");
+    EXPECT_EQ(render_pg_array_text(std::vector<qb::wall_time>{}), "{}");
+    EXPECT_EQ(render_pg_array_text(std::vector<qb::json>{}), "{}");
+    EXPECT_EQ(render_pg_array_text(std::vector<qb::jsonb>{}), "{}");
 }
 
 // to_binary for every registered array element type frames as [int32 body-len][body]

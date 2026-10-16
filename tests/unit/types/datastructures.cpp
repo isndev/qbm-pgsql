@@ -544,6 +544,12 @@ TEST(ResultsetPopulated, JsonSerializationBinaryColumns) {
         {"text_array", oid::text_array, qb::pg::test::gt::array::text_apple_banana, "{\"apple\",\"banana\"}"},
         {"text_array_null", oid::text_array, "00000001000000010000001900000003000000010000000361206200000003632264ffffffff",
          "{\"a b\",\"c\\\"d\",NULL}"},
+        {"uuid_array", oid::uuid_array, "000000010000000100000b8600000002fffffffe0000001000112233445566778899aabbccddeeffffffffff",
+         "[-2:-1]={00112233-4455-6677-8899-aabbccddeeff,NULL}"},
+        {"timestamptz_array", oid::timestamptz_array, "0000000100000001000004a00000000200000001000000080000000000000000ffffffff",
+         "{\"2000-01-01 00:00:00+00\",NULL}"},
+        {"numeric_array", oid::numeric_array, "0000000100000001000006a400000002000000000000000a0001000000000000002affffffff",
+         "[0:1]={42,NULL}"},
     };
 
     std::vector<std::string> names;
@@ -612,6 +618,73 @@ TEST(ResultsetPopulated, JsonSerializationPreservesJsonbWireTextAndArrayLowerBou
     EXPECT_EQ(j[0]["negative_bound"], "[-2:0]={1,2,3}");
 }
 
+TEST(ResultsetPopulated, JsonSerializationExtendedArrayEmptyAndNull) {
+    const std::pair<oid, const char *> cases[] = {
+        {oid::uuid_array, "000000000000000000000b86"},
+        {oid::timestamptz_array, "0000000000000000000004a0"},
+        {oid::numeric_array, "0000000000000000000006a4"},
+        {oid::json_array, "000000000000000000000072"},
+        {oid::jsonb_array, "000000000000000000000eda"}
+    };
+    for (const auto &[type, hex] : cases) {
+        SCOPED_TRACE(static_cast<int>(type));
+        const auto      bytes = qb::pg::test::hex_to_bytes(hex);
+        PopulatedResult pr({"empty", "null"}, {{std::string(bytes.begin(), bytes.end()), ""}}, {false, true});
+        for (auto &field : pr.impl.row_description()) {
+            field.type_oid    = type;
+            field.format_code = protocol_data_format::Binary;
+        }
+        EXPECT_NO_THROW({
+            const auto projection = pr.rs().json();
+            EXPECT_EQ(projection[0]["empty"], "{}");
+            EXPECT_TRUE(projection[0]["null"].is_null());
+        });
+    }
+}
+
+TEST(ResultsetPopulated, JsonSerializationJsonArraysKeepExactElementText) {
+    // These element bytes deliberately cannot round-trip through nlohmann's
+    // numeric DOM. Projection is text, not typed JSON decoding: keep every
+    // decimal digit, whitespace byte and pair-array shape in the wire payload.
+    const std::vector<std::optional<std::string>> elements{
+        "12345678901234567890.123456789", R"({"a": [[1,2], 3], "s": "a,b \"x\" \\y"})", "null", std::nullopt, R"("NULL")", "[]"
+    };
+    const std::string expected =
+        R"([-2:3]={"12345678901234567890.123456789","{\"a\": [[1,2], 3], \"s\": \"a,b \\\"x\\\" \\\\y\"}","null",NULL,"\"NULL\"","[]"})";
+    for (bool jsonb : {false, true}) {
+        SCOPED_TRACE(jsonb ? "jsonb[]" : "json[]");
+        auto bytes =
+            qb::pg::test::hex_to_bytes(jsonb ? "000000010000000100000eda00000006fffffffe" : "00000001000000010000007200000006fffffffe");
+        std::string wire(bytes.begin(), bytes.end());
+        auto        length = [&](std::uint32_t n) {
+            for (unsigned shift : {24u, 16u, 8u, 0u})
+                wire.push_back(static_cast<char>((n >> shift) & 0xffu));
+        };
+        for (const auto &element : elements) {
+            if (!element) {
+                length(0xffffffffu);
+                continue;
+            }
+            length(static_cast<std::uint32_t>(element->size() + (jsonb ? 1u : 0u)));
+            if (jsonb)
+                wire.push_back('\x01');
+            wire += *element;
+        }
+        EXPECT_NO_THROW({
+            qb::json projection;
+            {
+                PopulatedResult pr({"array"}, {{wire}});
+                auto           &field = pr.impl.row_description()[0];
+                field.type_oid        = jsonb ? oid::jsonb_array : oid::json_array;
+                field.format_code     = protocol_data_format::Binary;
+                projection            = pr.rs().json();
+            } // A projected string must outlive all borrowed field storage.
+            ASSERT_TRUE(projection[0]["array"].is_string());
+            EXPECT_EQ(projection[0]["array"].get<std::string>(), expected);
+        });
+    }
+}
+
 TEST(ResultsetPopulated, JsonSerializationRejectsInvalidJsonbVersionAndArrayBoundOverflow) {
     PopulatedResult bad_version({"doc"}, {{std::string("\x02", 1) + "[[1,2]]"}});
     bad_version.impl.row_description()[0].type_oid    = oid::jsonb;
@@ -629,6 +702,36 @@ TEST(ResultsetPopulated, JsonSerializationRejectsInvalidJsonbVersionAndArrayBoun
     two_dims.impl.row_description()[0].type_oid    = oid::int4_array;
     two_dims.impl.row_description()[0].format_code = protocol_data_format::Binary;
     EXPECT_THROW(two_dims.rs().json(), error::field_type_mismatch);
+
+    const std::pair<oid, const char *> malformed_arrays[] = {
+        // JSONB version 2, version 1 without JSON text, and a zero-length element.
+        {oid::jsonb_array, "000000010000000000000eda000000010000000100000005026e756c6c"},
+        {oid::jsonb_array, "000000010000000000000eda00000001000000010000000101"},
+        {oid::jsonb_array, "000000010000000000000eda000000010000000100000000"},
+        // Truncated element, illegal negative length, and overflowing upper bound.
+        {oid::jsonb_array, "000000010000000000000eda00000001000000010000000501"},
+        {oid::jsonb_array, "000000010000000000000eda0000000100000001fffffffe"},
+        {oid::jsonb_array, "000000010000000100000eda000000027fffffffffffffffffffffff"},
+        // A non-1 bound on an empty one-dimensional array is not representable.
+        {oid::jsonb_array, "000000010000000000000eda0000000000000000"},
+        // JSON has no version byte, but a present empty payload is not a JSON value.
+        {oid::json_array, "000000010000000000000072000000010000000100000000"},
+        {oid::json_array, "00000001"}
+    };
+    for (const auto &[type, hex] : malformed_arrays) {
+        SCOPED_TRACE(hex);
+        const auto      malformed = qb::pg::test::hex_to_bytes(hex);
+        PopulatedResult pr({"array"}, {{std::string(malformed.begin(), malformed.end())}});
+        pr.impl.row_description()[0].type_oid    = type;
+        pr.impl.row_description()[0].format_code = protocol_data_format::Binary;
+        EXPECT_THROW(pr.rs().json(), error::client_error);
+    }
+    for (oid type : {oid::json_array, oid::jsonb_array}) {
+        PopulatedResult pr({"array"}, {{std::string(multidim.begin(), multidim.end())}});
+        pr.impl.row_description()[0].type_oid    = type;
+        pr.impl.row_description()[0].format_code = protocol_data_format::Binary;
+        EXPECT_THROW(pr.rs().json(), error::field_type_mismatch);
+    }
 }
 
 // ----------------------------------------------------------------------------

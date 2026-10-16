@@ -37,11 +37,13 @@
 #include <string>
 #include <vector>
 
+#include "../../shared/pg_wire_ground_truth.hpp"
 #include <qbm/pgsql/pg_notify_sql.h>
 #include <qbm/pgsql/pgsql.h>
 
 using namespace qb::pg;
 using namespace qb::pg::detail;
+using qb::pg::test::hex_to_bytes;
 
 static void
 BM_EncodeMixedScalars(benchmark::State &state) {
@@ -54,8 +56,16 @@ BM_EncodeMixedScalars(benchmark::State &state) {
     {
         ParamSerializer probe;
         probe.serialize_params(i, b, d, txt, flg);
-        if (probe.param_count() != 5) {
-            state.SkipWithError("mixed scalar param_count != 5");
+        // Count, per-parameter lengths, network-order values and OIDs are literal
+        // PostgreSQL wire expectations, independent of the serializer/decoder.
+        const auto expected = hex_to_bytes("0005"                                           // five parameters
+                                           "000000040000002a"                               // int4: 42
+                                           "000000080000000218711a00"                       // int8: 9000000000
+                                           "00000008400921f9f01b866e"                       // IEEE-754 binary64: 3.14159
+                                           "0000001374686520717569636b2062726f776e20666f78" // text: the quick brown fox
+                                           "0000000101");                                   // bool: true
+        if (probe.param_count() != 5 || probe.param_types() != std::vector<integer>{23, 20, 701, 25, 16} || probe.params_buffer() != expected) {
+            state.SkipWithError("mixed scalar OID, order or exact wire bytes mismatch");
             return;
         }
     }
@@ -80,9 +90,14 @@ BM_EncodeInt4Array1000(benchmark::State &state) {
     {
         ParamSerializer probe;
         probe.serialize_params(arr);
-        // A non-empty vector becomes ONE array parameter.
-        if (probe.param_count() != 1 || probe.params_buffer().empty()) {
-            state.SkipWithError("int4[] encode produced no array param");
+        // One int4[] parameter: 8020-byte body, one dimension, no NULLs,
+        // element OID 23, length 1000, lower bound 1, then ordered int4 values.
+        auto expected = hex_to_bytes("000100001f54000000010000000000000017000003e800000001");
+        for (std::uint32_t k = 0; k < 1000; ++k) {
+            expected.insert(expected.end(), {0, 0, 0, 4, 0, 0, static_cast<byte>(k >> 8), static_cast<byte>(k & 0xff)});
+        }
+        if (probe.param_count() != 1 || probe.param_types() != std::vector<integer>{1007} || probe.params_buffer() != expected) {
+            state.SkipWithError("int4[] OID, order or exact wire bytes mismatch");
             return;
         }
     }
@@ -104,8 +119,11 @@ BM_EncodeWideNumeric(benchmark::State &state) {
     {
         std::vector<byte> probe;
         TypeConverter<numeric>::to_binary(n, probe);
-        if (probe.empty()) {
-            state.SkipWithError("numeric encode produced no bytes");
+        // Length 24; ndigits=8, weight=4, positive, dscale=9; base-10000
+        // digits {12,3456,7890,1234,5678,9876,5432,1000}. No codec round trip.
+        const auto expected = hex_to_bytes("000000180008000400000009000c0d801ed204d2162e2694153803e8");
+        if (probe != expected) {
+            state.SkipWithError("numeric exact wire bytes mismatch");
             return;
         }
     }
@@ -130,8 +148,13 @@ BM_EncodeTextOnly(benchmark::State &state) {
     {
         ParamSerializer probe;
         probe.serialize_params(a, b, c);
-        if (probe.param_count() != 3) {
-            state.SkipWithError("text param_count != 3");
+        const auto expected =
+            hex_to_bytes("0003"                                     // three parameters
+                         "00000005616c706861"                       // alpha
+                         "00000010626574612d67616d6d612d64656c7461" // beta-gamma-delta
+                         "000000356120736c696768746c79206c6f6e67657220746578742076616c7565207573656420617320612062696e6420706172616d65746572");
+        if (probe.param_count() != 3 || probe.param_types() != std::vector<integer>{25, 25, 25} || probe.params_buffer() != expected) {
+            state.SkipWithError("text OID, order or exact wire bytes mismatch");
             return;
         }
     }

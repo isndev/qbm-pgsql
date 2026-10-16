@@ -223,7 +223,7 @@ TEST(TypeConverterTemporalBinary, WallTimeRejectsShortPrefixedBuffer) {
 }
 
 // A pre-2000 sub-second instant encodes to NEGATIVE pg-epoch micros; from_binary's
-// unix_usecs<0 borrow (type_converter.cpp:196-199) must reproduce the exact instant, not
+// unix_usecs<0 borrow (type_converter.cpp:239-242) must reproduce the exact instant, not
 // truncate toward zero.
 TEST(TypeConverterTemporalBinary, WallTimePre2000NegativeMicrosRoundTrip) {
     qb::wall_time in = TypeConverter<qb::wall_time>::from_text("1999-12-31 23:59:59.500000");
@@ -317,14 +317,14 @@ TEST(TypeConverterTemporalText, TimestampMicrosAndTz) {
 }
 
 // A microsecond fraction with more digits than fit in an int overflows the STRICT parse
-// and must throw the module's client_error (type_converter.cpp:261-264) — never silently
+// and must throw the module's client_error (type_converter.cpp:304-307) — never silently
 // mis-scale a hostile fraction.
 TEST(TypeConverterTemporalText, TimestampMicrosFractionOverflowThrows) {
     EXPECT_THROW(TypeConverter<qb::wall_time>::from_text("2024-01-01 00:00:00.99999999999999999999"), qb::pg::error::client_error);
 }
 
 // A wrong date separator ('/' instead of '-') fails the literal-'-' match in the field
-// parser and throws std::runtime_error (type_converter.cpp:235-243) — a distinct path from
+// parser and throws std::runtime_error (type_converter.cpp:278-286) — a distinct path from
 // the no-leading-digit "bad ts" case above.
 TEST(TypeConverterTemporalText, TimestampWrongSeparatorThrows) {
     EXPECT_THROW(TypeConverter<qb::wall_time>::from_text("2024/01/01 00:00:00"), std::runtime_error);
@@ -345,6 +345,12 @@ TEST(TypeConverterTemporalText, DateAndTimestampAcrossEpochBoundary) {
     // A sub-second pre-1970 instant must borrow a second, not truncate toward zero.
     qb::wall_time ts2 = TypeConverter<qb::wall_time>::from_text("1955-11-05 06:15:00.500000");
     EXPECT_NE(TypeConverter<qb::wall_time>::to_text(ts2).find("1955-11-05 06:15:00.5"), std::string::npos);
+    // Fixed expectations for the new modern-year formatting path. Calendar
+    // arithmetic stays in qb; the broad old/new differential corpus is separate.
+    for (const char *text : {"1970-01-01 00:00:00.000001+00", "2000-02-29 12:34:56.123456+00", "2100-03-01 00:00:00+00"}) {
+        const auto value = TypeConverter<qb::wall_time>::from_text(text);
+        EXPECT_EQ(TypeConverter<qb::wall_time>::to_text(value), text);
+    }
 }
 
 // ----------------------------------------------------------------------------

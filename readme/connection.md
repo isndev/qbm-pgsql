@@ -180,7 +180,7 @@ connection_options sock = "socket:///tmp/.s.PGSQL.5432[analytics]"_pg;
 auto label = "analytics"_db;
 ```
 
-<!-- src: qbm/pgsql/src/qbm/pgsql/common.h:224,600,622 -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/common.h:224,605,627 -->
 
 For TLS, the example DSNs use a `tcp://` scheme and let the chosen alias (`tcp::ssl::database`) drive the SSLRequest
 negotiation. A plain `tcp://…` string is fine for an SSL client.

@@ -415,15 +415,10 @@ array_header_int(std::span<const std::byte> wire, std::size_t offset) {
     return qb::endian::from_big_endian(network);
 }
 
-template <typename T>
 std::string
-binary_array_text(const resultset::row::value_type &field) {
-    // The existing decoder validates element lengths and rejects ndim > 1. Its
-    // std::vector result loses the lower bound, so retain that header metadata
-    // while rendering the same one-dimensional PostgreSQL array literal.
-    std::string text = binary_field_text<std::vector<std::optional<T>>>(field);
-    const auto  wire = field.view();
-    const auto  ndim = array_header_int(wire, 0);
+with_binary_array_bounds(const resultset::row::value_type &field, std::string text) {
+    const auto wire = field.view();
+    const auto ndim = array_header_int(wire, 0);
     if (ndim == 0)
         return text; // '{}' has no dimension header or lower bound.
     if (ndim != 1)
@@ -439,6 +434,37 @@ binary_array_text(const resultset::row::value_type &field) {
     if (upper < std::numeric_limits<std::int32_t>::min() || upper > std::numeric_limits<std::int32_t>::max())
         throw error::client_error("results::json(): binary array upper bound overflows int32");
     return "[" + std::to_string(lower) + ":" + std::to_string(upper) + "]=" + text;
+}
+
+template <typename T>
+std::string
+binary_array_text(const resultset::row::value_type &field) {
+    // The decoder validates element lengths and rejects ndim > 1. The vector
+    // loses the lower bound, so retain that header metadata in the text literal.
+    return with_binary_array_bounds(field, binary_field_text<std::vector<std::optional<T>>>(field));
+}
+
+std::string
+binary_json_array_text(const resultset::row::value_type &field, bool jsonb) {
+    // Projection exports text. A JSON DOM would round long decimal values or
+    // reject them through the typed JSONB codec, and would rewrite whitespace.
+    // Decode only array framing. Local views borrow the still-live field storage;
+    // rendering returns an owning string before any view leaves this function.
+    const auto wire     = field.view();
+    auto       elements = detail::decode_pg_array<std::optional<std::string_view>>(
+        std::span<const byte>(reinterpret_cast<const byte *>(wire.data()), wire.size()));
+    for (auto &element : elements) {
+        if (!element)
+            continue;
+        if (jsonb) {
+            if (element->size() < 2 || element->front() != '\x01')
+                throw error::client_error("results::json(): unsupported JSONB array element version or empty payload");
+            element->remove_prefix(1);
+        } else if (element->empty()) {
+            throw error::client_error("results::json(): empty JSON array element payload");
+        }
+    }
+    return with_binary_array_bounds(field, detail::render_pg_array_text(elements));
 }
 
 std::string
@@ -507,6 +533,16 @@ json_field_text(const resultset::row::value_type &field) {
             return binary_array_text<double>(field);
         case oid::text_array:
             return binary_array_text<std::string>(field);
+        case oid::uuid_array:
+            return binary_array_text<qb::uuid>(field);
+        case oid::timestamptz_array:
+            return binary_array_text<qb::wall_time>(field);
+        case oid::numeric_array:
+            return binary_array_text<detail::numeric>(field);
+        case oid::json_array:
+            return binary_json_array_text(field, false);
+        case oid::jsonb_array:
+            return binary_json_array_text(field, true);
         default:
             throw error::client_error("results::json(): unsupported binary type OID "
                                       + std::to_string(static_cast<int>(field.description().type_oid)) + " for column '" + field.name() + "'");

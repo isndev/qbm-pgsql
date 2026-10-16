@@ -280,6 +280,16 @@ TEST(TCAdversarialNumeric, DecodeWeightAndScaleBoundaries) {
     // Fraction needs more limbs than present: ndigits=1 weight=-1 dscale=8 limb=5000 ->
     // 0.50000000 (missing fraction limbs read as 0, truncated to dscale).
     EXPECT_EQ(decode_pg_numeric(mk({1, 0xFFFF, 0x0000, 8, 5000}).data(), 10), "0.50000000");
+    // Preserve the historical full uint16 limb domain. Four digits is minimum
+    // padding, not a validation cap or a modulo-10000 conversion.
+    EXPECT_EQ(decode_pg_numeric(mk({1, 0, 0, 0, 65535}).data(), 10), "65535");
+    EXPECT_EQ(decode_pg_numeric(mk({2, 1, 0, 0, 1, 10000}).data(), 12), "110000");
+    EXPECT_EQ(decode_pg_numeric(mk({2, 1, 0, 0, 1, 65535}).data(), 12), "165535");
+    EXPECT_EQ(decode_pg_numeric(mk({1, 1, 0, 0, 65535}).data(), 10), "655350000");
+    EXPECT_EQ(decode_pg_numeric(mk({1, 0xFFFF, 0, 4, 10000}).data(), 10), "0.1000");
+    EXPECT_EQ(decode_pg_numeric(mk({1, 0xFFFF, 0, 5, 65535}).data(), 10), "0.65535");
+    EXPECT_EQ(decode_pg_numeric(mk({2, 0xFFFF, 0, 8, 65535, 12}).data(), 12), "0.65535001");
+    EXPECT_EQ(decode_pg_numeric(mk({1, 0, 0x8000, 0, 7}).data(), 10), "7");
 }
 
 // decode_pg_numeric truncated-digit-stream guard: header says ndigits=3 but the limbs
@@ -291,6 +301,10 @@ TEST(TCAdversarialNumeric, DecodeTruncatedDigitStreamGuard) {
     EXPECT_EQ(TypeConverter<numeric>::from_binary(hex_to_bytes("00030000000000000001")).str(), "0");
     // nullptr / zero size.
     EXPECT_EQ(decode_pg_numeric(nullptr, 0), "0");
+    // The special sign words are recognized before checking the limb stream.
+    EXPECT_EQ(TypeConverter<numeric>::from_binary(hex_to_bytes("ffff0000c000ffff")).str(), "NaN");
+    EXPECT_EQ(TypeConverter<numeric>::from_binary(hex_to_bytes("ffff0000d000ffff")).str(), "Infinity");
+    EXPECT_EQ(TypeConverter<numeric>::from_binary(hex_to_bytes("ffff0000f000ffff")).str(), "-Infinity");
 }
 
 // Round-trip the trailing-zero / scale corpus through REAL PG binary (to_binary writes

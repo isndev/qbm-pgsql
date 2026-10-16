@@ -1460,8 +1460,9 @@ decode_pg_array(std::span<const byte> buffer) {
         if (off + static_cast<std::size_t>(elem_len) > size)
             malformed("truncated element value");
         const byte *ev = p + off;
-        if constexpr (std::is_same_v<inner, std::string>) {
-            result.emplace_back(std::string(reinterpret_cast<const char *>(ev), static_cast<std::size_t>(elem_len)));
+        if constexpr (std::is_same_v<inner, std::string> || std::is_same_v<inner, std::string_view>) {
+            // The view form borrows the input buffer for synchronous text projection.
+            result.emplace_back(inner(reinterpret_cast<const char *>(ev), static_cast<std::size_t>(elem_len)));
         } else {
             // Element value carries no length prefix -- exactly the contract the
             // scalar from_binary decoders expect.
@@ -1668,7 +1669,9 @@ parse_pg_array_text(const std::string &text) {
  * @brief Render a std::vector<Elem> as a PostgreSQL array literal, the inverse of
  *        parse_pg_array_text (Huly QB-109): `{1,2,3}`, `{"a b","c\"d",NULL}`, `{}`. Every
  *        string element is quoted (with `\` and `"` escaped), so it round-trips whatever it
- *        holds; scalars use their own `to_text`; a `std::nullopt` element is `NULL`.
+ *        holds. Timestamp and JSON/JSONB text is quoted too: their whitespace,
+ *        delimiters and JSON `null` are element content, not array syntax. Other
+ *        scalars use their own `to_text`; a `std::nullopt` element is `NULL`.
  */
 template <typename Elem>
 std::string
@@ -1678,6 +1681,20 @@ render_pg_array_text(const std::vector<Elem> &vec) {
     std::string out;
     out.reserve(2 + vec.size() * 8);
     out += '{';
+    const auto append_quoted = [&out](std::string_view text) {
+        out += '"';
+        std::size_t first = 0;
+        for (std::size_t i = 0; i < text.size(); ++i) {
+            if (text[i] == '"' || text[i] == '\\') {
+                out.append(text.data() + first, i - first);
+                out += '\\';
+                first = i;
+            }
+        }
+        if (first < text.size())
+            out.append(text.data() + first, text.size() - first);
+        out += '"';
+    };
     bool first = true;
     for (const Elem &e : vec) {
         if (!first)
@@ -1693,14 +1710,13 @@ render_pg_array_text(const std::vector<Elem> &vec) {
         } else {
             value = &e;
         }
-        if constexpr (std::is_same_v<inner, std::string>) {
-            out += '"';
-            for (const char c : *value) {
-                if (c == '"' || c == '\\')
-                    out += '\\';
-                out += c;
-            }
-            out += '"';
+        if constexpr (std::is_same_v<inner, std::string> || std::is_same_v<inner, std::string_view>) {
+            append_quoted(*value);
+        } else if constexpr (std::is_same_v<inner, qb::wall_time> || std::is_same_v<inner, qb::json> || std::is_same_v<inner, qb::jsonb>) {
+            const auto text = TypeConverter<inner>::to_text(*value);
+            append_quoted(text);
+        } else if constexpr (std::is_same_v<inner, numeric>) {
+            out += value->str();
         } else {
             out += TypeConverter<inner>::to_text(*value);
         }
@@ -1763,6 +1779,11 @@ QB_PG_DEFINE_ARRAY_CONVERTER(bigint, 1016)      // int8[]
 QB_PG_DEFINE_ARRAY_CONVERTER(float, 1021)       // float4[]
 QB_PG_DEFINE_ARRAY_CONVERTER(double, 1022)      // float8[]
 QB_PG_DEFINE_ARRAY_CONVERTER(std::string, 1009) // text[]
+QB_PG_DEFINE_ARRAY_CONVERTER(qb::uuid, static_cast<integer>(oid::uuid_array))
+QB_PG_DEFINE_ARRAY_CONVERTER(qb::wall_time, static_cast<integer>(oid::timestamptz_array))
+QB_PG_DEFINE_ARRAY_CONVERTER(numeric, static_cast<integer>(oid::numeric_array))
+QB_PG_DEFINE_ARRAY_CONVERTER(qb::json, static_cast<integer>(oid::json_array))
+QB_PG_DEFINE_ARRAY_CONVERTER(qb::jsonb, static_cast<integer>(oid::jsonb_array))
 
 #undef QB_PG_DEFINE_ARRAY_CONVERTER
 #undef QB_PG_DEFINE_ARRAY_CONVERTER_FOR

@@ -666,6 +666,30 @@ public:
 ```
 Internally uses `qb::pg::detail::ParamSerializer` for serialization logic (see `param_serializer.h`) and `qb::pg::detail::ParamUnserializer` for deserialization (see `param_unserializer.h` and `field_reader.h`).
 
+Array specializations provide `get_oid`, `to_binary`, `from_binary`, `to_text` and `from_text`
+for both `std::vector<T>` and `std::vector<std::optional<T>>`. Supported elements are `bool`,
+`smallint`, `integer`, `bigint`, `float`, `double`, `std::string`, `qb::uuid`, `qb::wall_time`,
+`qb::pg::detail::numeric`, `qb::json` and `qb::jsonb`. The last five map to `uuid[]` (2951),
+`timestamptz[]` (1185), `numeric[]` (1231), `json[]` (199) and `jsonb[]` (3807).
+<!-- src: src/qbm/pgsql/type_converter.h:1782-1786 -->
+
+`from_binary` consumes array value bytes without a length prefix; `to_binary` writes the
+length prefix. `from_text` and `to_text` consume/produce PostgreSQL array literals.
+SQL NULL elements require `std::optional<T>`; JSON `null` is a present element. Timestamp
+and JSON/JSONB text elements are quoted and escaped. Empty arrays remain empty arrays,
+and multi-dimensional arrays throw `error::field_type_mismatch`.
+`results::json()` supports these binary arrays too: JSON/JSONB elements retain their wire text
+without DOM conversion; the array literal preserves NULL elements and lower bounds.
+Temporary element views are internal to that rendering call; the exported JSON owns its strings.
+No public array converter for `std::vector<std::string_view>` is provided.
+<!-- src: src/qbm/pgsql/resultset.cpp:448-468; src/qbm/pgsql/type_converter.h:1782-1786 -->
+
+`TypeConverter<qb::wall_time>::to_text` keeps UTC text and its `+00` suffix. Years 1970–9999
+use a stack formatter over the existing qb calendar; other years retain the previous formatter.
+`TypeConverter<numeric>::from_binary` still returns an owning `numeric` with the same scale
+and special values; integer limb formatting and transfer of the decoded string change no signature.
+<!-- src: src/qbm/pgsql/type_converter.cpp:138-204,703-761,896-915 -->
+
 ## Error Handling
 
 Exceptions inherit from `std::runtime_error` and `qb::pg::error::db_error`.

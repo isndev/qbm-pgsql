@@ -276,7 +276,7 @@ A `results::field` is a non-owning view of one cell. Its core members:
 `std::decay_t<T>` (`resultset.h:553-565`):
 
 ```cpp
-<!-- src: qbm/pgsql/tests/integration/datatypes/datatypes-roundtrip.cpp:285-290 -->
+<!-- src: qbm/pgsql/tests/integration/datatypes/datatypes-roundtrip.cpp:286-291 -->
 qb::pg::smallint s   = result[0][0].as<qb::pg::smallint>();
 qb::pg::integer  i   = result[0][0].as<qb::pg::integer>();
 qb::pg::bigint   b   = result[0][0].as<qb::pg::bigint>();
@@ -312,7 +312,7 @@ if (!field.is_null())
 ```
 
 `results::json()` checks SQL NULL directly, so a present empty TEXT value remains `""` while SQL NULL becomes JSON null
-(`resultset.cpp:518-531`).
+(`resultset.cpp:554-567`).
 `field.as<std::optional<T>>()` uses the same NULL metadata; a present value is decoded through `T`, preserving
 empty text and the column-OID conversion for binary numerics (`resultset.h:558-586,608-643`).
 
@@ -330,7 +330,7 @@ See [error_handling.md](./error_handling.md).
 Every present value is a JSON string, including numbers, booleans, JSONB, and arrays; SQL NULL is JSON null:
 
 ```cpp
-<!-- src: qbm/pgsql/src/qbm/pgsql/resultset.cpp:518-531 -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/resultset.cpp:554-567 -->
 qb::json j = rows.json();   // e.g. [{"id":"1","name":"ada"}, ...]
 ```
 
@@ -341,6 +341,18 @@ non-1 lower bounds preserved (`[0:2]={1,2,3}`); multi-dimensional arrays throw `
 flat vector decoder cannot represent their shape. Unsupported binary OIDs, malformed JSONB versions and overflowing
 array bounds throw instead of exporting a changed value. `field.as<std::string>()` still exposes raw binary bytes when
 requested directly.
+This projection also covers binary UUID, timestamptz, NUMERIC, JSON and JSONB arrays. For JSON/JSONB arrays it
+reads element text directly from the wire, checking each JSONB version byte, and quotes that text in the array
+literal. Decimal precision, whitespace and nested JSON shape remain intact; JSON `null` is a present element,
+distinct from SQL NULL. This text export does not use the typed JSONB DOM conversion or its numeric-loss rejection.
+Internally, element views borrow the field storage only during rendering. The returned JSON owns its strings,
+so those temporary views impose no lifetime requirement on the exported value and add no public array view type.
+<!-- src: src/qbm/pgsql/resultset.cpp:448-468,554-567 -->
+Binary `timestamptz` values, including elements of `timestamptz[]`, render in UTC with a `+00` suffix,
+independently of the session `TimeZone`. Text-format results retain the server's session-formatted representation;
+the exact-text guarantee above applies to JSON/JSONB element content and to preserved array bounds.
+The UTC formatter uses a stack buffer for years 1970–9999 and retains the previous path outside that interval;
+the text format and microsecond precision are unchanged. <!-- src: src/qbm/pgsql/type_converter.cpp:138-204 -->
 This export is convenient for diagnostics and admin endpoints; use typed `as<T>()` in hot paths.
 
 ---

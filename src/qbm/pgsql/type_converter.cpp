@@ -30,6 +30,7 @@
 
 #include "./type_converter.h"
 
+#include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <utility>
@@ -143,6 +144,48 @@ TypeConverter<qb::wall_time>::to_text(const qb::wall_time &value) {
     if (microsecs < 0) {
         microsecs += 1000000;
         --whole_sec;
+    }
+    // The common modern range uses the existing qb calendar. Outside it, keep
+    // the former formatter unchanged (including platform-specific year spelling).
+    constexpr std::int64_t year_10000 = qb::date::from_ymd(10000, 1, 1).days_since_epoch() * 86400;
+    if (whole_sec >= 0 && whole_sec < year_10000) {
+        std::tm utc{};
+        if (!qb::safe_gmtime(static_cast<std::time_t>(whole_sec), utc))
+            throw error::client_error("timestamp out of range for text conversion");
+        char      text[32];
+        const int year  = utc.tm_year + 1900;
+        text[0]         = static_cast<char>('0' + year / 1000);
+        text[1]         = static_cast<char>('0' + (year / 100) % 10);
+        text[2]         = static_cast<char>('0' + (year / 10) % 10);
+        text[3]         = static_cast<char>('0' + year % 10);
+        const auto pair = [](char *dest, int value) {
+            dest[0] = static_cast<char>('0' + value / 10);
+            dest[1] = static_cast<char>('0' + value % 10);
+        };
+        text[4] = '-';
+        pair(text + 5, utc.tm_mon + 1);
+        text[7] = '-';
+        pair(text + 8, utc.tm_mday);
+        text[10] = ' ';
+        pair(text + 11, utc.tm_hour);
+        text[13] = ':';
+        pair(text + 14, utc.tm_min);
+        text[16] = ':';
+        pair(text + 17, utc.tm_sec);
+        std::size_t size = 19;
+        if (microsecs > 0) {
+            text[size++]  = '.';
+            auto fraction = microsecs;
+            for (int i = 5; i >= 0; --i) {
+                text[size + static_cast<std::size_t>(i)] = static_cast<char>('0' + fraction % 10);
+                fraction /= 10;
+            }
+            size += 6;
+        }
+        text[size++] = '+';
+        text[size++] = '0';
+        text[size++] = '0';
+        return std::string(text, size);
     }
     // Date and time parts (UTC) via the canonical formatter.
     std::string result = qb::format_utc(qb::wall_from_unix_seconds(whole_sec), "%Y-%m-%d %H:%M:%S");
@@ -679,6 +722,16 @@ decode_pg_numeric(const byte *data, std::size_t size) {
     if (size < static_cast<std::size_t>(8) + static_cast<std::size_t>(ndigits) * 2)
         return "0"; // truncated/malformed
 
+    // rd16 yields the full uint16 domain, including historical non-canonical
+    // limbs above 9999. Five decimal bytes suffice; padding is a minimum width.
+    const auto append_limb = [](std::string &dest, std::uint16_t limb, bool pad_four) {
+        char       digits[5];
+        const auto end   = std::to_chars(digits, digits + sizeof(digits), limb).ptr;
+        const auto count = static_cast<std::size_t>(end - digits);
+        if (pad_four && count < 4)
+            dest.append(4 - count, '0');
+        dest.append(digits, count);
+    };
     std::string out;
     if (sign == 0x4000)
         out += '-';
@@ -688,10 +741,8 @@ decode_pg_numeric(const byte *data, std::size_t size) {
         out += '0';
     } else {
         for (int i = 0; i <= weight; ++i) {
-            const int limb = (i < ndigits) ? rd16(data + 8 + i * 2) : 0;
-            char      tmp[8];
-            std::snprintf(tmp, sizeof(tmp), i == 0 ? "%d" : "%04d", limb); // first limb: no pad
-            out += tmp;
+            const std::uint16_t limb = (i < ndigits) ? rd16(data + 8 + i * 2) : 0;
+            append_limb(out, limb, i != 0);
         }
     }
 
@@ -700,10 +751,8 @@ decode_pg_numeric(const byte *data, std::size_t size) {
         out += '.';
         std::string frac;
         for (int idx = weight + 1; static_cast<int>(frac.size()) < dscale; ++idx) {
-            const int limb = (idx >= 0 && idx < ndigits) ? rd16(data + 8 + idx * 2) : 0;
-            char      tmp[8];
-            std::snprintf(tmp, sizeof(tmp), "%04d", limb);
-            frac += tmp;
+            const std::uint16_t limb = (idx >= 0 && idx < ndigits) ? rd16(data + 8 + idx * 2) : 0;
+            append_limb(frac, limb, true);
         }
         frac.resize(static_cast<std::size_t>(dscale));
         out += frac;
@@ -855,10 +904,14 @@ TypeConverter<numeric>::from_binary(std::span<const byte> buffer) {
         std::memcpy(&len, buffer.data(), sizeof(integer));
         len = qb::endian::from_big_endian(len);
         if (len >= 0 && static_cast<size_t>(len) == buffer.size() - sizeof(integer)) {
-            return numeric(decode_pg_numeric(buffer.data() + sizeof(integer), buffer.size() - sizeof(integer)));
+            value_type result;
+            result.value = decode_pg_numeric(buffer.data() + sizeof(integer), buffer.size() - sizeof(integer));
+            return result;
         }
     }
-    return numeric(decode_pg_numeric(buffer.data(), buffer.size()));
+    value_type result;
+    result.value = decode_pg_numeric(buffer.data(), buffer.size());
+    return result;
 }
 
 // ============================================================================

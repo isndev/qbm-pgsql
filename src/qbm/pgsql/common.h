@@ -437,7 +437,7 @@ type_oid_prefers_binary_result_format(oid const t) noexcept {
         case static_cast<int>(oid::time):
         case static_cast<int>(oid::timetz):
         case static_cast<int>(oid::interval):
-        // 1-D arrays with a std::vector<T> decoder (bool/int2/int4/int8/float4/float8/text)
+        // 1-D arrays with a std::vector<T> decoder
         case static_cast<int>(oid::boolean_array):
         case static_cast<int>(oid::int2_array):
         case static_cast<int>(oid::int4_array):
@@ -445,6 +445,11 @@ type_oid_prefers_binary_result_format(oid const t) noexcept {
         case static_cast<int>(oid::float4_array):
         case static_cast<int>(oid::float8_array):
         case static_cast<int>(oid::text_array):
+        case static_cast<int>(oid::uuid_array):
+        case static_cast<int>(oid::timestamptz_array):
+        case static_cast<int>(oid::numeric_array):
+        case static_cast<int>(oid::json_array):
+        case static_cast<int>(oid::jsonb_array):
             return true;
         default:
             // text/varchar/bpchar/name/json/xml, network/bit/geometric/range/reg*/money,

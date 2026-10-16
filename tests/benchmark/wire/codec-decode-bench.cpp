@@ -32,6 +32,7 @@
  * @ingroup Pgsql
  */
 #include <benchmark/benchmark.h>
+#include <chrono>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -187,6 +188,72 @@ struct BinaryExportFixture {
     }
 };
 
+// New array types use TEXT on the old whitelist and BINARY on the new one;
+// int4/text stay BINARY on both. Every role exports the identical array literal.
+struct ExtendedArrayExportFixture {
+    result_impl impl;
+    std::string expected_text;
+
+    ExtendedArrayExportFixture(int kind, int count) {
+        struct Case {
+            oid         array_oid;
+            integer     element_oid;
+            const char *element_hex;
+            const char *array_element;
+        };
+        static constexpr std::string_view json_text    = R"({"n": 12345678901234567890.123456789, "s": "a\\b"})";
+        static constexpr const char      *json_element = R"("{\"n\": 12345678901234567890.123456789, \"s\": \"a\\\\b\"}")";
+        static const Case                 cases[]      = {
+            {oid::uuid_array, 2950, "550e8400e29b41d4a716446655440000", "550e8400-e29b-41d4-a716-446655440000"},
+            {oid::timestamptz_array, 1184, qb::pg::test::gt::temporal::ts_2024_03_15, R"("2024-03-15 14:30:45.123456+00")"},
+            {oid::numeric_array, 1700, "0008000400000009000c0d801ed204d2162e2694153803e8", "123456789012345678.987654321"},
+            {oid::json_array, 114, "", json_element},
+            {oid::jsonb_array, 3802, "", json_element},
+            {oid::int4_array, 23, "0000002a", "42"},
+            {oid::text_array, 25, "746578742076616c7565", R"("text value")"},
+        };
+        const auto &sample  = cases[kind];
+        auto        element = hex_to_bytes(sample.element_hex);
+        if (kind == 3 || kind == 4) {
+            element.assign(json_text.begin(), json_text.end());
+            if (kind == 4)
+                element.insert(element.begin(), static_cast<byte>(1)); // JSONB version, not array framing
+        }
+        // Literal array_send framing, independent of TypeConverter/array codecs.
+        auto       wire    = hex_to_bytes("0000000100000001"); // ndim=1, has-NULL=1
+        const auto put_i32 = [&](std::int32_t value) {
+            for (int shift = 24; shift >= 0; shift -= 8)
+                wire.push_back(static_cast<byte>(static_cast<std::uint32_t>(value) >> shift));
+        };
+        put_i32(sample.element_oid);
+        put_i32(count);
+        put_i32(-2);
+        expected_text = "[-2:" + std::to_string(count - 3) + "]={";
+        for (int i = 0; i < count; ++i) {
+            if (i)
+                expected_text += ',';
+            expected_text += i % 2 ? "NULL" : sample.array_element;
+            put_i32(i % 2 ? -1 : static_cast<std::int32_t>(element.size()));
+            if (i % 2 == 0)
+                wire.insert(wire.end(), element.begin(), element.end());
+        }
+        expected_text += '}';
+
+        field_description desc{};
+        desc.name         = "values";
+        desc.type_oid     = sample.array_oid;
+        desc.type_size    = -1;
+        desc.type_mod     = -1;
+        desc.format_code  = type_oid_prefers_binary_result_format(sample.array_oid) ? protocol_data_format::Binary : protocol_data_format::Text;
+        const bool binary = desc.format_code == protocol_data_format::Binary;
+        impl.row_description().push_back(std::move(desc));
+        auto &row    = impl.rows().emplace_back();
+        row.offsets  = {0};
+        row.null_map = {false};
+        row.data     = binary ? std::move(wire) : std::vector<byte>(expected_text.begin(), expected_text.end());
+    }
+};
+
 bool
 is_present_binary_int4_42(const resultset::row::value_type &field) {
     const auto &desc = field.description();
@@ -306,9 +373,15 @@ static void
 BM_DecodeInt4Array1000(benchmark::State &state) {
     const std::vector<byte> wire = build_int4_array(1000);
     auto                    gate = TypeConverter<std::vector<integer>>::from_binary(wire);
-    if (gate.size() != 1000 || gate.front() != 0 || gate.back() != 999) {
-        state.SkipWithError("int4[] decode mismatch");
+    if (gate.size() != 1000) {
+        state.SkipWithError("int4[] decode count mismatch");
         return;
+    }
+    for (std::size_t i = 0; i < gate.size(); ++i) {
+        if (gate[i] != static_cast<integer>(i)) {
+            state.SkipWithError("int4[] decode value or order mismatch");
+            return;
+        }
     }
     for (auto _ : state) {
         auto v = TypeConverter<std::vector<integer>>::from_binary(wire);
@@ -322,7 +395,13 @@ static void
 BM_DecodeTimestamptz(benchmark::State &state) {
     const std::vector<byte> wire = hex_to_bytes(qb::pg::test::gt::temporal::ts_2024_03_15);
     auto                    gate = TypeConverter<qb::wall_time>::from_binary(wire);
-    benchmark::DoNotOptimize(gate);
+    // Independent Unix-epoch value recorded beside the PostgreSQL wire fixture.
+    const qb::wall_time expected{std::chrono::duration_cast<qb::wall_time::duration>(
+        std::chrono::microseconds{qb::pg::test::gt::temporal::ts_2024_03_15_unix_micros})};
+    if (gate != expected) {
+        state.SkipWithError("timestamptz decode instant mismatch");
+        return;
+    }
     for (auto _ : state) {
         auto v = TypeConverter<qb::wall_time>::from_binary(wire);
         benchmark::DoNotOptimize(v);
@@ -407,6 +486,48 @@ BM_JsonExportInt4Binary(benchmark::State &state) {
     state.SetBytesProcessed(state.iterations() * 4);
 }
 BENCHMARK(BM_JsonExportInt4Binary);
+
+// Compare complete JSON export for the same values under each role's real Bind
+// result-format policy; input construction and the independent oracle are cold.
+static void
+BM_JsonExportExtendedArray(benchmark::State &state) {
+    const int kind  = static_cast<int>(state.range(0));
+    const int count = static_cast<int>(state.range(1));
+    if (kind < 0 || kind > 6 || (count != 2 && count != 32)) {
+        state.SkipWithError("unsupported extended-array export fixture");
+        return;
+    }
+    ExtendedArrayExportFixture fixture(kind, count);
+    resultset                  result(&fixture.impl);
+    const qb::json             expected = qb::json::array({qb::json{{"values", fixture.expected_text}}});
+    if (result.json() != expected) {
+        state.SkipWithError("extended-array JSON export changed exact text, NULLs or bounds");
+        return;
+    }
+    state.SetLabel(fixture.impl.row_description()[0].format_code == protocol_data_format::Binary ? "binary" : "text");
+    for (auto _ : state) {
+        auto value = result.json();
+        benchmark::DoNotOptimize(value);
+    }
+    state.SetItemsProcessed(state.iterations() * count);
+    state.SetBytesProcessed(state.iterations() * static_cast<std::int64_t>(fixture.expected_text.size())); // same output bytes on both roles
+}
+BENCHMARK(BM_JsonExportExtendedArray)
+    ->Args({0, 2})
+    ->Args({0, 32})
+    ->Args({1, 2})
+    ->Args({1, 32})
+    ->Args({2, 2})
+    ->Args({2, 32})
+    ->Args({3, 2})
+    ->Args({3, 32})
+    ->Args({4, 2})
+    ->Args({4, 32})
+    ->Args({5, 2})
+    ->Args({5, 32})
+    ->Args({6, 2})
+    ->Args({6, 32})
+    ->ArgNames({"type", "elements"});
 
 // PostgreSQL JSON (unlike JSONB) has no version byte. A pair-shaped JSON array
 // must remain an array; the old heuristic converted it into an object.

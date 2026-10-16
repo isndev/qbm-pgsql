@@ -338,6 +338,29 @@ C++ ⇄ PostgreSQL via `detail::type_mapping<T>` (OID for params) and
 | `qb::json` / `qb::jsonb` | json / jsonb | 114 / 3802 |
 | **`qb::wall_time`** | **timestamptz** | **1184** |
 
+One-dimensional arrays decode as `std::vector<T>` or `std::vector<std::optional<T>>` for
+`bool`, the integer and floating families, `std::string`, `qb::uuid`, `qb::wall_time`,
+`qb::pg::detail::numeric`, `qb::json` and `qb::jsonb`. The last five use array OIDs
+2951, 1185, 1231, 199 and 3807 respectively; prepared results request binary, while
+simple-query results use the text array grammar. A SQL NULL element needs the optional
+form. A present JSON `null` remains a JSON value, distinct from an empty optional;
+the text renderer quotes timestamp and JSON/JSONB elements and escapes quotes/backslashes.
+The array parameter path already uses the scalar codec and its array OID; these result
+converters do not change that binding contract. Multi-dimensional arrays remain unsupported.
+`results::json()` projects these binary arrays as PostgreSQL text literals, retaining lower
+bounds and NULL elements. JSON/JSONB element text is copied without DOM conversion, so long
+decimals and whitespace survive; JSONB version bytes are checked and removed per element.
+The projection's temporary element views borrow the field only during rendering; the exported
+JSON owns its strings. This does not add a public `std::vector<std::string_view>` array result
+type. NUMERIC remains an owning decimal-string carrier; its integer limb formatter and internal
+array rendering avoid intermediate string copies without changing its value or scale.
+<!-- src: src/qbm/pgsql/resultset.cpp:448-468; src/qbm/pgsql/type_converter.cpp:703-761,896-915; src/qbm/pgsql/type_converter.h:1718-1719 -->
+
+`qb::wall_time` text remains UTC with `+00` and six fractional digits when a fraction is present.
+Years 1970–9999 use the existing qb calendar and a stack formatter; pre-1970 and later years keep
+the previous formatter. This selects an implementation path, not a new range of accepted instants.
+<!-- src: src/qbm/pgsql/type_converter.cpp:138-204 -->
+
 Binary JSON/JSONB decoding preserves JSON structure: `[[1,2]]` remains an array
 of arrays. A pair-shaped array is never inferred to be an object.
 

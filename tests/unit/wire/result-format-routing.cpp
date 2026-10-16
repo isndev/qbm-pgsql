@@ -48,6 +48,11 @@ TEST(ResultFormatRouting, BinaryDecodableOidsPreferBinary) {
         oid::float4_array,
         oid::float8_array,
         oid::text_array,
+        oid::uuid_array,
+        oid::timestamptz_array,
+        oid::numeric_array,
+        oid::json_array,
+        oid::jsonb_array,
     };
     for (oid t : binary_oids)
         EXPECT_TRUE(type_oid_prefers_binary_result_format(t))

@@ -9,6 +9,15 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Added
 
+- **UUID, timestamptz, NUMERIC, JSON and JSONB arrays have typed result codecs (Huly QB-206).**
+  Read one-dimensional arrays as `std::vector<T>` or `std::vector<std::optional<T>>` for NULL elements.
+  Prepared queries request binary for all five array OIDs; simple-query text arrays decode too.
+  Timestamp and JSON/JSONB array text quotes and escapes each element, preserving JSON `null`
+  separately from SQL NULL. The existing binary parameter path and seven earlier element types
+  keep their contracts; multi-dimensional arrays remain unsupported. `results::json()` exports
+  these binary arrays as text with NULL elements and lower bounds preserved. JSON/JSONB elements
+  retain their wire text, including long decimals, without converting through a JSON DOM.
+
 - **A coroutine parked on PostgreSQL says so in qb's `CoroutineScheduler::dump()` (Huly QB-71).** `pg_awaiter` (every
   `pg_reply_awaiter<T>`: a query, an execute, a prepare, a transaction step) and `connect_awaiter` begin their
   `await_suspend` with `qb::io::async::track_suspension(h, ...)`: with suspension tracking on, the dump shows the
@@ -18,6 +27,13 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
   `scripts/check-awaiter-tracking.py`, run over this module from the superproject, refuses an awaiter without it.
 
 ### Changed
+
+- **NUMERIC, timestamp and array rendering retain their contracts (Huly QB-206).**
+  NUMERIC formats its limbs with integer conversion instead of `printf`, transfers decoded text into its owning
+  carrier, and renders that carrier directly inside arrays. UTC timestamp text uses the existing qb calendar
+  and a stack buffer for years 1970–9999; other years keep the previous formatter. JSON/JSONB array projection
+  borrows element text only while rendering, and quoted strings are appended in runs between escapes.
+  The final result owns its text; public types, scale, special values, NULLs and wire-format selection are unchanged.
 
 - **Typed JSONB decoding combines precision validation and DOM construction where supported (Huly QB-945).**
   Audited nlohmann versions and configurations reuse its DOM builder and numeric formatter.

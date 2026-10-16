@@ -30,6 +30,7 @@
  *     multi-dimensional + NULL-element arrays, empty-bytea-as-param protocol path.
  */
 
+#include <chrono>
 #include <cmath>
 #include <gtest/gtest.h>
 #include <limits>
@@ -679,6 +680,108 @@ TEST_F(DataTypesRoundTrip, NumericArrayParam_PreviouslyAnyarray_BindsAndMatches)
                        [](error::db_error e) { FAIL() << e.what(); })
                     .await());
     EXPECT_TRUE(ok);
+}
+
+// Five new array result types (QB-206). The SQL literal is independent of the
+// binary parameter encoder. The server checks complete values and element NULL
+// positions; client checks cover both simple/Text and prepared/Binary replies.
+TEST_F(DataTypesRoundTrip, ExtendedArrays_PreparedBinaryAndSimpleText) {
+    auto check = [&]<typename T>(const char *type, const std::vector<std::optional<T>> &input, const char *literal) {
+        SCOPED_TRACE(type);
+        const std::string array_type   = std::string(type) + "[]";
+        const std::string columns      = "SELECT a, cardinality(a), a IS NULL, a[2] IS NULL, a[3] IS NOT NULL, "
+                                         "to_jsonb(a) = to_jsonb("
+                                         + std::string(literal) + "), a[1:1] AS first_element FROM (SELECT ";
+        const std::string prepared_sql = columns + "$1::" + array_type + " AS a) s";
+        const std::string name         = std::string("extended_array_") + type;
+        ASSERT_TRUE(db_->prepare(name, prepared_sql, type_oid_sequence{}, discard_prepare, discard_error).await());
+
+        auto expected_format = protocol_data_format::Binary;
+        bool received        = false;
+        auto verify          = [&](transaction &, results r) {
+            ASSERT_EQ(r.size(), 1u);
+            ASSERT_EQ(r.columns_size(), 7u);
+            ASSERT_FALSE(r[0][0].is_null());
+            EXPECT_EQ(r.field(0).format_code, expected_format);
+            EXPECT_EQ(r[0][1].as<integer>(), static_cast<integer>(input.size()));
+            EXPECT_FALSE(r[0][2].as<bool>());
+            EXPECT_TRUE(r[0][3].as<bool>());
+            EXPECT_TRUE(r[0][4].as<bool>()); // JSON null is present; the second slot is SQL NULL.
+            EXPECT_TRUE(r[0][5].as<bool>()) << "the server rejected the bound array's value";
+            EXPECT_EQ(r[0][0].template as<std::vector<std::optional<T>>>(), input);
+            EXPECT_THROW((void) r[0][0].template as<std::vector<T>>(), error::value_is_null);
+            EXPECT_EQ(r[0][6].template as<std::vector<T>>(), (std::vector<T>{*input.front()}));
+            const auto projection = r.json();
+            ASSERT_TRUE(projection[0]["a"].is_string());
+            EXPECT_EQ(detail::parse_pg_array_text<std::optional<T>>(projection[0]["a"].get<std::string>()), input);
+            received = true;
+        };
+        auto failed = [](const error::db_error &err) {
+            FAIL() << err.what();
+        };
+        ASSERT_TRUE(db_->execute(name, params(input), verify, failed).await());
+        EXPECT_TRUE(received);
+
+        expected_format = protocol_data_format::Text;
+        received        = false;
+        ASSERT_TRUE(db_->execute(columns + literal + " AS a) s", verify, failed).await());
+        EXPECT_TRUE(received);
+
+        // Empty array, SQL NULL array and NULL element are three separate values.
+        // An empty vector must bind as a present array with cardinality zero.
+        const std::string empty_name = name + "_empty";
+        const std::string empty_sql =
+            "SELECT $1::" + array_type + ", NULL::" + array_type + ", cardinality($1::" + array_type + "), $1 IS NULL";
+        ASSERT_TRUE(db_->prepare(empty_name, empty_sql, type_oid_sequence{}, discard_prepare, discard_error).await());
+        bool empty_received = false;
+        ASSERT_TRUE(db_->execute(
+                           empty_name, params(std::vector<T>{}),
+                           [&](transaction &, results r) {
+                               ASSERT_EQ(r.size(), 1u);
+                               ASSERT_FALSE(r[0][0].is_null());
+                               EXPECT_TRUE(r[0][1].is_null());
+                               EXPECT_EQ(r[0][2].as<integer>(), 0);
+                               EXPECT_FALSE(r[0][3].as<bool>());
+                               EXPECT_EQ(r.field(0).format_code, protocol_data_format::Binary);
+                               EXPECT_TRUE(r[0][0].template as<std::vector<T>>().empty());
+                               EXPECT_TRUE(r[0][0].template as<std::optional<std::vector<T>>>().has_value());
+                               EXPECT_FALSE(r[0][1].template as<std::optional<std::vector<T>>>().has_value());
+                               empty_received = true;
+                           },
+                           failed)
+                        .await());
+        EXPECT_TRUE(empty_received);
+
+        // Ask PostgreSQL to parse our text renderer too. A local encoder/decoder
+        // pair agreeing on a bad quoting rule cannot satisfy this assertion.
+        const std::string text_name = name + "_text";
+        ASSERT_TRUE(db_->prepare(text_name, prepared_sql, type_oid_sequence{oid::text}, discard_prepare, discard_error).await());
+        expected_format = protocol_data_format::Binary;
+        received        = false;
+        ASSERT_TRUE(db_->execute(text_name, params(detail::render_pg_array_text(input)), verify, failed).await());
+        EXPECT_TRUE(received);
+    };
+
+    using detail::TypeConverter;
+    check("uuid",
+          std::vector<std::optional<qb::uuid>>{
+              TypeConverter<qb::uuid>::from_text("00112233-4455-6677-8899-aabbccddeeff"), std::nullopt,
+              TypeConverter<qb::uuid>::from_text("ffeeddcc-bbaa-9988-7766-554433221100")
+          },
+          "ARRAY['00112233-4455-6677-8899-aabbccddeeff'::uuid,NULL,'ffeeddcc-bbaa-9988-7766-554433221100'::uuid]");
+    check("timestamptz",
+          std::vector<std::optional<qb::wall_time>>{
+              qb::wall_from_unix_seconds(946684800) + std::chrono::microseconds(1), std::nullopt,
+              qb::wall_from_unix_seconds(0) - std::chrono::microseconds(1)
+          },
+          "ARRAY['2000-01-01 00:00:00.000001+00'::timestamptz,NULL,'1969-12-31 23:59:59.999999+00'::timestamptz]");
+    check("numeric", std::vector<std::optional<numeric>>{numeric("1234.5600"), std::nullopt, numeric("-0.0001")},
+          "ARRAY[1234.5600::numeric,NULL,-0.0001::numeric]");
+    const auto document = qb::json::parse(R"({"k":["a,b","\"","\\","NULL"],"pair":[[1,2],3]})");
+    check("json", std::vector<std::optional<qb::json>>{document, std::nullopt, qb::json::parse("null")},
+          R"(ARRAY[$pg206${"k":["a,b","\"","\\","NULL"],"pair":[[1,2],3]}$pg206$::json,NULL,'null'::json])");
+    check("jsonb", std::vector<std::optional<qb::jsonb>>{qb::jsonb(document), std::nullopt, qb::jsonb(qb::json::parse("null"))},
+          R"(ARRAY[$pg206${"k":["a,b","\"","\\","NULL"],"pair":[[1,2],3]}$pg206$::jsonb,NULL,'null'::jsonb])");
 }
 
 TEST_F(DataTypesRoundTrip, IntArray_MultiDimensional_IsRefusedLoudly) {
