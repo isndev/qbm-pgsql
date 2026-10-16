@@ -343,7 +343,9 @@ One-dimensional arrays decode as `std::vector<T>` or `std::vector<std::optional<
 `qb::pg::detail::numeric`, `qb::json` and `qb::jsonb`. The last five use array OIDs
 2951, 1185, 1231, 199 and 3807 respectively; prepared results request binary, while
 simple-query results use the text array grammar. A SQL NULL element needs the optional
-form. A present JSON `null` remains a JSON value, distinct from an empty optional;
+form; from a `const qb::json`, construct it explicitly (`std::optional<qb::json>(doc)`) —
+with nlohmann 3.12, MSVC rejects the copy-initialisation, and `{doc, std::nullopt}` falls back
+to `vector(count, value)`. A present JSON `null` remains a JSON value, distinct from an empty optional;
 the text renderer quotes timestamp and JSON/JSONB elements and escapes quotes/backslashes.
 The array parameter path already uses the scalar codec and its array OID; these result
 converters do not change that binding contract. Multi-dimensional arrays remain unsupported.

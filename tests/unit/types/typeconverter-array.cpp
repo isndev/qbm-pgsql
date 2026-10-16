@@ -352,8 +352,11 @@ TEST(TypeConverterArrayText, RendersAndRoundTrips) {
 TEST(TypeConverterArrayBinary, ExtendedElementsAgainstWireValues) {
     auto check = []<typename T>(const T &value, const char *hex, const char *empty_hex) {
         SCOPED_TRACE(TypeConverter<T>::get_oid());
-        const auto                          wire = hex_to_bytes(hex);
-        const std::vector<std::optional<T>> expected{value, std::nullopt};
+        const auto wire = hex_to_bytes(hex);
+        // Direct-initialise the element: with nlohmann 3.12, MSVC rejects copy-initialising
+        // std::optional<qb::json> from a const qb::json, and `{value, std::nullopt}` then falls
+        // back to vector(count, value) -- converting the document to a count (type_error 302).
+        const std::vector<std::optional<T>> expected{std::optional<T>(value), std::nullopt};
         EXPECT_EQ(decode_pg_array<std::optional<T>>(wire), expected);
         EXPECT_THROW(decode_pg_array<T>(wire), error::value_is_null);
         EXPECT_EQ(encode_pg_array(expected), wire);
@@ -439,8 +442,9 @@ TEST(TypeConverterArrayText, ExtendedJsonElementsPreserveNullAndEscapes) {
             ASSERT_EQ(payloads.size(), input.size());
             for (std::size_t i = 0; i < input.size(); ++i) {
                 ASSERT_EQ(payloads[i].has_value(), input[i].has_value()) << i;
-                if (input[i])
+                if (input[i]) {
                     EXPECT_EQ(*payloads[i], TypeConverter<T>::to_text(*input[i])) << i;
+                }
             }
         });
     };

@@ -251,6 +251,10 @@ text. Timestamp and JSON/JSONB elements are quoted when rendered as array text, 
 quotes and backslashes escaped. In `std::vector<std::optional<qb::json>>` (or `qb::jsonb`),
 a JSON `null` is a present JSON value; only an empty optional is a SQL NULL element.
 An empty vector binds an empty array, not a SQL NULL array.
+From a `const qb::json`, build the element explicitly — `std::optional<qb::json>(doc)`: with
+nlohmann 3.12, MSVC rejects copy-initialising the optional from it, and a brace list such as
+`{doc, std::nullopt}` then fails to compile or falls back to `vector(count, value)`, converting
+the document to a count.
 <!-- src: src/qbm/pgsql/common.h:440-453; src/qbm/pgsql/type_converter.h:1678-1726 -->
 
 Limits:

@@ -778,7 +778,8 @@ TEST_F(DataTypesRoundTrip, ExtendedArrays_PreparedBinaryAndSimpleText) {
     check("numeric", std::vector<std::optional<numeric>>{numeric("1234.5600"), std::nullopt, numeric("-0.0001")},
           "ARRAY[1234.5600::numeric,NULL,-0.0001::numeric]");
     const auto document = qb::json::parse(R"({"k":["a,b","\"","\\","NULL"],"pair":[[1,2],3]})");
-    check("json", std::vector<std::optional<qb::json>>{document, std::nullopt, qb::json::parse("null")},
+    // Direct-initialised: MSVC with nlohmann 3.12 cannot copy-initialise std::optional<qb::json> from a const qb::json.
+    check("json", std::vector<std::optional<qb::json>>{std::optional<qb::json>(document), std::nullopt, qb::json::parse("null")},
           R"(ARRAY[$pg206${"k":["a,b","\"","\\","NULL"],"pair":[[1,2],3]}$pg206$::json,NULL,'null'::json])");
     check("jsonb", std::vector<std::optional<qb::jsonb>>{qb::jsonb(document), std::nullopt, qb::jsonb(qb::json::parse("null"))},
           R"(ARRAY[$pg206${"k":["a,b","\"","\\","NULL"],"pair":[[1,2],3]}$pg206$::jsonb,NULL,'null'::jsonb])");
