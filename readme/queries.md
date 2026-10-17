@@ -128,6 +128,15 @@ callback
 **Storage:** **`PreparedQueryStorage`** LRU in [`src/qbm/pgsql/queries.h`](../src/qbm/pgsql/queries.h).
 Copying a storage value keeps an independent LRU order, and self-move assignment preserves it. A const `get()` still promotes the accessed query.
 
+**Bound and eviction.** The cache holds 100 statements unless `db.prepared_cache_capacity(n)` says otherwise
+(`0` restores the default). A Parse that needs a slot in a full cache evicts the least recently used statement
+before it is written, and a protocol `Close` message for that statement goes out in front of the Parse in the same
+message: the backend never holds more named statements than the cache, and no round trip is added. A smaller
+capacity evicts at once; the Closes it owes ride the next Parse or Bind. Executing an evicted name fails
+client-side (`not registered`) without touching the wire; prepare it again — the name is free on the server.
+The unnamed statement of `query(sql, args...)` takes one slot and is never closed: the next unnamed Parse
+replaces it (Huly QB-207).
+
 **Coroutine — prepare + execute**
 
 ```cpp
@@ -227,7 +236,7 @@ Ordinary chunk delivery borrows the operation and callable without copying eithe
 If cancellation detaches the sink or completion releases the operation during a call, ownership
 is retained in that operation's outermost sink invocation until it returns. Nested calls share
 that retention. This protects owned captures; it does not extend the lifetime of borrowed data.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:1073-1112,1120-1137,1805-1821,2258-2267 (CopyOperation / SinkInvocation / detach_sink; finish_copy; on_copy_data; copy_out) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:1073-1112,1120-1137,1805-1821,2283-2292 (CopyOperation / SinkInvocation / detach_sink; finish_copy; on_copy_data; copy_out) -->
 The source or sink activates only when that command reaches the wire, so an earlier
 plain SQL command cannot borrow it.
 
@@ -273,7 +282,7 @@ transaction is never joined and never ended by `query_stream`.
 > caller-owned only once its `BEGIN` has **completed** — `in_transaction()` mirrors the last `ReadyForQuery`. Started
 > before that, the stream reads the session as idle and opens (and later ends) a block of its own. `co_await` the
 > `begin()` first.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2344-2464,2358-2376,2378-2381,2436-2456,2134-2142 (in that order: query_stream; the seat/guard bookkeeping; the cursor name; the last-one-out COMMIT/ROLLBACK; in_transaction) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2369-2489,2383-2401,2403-2406,2461-2481,2159-2167 (in that order: query_stream; the seat/guard bookkeeping; the cursor name; the last-one-out COMMIT/ROLLBACK; in_transaction) -->
 
 ---
 

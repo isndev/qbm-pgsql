@@ -621,7 +621,7 @@ public:
         , _on_success(std::forward<CB_SUCCESS>(on_success))
         , _on_error(std::forward<CB_ERROR>(on_error)) {
         push_query(std::unique_ptr<ISqlQuery>(new ParseQuery(
-            _query,
+            _query_storage, _query,
             [this]() {
                 try {
                     _on_success(*this, _query_storage.push(std::move(_query)));
@@ -1443,7 +1443,7 @@ public:
             _query.param_types.push_back(static_cast<oid>(type));
 
         push_query(std::unique_ptr<ISqlQuery>(new ParseQuery(
-            _query,
+            _query_storage, _query,
             [this]() {
                 try {
                     if (!_result)

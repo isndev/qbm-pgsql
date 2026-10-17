@@ -9,6 +9,14 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Added
 
+- **The prepared-statement cache has a public bound, and counts its hits and misses (Huly QB-207).**
+  `db.prepared_cache_capacity(n)` sets the LRU's bound (100 by default; `0` restores it) and
+  `db.prepared_cache_capacity()` reads it. `PreparedStorage::hits()` / `misses()` count the named executions found
+  in the cache / refused because the name was not cached, beside `evicted_count()`; the inline `query(sql, args...)`
+  path's unnamed statement is not counted. ABI: `PreparedStorage` gains three members (the queue of owed Closes and
+  the two counters) — additive member growth in a qbm class, allowed under the 3.3.0 ABI reading; consumers
+  recompile with the train.
+
 - **UUID, timestamptz, NUMERIC, JSON and JSONB arrays have typed result codecs (Huly QB-206).**
   Read one-dimensional arrays as `std::vector<T>` or `std::vector<std::optional<T>>` for NULL elements.
   Prepared queries request binary for all five array OIDs; simple-query text arrays decode too.
@@ -55,6 +63,19 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Fixed
 
+- **A prepared statement the cache evicts is closed on the server (Huly QB-207).** The LRU's eviction was local
+  bookkeeping only: the backend kept every statement the connection ever prepared — 101 after 101 prepares into the
+  default 100-slot cache, without bound on a long-lived session — and preparing an evicted name again, the recovery the
+  client's "not registered" error asks for, failed on the server with 42P05 (`prepared statement "…" already
+  exists`). A Parse now makes room before it is written and sends `Close('S', name)` for the statement it pushes out
+  ahead of itself in the same message (no round trip is added; the existing CloseComplete handler absorbs the reply).
+  Every other eviction — a shrink of the bound — queues its Closes for the next Parse or Bind. The unnamed statement is
+  never closed. Pinned by `LruEvictionClosesTheEvictedStatementOnTheServer` and
+  `PreparedCacheCapacityBoundsTheServerSideStatements` against a live server (`pg_prepared_statements`) and
+  `EvictingParseCarriesTheCloseInItsOwnMessage` on the wire bytes.
+- **Shrinking the prepared-statement cache keeps exactly the new bound (Huly QB-207).** `PreparedStorage::set_max_size`
+  applied the pre-insertion rule (make room for one more) and left a shrunk cache one entry below the capacity it had
+  just been given. Pinned by `SetMaxSizeShrinksToTheNewBoundExactly`.
 - **`Database::disconnect()` ends the server backend (with qb's Huly QB-1060).** qb-io's standalone
   `dispose()` left the socket untouched, so the backend lived until the `Database` was destroyed. With
   qb's fix the sending side is shut down at teardown, the server reads EOF and the backend leaves

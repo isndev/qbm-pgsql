@@ -21,7 +21,10 @@ namespace qb::pg::detail {
 PreparedStorage::PreparedStorage(const PreparedStorage &other)
     : _lru_list(other._lru_list)
     , _max_size(other._max_size)
-    , _evicted_count(other._evicted_count) {
+    , _evicted_count(other._evicted_count)
+    , _pending_close(other._pending_close)
+    , _hits(other._hits)
+    , _misses(other._misses) {
     _prepared_queries.reserve(other._prepared_queries.size());
     for (auto it = _lru_list.begin(); it != _lru_list.end(); ++it) {
         auto source = other._prepared_queries.find(*it);
@@ -47,6 +50,9 @@ PreparedStorage::operator=(PreparedStorage &&other) noexcept {
         _lru_list         = std::move(other._lru_list);
         _max_size         = other._max_size;
         _evicted_count    = other._evicted_count;
+        _pending_close    = std::move(other._pending_close);
+        _hits             = other._hits;
+        _misses           = other._misses;
     }
     return *this;
 }
@@ -58,12 +64,23 @@ PreparedStorage::swap(PreparedStorage &other) {
     _lru_list.swap(other._lru_list);
     swap(_max_size, other._max_size);
     swap(_evicted_count, other._evicted_count);
+    _pending_close.swap(other._pending_close);
+    swap(_hits, other._hits);
+    swap(_misses, other._misses);
 }
 
 void
 PreparedStorage::set_max_size(size_t max_size) {
     _max_size = max_size > 0 ? max_size : 100;
-    evict_if_needed(); // Evict immediately if over capacity
+    // Down to the new bound, not one below it: the pre-insertion rule (make room for ONE more)
+    // applied here left a shrunk cache one entry short of its capacity.
+    evict_down_to(_max_size);
+}
+
+void
+PreparedStorage::make_room_for(std::string_view name) {
+    if (!has(name))
+        evict_down_to(_max_size - 1);
 }
 
 const PreparedQuery &
@@ -79,8 +96,9 @@ PreparedStorage::push(PreparedQuery &&query) {
         return it->second.query;
     }
 
-    // Evict if at capacity
-    evict_if_needed();
+    // Evict if at capacity. A Parse sent by the client made room already (make_room_for), so
+    // in a session this finds a free slot; direct users of the cache still get the bound.
+    evict_down_to(_max_size - 1);
 
     // Add to front of LRU list
     _lru_list.push_front(key);
@@ -107,14 +125,40 @@ PreparedStorage::get(std::string_view name) const {
 }
 
 void
-PreparedStorage::evict_if_needed() {
-    while (_prepared_queries.size() >= _max_size && !_lru_list.empty()) {
-        // Get least recently used (back of list)
-        std::string &lru_name = _lru_list.back();
-        _prepared_queries.erase(lru_name);
-        _lru_list.pop_back();
-        ++_evicted_count;
+PreparedStorage::evict_down_to(size_t limit) {
+    while (_prepared_queries.size() > limit && !_lru_list.empty())
+        evict_lru();
+}
+
+void
+PreparedStorage::evict_lru() {
+    // Least recently used = back of the list. The backend keeps a named statement until it is
+    // closed; the unnamed one is replaced by the next unnamed Parse and never needs a Close.
+    // The Close is queued first: if that allocation throws, nothing has been evicted yet.
+    std::string const &lru_name = _lru_list.back();
+    if (!lru_name.empty())
+        _pending_close.push_back(lru_name);
+    _prepared_queries.erase(lru_name);
+    _lru_list.pop_back();
+    ++_evicted_count;
+}
+
+message
+close_evicted_statements_before(PreparedStorage &storage, message &&tail) {
+    const auto names = storage.take_pending_close();
+    if (names.empty())
+        return std::move(tail);
+    message out(close_tag);
+    out.write('S');
+    out.write(names.front());
+    for (std::size_t i = 1; i < names.size(); ++i) {
+        message close(close_tag);
+        close.write('S');
+        close.write(names[i]);
+        out.pack(close);
     }
+    out.pack(tail);
+    return out;
 }
 
 smallint

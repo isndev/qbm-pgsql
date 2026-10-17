@@ -97,9 +97,10 @@ qb-io, not qb-core.
     following `error` and to `await()`; it does not undo SQL already committed.
 - **Wire protocol.** Simple-query protocol (`execute`/`query`) sends raw SQL;
   extended-query protocol (`prepare` then parameterized `execute`) does
-  Parse/Bind/Execute with **binary** parameters and a **client-side** prepared-
-  statement LRU (default capacity 100; eviction is local bookkeeping only — no
-  server-side `DEALLOCATE`). Framing, auth (SCRAM-SHA-256 / MD5 / cleartext), and type
+  Parse/Bind/Execute with **binary** parameters and a bounded prepared-statement
+  LRU (default capacity 100, `db.prepared_cache_capacity(n)`); a statement it evicts
+  is closed on the server too (a protocol `Close` message for it rides in the evicting
+  Parse's own message, so the backend holds no more statements than the cache). Framing, auth (SCRAM-SHA-256 / MD5 / cleartext), and type
   codecs are all in-module. SCRAM-SHA-256 is **mutual**: the client verifies the
   server's SASLFinal `ServerSignature` and refuses `AuthenticationOk` if a SCRAM
   exchange started but that signature never verified — so a server that cannot
@@ -234,8 +235,12 @@ db.prepare("sel_user", "SELECT name FROM users WHERE id = $1", {oid::int4},
 - **NULL parameter** → bind `std::optional<T>{}` (empty) → SQL NULL.
 - `prepare_file(name, path, types)` / `execute_file(path)` load SQL from a file
   (file read is **blocking** on the I/O thread).
-- The prepared-statement cache is a **bounded LRU** (default 100); heavy churn
-  evicts entries. A statement must be prepared before it is executed.
+- The prepared-statement cache is a **bounded LRU** (default 100,
+  `db.prepared_cache_capacity(n)`; `0` restores the default). Heavy churn evicts the
+  least recently used statement, on the server as well: its protocol `Close` message travels
+  in the evicting Parse's message (after a shrink, in the next Parse or Bind). Executing
+  an evicted name fails client-side ("not registered") — prepare it again; the name is
+  free on the server. A statement must be prepared before it is executed (Huly QB-207).
 
 ### 3.4 Transactions + savepoints
 
@@ -522,7 +527,7 @@ the operation and callable without copying either shared owner; retention occurs
 cancellation detaches the sink or completion releases the operation during the call. That
 ownership stays in the operation's outermost sink invocation through nested calls until return.
 Borrowed capture data still needs its own lifetime; command admission and reservation are unchanged.
-_(src/qbm/pgsql/pgsql.h:1073-1112,1120-1137,1805-1821,2258-2267)_
+_(src/qbm/pgsql/pgsql.h:1073-1112,1120-1137,1805-1821,2283-2292)_
 
 > **`copy_in` is NOT constant-memory.** It drains the entire `source` into the
 > output pipe synchronously (bounded only by the write-buffer ceiling). Only
@@ -577,7 +582,7 @@ coroutine, an actor, or a second connection's trigger; reach for `cancel()` only
 where no coroutine can run.
 During the packet write, a native TLS `WANT_READ` waits for readability alone;
 otherwise native TLS and plain writes wait for writability. A custom secure transport
-without native TLS state keeps the combined read/write fallback (`pgsql.h:2587-2598`).
+without native TLS state keeps the combined read/write fallback (`pgsql.h:2612-2623`).
 
 **Connection introspection (all `[[nodiscard]]`, libpq-style):**
 

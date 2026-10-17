@@ -12,6 +12,8 @@
  *   nonexistent relation at execute time → `42P01`).
  * - `prepare_file` from a writable temp dir (callback, success-only, discard, and the
  *   throwing non-existent-file path).
+ * - The bounded statement cache closes what it evicts on the server: `pg_prepared_statements`
+ *   after N+1 prepares, re-preparing an evicted name, `prepared_cache_capacity()` (Huly QB-207).
  * - Statement reuse, batch prepare+execute, SELECTs (LIKE filter, empty result set),
  *   large result sets, and SQL-level transaction visibility (COMMIT / ROLLBACK).
  *
@@ -43,6 +45,7 @@
  * limitations under the License.
  */
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -591,6 +594,144 @@ TEST_F(PreparedStatementsIntegration, ExecuteAfterDeallocateFailsThenReprepareWo
                        [](error::db_error const &e) { ADD_FAILURE() << e.what(); })
                     .await());
     ASSERT_TRUE(second_ok);
+}
+
+// ---------------------------------------------------------------------------
+// LRU eviction closes the statement on the server (Huly QB-207)
+// ---------------------------------------------------------------------------
+
+namespace prepared_statements_test {
+
+/// The named prepared statements this session holds ON THE SERVER whose name starts with @p prefix,
+/// sorted. Read through the simple-query protocol, which neither touches the client cache nor
+/// carries a pending Close.
+[[nodiscard]] std::vector<std::string>
+server_statements(qb::pg::tcp::database &db, std::string const &prefix) {
+    std::vector<std::string> names;
+    const bool ok = static_cast<bool>(db.execute(
+                                            "SELECT name FROM pg_prepared_statements WHERE starts_with(name, '" + prefix + "') ORDER BY name",
+                                            [&names](Transaction &, results r) {
+                                                for (auto const &row : r)
+                                                    names.push_back(row[0].as<std::string>());
+                                            },
+                                            [](error::db_error const &e) { ADD_FAILURE() << "pg_prepared_statements: " << e.what(); })
+                                          .await());
+    EXPECT_TRUE(ok);
+    return names;
+}
+
+/// `execute(name)` answers `expected` (a one-column int result); false on any failure.
+[[nodiscard]] bool
+executes_to(qb::pg::tcp::database &db, std::string const &name, int expected) {
+    int        got = -1;
+    const bool ok  = static_cast<bool>(db.execute(
+                                             name, params{},
+                                             [&got](Transaction &, results r) {
+                                                if (r.size() == 1U)
+                                                    got = r[0][0].as<int>();
+                                             },
+                                             discard_error)
+                                           .await());
+    return ok && got == expected;
+}
+
+} // namespace prepared_statements_test
+
+/**
+ * @brief The statement the LRU evicts is closed on the server: after N+1 distinct prepares the
+ *        backend holds N, and the evicted name can be prepared again.
+ *
+ * The eviction used to be local only: the backend kept every statement ever prepared on the
+ * connection (an unbounded leak in a long-lived session), and re-preparing an evicted name — the
+ * one recovery the client's "not registered" error asks for — failed on the server with 42P05
+ * (`duplicate_prepared_statement`), because the name was still taken there. 100 is the cache's
+ * default capacity (`PreparedStorage::_max_size`, asserted through the public accessor below).
+ */
+TEST_F(PreparedStatementsIntegration, LruEvictionClosesTheEvictedStatementOnTheServer) {
+    using prepared_statements_test::server_statements;
+    constexpr int kDefaultCapacity = 100;
+    const auto    name             = [](int i) {
+        std::string digits = std::to_string(i);
+        return "qb207_" + std::string(3 - digits.size(), '0') + digits;
+    };
+
+    for (int i = 0; i <= kDefaultCapacity; ++i)
+        ASSERT_TRUE(db_->prepare(name(i), "SELECT " + std::to_string(i), type_oid_sequence{}, discard_prepare, discard_error).await())
+            << name(i);
+
+    auto held = server_statements(*db_, "qb207_");
+    EXPECT_EQ(held.size(), static_cast<std::size_t>(kDefaultCapacity)) << "the server must hold exactly the cached statements";
+    ASSERT_FALSE(held.empty());
+    EXPECT_EQ(held.front(), name(1)) << "the least recently used statement must be gone from the server";
+
+    // The client refuses the evicted name before any wire traffic ...
+    EXPECT_FALSE(prepared_statements_test::executes_to(*db_, name(0), 0));
+    // ... and preparing it again works, which pushes the next LRU entry out the same way.
+    sqlstate::code seen = sqlstate::unknown_code;
+    std::string    msg;
+    ASSERT_TRUE(db_->prepare(name(0), "SELECT 1000", type_oid_sequence{}, discard_prepare,
+                             [&seen, &msg](error::db_error const &e) {
+                                 seen = e.sqlstate;
+                                 msg  = e.what();
+                             })
+                    .await())
+        << "re-preparing an evicted statement failed (SQLSTATE " << static_cast<int>(seen) << "): " << msg;
+    EXPECT_TRUE(prepared_statements_test::executes_to(*db_, name(0), 1000));
+
+    held = server_statements(*db_, "qb207_");
+    EXPECT_EQ(held.size(), static_cast<std::size_t>(kDefaultCapacity));
+    EXPECT_TRUE(std::find(held.begin(), held.end(), name(0)) != held.end());
+    EXPECT_TRUE(std::find(held.begin(), held.end(), name(1)) == held.end());
+}
+
+/**
+ * @brief `prepared_cache_capacity()` bounds the statements the server holds: an eviction by a
+ *        Parse closes in that Parse's message, a shrink closes in the next Parse or Bind, and the
+ *        inline `query(sql, args...)` path evicts a named statement like any other Parse.
+ */
+TEST_F(PreparedStatementsIntegration, PreparedCacheCapacityBoundsTheServerSideStatements) {
+    using prepared_statements_test::executes_to;
+    using prepared_statements_test::server_statements;
+    using names = std::vector<std::string>;
+
+    EXPECT_EQ(db_->prepared_cache_capacity(), 100u) << "the default the eviction test above relies on";
+    db_->prepared_cache_capacity(3);
+    EXPECT_EQ(db_->prepared_cache_capacity(), 3u);
+
+    ASSERT_TRUE(db_->prepare("qb207cap_a", "SELECT 1", type_oid_sequence{}, discard_prepare, discard_error).await());
+    ASSERT_TRUE(db_->prepare("qb207cap_b", "SELECT 2", type_oid_sequence{}, discard_prepare, discard_error).await());
+    ASSERT_TRUE(db_->prepare("qb207cap_c", "SELECT 3", type_oid_sequence{}, discard_prepare, discard_error).await());
+    ASSERT_TRUE(executes_to(*db_, "qb207cap_a", 1)); // a becomes the most recently used; b is the LRU
+
+    ASSERT_TRUE(db_->prepare("qb207cap_d", "SELECT 4", type_oid_sequence{}, discard_prepare, discard_error).await());
+    EXPECT_EQ(server_statements(*db_, "qb207cap_"), (names{"qb207cap_a", "qb207cap_c", "qb207cap_d"}));
+    EXPECT_FALSE(executes_to(*db_, "qb207cap_b", 2)) << "an evicted name is refused client-side";
+
+    // A shrink evicts at once (c, then a); the Closes it owes ride the next Bind, not a query of
+    // their own: the simple-query read in between still sees all three.
+    db_->prepared_cache_capacity(1);
+    EXPECT_EQ(server_statements(*db_, "qb207cap_").size(), 3U);
+    ASSERT_TRUE(executes_to(*db_, "qb207cap_d", 4));
+    EXPECT_EQ(server_statements(*db_, "qb207cap_"), (names{"qb207cap_d"}));
+
+    // The inline query parses the unnamed statement into the same one-slot cache: d is evicted and
+    // closed in that Parse's message.
+    int  inline_value = 0;
+    bool inline_ok    = false;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        auto r = co_await db_->query("SELECT $1::int + 1", 41);
+        if (r.ok() && r.result().size() == 1U) {
+            inline_value = r.result()[0][0].as<int>();
+            inline_ok    = true;
+        }
+    }());
+    ASSERT_TRUE(inline_ok);
+    EXPECT_EQ(inline_value, 42);
+    EXPECT_TRUE(server_statements(*db_, "qb207cap_").empty());
+    EXPECT_FALSE(executes_to(*db_, "qb207cap_d", 4));
+
+    db_->prepared_cache_capacity(0); // 0 restores the default
+    EXPECT_EQ(db_->prepared_cache_capacity(), 100u);
 }
 
 // ---------------------------------------------------------------------------

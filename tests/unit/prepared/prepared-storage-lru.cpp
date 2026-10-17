@@ -8,6 +8,9 @@
  *  - `PreparedStorageStressTest.HighVolumeEviction` — 1000 inserts / 100-slot cache;
  *  - `PreparedStorageStressTest.AccessPatternPromotion` — accessed entries survive;
  *  - copied/moved storage keeps its own LRU index, including self-move; const lookup promotes recency;
+ *  - a shrink evicts down to the new bound; every named statement evicted is queued for a server-side
+ *    `Close('S')`, carried by the Parse that evicted it or by the next Bind (Huly QB-207); hits and misses
+ *    count named executions only;
  *  - `NameCacheTest.LazyInitialization` — REWRITTEN from a zero-assertion placeholder
  *    (`std::cout "placeholder"`) into a real check of `result_impl::column_index_of`'s
  *    lazy O(1) name-cache (built on first lookup; miss → npos).
@@ -19,11 +22,14 @@
 
 #include <gtest/gtest.h>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <new>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 #include <qbm/pgsql/pgsql.h>
 
 namespace {
@@ -275,6 +281,164 @@ TEST(PreparedStorageStress, AccessPatternPromotion) {
     EXPECT_TRUE(storage.has("q5"));
     EXPECT_TRUE(storage.has("q6"));
     EXPECT_EQ(storage.evicted_count(), 2u);
+}
+
+/// A shrink evicts down to the new bound. It used to apply the pre-insertion rule (make room for
+/// one more) and leave the cache one entry below the capacity it had just been given.
+TEST(PreparedStorageLRU, SetMaxSizeShrinksToTheNewBoundExactly) {
+    PreparedStorage storage(5);
+    for (int i = 0; i < 5; ++i)
+        storage.push(make_query("q" + std::to_string(i), "SELECT " + std::to_string(i)));
+
+    storage.set_max_size(3);
+    EXPECT_EQ(storage.max_size(), 3u);
+    EXPECT_EQ(storage.size(), 3u);
+    EXPECT_EQ(storage.evicted_count(), 2u);
+    EXPECT_FALSE(storage.has("q0"));
+    EXPECT_FALSE(storage.has("q1"));
+    EXPECT_TRUE(storage.has("q2"));
+    EXPECT_TRUE(storage.has("q4"));
+}
+
+/**
+ * @brief Every named statement the LRU evicts is queued for a server-side Close, once; the unnamed
+ *        statement is evicted without one (the next unnamed Parse replaces it on the server).
+ */
+TEST(PreparedStorageLRU, EvictionQueuesTheServerCloseOfNamedStatementsOnly) {
+    PreparedStorage storage(2);
+    storage.push(make_query("a", "SELECT 1"));
+    storage.push(make_query("", "SELECT $1::int"));
+    EXPECT_FALSE(storage.has_pending_close());
+
+    // A cached name needs no room, even in a full cache.
+    storage.make_room_for("a");
+    storage.make_room_for("");
+    EXPECT_EQ(storage.size(), 2u);
+    EXPECT_FALSE(storage.has_pending_close());
+
+    // A new name in a full cache evicts the least recently used entry, "a", before its Parse.
+    storage.make_room_for("b");
+    EXPECT_FALSE(storage.has("a"));
+    EXPECT_EQ(storage.size(), 1u);
+    ASSERT_TRUE(storage.has_pending_close());
+    EXPECT_EQ(storage.take_pending_close(), std::vector<std::string>{"a"});
+    EXPECT_FALSE(storage.has_pending_close());
+    storage.push(make_query("b", "SELECT 2")); // ParseComplete: the slot is free, nothing more goes
+    EXPECT_EQ(storage.evicted_count(), 1u);
+
+    // The unnamed statement is now the LRU: evicted, never queued for a Close.
+    storage.make_room_for("c");
+    EXPECT_FALSE(storage.has(""));
+    EXPECT_FALSE(storage.has_pending_close());
+    EXPECT_EQ(storage.evicted_count(), 2u);
+
+    // A shrink queues every named statement it evicts, oldest first, and clear() (a new backend
+    // session) drops the Closes owed to the old one.
+    storage.push(make_query("c", "SELECT 3"));
+    storage.set_max_size(1);
+    EXPECT_EQ(storage.take_pending_close(), std::vector<std::string>{"b"});
+    storage.set_max_size(3);
+    storage.push(make_query("d", "SELECT 4"));
+    storage.set_max_size(1);
+    ASSERT_TRUE(storage.has_pending_close());
+    storage.clear();
+    EXPECT_FALSE(storage.has_pending_close());
+    EXPECT_EQ(storage.size(), 0u);
+}
+
+/// Hits and misses count the named executions about to be sent; the unnamed slot is not counted.
+TEST(PreparedStorageLRU, HitsAndMissesCountNamedExecutionsOnly) {
+    PreparedStorage storage(2);
+    storage.push(make_query("a", "SELECT 1"));
+    storage.push(make_query("", "SELECT $1::int"));
+
+    EXPECT_TRUE(storage.lookup_for_execute("a"));
+    EXPECT_TRUE(storage.lookup_for_execute("a"));
+    EXPECT_FALSE(storage.lookup_for_execute("never_prepared"));
+    EXPECT_TRUE(storage.lookup_for_execute(""));
+    EXPECT_EQ(storage.hits(), 2u);
+    EXPECT_EQ(storage.misses(), 1u);
+
+    // A miss caused by the LRU is a miss like any other.
+    storage.push(make_query("b", "SELECT 2"));
+    EXPECT_FALSE(storage.lookup_for_execute("a"));
+    EXPECT_EQ(storage.misses(), 2u);
+
+    // has() stays a pure query.
+    EXPECT_TRUE(storage.has("b"));
+    EXPECT_EQ(storage.hits(), 2u);
+    EXPECT_EQ(storage.misses(), 2u);
+}
+
+/// Split a frontend byte stream into (tag, body) messages.
+[[nodiscard]] static std::vector<std::pair<char, std::string>>
+frontend_messages(message const &m) {
+    const auto                                range = m.buffer();
+    const std::string                         bytes(range.first, range.second);
+    std::vector<std::pair<char, std::string>> out;
+    std::size_t                               at = 0;
+    while (at + 5 <= bytes.size()) {
+        const auto octet = [&](std::size_t i) {
+            return static_cast<std::uint32_t>(static_cast<unsigned char>(bytes[i]));
+        };
+        const std::uint32_t len = (octet(at + 1) << 24) | (octet(at + 2) << 16) | (octet(at + 3) << 8) | octet(at + 4);
+        if (len < 4 || at + 1 + len > bytes.size())
+            break;
+        out.emplace_back(bytes[at], bytes.substr(at + 5, len - 4));
+        at += 1 + len;
+    }
+    EXPECT_EQ(at, bytes.size()) << "trailing bytes do not frame as messages";
+    return out;
+}
+
+/**
+ * @brief The Parse that evicts a statement carries that statement's Close('S') ahead of itself in
+ *        the same message — no extra round trip — and the Bind after a shrink carries the Closes
+ *        the shrink owed (Huly QB-207).
+ */
+TEST(PreparedStorageLRU, EvictingParseCarriesTheCloseInItsOwnMessage) {
+    PreparedStorage storage(1);
+    storage.push(make_query("old_stmt", "SELECT 1"));
+
+    const PreparedQuery fresh{"new_stmt", "SELECT 2", {}, {}};
+    ParseQuery          parse(storage, fresh, [] {}, [](error::db_error const &) {});
+    const auto          parse_msgs = frontend_messages(parse.get());
+    ASSERT_EQ(parse_msgs.size(), 4u);
+    EXPECT_EQ(parse_msgs[0].first, 'C');
+    EXPECT_EQ(parse_msgs[0].second, std::string("Sold_stmt\0", 10));
+    EXPECT_EQ(parse_msgs[1].first, 'P');
+    EXPECT_EQ(parse_msgs[2].first, 'D');
+    EXPECT_EQ(parse_msgs[3].first, 'S');
+    EXPECT_FALSE(storage.has("old_stmt"));
+    EXPECT_FALSE(storage.has_pending_close());
+
+    // ParseComplete, then a Parse with room to spare carries no Close.
+    storage.push(PreparedQuery{fresh});
+    storage.set_max_size(2);
+    const PreparedQuery second{"second_stmt", "SELECT 3", {}, {}};
+    ParseQuery          parse2(storage, second, [] {}, [](error::db_error const &) {});
+    const auto          parse2_msgs = frontend_messages(parse2.get());
+    ASSERT_EQ(parse2_msgs.size(), 3u);
+    EXPECT_EQ(parse2_msgs[0].first, 'P');
+    storage.push(PreparedQuery{second});
+
+    // A shrink evicts at once; the next Bind carries the Close it owes, then Bind/Execute/Sync.
+    storage.set_max_size(1);
+    ASSERT_TRUE(storage.has("second_stmt"));
+    ExecuteQuery bind(storage, "second_stmt", QueryParams{}, [] {}, [](error::db_error const &) {});
+    ASSERT_TRUE(bind.is_valid());
+    const auto bind_msgs = frontend_messages(bind.get());
+    ASSERT_EQ(bind_msgs.size(), 4u);
+    EXPECT_EQ(bind_msgs[0].first, 'C');
+    EXPECT_EQ(bind_msgs[0].second, std::string("Snew_stmt\0", 10));
+    EXPECT_EQ(bind_msgs[1].first, 'B');
+    EXPECT_EQ(bind_msgs[2].first, 'E');
+    EXPECT_EQ(bind_msgs[3].first, 'S');
+
+    // The queue is drained: the next Bind is Bind/Execute/Sync alone.
+    ExecuteQuery bind2(storage, "second_stmt", QueryParams{}, [] {}, [](error::db_error const &) {});
+    ASSERT_TRUE(bind2.is_valid());
+    EXPECT_EQ(frontend_messages(bind2.get()).size(), 3u);
 }
 
 TEST(PreparedStorageLRU, CopyConstructionKeepsQueriesAndOrderIndependent) {

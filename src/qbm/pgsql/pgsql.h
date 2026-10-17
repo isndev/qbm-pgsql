@@ -2050,6 +2050,31 @@ public:
     }
 
     /**
+     * @brief Bound the connection's prepared-statement cache (default 100 statements).
+     *
+     * The cache is an LRU of the statements `prepare()` created on this connection (the inline
+     * `query(sql, args...)` path keeps its unnamed statement in one slot of it). A named statement
+     * it evicts is closed on the server as well: `Close('S', name)` travels in the message of the
+     * Parse that evicted it, or — after a shrink, which evicts at once — of the next Parse or Bind,
+     * so the backend holds no more named statements than the cache does. Executing an evicted
+     * name fails client-side ("not registered"); prepare it again. `0` restores the default.
+     *
+     * @param capacity Maximum number of cached statements
+     * @return *this
+     */
+    Database<QB_IO_, NotifyDerived> &
+    prepared_cache_capacity(std::size_t capacity) {
+        storage_.set_max_size(capacity);
+        return *this;
+    }
+
+    /** @brief The prepared-statement cache's bound (see `prepared_cache_capacity(std::size_t)`). */
+    [[nodiscard]] std::size_t
+    prepared_cache_capacity() const noexcept {
+        return storage_.max_size();
+    }
+
+    /**
      * @brief Enable TCP keepalive for the connection (P1-1)
      *
      * Configures TCP keepalive parameters to detect dead connections.

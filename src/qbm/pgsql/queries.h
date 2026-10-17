@@ -23,11 +23,13 @@
  */
 #pragma once
 
+#include <cstdint>
 #include <iomanip>
 #include <iostream>
 #include <list> // P2-1: LRU cache
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <vector>
 #include <qb/io.h>
 #include <qb/system/container/unordered_map.h>
@@ -61,6 +63,14 @@ struct PreparedQuery {
  * Provides a central repository for all prepared statements in the
  * database session, allowing them to be referenced by name.
  * Implements bounded capacity with LRU eviction to prevent unbounded growth.
+ *
+ * The cache mirrors the server: a named statement it evicts still exists in the backend
+ * session until a `Close('S', name)` reaches it, so every eviction queues that name
+ * (`has_pending_close()` / `take_pending_close()`), and the next Parse or Bind the client
+ * sends carries the Close messages ahead of its own (Huly QB-207). A Parse makes room for
+ * itself BEFORE it is written (`make_room_for()`), so the Close of the statement it pushes
+ * out travels in the same message. The unnamed statement `""` is never closed: the next
+ * unnamed Parse replaces it on the server.
  */
 class PreparedStorage {
     // LRU cache implementation
@@ -74,6 +84,9 @@ class PreparedStorage {
     mutable std::list<std::string>           _lru_list;         ///< LRU order list, reordered by get()
     size_t                                   _max_size{100};    ///< Max capacity
     size_t                                   _evicted_count{0}; ///< Stats: evicted
+    std::vector<std::string>                 _pending_close;    ///< Evicted named statements the server still holds
+    mutable std::uint64_t                    _hits{0};          ///< Stats: execute(name) found in the cache
+    mutable std::uint64_t                    _misses{0};        ///< Stats: execute(name) refused, name not cached
 
 public:
     /**
@@ -94,7 +107,11 @@ public:
     PreparedStorage &operator=(PreparedStorage &&other) noexcept;
 
     /**
-     * @brief Set maximum cache size (applies to future insertions)
+     * @brief Set the maximum cache size
+     *
+     * A smaller bound evicts the least recently used entries at once, down to the new bound;
+     * the named ones are queued for a server-side Close. 0 restores the default (100).
+     *
      * @param max_size New maximum size
      */
     void set_max_size(size_t max_size);
@@ -127,6 +144,23 @@ public:
     }
 
     /**
+     * @brief Named executions found in the cache (monotonic; the unnamed statement is not counted)
+     */
+    [[nodiscard]] std::uint64_t
+    hits() const noexcept {
+        return _hits;
+    }
+
+    /**
+     * @brief Named executions refused because the name is not cached (monotonic): never
+     *        prepared, evicted by the LRU, or dropped with the cache by `prepare_reconnect()`
+     */
+    [[nodiscard]] std::uint64_t
+    misses() const noexcept {
+        return _misses;
+    }
+
+    /**
      * @brief Checks if a prepared query exists
      *
      * @param name Name of the prepared query
@@ -135,6 +169,54 @@ public:
     bool
     has(std::string_view name) const {
         return _prepared_queries.find(std::string(name)) != _prepared_queries.cend();
+    }
+
+    /**
+     * @brief `has()` for an execution about to be sent, counted as a hit or a miss
+     *
+     * The unnamed statement `""` is the inline `query(sql, args...)` path's private slot, not a
+     * cached statement, and is not counted.
+     *
+     * @param name Name of the prepared query
+     * @return bool True if the query exists, false otherwise
+     */
+    bool
+    lookup_for_execute(std::string_view name) const {
+        const bool found = has(name);
+        if (!name.empty())
+            ++(found ? _hits : _misses);
+        return found;
+    }
+
+    /**
+     * @brief Make room for a statement about to be parsed
+     *
+     * When @p name is not cached and the cache is full, evicts the least recently used
+     * entries until one slot is free, queuing each named one for a server-side Close. Called
+     * while the Parse is being written, so that Close travels in the Parse's own message.
+     *
+     * @param name Name of the statement the Parse will create
+     */
+    void make_room_for(std::string_view name);
+
+    /**
+     * @brief Whether an evicted named statement still awaits its server-side Close
+     */
+    [[nodiscard]] bool
+    has_pending_close() const noexcept {
+        return !_pending_close.empty();
+    }
+
+    /**
+     * @brief Take the names of the evicted statements the server still holds
+     *
+     * The caller writes one `Close('S', name)` per name ahead of the message it is sending.
+     *
+     * @return std::vector<std::string> The names, oldest eviction first; the queue is left empty
+     */
+    [[nodiscard]] std::vector<std::string>
+    take_pending_close() noexcept {
+        return std::exchange(_pending_close, {});
     }
 
     /**
@@ -161,24 +243,47 @@ public:
 
     /**
      * @brief Clear all prepared queries
+     *
+     * For a new backend session: the statements of the old one, and the Closes still owed to
+     * it, died with it.
      */
     void
     clear() {
         _prepared_queries.clear();
         _lru_list.clear();
+        _pending_close.clear();
     }
 
 private:
     /**
-     * @brief Evict least recently used items if over capacity
+     * @brief Evict least recently used entries until at most @p limit remain
      */
-    void evict_if_needed();
+    void evict_down_to(size_t limit);
+
+    /**
+     * @brief Evict the least recently used entry, queuing its server-side Close when named
+     */
+    void evict_lru();
 
     void swap(PreparedStorage &other);
 };
 
 // Maintain backward compatibility
 using PreparedQueryStorage = PreparedStorage;
+
+/**
+ * @brief Prefix @p tail with one `Close('S', name)` per statement @p storage evicted and the
+ *        server still holds, emptying that queue (Huly QB-207)
+ *
+ * @p tail is a Parse or a Bind sequence ending with its own Sync, so a Close travels inside
+ * the extended-query cycle that Sync closes. Out of line: the queue is empty on every message
+ * but the one that follows an eviction.
+ *
+ * @param storage The session's statement cache; its pending-close queue is drained
+ * @param tail The message the Closes precede
+ * @return message The Closes, then @p tail
+ */
+[[nodiscard]] message close_evicted_statements_before(PreparedStorage &storage, message &&tail);
 
 /**
  * @brief Class for managing query parameters
@@ -675,11 +780,13 @@ public:
  */
 template <typename CB_SUCCESS, typename CB_ERROR>
 class ParseQuery final : public SqlQuery<CB_SUCCESS, CB_ERROR> {
-    PreparedQuery const &_query; ///< Prepared query definition
+    PreparedStorage     &_storage; ///< The session's statement cache: room is made in it as the Parse is written
+    PreparedQuery const &_query;   ///< Prepared query definition
 
 public:
-    ParseQuery(PreparedQuery const &query, CB_SUCCESS &&success, CB_ERROR &&error)
+    ParseQuery(PreparedStorage &storage, PreparedQuery const &query, CB_SUCCESS &&success, CB_ERROR &&error)
         : SqlQuery<CB_SUCCESS, CB_ERROR>(std::forward<CB_SUCCESS>(success), std::forward<CB_ERROR>(error))
+        , _storage(storage)
         , _query(query) {}
 
     bool
@@ -696,9 +803,27 @@ public:
         return false;
     }
 
+    /**
+     * @brief Parse + Describe + Sync, preceded by the Close of every statement the cache
+     *        evicted — including the one this Parse pushes out of a full cache (Huly QB-207)
+     *
+     * Called once, when the query is sent: the eviction happens here, not when ParseComplete
+     * arrives, so its `Close('S', name)` rides in this message instead of costing a round
+     * trip. The server answers each Close with CloseComplete ahead of ParseComplete; closing a
+     * name the backend does not know is not an error.
+     */
     [[nodiscard]] message
     get() const final {
         QB_LOG_DEBUG("[pgsql] Send PARSE QUERY \"" << _query.expression << "\"");
+        _storage.make_room_for(_query.name);
+        if (_storage.has_pending_close())
+            return close_evicted_statements_before(_storage, parse_describe_sync());
+        return parse_describe_sync();
+    }
+
+private:
+    [[nodiscard]] message
+    parse_describe_sync() const {
         message cmd(parse_tag);
         cmd.write(_query.name);
         cmd.write(_query.expression);
@@ -725,9 +850,9 @@ public:
  */
 template <typename CB_SUCCESS, typename CB_ERROR>
 class ExecuteQuery final : public SqlQuery<CB_SUCCESS, CB_ERROR> {
-    const PreparedStorage &_storage;    ///< Prepared statement storage
-    std::string            _query_name; ///< Query name to execute
-    QueryParams            _params;     ///< Query parameters
+    PreparedStorage &_storage;    ///< Prepared statement storage (hit/miss counted, owed Closes drained)
+    std::string      _query_name; ///< Query name to execute
+    QueryParams      _params;     ///< Query parameters
 
 public:
     /**
@@ -739,7 +864,7 @@ public:
      * @param success Success callback
      * @param error Error callback
      */
-    ExecuteQuery(const PreparedStorage &storage, std::string_view query_name, QueryParams &&params, CB_SUCCESS &&success, CB_ERROR &&error)
+    ExecuteQuery(PreparedStorage &storage, std::string_view query_name, QueryParams &&params, CB_SUCCESS &&success, CB_ERROR &&error)
         : SqlQuery<CB_SUCCESS, CB_ERROR>(std::forward<CB_SUCCESS>(success), std::forward<CB_ERROR>(error))
         , _storage(storage)
         , _query_name(query_name)
@@ -747,14 +872,26 @@ public:
 
     bool
     is_valid() const final {
-        if (qb::likely(_storage.has(_query_name)))
+        if (qb::likely(_storage.lookup_for_execute(_query_name)))
             return true;
         QB_LOG_CRIT("[pgsql] Error prepared query " << _query_name << " not registered");
         return false;
     }
 
+    /**
+     * @brief Bind + Execute + Sync — preceded, in the rare message that follows a cache shrink
+     *        (`set_max_size()`), by the Close of each statement it evicted (Huly QB-207)
+     */
     message
     get() const final {
+        if (_storage.has_pending_close()) [[unlikely]]
+            return close_evicted_statements_before(_storage, bind_execute_sync());
+        return bind_execute_sync();
+    }
+
+private:
+    [[nodiscard]] message
+    bind_execute_sync() const {
         const auto &query = _storage.get(_query_name);
         message     cmd(bind_tag);
 
