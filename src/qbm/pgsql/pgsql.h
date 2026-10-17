@@ -564,6 +564,22 @@ private:
     /// `database`).
     std::function<void(::qb::pg::notification &&)> inbound_notify_handler_{};
 
+    /// `on_notice`: every NoticeResponse, with all its fields (Huly QB-108); empty: logged at INFO.
+    std::function<void(::qb::pg::notice const &)> notice_handler_{};
+
+    /// Out of line and cold: a notice is rare. An exception escaping the handler is contained and
+    /// logged -- it runs inside the protocol handler.
+    QB_NOINLINE QB_COLD void
+    deliver_notice(::qb::pg::notice const &n) noexcept {
+        try {
+            notice_handler_(n);
+        } catch (std::exception const &e) {
+            QB_LOG_WARN("[pgsql] on_notice handler threw: " << e.what());
+        } catch (...) {
+            QB_LOG_WARN("[pgsql] on_notice handler threw a non-std exception");
+        }
+    }
+
     void
     try_resume_connect_wait() {
         if (!connect_coroutine_pending_)
@@ -1537,7 +1553,9 @@ public:
         msg.read(notice);
 
         QB_LOG_WARN("[pgsql] Error " << notice);
-        error::query_error err(notice.message, notice.severity, notice.sqlstate, notice.detail);
+        // Every field the server sent, kept whole and shared by the error's copies (Huly QB-108).
+        error::query_error err(
+            std::make_shared<const ::qb::pg::server_error_fields>(std::move(static_cast<::qb::pg::server_error_fields &>(notice))));
 
         on_error_query(err);
         if (connect_coroutine_pending_ && !is_connected_)
@@ -1579,6 +1597,10 @@ public:
         notice_message notice;
         msg.read(notice);
 
+        if (notice_handler_) {
+            deliver_notice(notice);
+            return;
+        }
         QB_LOG_INFO("[pgsql] Received notice" << notice);
     }
 
@@ -2142,6 +2164,25 @@ public:
     on_incoming_notify(std::function<void(::qb::pg::notification &&)> fn) {
         if constexpr (std::is_same_v<NotifyDerived, void>)
             inbound_notify_handler_ = std::move(fn);
+        return *this;
+    }
+
+    /**
+     * @brief Be told of every NoticeResponse the server sends on this connection (Huly QB-108).
+     *
+     * A notice is the non-error message a statement can emit -- `RAISE NOTICE` / `WARNING`, an
+     * implicit index creation, a `DROP ... IF EXISTS` of nothing. @p fn receives every field the
+     * server sent (`qb::pg::notice`, the same struct a server error keeps), on the connection's
+     * thread, as the message is read; it must not drive this connection, and an exception escaping
+     * it is contained and logged. Without a handler -- the default, or an empty function -- a
+     * notice is logged at INFO as before. Replaces any previous handler.
+     *
+     * @param fn The handler, or an empty one to remove it
+     * @return *this
+     */
+    Database<QB_IO_, NotifyDerived> &
+    on_notice(std::function<void(::qb::pg::notice const &)> fn) {
+        notice_handler_ = std::move(fn);
         return *this;
     }
 

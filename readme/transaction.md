@@ -402,7 +402,7 @@ Key facts to get right:
 
 ## LISTEN / NOTIFY
 
-<!-- src: src/qbm/pgsql/transaction.h:464-528; src/qbm/pgsql/pg_notify_sql.h:25-92; qbm/pgsql/src/qbm/pgsql/pgsql.h:383-393,2141-2146,3020-3155 (in that order: notification; on_incoming_notify; notify_consumer / notify_co_consumer / notify_cb_consumer) -->
+<!-- src: src/qbm/pgsql/transaction.h:464-528; src/qbm/pgsql/pg_notify_sql.h:25-92; qbm/pgsql/src/qbm/pgsql/pgsql.h:383-393,2163-2168,3061-3196 (in that order: notification; on_incoming_notify; notify_consumer / notify_co_consumer / notify_cb_consumer) -->
 
 ### Publishing (NOTIFY)
 
@@ -414,7 +414,7 @@ with `notify_payload_max_bytes` (8000) bytes or more are rejected locally with a
 The bound counts bytes: 7,999 bytes are accepted, 8,000 are rejected. The local error uses the existing
 `code == "00000"` and does not publish a notification or make the connection unusable.
 The callback form invokes its error callback and rethrows; the coroutine form returns a failed `Reply<void>`.
-<!-- src: src/qbm/pgsql/pg_notify_sql.cpp:65-74; src/qbm/pgsql/error.cpp:132-143; src/qbm/pgsql/commands.h:1249-1256,1626-1628 -->
+<!-- src: src/qbm/pgsql/pg_notify_sql.cpp:65-74; src/qbm/pgsql/error.cpp:144-155; src/qbm/pgsql/commands.h:1249-1256,1626-1628 -->
 
 ```cpp
 // Callback
@@ -478,7 +478,7 @@ subscription belongs to the session — `receive()` serves the new connection, u
   `End`/`with_transaction` do it) before sending new commands.
 - **A lost connection fails every pending query automatically.** You do **not** write a disconnect handler. The built-in
   `Database::on(qb::io::async::event::disconnected)` handler calls `fail_all_pending(...)` on the root transaction (through
-  `fail_all_pending_counted`, `qbm/pgsql/src/qbm/pgsql/pgsql.h:2919`, which also counts each drained query), which drains every queued query and pending sub-transaction so suspended `co_await`
+  `fail_all_pending_counted`, `qbm/pgsql/src/qbm/pgsql/pgsql.h:2960`, which also counts each drained query), which drains every queued query and pending sub-transaction so suspended `co_await`
   awaiters resume with `client_error("database disconnected")` instead of hanging forever.
   See [connection.md](./connection.md) (Fail-all-on-disconnect).
 - **Statement timeout below 1 ms vanishes.** A sub-millisecond `set_timeout` truncates to 0 and emits no `SET LOCAL`.

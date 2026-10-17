@@ -459,6 +459,24 @@ if (reply.error().sqlstate == qb::pg::sqlstate::unique_violation) { /* 23505 */ 
 `sqlstate` (`qb::pg::sqlstate::code` enum). Exceptions thrown **inside** a user
 callback are wrapped as `error::client_error`.
 
+**Every field the server sent** (Huly QB-108): a server error keeps them all in a
+shared `qb::pg::server_error_fields` (`db_error::server_fields()`, null for an error
+the client raised), read through `std::string_view` accessors that are empty when
+absent — `constraint_name()`, `table_name()`, `schema_name()`, `column_name()`,
+`data_type_name()`, `hint()`, `position()`, `internal_query()`,
+`internal_position()`, `where()`, `severity_nonlocalized()`, `file_name()`,
+`line()`, `routine()`. The handler of a unique violation names the constraint:
+
+```cpp
+if (!r.ok() && r.error().sqlstate == qb::pg::sqlstate::unique_violation
+    && r.error().constraint_name() == "users_email_key") { /* email taken */ }
+```
+
+**Notices** (`RAISE NOTICE`, warnings): `db.on_notice([](qb::pg::notice const &n) { ... })`
+receives each one with the same fields (`qb::pg::notice` is `server_error_fields`), on
+the connection's thread; it must not drive the connection, an exception escaping it is
+contained. Without a handler a notice is only logged at INFO.
+
 ### 3.9 LISTEN / NOTIFY
 
 Plain database: `notify` / `listen` / `unlisten` / `unlisten_all` (callback or
@@ -473,7 +491,7 @@ The payload limit is exclusive and measured in bytes: 7,999 bytes are accepted, 
 8,000 or more fail locally before SQL is queued. The failure is `error::client_error`
 with the existing `code == "00000"`. The callback form invokes its error callback and
 rethrows that error; the coroutine form returns a failed `Reply<void>`
-(`src/qbm/pgsql/pg_notify_sql.cpp:65-74`, `src/qbm/pgsql/error.cpp:132-143`,
+(`src/qbm/pgsql/pg_notify_sql.cpp:65-74`, `src/qbm/pgsql/error.cpp:144-155`,
 `src/qbm/pgsql/commands.h:1249-1256,1626-1628`).
 
 For a queue-based consumer use the dedicated client:
@@ -542,7 +560,7 @@ the operation and callable without copying either shared owner; retention occurs
 cancellation detaches the sink or completion releases the operation during the call. That
 ownership stays in the operation's outermost sink invocation through nested calls until return.
 Borrowed capture data still needs its own lifetime; command admission and reservation are unchanged.
-_(src/qbm/pgsql/pgsql.h:1164-1203,1211-1228,1901-1917,2425-2434)_
+_(src/qbm/pgsql/pgsql.h:1180-1219,1227-1244,1923-1939,2466-2475)_
 
 > **`copy_in` is NOT constant-memory.** It drains the entire `source` into the
 > output pipe synchronously (bounded only by the write-buffer ceiling). Only
@@ -597,7 +615,7 @@ coroutine, an actor, or a second connection's trigger; reach for `cancel()` only
 where no coroutine can run.
 During the packet write, a native TLS `WANT_READ` waits for readability alone;
 otherwise native TLS and plain writes wait for writability. A custom secure transport
-without native TLS state keeps the combined read/write fallback (`pgsql.h:2754-2765`).
+without native TLS state keeps the combined read/write fallback (`pgsql.h:2795-2806`).
 
 **Connection introspection (all `[[nodiscard]]`, libpq-style):**
 
@@ -871,8 +889,8 @@ public:
         query_stream(std::string sql, std::size_t batch_size, RowFn on_row);
 
     // Connection introspection / control:
-    bool cancel();                                      // out-of-band PostgreSQL CancelRequest (SYNCHRONOUS, ≤2s, plaintext); NOT [[nodiscard]] (pgsql.h:2653-2654)
-    [[nodiscard]] qb::io::async::task<bool> cancel_async(); // the same request, non-blocking, TLS on a secure database (pgsql.h:2698-2699)
+    bool cancel();                                      // out-of-band PostgreSQL CancelRequest (SYNCHRONOUS, ≤2s, plaintext); NOT [[nodiscard]] (pgsql.h:2694-2695)
+    [[nodiscard]] qb::io::async::task<bool> cancel_async(); // the same request, non-blocking, TLS on a secure database (pgsql.h:2739-2740)
     [[nodiscard]] bool in_transaction() const noexcept; // backend session in a transaction block ('T'/'E')
     [[nodiscard]] bool used_channel_binding() const noexcept; // SCRAM-SHA-256-PLUS tls-server-end-point binding negotiated
     [[nodiscard]] std::optional<std::string_view> parameter_status(std::string_view key) const; // PQparameterStatus
@@ -882,6 +900,7 @@ public:
     [[nodiscard]] std::size_t prepared_cache_capacity() const noexcept;
     [[nodiscard]] qb::pg::stats stats() const noexcept;          // counts since construction (Huly QB-115)
     Database &on_query_complete(std::function<void(qb::pg::query_info const &)> hook); // empty = none
+    Database &on_notice(std::function<void(qb::pg::notice const &)> fn);                 // empty = log at INFO
 
     // Transaction methods (fluent API - from qb::pg::detail::Transaction):
     // template <typename CB_SUCCESS, typename CB_ERROR>
@@ -922,7 +941,7 @@ struct tcp {
     - `copy_in(std::string sql, std::function<std::optional<std::string>()> source) -> task<Reply<resultset>>`: Runs a `COPY … FROM STDIN`, calling `source` repeatedly and sending each returned chunk as `CopyData` until it returns `std::nullopt` (then `CopyDone`). A throwing `source` aborts the COPY with `CopyFail`. Resolves to `ok()` (the `COPY n` count) on success; the connection stays usable on error. **NOT constant-memory** — it drains the whole source into the output pipe synchronously (capped by the write-buffer ceiling); only `copy_out` and `query_stream` stream in constant memory.
     - `copy_in(std::string sql, std::string data) -> task<Reply<resultset>>`: Convenience overload that sends the entire `data` payload in one shot.
     - The connection admits one COPY at a time, in either direction. A second COPY returns a failed `Reply` without sending SQL or invoking its source/sink. Destroying the awaiting coroutine detaches its callback; its command keeps the reservation until completion, so a later COPY cannot answer the old server response. A source that destroys its own waiter causes its returned chunk to be discarded and `CopyFail` to be sent without another source call.
-    - A COPY OUT sink and its owned captures stay alive until its invocation returns, including self-cancellation or disconnect; detachment prevents later calls. Ordinary chunk delivery borrows the operation and callable without copying either shared owner. Cancellation or completion during the call retains the needed ownership in the operation's outermost sink invocation, shared by nested calls until return. Borrowed capture data needs its own lifetime. Command admission and query association remain unchanged (`src/qbm/pgsql/pgsql.h:1164-1203,1211-1228,1901-1917,2425-2434`).
+    - A COPY OUT sink and its owned captures stay alive until its invocation returns, including self-cancellation or disconnect; detachment prevents later calls. Ordinary chunk delivery borrows the operation and callable without copying either shared owner. Cancellation or completion during the call retains the needed ownership in the operation's outermost sink invocation, shared by nested calls until return. Borrowed capture data needs its own lifetime. Command admission and query association remain unchanged (`src/qbm/pgsql/pgsql.h:1180-1219,1227-1244,1923-1939,2466-2475`).
     - `query_stream(std::string sql, std::size_t batch_size, RowFn on_row) -> task<Reply<void>>`: Streams a large result via a server-side `CURSOR` (`DECLARE`/`FETCH`, `batch_size` rows per round trip), invoking `on_row` per row in **constant memory**. Auto-manages a transaction when idle (`BEGIN`/`COMMIT`, `ROLLBACK` on failure); when `in_transaction()` it declares the cursor in the caller's transaction and touches only the cursor. Cursor names are unique per connection (`qb_stream_cursor_<n>`), so streams **may overlap** on one `database` — and because a session has a single transaction, overlapping streams **share** the self-opened block: the first opens it, later ones only join, the last one out `COMMIT`s (or `ROLLBACK`s if any participant failed), so a server error in one stream aborts the block for the others. A caller-opened transaction is recognised as caller-owned only once its `BEGIN` has **completed** (`in_transaction()` mirrors the last `ReadyForQuery`), so do not start a stream while your own `begin()` is still in flight. `on_row` exceptions are rethrown after the cursor is closed and any self-opened transaction rolled back. `batch_size` is clamped to ≥ 1.
 - **Connection introspection / control:**
     - `bool cancel()`: Sends an out-of-band PostgreSQL `CancelRequest` on a short-lived **separate** connection (libpq `PQcancel` style). It is **synchronous / blocking** (capped at ≤ 2s) and plaintext even when the main link is SSL. Surfaces on the in-flight query as `sqlstate::query_canceled` (57014). Note: it briefly blocks the calling thread — prefer `cancel_async()`.
@@ -930,13 +949,14 @@ struct tcp {
     - `bool in_transaction() const noexcept`: True when the backend session is in a transaction block (`'T'`) or a failed transaction block (`'E'`); false when idle (`'I'`).
     - Packet-write readiness in `cancel_async()`: native TLS `WANT_READ` waits for read only;
       other native TLS/plain writes wait for write. Custom secure transports without native
-      TLS state retain the combined read/write fallback (`pgsql.h:2754-2765`).
+      TLS state retain the combined read/write fallback (`pgsql.h:2795-2806`).
     - `bool used_channel_binding() const noexcept`: True when **SCRAM-SHA-256-PLUS** with `tls-server-end-point` channel binding was negotiated (only over TLS, when the server offers the `-PLUS` mechanism).
     - `std::optional<std::string_view> parameter_status(std::string_view key) const`: Value of a server `ParameterStatus` report (libpq `PQparameterStatus`); e.g. `"server_version"`, `"server_encoding"`, `"TimeZone"`. `std::nullopt` if the key was never reported.
     - `int server_version() const`: Server version as a libpq-style integer (`PQserverVersion`), e.g. `160002` for 16.2. Returns 0 if the `server_version` parameter is unknown.
     - `int backend_pid() const noexcept`: Server-side backend PID captured at connect (`BackendKeyData`); libpq `PQbackendPID`. Returns 0 if not connected.
     - `qb::pg::stats stats() const noexcept`: A snapshot, by value, of what the connection has done — monotonic `std::uint64_t` counts since construction (a reconnect resets nothing) and the last query's duration. See [Observability](#observability-qbpgstats-qbpgquery_info-qbpgquery_kind). (Huly QB-115)
     - `Database &on_query_complete(std::function<void(qb::pg::query_info const &)> hook)`: One call per completed query, on the connection's thread, before the query's own callback or awaiter: success, server error, local refusal, or a disconnect's drain. An empty function (the default) removes it; without one a completion pays one predictable branch. Must not drive the connection; an exception escaping it is contained and logged. (Huly QB-115)
+    - `Database &on_notice(std::function<void(qb::pg::notice const &)> fn)`: Every NoticeResponse (`RAISE NOTICE` / `WARNING`, server notices) with all its fields, on the connection's thread as the message is read; must not drive the connection; an exception escaping it is contained and logged. Without a handler (the default, or an empty function) a notice is logged at INFO. Replaces any previous handler. (Huly QB-108)
     - `Database &prepared_cache_capacity(std::size_t capacity)` / `std::size_t prepared_cache_capacity() const noexcept`: The bound of the connection's prepared-statement LRU — 100 by default, `0` restores it. A statement the LRU evicts is closed on the server as well: a protocol `Close` message for it precedes the evicting Parse in the same message, or, after a shrink (which evicts at once), the next Parse or Bind. The backend therefore holds no more named statements than the cache; executing an evicted name fails client-side and the name can be prepared again. The inline `query(sql, args...)` path's unnamed statement takes one slot and is never closed. (Huly QB-207)
 - **Transaction API:**
     - `begin(...)`: Starts a new transaction. Takes success/error callbacks and optional `transaction_mode`.
@@ -949,7 +969,7 @@ struct tcp {
       fail locally before SQL is queued, with `error::client_error` and `code == "00000"`.
       The callback form invokes its error callback and rethrows; the coroutine form returns a failed `Reply<void>`
       (`src/qbm/pgsql/transaction.h:470-482`, `src/qbm/pgsql/pg_notify_sql.cpp:65-74`,
-      `src/qbm/pgsql/error.cpp:132-143`, `src/qbm/pgsql/commands.h:1249-1256,1626-1628`).
+      `src/qbm/pgsql/error.cpp:144-155`, `src/qbm/pgsql/commands.h:1249-1256,1626-1628`).
     - `savepoint(...)`: Creates a savepoint within a transaction. A handled child failure rolls back to and releases it, then the outer block continues; failed creation or cleanup aborts the outer block. The savepoint error callback runs once after cleanup, including when its success callback throws.
     - `then(...)`: Chains an operation to be executed if the previous one succeeds. A thrown callback becomes a client error visible to `error(...)` and `await()`; completed SQL is not undone.
     - `error(...)`: Registers an error handler for the preceding operation(s).
@@ -1184,7 +1204,7 @@ namespace qb::pg {
 
 ### `qb::pg::results` (alias for `qb::pg::resultset`)
 
-Represents the set of rows returned by a query. The class is declared publicly as `qb::pg::resultset` in `resultset.h`; `qb::pg::results` is its public alias (`qbm/pgsql/src/qbm/pgsql/pgsql.h:3186`). Both spellings are valid, with `results` preferred for application code. Row and field are reachable as `qb::pg::results::row` / `qb::pg::results::field`.
+Represents the set of rows returned by a query. The class is declared publicly as `qb::pg::resultset` in `resultset.h`; `qb::pg::results` is its public alias (`qbm/pgsql/src/qbm/pgsql/pgsql.h:3227`). Both spellings are valid, with `results` preferred for application code. Row and field are reachable as `qb::pg::results::row` / `qb::pg::results::field`.
 
 **Definition (`qbm/pgsql/src/qbm/pgsql/resultset.h`):**
 ```cpp
@@ -1492,14 +1512,36 @@ public:
     explicit db_error(std::string const &what_arg);
     explicit db_error(char const *what_arg);
     db_error(std::string const &message, std::string severity, std::string code, std::string detail);
+    explicit db_error(std::shared_ptr<const server_error_fields> fields); // a server error, every field kept
 
     std::string    severity; // ERROR, FATAL, WARNING, etc.
     std::string    code;     // PostgreSQL error code string (e.g., "42P01")
     std::string    detail;
     sqlstate::code sqlstate; // Enum representation of the SQLSTATE
+
+    // Every field the server sent (Huly QB-108): null / empty for an error the client raised.
+    [[nodiscard]] server_error_fields const *server_fields() const noexcept;
+    [[nodiscard]] std::string_view severity_nonlocalized() const noexcept; // V
+    [[nodiscard]] std::string_view hint() const noexcept;                  // H
+    [[nodiscard]] std::string_view position() const noexcept;              // P (decimal text)
+    [[nodiscard]] std::string_view internal_position() const noexcept;     // p
+    [[nodiscard]] std::string_view internal_query() const noexcept;        // q
+    [[nodiscard]] std::string_view where() const noexcept;                 // W
+    [[nodiscard]] std::string_view schema_name() const noexcept;           // s
+    [[nodiscard]] std::string_view table_name() const noexcept;            // t
+    [[nodiscard]] std::string_view column_name() const noexcept;           // c
+    [[nodiscard]] std::string_view data_type_name() const noexcept;        // d
+    [[nodiscard]] std::string_view constraint_name() const noexcept;       // n
+    [[nodiscard]] std::string_view file_name() const noexcept;             // F
+    [[nodiscard]] std::string_view line() const noexcept;                  // L
+    [[nodiscard]] std::string_view routine() const noexcept;               // R
 };
 } // namespace qb::pg::error
 ```
+
+The fields live in one `std::shared_ptr<const server_error_fields>`, shared by the error's copies and allocated only for
+a server error: `db_error` (and so every `Reply<T>`) grows by 16 bytes on a 64-bit target, pinned by a `static_assert`
+in `tests/unit/protocol/protocol-message-codec.cpp`. `query_error` has the same `explicit query_error(std::shared_ptr<const server_error_fields>)`.
 
 ### `qb::pg::error::connection_error`
 
@@ -1573,7 +1615,9 @@ Primarily defined in `common.h`, `pg_types.h`, and `error.h`.
 -   **Numeric types**: `smallint` (int16_t), `integer` (int32_t), `bigint` (int64_t).
 -   **`qb::pg::field_buffer`**: `qb::util::input_iterator_buffer`.
 -   **`qb::pg::detail::row_data`**: Internal storage for a row's data.
--   **`qb::pg::detail::notice_message`**: Structure to hold fields from PostgreSQL NOTICE or ERROR messages.
+-   **`qb::pg::server_error_fields`** (`error.h`): every field of an ErrorResponse / NoticeResponse, one `std::string` each, empty when absent — `severity` (S), `severity_nonlocalized` (V), `sqlstate` (C), `message` (M), `detail` (D), `hint` (H), `position` (P), `internal_position` (p), `internal_query` (q), `where` (W), `schema_name` (s), `table_name` (t), `column_name` (c), `data_type_name` (d), `constraint_name` (n), `file_name` (F), `line` (L), `routine` (R). (Huly QB-108)
+-   **`qb::pg::notice`**: `using notice = server_error_fields;` — what `database::on_notice(std::function<void(qb::pg::notice const &)>)` receives.
+-   **`qb::pg::detail::notice_message`**: the decoder's view of NOTICE / ERROR messages: it derives from `server_error_fields` and maps each field code to its member (`has_field`, `field`).
 -   **`qb::pg::detail::command_complete`**: Structure holding the command tag from a CommandComplete message.
 
 ### Observability (`qb::pg::stats`, `qb::pg::query_info`, `qb::pg::query_kind`)

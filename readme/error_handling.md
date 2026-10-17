@@ -87,7 +87,7 @@ flowchart TD
 
 | Type                             | Role                                                                                                                                       |
 |:---------------------------------|:-------------------------------------------------------------------------------------------------------------------------------------------|
-| `db_error`                       | Base. Carries `what()`, `severity`, `code`, `detail`, `sqlstate`.                                                                          |
+| `db_error`                       | Base. Carries `what()`, `severity`, `code`, `detail`, `sqlstate`, and for a server error every other field (`server_fields()`).            |
 | `connection_error`               | Connect, transport, handshake, or shutdown failure.                                                                                        |
 | `query_error`                    | A server-reported SQL or protocol error during a command (the `ErrorResponse` path). Carries the full severity / code / detail / SQLSTATE. |
 | `transaction_closed`             | A `query_error` subclass thrown when you operate on a finished transaction.                                                                |
@@ -98,6 +98,48 @@ flowchart TD
 `field_is_null` derives from `value_is_null`, which derives from `db_error`; both are field-decode failures, not wire
 failures. See [results.md](./results.md) for how `as<T>()` raises them and how `std::optional<T>` avoids `value_is_null`
 entirely.
+
+### Every field the server sent
+
+A server error carries more than its SQLSTATE: the constraint that a unique or foreign-key violation broke, the table,
+column, schema and data type involved, the position of a syntax error in your query, a hint, the PL/pgSQL context. The
+client keeps every field of the `ErrorResponse` in one shared `qb::pg::server_error_fields` (`db_error::server_fields()`,
+null for an error the client raised) and reads them through `std::string_view` accessors, empty when the server did not
+send the field (Huly QB-108):
+
+| Accessor                                    | Protocol field | Typical content                                                 |
+|:--------------------------------------------|:---------------|:----------------------------------------------------------------|
+| `constraint_name()`                         | n              | `users_email_key` for a 23505, the FK name for a 23503          |
+| `table_name()` / `schema_name()`            | t / s          | the relation the error is about                                 |
+| `column_name()` / `data_type_name()`        | c / d          | the column of a 23502, the type of a domain error               |
+| `hint()`                                    | H              | "Perhaps you meant to reference the column ..."                 |
+| `position()`                                | P              | 1-based character index into your query, as decimal text        |
+| `internal_query()` / `internal_position()`  | q / p          | a failing statement PL/pgSQL generated, and the index into it   |
+| `where()`                                   | W              | the context: "PL/pgSQL function ... line 3 at RAISE"            |
+| `severity_nonlocalized()`                   | V              | `ERROR` even when `severity` is localized (`ERREUR`)            |
+| `file_name()` / `line()` / `routine()`      | F / L / R      | where in the server's source the error was raised               |
+
+```cpp
+auto r = co_await db.execute("insert_user", qb::pg::params{email});
+if (!r.ok() && r.error().sqlstate == qb::pg::sqlstate::unique_violation) {
+    if (r.error().constraint_name() == "users_email_key") { /* the email is taken */ }
+}
+```
+
+The fields are shared by the error's copies and allocated only for a server error: `db_error`, and so every `Reply<T>`,
+grows by one `std::shared_ptr` (16 bytes on a 64-bit target).
+<!-- src: qbm/pgsql/src/qbm/pgsql/error.h:50,147,159,230 (in that order: server_error_fields; the db_error constructor from it; server_fields; the shared member); qbm/pgsql/src/qbm/pgsql/pgsql.h:1557-1558 (on_error_response keeps them) -->
+
+### Notices
+
+A statement can also emit notices — `RAISE NOTICE` / `RAISE WARNING`, an implicit index, a `DROP ... IF EXISTS` of
+nothing. `db.on_notice([](qb::pg::notice const &n) { ... })` receives each one with the same fields (`qb::pg::notice` is
+`server_error_fields`): `n.severity_nonlocalized`, `n.sqlstate`, `n.message`, `n.hint`, ... It runs on the connection's
+thread as the message is read, must not drive the connection, and an exception escaping it is contained and logged.
+Without a handler a notice is logged at INFO, as before.
+<!-- src: qbm/pgsql/src/qbm/pgsql/error.h:74 (notice); qbm/pgsql/src/qbm/pgsql/pgsql.h:2184-2187,1596-1605 (in that order: on_notice; on_notice_response) -->
+
+### What each path fills
 
 When you receive a `db_error` (in a callback, on a `Reply`, or as a caught exception), the four fields are fully
 populated for the `query_error` path. On the `connection_error` path only `what()` is meaningful and `sqlstate` stays
@@ -155,7 +197,7 @@ the I/O loop.
 
 ### Handle a failed coroutine operation
 
-<!-- src: qbm/pgsql/tests/integration/errors/errors-sqlstate.cpp:139-155 -->
+<!-- src: qbm/pgsql/tests/integration/errors/errors-sqlstate.cpp:146-162 -->
 
 ```cpp
 #include <qbm/pgsql/pgsql.h>
@@ -186,7 +228,7 @@ default-constructed and meaningless. Read `error()` instead.
 
 ### Handle a failure on the fluent (callback) API
 
-<!-- src: qbm/pgsql/tests/integration/errors/errors-sqlstate.cpp:120-137 -->
+<!-- src: qbm/pgsql/tests/integration/errors/errors-sqlstate.cpp:127-144 -->
 
 ```cpp
 #include <qbm/pgsql/pgsql.h>

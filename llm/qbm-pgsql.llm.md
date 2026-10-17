@@ -444,6 +444,24 @@ if (reply.error().sqlstate == qb::pg::sqlstate::unique_violation) { /* 23505 */ 
 `sqlstate` (`qb::pg::sqlstate::code` enum). Exceptions thrown **inside** a user
 callback are wrapped as `error::client_error`.
 
+**Every field the server sent** (Huly QB-108): a server error keeps them all in a
+shared `qb::pg::server_error_fields` (`db_error::server_fields()`, null for an error
+the client raised), read through `std::string_view` accessors that are empty when
+absent — `constraint_name()`, `table_name()`, `schema_name()`, `column_name()`,
+`data_type_name()`, `hint()`, `position()`, `internal_query()`,
+`internal_position()`, `where()`, `severity_nonlocalized()`, `file_name()`,
+`line()`, `routine()`. The handler of a unique violation names the constraint:
+
+```cpp
+if (!r.ok() && r.error().sqlstate == qb::pg::sqlstate::unique_violation
+    && r.error().constraint_name() == "users_email_key") { /* email taken */ }
+```
+
+**Notices** (`RAISE NOTICE`, warnings): `db.on_notice([](qb::pg::notice const &n) { ... })`
+receives each one with the same fields (`qb::pg::notice` is `server_error_fields`), on
+the connection's thread; it must not drive the connection, an exception escaping it is
+contained. Without a handler a notice is only logged at INFO.
+
 ### 3.9 LISTEN / NOTIFY
 
 Plain database: `notify` / `listen` / `unlisten` / `unlisten_all` (callback or
@@ -458,7 +476,7 @@ The payload limit is exclusive and measured in bytes: 7,999 bytes are accepted, 
 8,000 or more fail locally before SQL is queued. The failure is `error::client_error`
 with the existing `code == "00000"`. The callback form invokes its error callback and
 rethrows that error; the coroutine form returns a failed `Reply<void>`
-(`src/qbm/pgsql/pg_notify_sql.cpp:65-74`, `src/qbm/pgsql/error.cpp:132-143`,
+(`src/qbm/pgsql/pg_notify_sql.cpp:65-74`, `src/qbm/pgsql/error.cpp:144-155`,
 `src/qbm/pgsql/commands.h:1249-1256,1626-1628`).
 
 For a queue-based consumer use the dedicated client:
@@ -527,7 +545,7 @@ the operation and callable without copying either shared owner; retention occurs
 cancellation detaches the sink or completion releases the operation during the call. That
 ownership stays in the operation's outermost sink invocation through nested calls until return.
 Borrowed capture data still needs its own lifetime; command admission and reservation are unchanged.
-_(src/qbm/pgsql/pgsql.h:1164-1203,1211-1228,1901-1917,2425-2434)_
+_(src/qbm/pgsql/pgsql.h:1180-1219,1227-1244,1923-1939,2466-2475)_
 
 > **`copy_in` is NOT constant-memory.** It drains the entire `source` into the
 > output pipe synchronously (bounded only by the write-buffer ceiling). Only
@@ -582,7 +600,7 @@ coroutine, an actor, or a second connection's trigger; reach for `cancel()` only
 where no coroutine can run.
 During the packet write, a native TLS `WANT_READ` waits for readability alone;
 otherwise native TLS and plain writes wait for writability. A custom secure transport
-without native TLS state keeps the combined read/write fallback (`pgsql.h:2754-2765`).
+without native TLS state keeps the combined read/write fallback (`pgsql.h:2795-2806`).
 
 **Connection introspection (all `[[nodiscard]]`, libpq-style):**
 

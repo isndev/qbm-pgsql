@@ -29,12 +29,50 @@
  */
 #pragma once
 
+#include <memory>
 #include <stdexcept>
+#include <string>
+#include <string_view>
 
 #include "./sqlstates.h"
 
 namespace qb {
 namespace pg {
+
+/**
+ * @brief Every field of a server ErrorResponse or NoticeResponse (Huly QB-108)
+ *
+ * One `std::string` per field the PostgreSQL protocol defines
+ * (https://www.postgresql.org/docs/current/protocol-error-fields.html), empty when the server
+ * did not send it. A server error keeps them in `error::db_error::server_fields()`; a notice is
+ * handed to `database::on_notice` as the same struct (`qb::pg::notice`).
+ */
+struct server_error_fields {
+    std::string severity;              ///< S: ERROR, FATAL, PANIC / WARNING, NOTICE, DEBUG, INFO, LOG -- localized
+    std::string severity_nonlocalized; ///< V: the same severity, never localized (PostgreSQL 9.6+)
+    std::string sqlstate;              ///< C: the SQLSTATE code
+    std::string message;               ///< M: the primary message
+    std::string detail;                ///< D: an optional secondary message
+    std::string hint;                  ///< H: an optional suggestion
+    std::string position;              ///< P: 1-based character index into the query string, as decimal text
+    std::string internal_position;     ///< p: the same, into an internally generated command
+    std::string internal_query;        ///< q: the text of that internally generated command
+    std::string where;                 ///< W: the context -- a call stack traceback, PL/pgSQL frames
+    std::string schema_name;           ///< s: the schema of the object the error is about
+    std::string table_name;            ///< t: the table
+    std::string column_name;           ///< c: the column
+    std::string data_type_name;        ///< d: the data type
+    std::string constraint_name;       ///< n: the constraint
+    std::string file_name;             ///< F: the server source file that reported it
+    std::string line;                  ///< L: the line in that file, as decimal text
+    std::string routine;               ///< R: the server routine that reported it
+};
+
+/**
+ * @brief A server NoticeResponse, as `database::on_notice` hands it over: the same fields as an error
+ */
+using notice = server_error_fields;
+
 namespace error {
 
 /**
@@ -98,10 +136,98 @@ public:
      */
     db_error(std::string const &message, std::string severity, std::string code, std::string detail);
 
+    /**
+     * @brief A server-reported error, with every field the server sent (Huly QB-108)
+     *
+     * `what()`, `severity`, `code`, `detail` and `sqlstate` are taken from @p fields, which the
+     * error keeps and shares with its copies (`server_fields()`).
+     *
+     * @param fields The decoded ErrorResponse; must not be null
+     */
+    explicit db_error(std::shared_ptr<const server_error_fields> fields);
+
     std::string    severity; ///< PostgreSQL error severity level (ERROR, FATAL, etc.)
     std::string    code;     ///< PostgreSQL error code string
     std::string    detail;   ///< Detailed error description
     sqlstate::code sqlstate; ///< Structured SQL state code
+
+    /**
+     * @brief Every field the server sent with this error; null for an error the client raised
+     *        (a connection loss, a local refusal, a decode failure)
+     */
+    [[nodiscard]] server_error_fields const *
+    server_fields() const noexcept {
+        return _fields.get();
+    }
+
+    /// @name The ErrorResponse fields beyond `severity` / `code` / `detail`; empty when absent
+    /// @{
+    [[nodiscard]] std::string_view
+    severity_nonlocalized() const noexcept {
+        return field(&server_error_fields::severity_nonlocalized);
+    }
+    [[nodiscard]] std::string_view
+    hint() const noexcept {
+        return field(&server_error_fields::hint);
+    }
+    [[nodiscard]] std::string_view
+    position() const noexcept {
+        return field(&server_error_fields::position);
+    }
+    [[nodiscard]] std::string_view
+    internal_position() const noexcept {
+        return field(&server_error_fields::internal_position);
+    }
+    [[nodiscard]] std::string_view
+    internal_query() const noexcept {
+        return field(&server_error_fields::internal_query);
+    }
+    [[nodiscard]] std::string_view
+    where() const noexcept {
+        return field(&server_error_fields::where);
+    }
+    [[nodiscard]] std::string_view
+    schema_name() const noexcept {
+        return field(&server_error_fields::schema_name);
+    }
+    [[nodiscard]] std::string_view
+    table_name() const noexcept {
+        return field(&server_error_fields::table_name);
+    }
+    [[nodiscard]] std::string_view
+    column_name() const noexcept {
+        return field(&server_error_fields::column_name);
+    }
+    [[nodiscard]] std::string_view
+    data_type_name() const noexcept {
+        return field(&server_error_fields::data_type_name);
+    }
+    [[nodiscard]] std::string_view
+    constraint_name() const noexcept {
+        return field(&server_error_fields::constraint_name);
+    }
+    [[nodiscard]] std::string_view
+    file_name() const noexcept {
+        return field(&server_error_fields::file_name);
+    }
+    [[nodiscard]] std::string_view
+    line() const noexcept {
+        return field(&server_error_fields::line);
+    }
+    [[nodiscard]] std::string_view
+    routine() const noexcept {
+        return field(&server_error_fields::routine);
+    }
+    /// @}
+
+private:
+    [[nodiscard]] std::string_view
+    field(std::string server_error_fields::*member) const noexcept {
+        return _fields ? std::string_view{(*_fields).*member} : std::string_view{};
+    }
+
+    /// Shared with every copy, allocated only for a server error: +16 bytes per `db_error`, null otherwise.
+    std::shared_ptr<const server_error_fields> _fields;
 };
 
 /**
@@ -217,6 +343,13 @@ public:
      * @param detail Additional error details or context
      */
     query_error(std::string const &message, std::string severity, std::string code, std::string detail);
+
+    /**
+     * @brief A server-reported query error, with every field the server sent (Huly QB-108)
+     *
+     * @param fields The decoded ErrorResponse; must not be null
+     */
+    explicit query_error(std::shared_ptr<const server_error_fields> fields);
 };
 
 /**

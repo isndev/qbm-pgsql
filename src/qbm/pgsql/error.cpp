@@ -21,6 +21,7 @@
  * @ingroup Pgsql
  */
 #include "./error.h"
+#include <utility>
 
 namespace qb {
 namespace pg {
@@ -67,6 +68,14 @@ db_error::db_error(std::string const &message, std::string s, std::string c, std
     , code(c)
     , detail(d)
     , sqlstate(sqlstate::code_to_state(code)) {}
+
+db_error::db_error(std::shared_ptr<const server_error_fields> fields)
+    : std::runtime_error(fields->message)
+    , severity(fields->severity)
+    , code(fields->sqlstate)
+    , detail(fields->detail)
+    , sqlstate(sqlstate::code_to_state(code))
+    , _fields(std::move(fields)) {}
 
 /**
  * @brief Implements the connection error constructor (string version)
@@ -121,6 +130,9 @@ query_error::query_error(char const *what_arg)
  */
 query_error::query_error(std::string const &message, std::string s, std::string c, std::string d)
     : db_error(message, s, c, d) {}
+
+query_error::query_error(std::shared_ptr<const server_error_fields> fields)
+    : db_error(std::move(fields)) {}
 
 /**
  * @brief Implements the client error constructor (string version)

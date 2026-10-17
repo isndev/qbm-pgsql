@@ -9,6 +9,20 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Added
 
+- **A server error keeps every field the server sent, and notices reach a handler (Huly QB-108).** The client
+  decoded all the ErrorResponse fields and kept four (message, severity, SQLSTATE, detail): `constraint_name` -- the
+  field a handler of 23505 wants -- `table_name`, `schema_name`, `column_name`, `data_type_name`, `hint`, `position`,
+  `internal_query`, `internal_position`, `where`, `file_name`, `line` and `routine` were dropped, and `V`, the
+  non-localized severity, was not even decoded. They now live in one public `qb::pg::server_error_fields`, shared by the
+  error's copies (`db_error::server_fields()`, null for an error the client raised) and read through `std::string_view`
+  accessors (`db_error::constraint_name()`, ...), empty when absent. `database::on_notice(fn)` receives every
+  NoticeResponse with the same fields (`qb::pg::notice`); without a handler a notice is logged at INFO, as before; an
+  exception escaping the handler is contained. The decoder's `qb::pg::detail::notice_message` now derives from the
+  public struct, so one definition of the fields remains. ABI: `db_error` -- and so every `Reply<T>`, which embeds one
+  -- grows by one `std::shared_ptr` (16 bytes on a 64-bit target, allocated only for a server error, pinned by a
+  `static_assert`); additive member growth in a qbm class, allowed under the 3.3.0 ABI reading -- consumers recompile
+  with the train.
+
 - **`database::stats()` and `database::on_query_complete()` (Huly QB-115).** `stats()` returns a `qb::pg::stats`
   snapshot by value: monotonic `std::uint64_t` counts since construction — `queries`, `errors`, `bytes_sent`,
   `bytes_received` (PostgreSQL protocol bytes, the handshake included, TLS framing excluded), `notifications_received`,

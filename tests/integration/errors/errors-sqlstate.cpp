@@ -19,6 +19,10 @@
  * (`co_await db_->query(...)` -> `Reply`) are exercised and both assert the EXACT
  * SQLSTATE, never a message-substring-OR-code disjunction.
  *
+ * Every field of a server error reaches `db_error` (constraint, table, schema, column, data type,
+ * position, internal query and position, context, hint, the non-localized severity, the server's
+ * source location), and `on_notice` receives every notice (Huly QB-108).
+ *
  * Tier: integration (REQUIRES live postgres), skip-not-fail via `PgIntegrationTest`.
  *
  * The connect-to-dead-host / DNS-resolve-failure case that used to live here belongs in
@@ -27,7 +31,10 @@
  * @ingroup Pgsql
  */
 #include <gtest/gtest.h>
+#include <optional>
+#include <stdexcept>
 #include <string>
+#include <vector>
 #include <qb/io/async.h>
 #include <qb/io/async/coroutine.h>
 #include <qb/io/async/coroutine/utils.h>
@@ -327,6 +334,159 @@ TEST_F(PostgreSQLErrorHandlingTest, PreparedStatementParameterError) {
     EXPECT_TRUE(error_caught);
     EXPECT_EQ(state, sqlstate::protocol_violation);
     EXPECT_EQ(code, "08P01");
+}
+
+// ---------------------------------------------------------------------------
+// Every field of a server error, and the notices (Huly QB-108)
+// ---------------------------------------------------------------------------
+
+namespace errors_sqlstate_test {
+
+/// The error a failing callback-form execute(sql) reports; false when it did not fail.
+bool
+execute_error(qb::pg::tcp::database &db, std::string const &sql, std::optional<error::db_error> &out) {
+    (void) db.execute(sql, [](Transaction &, results) {}, [&out](error::db_error const &e) { out = e; }).await();
+    return out.has_value();
+}
+
+/// What a notice handler saw, copied out of the call.
+struct seen_notice {
+    std::string severity;
+    std::string severity_nonlocalized;
+    std::string sqlstate;
+    std::string message;
+    std::string hint;
+};
+
+} // namespace errors_sqlstate_test
+
+/**
+ * @brief A unique violation names its constraint, table and schema -- the fields a handler of
+ *        23505 needs, which the client used to drop -- and keeps every other field the server sent.
+ */
+TEST_F(PostgreSQLErrorHandlingTest, UniqueViolationCarriesTheConstraintTableAndSchema) {
+    std::optional<error::db_error> err;
+    ASSERT_TRUE(errors_sqlstate_test::execute_error(*db_, "INSERT INTO test_errors (value, unique_value) VALUES ('x', 'unique1')", err));
+    EXPECT_EQ(err->sqlstate, sqlstate::unique_violation);
+    ASSERT_NE(err->server_fields(), nullptr);
+    EXPECT_EQ(err->constraint_name(), "test_errors_unique_value_key");
+    EXPECT_EQ(err->table_name(), "test_errors");
+    EXPECT_FALSE(err->schema_name().empty());
+    EXPECT_EQ(err->severity_nonlocalized(), "ERROR");
+    EXPECT_NE(err->detail.find("unique1"), std::string::npos) << err->detail;
+    EXPECT_EQ(err->server_fields()->detail, err->detail);
+    EXPECT_FALSE(err->file_name().empty()) << "the server always says where it raised the error";
+    EXPECT_FALSE(err->line().empty());
+    EXPECT_FALSE(err->routine().empty());
+
+    // A copy shares the fields; it does not duplicate them.
+    const error::db_error copy = *err;
+    EXPECT_EQ(copy.server_fields(), err->server_fields());
+}
+
+/// A NOT NULL violation names its column -- through the coroutine Reply as well.
+TEST_F(PostgreSQLErrorHandlingTest, NotNullViolationCarriesTheColumn_Coroutine) {
+    std::optional<error::db_error> err;
+    qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
+        auto reply = co_await db_->query("INSERT INTO test_errors (value) VALUES (NULL)");
+        if (!reply.ok())
+            err = reply.error();
+    }());
+    ASSERT_TRUE(err.has_value());
+    EXPECT_EQ(err->sqlstate, sqlstate::not_null_violation);
+    EXPECT_EQ(err->column_name(), "value");
+    EXPECT_EQ(err->table_name(), "test_errors");
+}
+
+/// A syntax error says where in the query; an undefined column says what the server suggests.
+TEST_F(PostgreSQLErrorHandlingTest, SyntaxErrorCarriesThePositionAndUndefinedColumnTheHint) {
+    std::optional<error::db_error> syntax;
+    ASSERT_TRUE(errors_sqlstate_test::execute_error(*db_, "SELEC 1", syntax));
+    EXPECT_EQ(syntax->sqlstate, sqlstate::syntax_error);
+    EXPECT_EQ(syntax->position(), "1");
+
+    std::optional<error::db_error> column;
+    ASSERT_TRUE(errors_sqlstate_test::execute_error(*db_, "SELECT valuee FROM test_errors", column));
+    EXPECT_EQ(column->sqlstate, sqlstate::undefined_column);
+    EXPECT_NE(column->hint().find("value"), std::string_view::npos) << "hint: " << column->hint();
+    EXPECT_EQ(column->position(), "8");
+}
+
+/**
+ * @brief Every field a statement can set reaches the error: RAISE ... USING sets them all, the
+ *        PL/pgSQL frame is the context, and a failing dynamic statement is the internal query.
+ */
+TEST_F(PostgreSQLErrorHandlingTest, EveryRaiseFieldReachesTheError) {
+    std::optional<error::db_error> err;
+    ASSERT_TRUE(errors_sqlstate_test::execute_error(
+        *db_,
+        "DO $$ BEGIN RAISE EXCEPTION 'boom' USING ERRCODE = 'P0001', DETAIL = 'the detail', HINT = 'the hint', "
+        "COLUMN = 'col_x', CONSTRAINT = 'con_x', DATATYPE = 'type_x', TABLE = 'tab_x', SCHEMA = 'sch_x'; END $$",
+        err));
+    EXPECT_STREQ(err->what(), "boom");
+    EXPECT_EQ(err->code, "P0001");
+    EXPECT_EQ(err->detail, "the detail");
+    EXPECT_EQ(err->hint(), "the hint");
+    EXPECT_EQ(err->column_name(), "col_x");
+    EXPECT_EQ(err->constraint_name(), "con_x");
+    EXPECT_EQ(err->data_type_name(), "type_x");
+    EXPECT_EQ(err->table_name(), "tab_x");
+    EXPECT_EQ(err->schema_name(), "sch_x");
+    EXPECT_NE(err->where().find("PL/pgSQL function"), std::string_view::npos) << "where: " << err->where();
+
+    std::optional<error::db_error> dynamic;
+    ASSERT_TRUE(errors_sqlstate_test::execute_error(*db_, "DO $$ BEGIN EXECUTE 'SELEC 1'; END $$", dynamic));
+    EXPECT_EQ(dynamic->sqlstate, sqlstate::syntax_error);
+    EXPECT_EQ(dynamic->internal_query(), "SELEC 1");
+    EXPECT_EQ(dynamic->internal_position(), "1");
+}
+
+/// An error the client raised has no server fields: every accessor is empty.
+TEST_F(PostgreSQLErrorHandlingTest, AClientErrorHasNoServerFields) {
+    std::optional<error::db_error> err;
+    (void) db_->execute(
+                  "never_prepared_qb108", params{1}, [](Transaction &, results) {}, [&err](error::db_error const &e) { err = e; })
+        .await();
+    ASSERT_TRUE(err.has_value());
+    EXPECT_EQ(err->server_fields(), nullptr);
+    EXPECT_TRUE(err->hint().empty());
+    EXPECT_TRUE(err->constraint_name().empty());
+    EXPECT_TRUE(err->where().empty());
+}
+
+/**
+ * @brief on_notice receives every notice with all its fields; without a handler a notice is only
+ *        logged; a throwing handler is contained.
+ */
+TEST_F(PostgreSQLErrorHandlingTest, OnNoticeReceivesEveryNoticeWithItsFields) {
+    using errors_sqlstate_test::seen_notice;
+    std::vector<seen_notice> seen;
+    db_->on_notice([&seen](qb::pg::notice const &n) { seen.push_back({n.severity, n.severity_nonlocalized, n.sqlstate, n.message, n.hint}); });
+    ASSERT_TRUE(
+        db_->execute("DO $$ BEGIN RAISE NOTICE 'note %', 42 USING HINT = 'nh'; RAISE WARNING 'warn'; END $$", discard_query, discard_error)
+            .await());
+    ASSERT_EQ(seen.size(), 2u);
+    EXPECT_EQ(seen[0].severity_nonlocalized, "NOTICE");
+    EXPECT_EQ(seen[0].sqlstate, "00000");
+    EXPECT_EQ(seen[0].message, "note 42");
+    EXPECT_EQ(seen[0].hint, "nh");
+    EXPECT_EQ(seen[1].severity_nonlocalized, "WARNING");
+    EXPECT_EQ(seen[1].sqlstate, "01000");
+    EXPECT_EQ(seen[1].message, "warn");
+
+    db_->on_notice({});
+    ASSERT_TRUE(db_->execute("DO $$ BEGIN RAISE NOTICE 'unheard'; END $$", discard_query, discard_error).await());
+    EXPECT_EQ(seen.size(), 2u) << "a removed handler hears nothing";
+
+    int calls = 0;
+    db_->on_notice([&calls](qb::pg::notice const &) {
+        ++calls;
+        throw std::runtime_error("intentional on_notice throw");
+    });
+    ASSERT_TRUE(db_->execute("DO $$ BEGIN RAISE NOTICE 'thrown at'; END $$", discard_query, discard_error).await());
+    EXPECT_EQ(calls, 1);
+    EXPECT_TRUE(db_->execute("SELECT 1", discard_query, discard_error).await()) << "the connection survives a throwing handler";
+    db_->on_notice({});
 }
 
 int

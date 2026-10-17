@@ -626,6 +626,7 @@ namespace {
 
 const std::map<char, std::string notice_message::*> notice_fields{
     {'S', &notice_message::severity},
+    {'V', &notice_message::severity_nonlocalized},
     {'C', &notice_message::sqlstate},
     {'M', &notice_message::message},
     {'D', &notice_message::detail},

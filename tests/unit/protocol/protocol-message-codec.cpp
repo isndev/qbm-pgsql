@@ -29,9 +29,12 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <memory>
 #include <sstream>
+#include <stdexcept>
 #include <streambuf>
 #include <string>
+#include <utility>
 #include <vector>
 
 #if defined(_WIN32)
@@ -612,6 +615,106 @@ TEST(ProtocolNoticeMessage, FieldMapsKnownCodeAndRejectsUnknown) {
     EXPECT_EQ(n.severity, "ERROR");
     EXPECT_THROW(n.field('Z'), std::runtime_error); // unknown code
 }
+
+// Every field code of an ErrorResponse decodes into the shared server_error_fields -- V, the
+// non-localized severity, included -- and a db_error built from them keeps them all (Huly QB-108).
+TEST(ProtocolNoticeMessage, DecodesEveryErrorFieldIntoTheSharedStruct) {
+    const std::pair<char, std::string> fields[] = {
+        {'S', "ERREUR"},
+        {'V', "ERROR"},
+        {'C', "23505"},
+        {'M', "duplicate"},
+        {'D', "Key (id)=(1) exists."},
+        {'H', "the hint"},
+        {'P', "8"},
+        {'p', "3"},
+        {'q', "SELECT 1"},
+        {'W', "the context"},
+        {'s', "public"},
+        {'t', "t"},
+        {'c', "id"},
+        {'d', "int4"},
+        {'n', "t_pkey"},
+        {'F', "nbtinsert.c"},
+        {'L', "666"},
+        {'R', "_bt_check_unique"}
+    };
+    message m(execute_tag); // 'E': Execute out, ErrorResponse in
+    for (auto const &[code, value] : fields) {
+        m.write(code);
+        m.write(value);
+    }
+    m.write('\0');
+    (void) m.buffer();
+    m.reset_read();
+    notice_message n;
+    ASSERT_TRUE(m.read(n));
+    const server_error_fields &f = n;
+    EXPECT_EQ(f.severity, "ERREUR");
+    EXPECT_EQ(f.severity_nonlocalized, "ERROR");
+    EXPECT_EQ(f.sqlstate, "23505");
+    EXPECT_EQ(f.message, "duplicate");
+    EXPECT_EQ(f.detail, "Key (id)=(1) exists.");
+    EXPECT_EQ(f.hint, "the hint");
+    EXPECT_EQ(f.position, "8");
+    EXPECT_EQ(f.internal_position, "3");
+    EXPECT_EQ(f.internal_query, "SELECT 1");
+    EXPECT_EQ(f.where, "the context");
+    EXPECT_EQ(f.schema_name, "public");
+    EXPECT_EQ(f.table_name, "t");
+    EXPECT_EQ(f.column_name, "id");
+    EXPECT_EQ(f.data_type_name, "int4");
+    EXPECT_EQ(f.constraint_name, "t_pkey");
+    EXPECT_EQ(f.file_name, "nbtinsert.c");
+    EXPECT_EQ(f.line, "666");
+    EXPECT_EQ(f.routine, "_bt_check_unique");
+
+    const error::query_error err(std::make_shared<const server_error_fields>(f));
+    EXPECT_STREQ(err.what(), "duplicate");
+    EXPECT_EQ(err.severity, "ERREUR");
+    EXPECT_EQ(err.code, "23505");
+    EXPECT_EQ(err.sqlstate, sqlstate::unique_violation);
+    EXPECT_EQ(err.detail, "Key (id)=(1) exists.");
+    EXPECT_EQ(err.severity_nonlocalized(), "ERROR");
+    EXPECT_EQ(err.hint(), "the hint");
+    EXPECT_EQ(err.position(), "8");
+    EXPECT_EQ(err.internal_position(), "3");
+    EXPECT_EQ(err.internal_query(), "SELECT 1");
+    EXPECT_EQ(err.where(), "the context");
+    EXPECT_EQ(err.schema_name(), "public");
+    EXPECT_EQ(err.table_name(), "t");
+    EXPECT_EQ(err.column_name(), "id");
+    EXPECT_EQ(err.data_type_name(), "int4");
+    EXPECT_EQ(err.constraint_name(), "t_pkey");
+    EXPECT_EQ(err.file_name(), "nbtinsert.c");
+    EXPECT_EQ(err.line(), "666");
+    EXPECT_EQ(err.routine(), "_bt_check_unique");
+
+    const error::db_error sliced = err; // the base keeps them: they live in the shared struct
+    EXPECT_EQ(sliced.server_fields(), err.server_fields());
+    EXPECT_EQ(sliced.constraint_name(), "t_pkey");
+
+    const error::client_error local{"local"};
+    EXPECT_EQ(local.server_fields(), nullptr);
+    EXPECT_TRUE(local.hint().empty());
+    EXPECT_TRUE(local.routine().empty());
+}
+
+namespace protocol_message_codec_test {
+/// db_error's layout before Huly QB-108, plus the one member it gained.
+struct db_error_layout : std::runtime_error {
+    std::string                                severity;
+    std::string                                code;
+    std::string                                detail;
+    sqlstate::code                             state;
+    std::shared_ptr<const server_error_fields> fields;
+};
+} // namespace protocol_message_codec_test
+
+// The rich error costs one shared_ptr per db_error (16 bytes on a 64-bit target), allocated only
+// for a server error: the size every Reply<T> carries grows by exactly that (Huly QB-108).
+static_assert(sizeof(error::db_error) == sizeof(protocol_message_codec_test::db_error_layout));
+static_assert(sizeof(std::shared_ptr<const server_error_fields>) == 2 * sizeof(void *));
 
 // pack() appends the SECOND message's full wire bytes (tag + length + body) after the
 // first message's framed bytes. Was EXPECT_GE(n,10): now decode the embedded Sync

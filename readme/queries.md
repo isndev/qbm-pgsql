@@ -236,7 +236,7 @@ Ordinary chunk delivery borrows the operation and callable without copying eithe
 If cancellation detaches the sink or completion releases the operation during a call, ownership
 is retained in that operation's outermost sink invocation until it returns. Nested calls share
 that retention. This protects owned captures; it does not extend the lifetime of borrowed data.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:1164-1203,1211-1228,1901-1917,2425-2434 (CopyOperation / SinkInvocation / detach_sink; finish_copy; on_copy_data; copy_out) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:1180-1219,1227-1244,1923-1939,2466-2475 (CopyOperation / SinkInvocation / detach_sink; finish_copy; on_copy_data; copy_out) -->
 The source or sink activates only when that command reaches the wire, so an earlier
 plain SQL command cannot borrow it.
 
@@ -282,7 +282,7 @@ transaction is never joined and never ended by `query_stream`.
 > caller-owned only once its `BEGIN` has **completed** — `in_transaction()` mirrors the last `ReadyForQuery`. Started
 > before that, the stream reads the session as idle and opens (and later ends) a block of its own. `co_await` the
 > `begin()` first.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2511-2631,2525-2543,2545-2548,2603-2623,2301-2309 (in that order: query_stream; the seat/guard bookkeeping; the cursor name; the last-one-out COMMIT/ROLLBACK; in_transaction) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2552-2672,2566-2584,2586-2589,2644-2664,2342-2350 (in that order: query_stream; the seat/guard bookkeeping; the cursor name; the last-one-out COMMIT/ROLLBACK; in_transaction) -->
 
 ---
 
@@ -324,7 +324,7 @@ db.prepare_file("mig", std::filesystem::path{"mig.sql"},
 The payload must contain fewer than 8,000 bytes. Both public forms accept 7,999 bytes and reject 8,000 bytes or more
 locally before SQL is queued, with `client_error` (`code == "00000"`). Empty payloads still omit the payload clause.
 The callback form invokes its error callback and rethrows; the coroutine form returns a failed `Reply<void>`.
-<!-- src: src/qbm/pgsql/pg_notify_sql.cpp:65-74; src/qbm/pgsql/error.cpp:132-143; src/qbm/pgsql/commands.h:1249-1256,1626-1628 -->
+<!-- src: src/qbm/pgsql/pg_notify_sql.cpp:65-74; src/qbm/pgsql/error.cpp:144-155; src/qbm/pgsql/commands.h:1249-1256,1626-1628 -->
 
 **Coroutine**
 

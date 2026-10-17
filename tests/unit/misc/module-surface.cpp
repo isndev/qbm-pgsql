@@ -38,7 +38,7 @@ TEST(ModuleSurface, InitRunsWithoutThrowing) {
 }
 
 // ---------------------------------------------------------------------------
-// error::client_error wrapping an existing exception (error.cpp:153)
+// error::client_error wrapping an existing exception (error.cpp:165)
 // ---------------------------------------------------------------------------
 
 /// The exception-wrapping ctor prefixes the wrapped message with "Client thrown exception: "

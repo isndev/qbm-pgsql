@@ -30,6 +30,7 @@
 #include <string_view>
 #include <vector>
 #include "common.h"
+#include "error.h"
 
 namespace qb {
 namespace pg {
@@ -489,24 +490,10 @@ private:
  *
  * @see https://www.postgresql.org/docs/current/protocol-error-fields.html
  */
-struct notice_message {
-    std::string severity;          /**< Error severity (S): ERROR, FATAL, PANIC, WARNING, NOTICE, etc. */
-    std::string sqlstate;          /**< SQL state code (C): SQLSTATE code */
-    std::string message;           /**< Primary error message (M) */
-    std::string detail;            /**< Detailed error message (D) */
-    std::string hint;              /**< Suggestion for resolving the problem (H) */
-    std::string position;          /**< Error position in original query (P) */
-    std::string internal_position; /**< Error position in internal query (p) */
-    std::string internal_query;    /**< Text of internal query (q) */
-    std::string where;             /**< Context of error occurrence (W) */
-    std::string schema_name;       /**< Schema name (s) */
-    std::string table_name;        /**< Table name (t) */
-    std::string column_name;       /**< Column name (c) */
-    std::string data_type_name;    /**< Data type name (d) */
-    std::string constraint_name;   /**< Constraint name (n) */
-    std::string file_name;         /**< Source file name (F) */
-    std::string line;              /**< Source file line number (L) */
-    std::string routine;           /**< Source routine name (R) */
+struct notice_message : ::qb::pg::server_error_fields {
+    // The fields are the public ::qb::pg::server_error_fields, one per protocol field code
+    // (S V C M D H P p q W s t c d n F L R): one definition, decoded here and kept whole by a
+    // server error (db_error::server_fields()) or handed to database::on_notice (Huly QB-108).
 
     /**
      * @brief Check if the notice contains a field
