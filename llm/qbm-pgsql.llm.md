@@ -368,7 +368,7 @@ type. NUMERIC remains an owning decimal-string carrier. The projection writes a 
 literal in place -- the bounds first, then each element's UUID, timestamp, NUMERIC or quoted text
 appended to the one output string, with no typed vector and no string per element (Huly QB-1087) --
 without changing any value, scale or spelling.
-<!-- src: src/qbm/pgsql/resultset.cpp:424-500; src/qbm/pgsql/type_converter.cpp:711-788,923-946; src/qbm/pgsql/type_converter.h:1738-1754 -->
+<!-- src: src/qbm/pgsql/resultset.cpp:424-500; src/qbm/pgsql/type_converter.cpp:711-788,921-944; src/qbm/pgsql/type_converter.h:1738-1754 -->
 
 `qb::wall_time` text remains UTC with `+00` and six fractional digits when a fraction is present.
 Years 1970–9999 use the existing qb calendar and a stack formatter; pre-1970 and later years keep

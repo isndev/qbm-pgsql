@@ -789,35 +789,26 @@ append_pg_numeric_text(std::string &out, const byte *data, std::size_t size) {
 
 std::vector<byte>
 encode_pg_numeric(const std::string &in) {
-    auto wr16 = [](std::vector<byte> &b, std::uint16_t v) {
-        std::uint16_t be = qb::endian::to_big_endian(v);
-        const byte   *p  = reinterpret_cast<const byte *>(&be);
-        b.insert(b.end(), p, p + sizeof(be));
+    // One output buffer, written in place (Huly QB-1088): the limbs are read straight from the digits
+    // of `in`, with no intermediate string, vector or concatenation, so the cost of this function does
+    // not hang on whether the compiler inlines the string helpers the rest of the TU also calls.
+    const auto put16 = [](byte *p, std::uint16_t v) {
+        p[0] = static_cast<byte>(v >> 8);
+        p[1] = static_cast<byte>(v & 0xff);
     };
-    std::vector<byte> out;
+    const auto special = [&put16](std::uint16_t sign) {
+        std::vector<byte> out(8, byte{0});
+        put16(out.data() + 4, sign);
+        return out;
+    };
 
     // Non-finite values.
-    if (in == "NaN") {
-        wr16(out, 0);
-        wr16(out, 0);
-        wr16(out, 0xC000);
-        wr16(out, 0);
-        return out;
-    }
-    if (in == "Infinity" || in == "+Infinity") {
-        wr16(out, 0);
-        wr16(out, 0);
-        wr16(out, 0xD000);
-        wr16(out, 0);
-        return out;
-    }
-    if (in == "-Infinity") {
-        wr16(out, 0);
-        wr16(out, 0);
-        wr16(out, 0xF000);
-        wr16(out, 0);
-        return out;
-    }
+    if (in == "NaN")
+        return special(0xC000);
+    if (in == "Infinity" || in == "+Infinity")
+        return special(0xD000);
+    if (in == "-Infinity")
+        return special(0xF000);
 
     std::size_t i   = 0;
     bool        neg = false;
@@ -832,71 +823,78 @@ encode_pg_numeric(const std::string &in) {
     const auto reject = [&in]() {
         throw error::client_error("invalid NUMERIC text representation: '" + in + "'");
     };
-    std::string intpart, fracpart;
+    const std::size_t int_begin = i;
     for (; i < in.size() && in[i] != '.'; ++i) {
         if (in[i] < '0' || in[i] > '9')
             reject();
-        intpart += in[i];
     }
+    const std::size_t int_digits = i - int_begin;
+    std::size_t       frac_begin = i;
     if (i < in.size() && in[i] == '.') {
-        ++i;
+        frac_begin = ++i;
         for (; i < in.size(); ++i) {
             if (in[i] < '0' || in[i] > '9')
                 reject();
-            fracpart += in[i];
         }
     }
+    const std::size_t frac_digits = i - frac_begin;
     // No digits at all ("", "+", "-", ".", "+.") is not a number.
-    if (intpart.empty() && fracpart.empty())
+    if (int_digits == 0 && frac_digits == 0)
         reject();
-    const int dscale = static_cast<int>(fracpart.size());
+    const int dscale = static_cast<int>(frac_digits);
 
-    // Align to base-10000 limb boundaries: integer part left-padded, fraction
-    // part right-padded, each to a multiple of 4 decimal digits.
-    const std::string int_al  = std::string((4 - (intpart.size() % 4)) % 4, '0') + intpart;
-    const std::string frac_al = fracpart + std::string((4 - (fracpart.size() % 4)) % 4, '0');
-
-    const int n_int  = static_cast<int>(int_al.size()) / 4;
-    const int n_frac = static_cast<int>(frac_al.size()) / 4;
-
-    auto limb_of = [](const std::string &s, int k) {
+    // Base-10000 limbs on limb boundaries: the integer digits left-padded, the fraction digits
+    // right-padded, each to a multiple of 4 decimal digits; a padding position reads as 0.
+    const std::size_t int_pad = (4 - int_digits % 4) % 4;
+    const std::size_t n_int   = (int_digits + int_pad) / 4;
+    const std::size_t n_frac  = (frac_digits + 3) / 4;
+    std::vector<byte> out(8 + 2 * (n_int + n_frac));
+    byte *const       limbs = out.data() + 8;
+    for (std::size_t k = 0; k < n_int; ++k) {
         int v = 0;
-        for (int j = 0; j < 4; ++j)
-            v = v * 10 + (s[static_cast<std::size_t>(k) * 4 + j] - '0');
-        return v;
-    };
-    std::vector<int> limbs;
-    limbs.reserve(static_cast<std::size_t>(n_int) + static_cast<std::size_t>(n_frac));
-    for (int k = 0; k < n_int; ++k)
-        limbs.push_back(limb_of(int_al, k));
-    for (int k = 0; k < n_frac; ++k)
-        limbs.push_back(limb_of(frac_al, k));
+        for (std::size_t j = 0; j < 4; ++j) {
+            const std::size_t at = k * 4 + j; // in the padded integer digits
+            v                    = v * 10 + (at < int_pad ? 0 : in[int_begin + at - int_pad] - '0');
+        }
+        put16(limbs + 2 * k, static_cast<std::uint16_t>(v));
+    }
+    for (std::size_t k = 0; k < n_frac; ++k) {
+        int v = 0;
+        for (std::size_t j = 0; j < 4; ++j) {
+            const std::size_t at = k * 4 + j; // in the padded fraction digits
+            v                    = v * 10 + (at < frac_digits ? in[frac_begin + at] - '0' : 0);
+        }
+        put16(limbs + 2 * (n_int + k), static_cast<std::uint16_t>(v));
+    }
 
-    int weight = n_int - 1;
     // Strip leading zero limbs (each lowers the weight) and trailing zero limbs
     // (dscale is preserved regardless).
-    int start = 0;
-    while (start < static_cast<int>(limbs.size()) && limbs[start] == 0) {
+    const auto zero = [limbs](std::size_t k) {
+        return limbs[2 * k] == 0 && limbs[2 * k + 1] == 0;
+    };
+    int         weight = static_cast<int>(n_int) - 1;
+    std::size_t start  = 0;
+    std::size_t end    = n_int + n_frac;
+    while (start < end && zero(start)) {
         ++start;
         --weight;
     }
-    int end = static_cast<int>(limbs.size());
-    while (end > start && limbs[end - 1] == 0)
+    while (end > start && zero(end - 1))
         --end;
 
-    const int     ndigits = end - start;
-    std::uint16_t sign    = neg ? 0x4000 : 0x0000;
+    const std::size_t ndigits = end - start;
+    std::uint16_t     sign    = neg ? 0x4000 : 0x0000;
     if (ndigits == 0) { // exact zero: normalize weight/sign, keep dscale
         weight = 0;
         sign   = 0x0000;
     }
-
-    wr16(out, static_cast<std::uint16_t>(ndigits));
-    wr16(out, static_cast<std::uint16_t>(static_cast<std::int16_t>(weight)));
-    wr16(out, sign);
-    wr16(out, static_cast<std::uint16_t>(dscale));
-    for (int k = start; k < end; ++k)
-        wr16(out, static_cast<std::uint16_t>(limbs[k]));
+    if (start > 0)
+        std::memmove(limbs, limbs + 2 * start, 2 * ndigits);
+    out.resize(8 + 2 * ndigits);
+    put16(out.data() + 0, static_cast<std::uint16_t>(ndigits));
+    put16(out.data() + 2, static_cast<std::uint16_t>(static_cast<std::int16_t>(weight)));
+    put16(out.data() + 4, sign);
+    put16(out.data() + 6, static_cast<std::uint16_t>(dscale));
     return out;
 }
 

@@ -162,6 +162,18 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
   writes its elements through the same appenders. A malformed array that is wrong in two places may report the
   framing fault before the element fault; both throw.
 
+- **`encode_pg_numeric` writes its limbs in place (Huly QB-1088).** Encoding a NUMERIC parameter built the
+  integer and fraction digits in strings, padded each into a new one by concatenation, collected the limbs in
+  a `std::vector<int>` and grew the output with an insert per 16-bit word. type_converter.cpp exhausts g++'s
+  `inline-unit-growth` budget, so whether those string helpers were inlined into the function depended on the
+  rest of the TU: under `-march=native`, the benchmarks preset's, train 3's rewrite of the TU left two
+  `std::string` move constructors out of line (1641 -> 1411 instructions, +28 instructions per call), while
+  the portable `-march=x86-64` build was unaffected. The encoder now reads each limb straight from the digits
+  into one output buffer, the only allocation: 858 instructions whose only calls are the buffer's, and per
+  `BM_EncodeWideNumeric` call (callgrind, g++-14) 3892 -> 696 instructions with `-march=native` and
+  3927 -> 698 with `-march=x86-64`. Its bytes and rejections are those of the string-building encoder, held
+  by a differential test over 20000 random decimal texts and the edge cases.
+
 - **Typed JSONB decoding combines precision validation and DOM construction where supported (Huly QB-945).**
   Audited nlohmann versions and configurations reuse its DOM builder and numeric formatter.
   Other configurations keep the checked public parser and its position metadata.

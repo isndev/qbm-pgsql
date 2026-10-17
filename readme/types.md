@@ -133,7 +133,7 @@ The NUMERIC binary decoder retains scale and its existing special-value behavior
 (`append_pg_numeric_text`): into the owning `numeric` carrier, or, for a binary `numeric[]` that `results::json()`
 exports, straight into the array literal (Huly QB-1087); the public value remains an owned string. Typed array
 rendering reads that carrier directly without an intermediate text copy.
-<!-- src: src/qbm/pgsql/type_converter.cpp:711-788,923-946; src/qbm/pgsql/type_converter.h:1747-1748 -->
+<!-- src: src/qbm/pgsql/type_converter.cpp:711-788,921-944; src/qbm/pgsql/type_converter.h:1747-1748 -->
 
 ### Text and binary blobs
 

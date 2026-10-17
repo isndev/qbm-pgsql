@@ -786,7 +786,7 @@ and special values; integer limb formatting and transfer of the decoded string c
 `TypeConverter<qb::wall_time>::append_text` writes `to_text`'s text into a caller's string, and
 `decode_pg_numeric`, `from_binary` and `append_text_from_binary` decode through
 `append_pg_numeric_text`, which writes the digits in place (Huly QB-1087).
-<!-- src: src/qbm/pgsql/type_converter.cpp:138-212,711-788,923-946 -->
+<!-- src: src/qbm/pgsql/type_converter.cpp:138-212,711-788,921-944 -->
 
 ## Error Handling
 

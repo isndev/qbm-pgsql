@@ -374,6 +374,121 @@ reference_decode_pg_numeric(const byte *data, std::size_t size) {
     return out;
 }
 
+// The string-building encoder encode_pg_numeric replaced (Huly QB-1088), kept as the reference the
+// in-place one is held to.
+std::vector<byte>
+reference_encode_pg_numeric(const std::string &in) {
+    auto wr16 = [](std::vector<byte> &b, std::uint16_t v) {
+        std::uint16_t be = qb::endian::to_big_endian(v);
+        const byte   *p  = reinterpret_cast<const byte *>(&be);
+        b.insert(b.end(), p, p + sizeof(be));
+    };
+    std::vector<byte> out;
+
+    // Non-finite values.
+    if (in == "NaN") {
+        wr16(out, 0);
+        wr16(out, 0);
+        wr16(out, 0xC000);
+        wr16(out, 0);
+        return out;
+    }
+    if (in == "Infinity" || in == "+Infinity") {
+        wr16(out, 0);
+        wr16(out, 0);
+        wr16(out, 0xD000);
+        wr16(out, 0);
+        return out;
+    }
+    if (in == "-Infinity") {
+        wr16(out, 0);
+        wr16(out, 0);
+        wr16(out, 0xF000);
+        wr16(out, 0);
+        return out;
+    }
+
+    std::size_t i   = 0;
+    bool        neg = false;
+    if (i < in.size() && (in[i] == '+' || in[i] == '-')) {
+        neg = (in[i] == '-');
+        ++i;
+    }
+    // Strict: every character of the integer/fraction part must be a digit (or the single
+    // decimal point). Previously any non-digit was SILENTLY skipped, so "abc" encoded as the
+    // zero NUMERIC, "12abc" as 12, and "1e5" as 15 — silent data corruption sent to the server.
+    // A malformed value must fail loudly, like every other from_text/encode path.
+    const auto reject = [&in]() {
+        throw error::client_error("invalid NUMERIC text representation: '" + in + "'");
+    };
+    std::string intpart, fracpart;
+    for (; i < in.size() && in[i] != '.'; ++i) {
+        if (in[i] < '0' || in[i] > '9')
+            reject();
+        intpart += in[i];
+    }
+    if (i < in.size() && in[i] == '.') {
+        ++i;
+        for (; i < in.size(); ++i) {
+            if (in[i] < '0' || in[i] > '9')
+                reject();
+            fracpart += in[i];
+        }
+    }
+    // No digits at all ("", "+", "-", ".", "+.") is not a number.
+    if (intpart.empty() && fracpart.empty())
+        reject();
+    const int dscale = static_cast<int>(fracpart.size());
+
+    // Align to base-10000 limb boundaries: integer part left-padded, fraction
+    // part right-padded, each to a multiple of 4 decimal digits.
+    const std::string int_al  = std::string((4 - (intpart.size() % 4)) % 4, '0') + intpart;
+    const std::string frac_al = fracpart + std::string((4 - (fracpart.size() % 4)) % 4, '0');
+
+    const int n_int  = static_cast<int>(int_al.size()) / 4;
+    const int n_frac = static_cast<int>(frac_al.size()) / 4;
+
+    auto limb_of = [](const std::string &s, int k) {
+        int v = 0;
+        for (int j = 0; j < 4; ++j)
+            v = v * 10 + (s[static_cast<std::size_t>(k) * 4 + j] - '0');
+        return v;
+    };
+    std::vector<int> limbs;
+    limbs.reserve(static_cast<std::size_t>(n_int) + static_cast<std::size_t>(n_frac));
+    for (int k = 0; k < n_int; ++k)
+        limbs.push_back(limb_of(int_al, k));
+    for (int k = 0; k < n_frac; ++k)
+        limbs.push_back(limb_of(frac_al, k));
+
+    int weight = n_int - 1;
+    // Strip leading zero limbs (each lowers the weight) and trailing zero limbs
+    // (dscale is preserved regardless).
+    int start = 0;
+    while (start < static_cast<int>(limbs.size()) && limbs[start] == 0) {
+        ++start;
+        --weight;
+    }
+    int end = static_cast<int>(limbs.size());
+    while (end > start && limbs[end - 1] == 0)
+        --end;
+
+    const int     ndigits = end - start;
+    std::uint16_t sign    = neg ? 0x4000 : 0x0000;
+    if (ndigits == 0) { // exact zero: normalize weight/sign, keep dscale
+        weight = 0;
+        sign   = 0x0000;
+    }
+
+    wr16(out, static_cast<std::uint16_t>(ndigits));
+    wr16(out, static_cast<std::uint16_t>(static_cast<std::int16_t>(weight)));
+    wr16(out, sign);
+    wr16(out, static_cast<std::uint16_t>(dscale));
+    for (int k = start; k < end; ++k)
+        wr16(out, static_cast<std::uint16_t>(limbs[k]));
+    return out;
+}
+
 } // namespace typeconverter_adversarial_test
 
 // The in-place NUMERIC decoder (Huly QB-1087) writes what the string-building one wrote, for every
@@ -416,6 +531,84 @@ TEST(TCAdversarialNumeric, InPlaceDecodeMatchesTheStringBuildingDecoder) {
     append_pg_numeric_text(out, widest.data(), widest.size());
     EXPECT_EQ(out.size(), 1 + 5 + 32767 * 4 + 1 + 3);
     EXPECT_EQ(out, reference_decode_pg_numeric(widest.data(), widest.size()));
+}
+
+// The in-place NUMERIC encoder (Huly QB-1088) writes the bytes the string-building one wrote, and rejects
+// what it rejected: random decimal texts (signs, leading and trailing zeros, empty integer or fraction
+// parts, every length modulo four, the odd stray character) and the fixed edge cases below.
+TEST(TCAdversarialNumeric, InPlaceEncodeMatchesTheStringBuildingEncoder) {
+    using typeconverter_adversarial_test::reference_encode_pg_numeric;
+    const auto check = [](const std::string &text) {
+        std::vector<byte> expected;
+        bool              rejected = false;
+        try {
+            expected = reference_encode_pg_numeric(text);
+        } catch (const error::client_error &) {
+            rejected = true;
+        }
+        if (rejected)
+            EXPECT_THROW((void) encode_pg_numeric(text), error::client_error) << '"' << text << '"';
+        else
+            EXPECT_EQ(encode_pg_numeric(text), expected) << '"' << text << '"';
+    };
+    for (const char *text :
+         {"0",
+          "-0",
+          "+0",
+          "0.0",
+          "-0.000",
+          ".5",
+          "5.",
+          "-.5",
+          "+.25",
+          "00001",
+          "1000000",
+          "0.0001",
+          "123456789012345678.987654321",
+          "99999999.99999999",
+          "0000.0000",
+          "10000",
+          "0.00010000",
+          "NaN",
+          "Infinity",
+          "+Infinity",
+          "-Infinity",
+          "",
+          "+",
+          "-",
+          ".",
+          "+.",
+          "1e5",
+          "12abc",
+          " 1",
+          "1 ",
+          "1..2",
+          "--1",
+          "nan",
+          "inf",
+          "1.2.3",
+          "+-1"})
+        check(text);
+    std::mt19937 rng(1088);
+    for (int round = 0; round < 20000; ++round) {
+        std::string text;
+        if (const auto sign = rng() % 4; sign < 2)
+            text += sign == 0 ? '-' : '+';
+        const auto digits = [&](std::size_t count) {
+            for (std::size_t i = 0; i < count; ++i)
+                text += static_cast<char>('0' + (rng() % 4 == 0 ? 0 : rng() % 10));
+        };
+        digits(rng() % 14);
+        if (rng() % 3 != 0) {
+            text += '.';
+            digits(rng() % 14);
+        }
+        if (rng() % 50 == 0)
+            text.insert(rng() % (text.size() + 1), 1, "xe .-"[rng() % 5]);
+        check(text);
+        if (HasFailure())
+            break;
+    }
 }
 
 // ============================================================================
