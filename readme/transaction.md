@@ -402,7 +402,7 @@ Key facts to get right:
 
 ## LISTEN / NOTIFY
 
-<!-- src: src/qbm/pgsql/transaction.h:464-528; src/qbm/pgsql/pg_notify_sql.h:25-92; qbm/pgsql/src/qbm/pgsql/pgsql.h:383-393,2171-2176,3069-3204 (in that order: notification; on_incoming_notify; notify_consumer / notify_co_consumer / notify_cb_consumer) -->
+<!-- src: src/qbm/pgsql/transaction.h:464-528; src/qbm/pgsql/pg_notify_sql.h:25-92; qbm/pgsql/src/qbm/pgsql/pgsql.h:383-393,2171-2176,3069-3245 (in that order: notification; on_incoming_notify; notify_consumer / notify_cb_consumer / notify_co_consumer) -->
 
 ### Publishing (NOTIFY)
 
@@ -436,8 +436,10 @@ alone is not enough — you must give the connection somewhere to deliver inboun
 
 - A plain `database` only **logs** an inbound `NOTIFY` unless you set
   `on_incoming_notify(std::function<void(qb::pg::notification&&)>)`.
-- `qb::pg::tcp::notify_co_consumer` (alias `notify_cb_consumer`) is a `database` subtype that adds an `on_notify(cb)`
-  callback **and** a bounded queue you drain with `co_await sub.receive()`.
+- `qb::pg::tcp::notify_co_consumer` is a `database` subtype that adds an `on_notify(cb)` callback **and** a bounded
+  queue you drain with `co_await sub.receive()`.
+- `qb::pg::tcp::notify_cb_consumer` delivers to its `on_notify(cb)` callback only: no queue, so nothing is dropped
+  (until 3.3 it was an alias of `notify_co_consumer`, Huly QB-1092).
 
 A delivered `qb::pg::notification` carries `server_backend_pid`, `channel`, and `payload`.
 

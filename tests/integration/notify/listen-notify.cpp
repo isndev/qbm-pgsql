@@ -29,6 +29,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <gtest/gtest.h>
 #include <string>
 #include <vector>
@@ -267,6 +268,53 @@ TEST_F(ListenNotify, CbConsumer_ReceivesPayload) {
     sub.disconnect();
 }
 
+// A callback-only consumer retains nothing, so it drops nothing (Huly QB-1092). notify_cb_consumer was an
+// alias of the queueing consumer: every notification also went into receive()'s bounded queue (8192 by
+// default), which a callback-only user never reads -- it kept up to 8192 payloads alive, then reported
+// every later NOTIFY as dropped although the callback had handled it. 8192 + 8 notifications, published
+// in one transaction (pg_notify over generate_series), all reach the callback and none counts as dropped.
+TEST_F(ListenNotify, CbConsumer_RetainsNothingAndDropsNothing) {
+    constexpr int                   kNotifications = 8192 + 8;
+    int                             hits{};
+    qb::pg::tcp::notify_cb_consumer sub{dsn_tcp_string()};
+    sub.on_notify([&](qb::pg::notification &&n) {
+        if (n.channel == std::string(kChan))
+            ++hits;
+    });
+    ASSERT_TRUE(qb::io::async::run_sync(sub.connect(dsn_tcp_string())));
+    ASSERT_TRUE(sub.listen(std::string(kChan), discard_query, discard_error).await());
+    ASSERT_TRUE(pub_->execute("SELECT pg_notify('" + std::string(kChan) + "', g::text) FROM generate_series(1, "
+                                  + std::to_string(kNotifications) + ") AS g",
+                              discard_query, discard_error)
+                    .await());
+
+    ASSERT_TRUE(pump_until([&] { return hits >= kNotifications; }, kDeadline)) << "only " << hits << " notifications reached the callback";
+    EXPECT_EQ(hits, kNotifications);
+    EXPECT_EQ(sub.stats().notifications_received, static_cast<std::uint64_t>(kNotifications));
+    EXPECT_EQ(sub.stats().notifications_dropped, 0u) << "a callback-only consumer queued its notifications and then dropped them";
+    sub.disconnect();
+}
+
+// The callback-only consumer contains a throwing callback as well, and goes on delivering.
+TEST_F(ListenNotify, CbConsumer_OnNotifyCallbackThrows_StillDelivers) {
+    int                             calls{};
+    qb::pg::tcp::notify_cb_consumer sub{dsn_tcp_string()};
+    sub.on_notify([&](qb::pg::notification &&n) {
+        if (n.channel != std::string(kChan))
+            return;
+        if (++calls == 1)
+            throw std::runtime_error("intentional on_notify throw");
+    });
+    ASSERT_TRUE(qb::io::async::run_sync(sub.connect(dsn_tcp_string())));
+    ASSERT_TRUE(sub.listen(std::string(kChan), discard_query, discard_error).await());
+    ASSERT_TRUE(pub_->notify(std::string(kChan), "throws", discard_query, discard_error).await());
+    ASSERT_TRUE(pub_->notify(std::string(kChan), "delivered", discard_query, discard_error).await());
+    EXPECT_TRUE(pump_until([&] { return calls >= 2; }, kDeadline)) << "the consumer stopped delivering after a throwing callback";
+    EXPECT_EQ(calls, 2);
+    EXPECT_TRUE(sub.is_connected());
+    sub.disconnect();
+}
+
 TEST_F(ListenNotify, CbConsumer_MultiPayload_Ordered) {
     std::vector<std::string>        received;
     qb::pg::tcp::notify_cb_consumer sub{dsn_tcp_string()};
@@ -378,10 +426,11 @@ TEST_F(ListenNotify, CoConsumer_ReconnectAndReListen_ReceiveServesTheNewConnecti
 
 // A throwing on_notify callback must be swallowed (logged) by deliver_pg_notify and must
 // NOT prevent the notification from being queued for receive(): the consumer keeps working.
-// Exercises the catch(std::exception&) arm of the on_notify_callback_ path.
-TEST_F(ListenNotify, CbConsumer_OnNotifyCallbackThrows_StillQueuesAndSurvives) {
+// Exercises the catch(std::exception&) arm of the on_notify_callback_ path. The queueing consumer is
+// notify_co_consumer: notify_cb_consumer has no queue since Huly QB-1092.
+TEST_F(ListenNotify, CoConsumer_OnNotifyCallbackThrows_StillQueuesAndSurvives) {
     std::atomic<int>                cb_calls{0};
-    qb::pg::tcp::notify_cb_consumer sub{dsn_tcp_string()};
+    qb::pg::tcp::notify_co_consumer sub{dsn_tcp_string()};
     sub.on_notify([&](qb::pg::notification &&n) {
         if (n.channel == std::string(kChan)) {
             cb_calls.fetch_add(1, std::memory_order_relaxed);

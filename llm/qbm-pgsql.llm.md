@@ -482,7 +482,7 @@ rethrows that error; the coroutine form returns a failed `Reply<void>`
 For a queue-based consumer use the dedicated client:
 
 ```cpp
-qb::pg::tcp::notify_co_consumer sub;                     // alias: notify_cb_consumer (same type)
+qb::pg::tcp::notify_co_consumer sub;                     // notify_cb_consumer: callback-only, no queue
 qb::io::async::run_sync(sub.connect("tcp://user:secret@localhost:5432[mydb]"));
 
 qb::io::async::run_sync([&]() -> qb::io::async::task<void> {

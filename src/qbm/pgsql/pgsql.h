@@ -522,8 +522,8 @@ struct postgres_ssl_negotiator {
  *
  * @tparam QB_IO_ I/O handler type that provides networking capabilities
  * @tparam NotifyDerived CRTP notify consumer type (`void` for plain `database`); receives NOTIFY via
- *         `consume_pg_notify` / `deliver_pg_notify`. See `notify_consumer` / `notify_co_consumer`
- *         (`notify_cb_consumer` is an alias for the same class).
+ *         `consume_pg_notify` / `deliver_pg_notify`. See `notify_consumer`, `notify_cb_consumer` and
+ *         `notify_co_consumer`.
  */
 template <typename QB_IO_, typename NotifyDerived = void>
 class Database
@@ -3063,7 +3063,7 @@ public:
  * @brief CRTP base for LISTEN/NOTIFY consumers (mirrors `RedisConsumer` + derived).
  *
  * `Derived` must implement `deliver_pg_notify(::qb::pg::notification &&)` and inherit this class as
- * `notify_consumer<QB_IO_, Derived>` (see `notify_co_consumer`).
+ * `notify_consumer<QB_IO_, Derived>` (see `notify_cb_consumer`, `notify_co_consumer`).
  */
 template <typename QB_IO_, typename Derived>
 class notify_consumer : public Database<QB_IO_, Derived> {
@@ -3081,8 +3081,54 @@ public:
 };
 
 /**
- * @brief LISTEN/NOTIFY consumer: optional callback + `co_await receive()` queue (mirrors Redis
- * `cb_consumer` / `co_consumer` in one type — PostgreSQL allows normal queries on the same link).
+ * @brief LISTEN/NOTIFY consumer that delivers to a callback only (Huly QB-1092; see `redis::tcp::cb_consumer`).
+ *
+ * Every NOTIFY goes to `on_notify`, on the connection's thread, as it is read; nothing is queued, so
+ * nothing is ever dropped. Until 3.3 this name was an alias of `notify_co_consumer`, whose bounded queue
+ * a callback-only program never reads: it filled after 8192 notifications, and every later NOTIFY was
+ * counted and logged as dropped although the callback had handled it. An exception escaping the callback
+ * is contained and logged. Without a callback a NOTIFY is logged at INFO. Normal queries run on the same
+ * connection. LISTEN is per session: LISTEN again after a reconnect.
+ */
+template <typename QB_IO_>
+class notify_cb_consumer : public notify_consumer<QB_IO_, notify_cb_consumer<QB_IO_>> {
+    using base_type = notify_consumer<QB_IO_, notify_cb_consumer<QB_IO_>>;
+
+    std::function<void(::qb::pg::notification &&)> on_notify_{};
+
+public:
+    notify_cb_consumer()
+        : base_type() {}
+
+    explicit notify_cb_consumer(std::string const &opts)
+        : base_type(opts) {}
+
+    /** @brief The callback each NOTIFY is delivered to (replaces any previous one). */
+    notify_cb_consumer<QB_IO_> &
+    on_notify(std::function<void(::qb::pg::notification &&)> cb) {
+        on_notify_ = std::move(cb);
+        return *this;
+    }
+
+    void
+    deliver_pg_notify(::qb::pg::notification &&n) {
+        if (!on_notify_) {
+            QB_LOG_INFO("[pgsql] NOTIFY pid=" << n.server_backend_pid << " channel=" << n.channel << " payload=" << n.payload);
+            return;
+        }
+        try {
+            on_notify_(std::move(n));
+        } catch (std::exception const &ex) {
+            QB_LOG_WARN("[pgsql] notify_cb_consumer on_notify callback error: " << ex.what());
+        } catch (...) {
+            QB_LOG_WARN("[pgsql] notify_cb_consumer on_notify callback threw a non-std exception");
+        }
+    }
+};
+
+/**
+ * @brief LISTEN/NOTIFY consumer with `co_await receive()` (see `redis::tcp::co_consumer`): a bounded queue
+ * of notifications, plus an optional `on_notify` callback called before each one is queued.
  *
  * A disconnect closes the queue: `receive()` yields what was already received, then `std::nullopt`
  * for as long as the consumer stays disconnected. After the next `connect()` it serves the new
@@ -3198,11 +3244,6 @@ public:
     }
 };
 
-/** @brief Same type as `notify_co_consumer` (Redis-style name for callback-first usage via
- * `on_notify`). */
-template <typename QB_IO_>
-using notify_cb_consumer = notify_co_consumer<QB_IO_>;
-
 } // namespace detail
 
 /**
@@ -3286,7 +3327,8 @@ struct tcp {
     using database = detail::Database<qb::io::transport::tcp, void>;
 
     /**
-     * @brief LISTEN/NOTIFY consumer with callback delivery (see `redis::tcp::cb_consumer`).
+     * @brief LISTEN/NOTIFY consumer with callback-only delivery: nothing queued, nothing dropped (see
+     *        `redis::tcp::cb_consumer`).
      */
     using notify_cb_consumer = detail::notify_cb_consumer<qb::io::transport::tcp>;
 

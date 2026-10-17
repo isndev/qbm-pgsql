@@ -364,8 +364,10 @@ db.unlisten_all(qb::pg::discard_query, qb::pg::discard_error);
 `pgsql.h`](../src/qbm/pgsql/pgsql.h)). **`qb::pg::notification`** holds **`channel`**, **`payload`**, and the originating backend
 PID **`server_backend_pid`**. The handler runs on the I/O thread when a `NotificationResponse` arrives.
 
-**`notify_co_consumer`:** optional **`on_notify`**, **`on_notify_dropped`**, **`co_await receive()`** —
-**`notify_cb_consumer`** is an alias of the same class ([`pgsql.h`](../src/qbm/pgsql/pgsql.h)). See
+**`notify_co_consumer`:** optional **`on_notify`**, **`on_notify_dropped`**, **`co_await receive()`**.
+**`notify_cb_consumer`** is the callback-only twin: **`on_notify`** alone, no queue, so it never drops a
+notification (until 3.3 it was an alias of `notify_co_consumer`, whose unread queue filled and dropped every later
+NOTIFY — Huly QB-1092) ([`pgsql.h`](../src/qbm/pgsql/pgsql.h)). See
 [`tests/integration/notify/listen-notify.cpp`](../tests/integration/notify/listen-notify.cpp) for the `pump_until` and ordering patterns.
 
 ---

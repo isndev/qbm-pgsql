@@ -15,7 +15,7 @@
 llm/qbm-pgsql.llm.api.md	pgsql.h:2702-2703	174bc1d30cbd	bool
 llm/qbm-pgsql.llm.api.md	pgsql.h:2747-2748	14276ca02568	[[nodiscard]] qb::io::async::task<bool>
 llm/qbm-pgsql.llm.api.md	pgsql.h:2803-2814	c0a478f5184b	int events = EV_WRITE; // A plain would-block write needs output capa...
-llm/qbm-pgsql.llm.api.md	qbm/pgsql/src/qbm/pgsql/pgsql.h:3235-3235	3e2a63be5571	using results = detail::resultset;
+llm/qbm-pgsql.llm.api.md	qbm/pgsql/src/qbm/pgsql/pgsql.h:3276-3276	3e2a63be5571	using results = detail::resultset;
 llm/qbm-pgsql.llm.api.md	queries.h:285-285	ab6ca6aa9ac4	using PreparedQueryStorage = PreparedStorage;
 llm/qbm-pgsql.llm.api.md	queries.h:76-76	e0fb44c50b81	class PreparedStorage {
 llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/commands.h:1249-1256	66990ac08294	Transaction::notify(std::string_view channel, std::string_view payloa...

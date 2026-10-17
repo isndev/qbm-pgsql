@@ -10,6 +10,7 @@ This document provides a detailed API reference for the `qb::pg` module, part of
   - [Database Client Classes](#database-client-classes)
     - [`qb::pg::tcp::database`](#qbpgtcpdatabase)
     - [`qb::pg::tcp::ssl::database`](#qbpgtcpssldatabase)
+    - [LISTEN/NOTIFY consumers (`notify_cb_consumer`, `notify_co_consumer`)](#listennotify-consumers-notify_cb_consumer-notify_co_consumer)
   - [Transaction Management](#transaction-management)
     - [`qb::pg::transaction` (alias for `qb::pg::detail::Transaction`)](#qbpgtransaction-alias-for-qbpgdetailtransaction)
 - [Connection Handling](#connection-handling)
@@ -210,6 +211,45 @@ struct tcp {
 } // namespace qb::pg
 ```
 **Usage:** Similar to `qb::pg::tcp::database`, but uses `qb::io::transport::stcp` for secure communication. Transport selection is a **compile-time choice of the alias** (`tcp::database` vs `tcp::ssl::database`), not a DSN scheme: an `ssl://` scheme string on a `tcp::database` does **not** enable TLS, and a `tcp://` string on a `tcp::ssl::database` still negotiates TLS. There is **no** libpq `sslmode` parsing. TLS certificate verification is off by default (`ssl_verify_mode::none` ≈ libpq `sslmode=require`: encrypted but unauthenticated); set `connection_options::ssl_verify = qb::pg::ssl_verify_mode::full` (≈ libpq `verify-full`: chain + hostname checks) and pass the options to `connect(connection_options)` before connecting. For a private CA set `ssl_root_cert` (libpq `sslrootcert`); for mutual TLS set `ssl_cert` + `ssl_key` (libpq `sslcert`/`sslkey`) — a bad path fails the connect closed. The DSN string cannot carry TLS fields.
+
+#### LISTEN/NOTIFY consumers (`notify_cb_consumer`, `notify_co_consumer`)
+
+Two `database` subtypes dedicated to receiving NOTIFY (`qb::pg::tcp::` and, with `QB_HAS_SSL`,
+`qb::pg::tcp::ssl::`); both run normal queries too. Publish from a separate connection.
+
+```cpp
+namespace qb::pg::detail {
+template <typename QB_IO_>
+class notify_cb_consumer : public Database<QB_IO_, notify_cb_consumer<QB_IO_>> /* via notify_consumer */ {
+public:
+    notify_cb_consumer();
+    explicit notify_cb_consumer(std::string const &opts);
+    notify_cb_consumer &on_notify(std::function<void(qb::pg::notification &&)> cb);
+};
+
+template <typename QB_IO_>
+class notify_co_consumer : public Database<QB_IO_, notify_co_consumer<QB_IO_>> /* via notify_consumer */ {
+public:
+    notify_co_consumer();
+    explicit notify_co_consumer(std::string const &opts, std::size_t notify_capacity = 8192);
+    notify_co_consumer &on_notify(std::function<void(qb::pg::notification &&)> cb);
+    notify_co_consumer &on_notify_dropped(std::function<void(qb::pg::notification &&)> cb);
+    [[nodiscard]] std::size_t notify_channel_capacity() const noexcept;
+    [[nodiscard]] qb::io::async::task<std::optional<qb::pg::notification>> receive();
+};
+} // namespace qb::pg::detail
+```
+
+- `notify_cb_consumer`: every NOTIFY goes to `on_notify`, on the connection's thread, as it is read.
+  Nothing is queued, so nothing is dropped (`stats().notifications_dropped` stays 0). Without a callback a
+  NOTIFY is logged at INFO; an exception escaping the callback is contained and logged. Until 3.3 this name
+  was an alias of `notify_co_consumer`, whose queue a callback-only program never read: after 8192
+  notifications every later one was counted and logged as dropped. (Huly QB-1092)
+- `notify_co_consumer`: `on_notify` (optional) is called first, then the NOTIFY is queued for
+  `co_await receive()` in a bounded channel (`notify_capacity`, default 8192). A NOTIFY that does not fit
+  goes to `on_notify_dropped` (or a WARN log) and counts in `stats().notifications_dropped`. A disconnect
+  closes the channel: `receive()` yields what it holds, then `std::nullopt`; the next `connect()` serves a
+  new channel that starts with what was not read (Huly QB-252).
 
 ### Transaction Management
 
@@ -416,7 +456,7 @@ namespace qb::pg {
 
 ### `qb::pg::results` (alias for `qb::pg::resultset`)
 
-Represents the set of rows returned by a query. The class is declared publicly as `qb::pg::resultset` in `resultset.h`; `qb::pg::results` is its public alias (`qbm/pgsql/src/qbm/pgsql/pgsql.h:3235`). Both spellings are valid, with `results` preferred for application code. Row and field are reachable as `qb::pg::results::row` / `qb::pg::results::field`.
+Represents the set of rows returned by a query. The class is declared publicly as `qb::pg::resultset` in `resultset.h`; `qb::pg::results` is its public alias (`qbm/pgsql/src/qbm/pgsql/pgsql.h:3276`). Both spellings are valid, with `results` preferred for application code. Row and field are reachable as `qb::pg::results::row` / `qb::pg::results::field`.
 
 **Definition (`qbm/pgsql/src/qbm/pgsql/resultset.h`):**
 ```cpp

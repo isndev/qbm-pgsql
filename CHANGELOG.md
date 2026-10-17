@@ -65,6 +65,15 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Changed
 
+- **Source change -- `notify_cb_consumer` is a callback-only consumer (Huly QB-1092).** It was an alias of
+  `notify_co_consumer`: every NOTIFY went to `on_notify` AND into `receive()`'s bounded queue (8192 by default), which
+  a callback-only program never reads -- the queue kept up to 8192 payloads alive, then every later NOTIFY was counted
+  in `stats().notifications_dropped` and logged as dropped although the callback had handled it. It is now its own
+  class: `on_notify` only, nothing queued, nothing dropped; an exception escaping the callback is contained (a
+  non-`std` one too). A program that called `receive()`, `on_notify_dropped()` or `notify_channel_capacity()` on a
+  `notify_cb_consumer` uses `notify_co_consumer`, which is unchanged. Pinned by `CbConsumer_RetainsNothingAndDropsNothing`
+  (8192 + 8 notifications, all delivered, none dropped) and `CbConsumer_OnNotifyCallbackThrows_StillDelivers`.
+
 - **NUMERIC, timestamp and array rendering retain their contracts (Huly QB-206).**
   NUMERIC formats its limbs with integer conversion instead of `printf`, transfers decoded text into its owning
   carrier, and renders that carrier directly inside arrays. UTC timestamp text uses the existing qb calendar
