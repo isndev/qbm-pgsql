@@ -31,6 +31,7 @@
 #include <chrono>
 #include <cstdint>
 #include <gtest/gtest.h>
+#include <set>
 #include <string>
 #include <vector>
 #include <qb/io/async.h>
@@ -83,6 +84,17 @@ notify_boundary_payload(bool multibyte) {
         payload.append("\xc3\xa9"); // UTF-8: two bytes per code point.
     payload.push_back('a');
     return payload;
+}
+
+/// `receive()` bounded by a deadline: a regression that stops the stream fails the test instead of hanging it.
+qb::io::async::task<std::optional<qb::pg::notification>>
+receive_within(qb::pg::tcp::notify_co_consumer &sub, std::chrono::seconds limit = std::chrono::seconds(5)) {
+    try {
+        co_return co_await qb::io::async::with_deadline(sub.receive(), std::chrono::steady_clock::now() + limit);
+    } catch (qb::io::async::timeout_error const &) {
+        ADD_FAILURE() << "receive() did not resolve within " << limit.count() << " s";
+        co_return std::nullopt;
+    }
 }
 
 class NotifyCallbackGuard {
@@ -625,6 +637,309 @@ TEST_F(ListenNotify, CoConsumer_CapacityTwo_DropBoundary) {
         auto second = co_await sub.receive();
         co_return first.has_value() && second.has_value() && first->payload == "one" && second->payload == "two";
     }()));
+    sub.disconnect();
+}
+
+// ---------------------------------------------------------------------------
+// The reconnect contract on the notify consumers (Huly QB-111)
+// ---------------------------------------------------------------------------
+
+// A run that recovers a lost connection replays the listened set -- what listen() / unlisten() left,
+// not what was ever listened -- and the stream says where it has a hole: one gap marker
+// (reason reconnect) before the first notification of the new session. The stream never ended.
+TEST_F(ListenNotify, CoConsumer_ARunReplaysTheListenedSetAndMarksTheGap) {
+    qb::pg::tcp::notify_co_consumer sub{dsn_tcp_string()};
+    int                             connected = 0;
+    sub.on_connected([&] { ++connected; });
+    sub.enable_auto_reconnect(RetryPolicy{}.with_initial_delay(std::chrono::milliseconds(20)).with_jitter(false));
+    ASSERT_TRUE(qb::io::async::run_sync(sub.connect(dsn_tcp_string())));
+    ASSERT_TRUE(sub.listen(std::string(kChan), discard_query, discard_error).await());
+    ASSERT_TRUE(sub.listen(std::string(kChan2), discard_query, discard_error).await());
+    ASSERT_TRUE(sub.unlisten(std::string(kChan2), discard_query, discard_error).await());
+    EXPECT_EQ(sub.listened_channels(), (std::set<std::string, std::less<>>{std::string(kChan)}));
+    ASSERT_TRUE(pub_->notify(std::string(kChan), "before", discard_query, discard_error).await());
+    ASSERT_TRUE(pump_until([&] { return sub.stats().notifications_received == 1; }, kDeadline));
+    EXPECT_EQ(sub.stats().gaps, 0u) << "the first ready session of a lifecycle follows no hole";
+
+    ASSERT_TRUE(pub_->execute("SELECT pg_terminate_backend(" + std::to_string(sub.backend_pid()) + ")", discard_query, discard_error).await());
+    ASSERT_TRUE(pump_until([&] { return connected == 2; }, kDeadline)) << "the run never reconnected";
+    // The replay is server state, not a guess: the new backend listens on kChan, and only on it.
+    std::string listening;
+    ASSERT_TRUE(sub.execute(
+                       "SELECT coalesce(string_agg(c, ','), '') FROM pg_listening_channels() AS c",
+                       [&](transaction &, results r) { listening = r[0][0].as<std::string>(); }, discard_error)
+                    .await());
+    EXPECT_EQ(listening, std::string(kChan));
+    ASSERT_TRUE(pub_->notify(std::string(kChan), "after", discard_query, discard_error).await());
+    ASSERT_TRUE(pub_->notify(std::string(kChan2), "unlistened", discard_query, discard_error).await());
+    ASSERT_TRUE(pump_until([&] { return sub.stats().notifications_received == 2; }, kDeadline));
+
+    std::vector<qb::pg::notification> stream;
+    ASSERT_TRUE(qb::io::async::run_sync([&]() -> qb::io::async::task<bool> {
+        for (int i = 0; i < 3; ++i) {
+            auto n = co_await receive_within(sub);
+            if (!n)
+                co_return false;
+            stream.push_back(std::move(*n));
+        }
+        co_return true;
+    }()))
+        << "the stream ended across a recovered loss";
+    ASSERT_EQ(stream.size(), 3u);
+    EXPECT_EQ(stream[0].kind, notification_kind::notify);
+    EXPECT_EQ(stream[0].payload, "before");
+    EXPECT_EQ(stream[1].kind, notification_kind::gap) << "no gap marker before the first notification of the new session";
+    EXPECT_EQ(stream[1].gap.reason, qb::io::gap_reason::reconnect);
+    EXPECT_EQ(stream[1].gap.lost, 0u);
+    EXPECT_EQ(stream[2].kind, notification_kind::notify);
+    EXPECT_EQ(stream[2].payload, "after");
+    EXPECT_EQ(sub.stats().gaps, 1u);
+    EXPECT_EQ(sub.stats().reconnects, 1u);
+    sub.disconnect();
+}
+
+// The callback consumer is told of the same hole by on_gap, before the next on_notify.
+TEST_F(ListenNotify, CbConsumer_OnGapComesBeforeTheNextNotify) {
+    std::vector<std::string>        events;
+    qb::pg::tcp::notify_cb_consumer sub{dsn_tcp_string()};
+    int                             connected = 0;
+    bool                            ready_in_gap{}, resynced{};
+    sub.on_connected([&] {
+        events.push_back("connected");
+        ++connected;
+    });
+    sub.on_notify([&](qb::pg::notification &&n) { events.push_back("notify:" + n.payload); });
+    sub.on_gap([&](qb::io::gap_info gap) {
+        events.push_back(std::string("gap:") + std::string(qb::io::gap_reason_name(gap.reason)));
+        // The resync a gap calls for, on this very connection: it is ready when on_gap runs.
+        ready_in_gap = sub.is_connected();
+        sub.execute("SELECT 1", [&](transaction &, results) { resynced = true; }, discard_error);
+    });
+    sub.enable_auto_reconnect(RetryPolicy{}.with_initial_delay(std::chrono::milliseconds(20)).with_jitter(false));
+    ASSERT_TRUE(qb::io::async::run_sync(sub.connect(dsn_tcp_string())));
+    ASSERT_TRUE(sub.listen(std::string(kChan), discard_query, discard_error).await());
+    ASSERT_TRUE(pub_->notify(std::string(kChan), "1", discard_query, discard_error).await());
+    ASSERT_TRUE(pump_until([&] { return events.size() == 2; }, kDeadline)); // "connected", "notify:1"
+
+    ASSERT_TRUE(pub_->execute("SELECT pg_terminate_backend(" + std::to_string(sub.backend_pid()) + ")", discard_query, discard_error).await());
+    ASSERT_TRUE(pump_until([&] { return connected == 2; }, kDeadline)) << "the run never reconnected";
+    ASSERT_TRUE(pub_->notify(std::string(kChan), "2", discard_query, discard_error).await());
+    ASSERT_TRUE(pump_until([&] { return events.size() == 5 && resynced; }, kDeadline));
+    EXPECT_EQ(events, (std::vector<std::string>{"connected", "notify:1", "gap:reconnect", "connected", "notify:2"}));
+    EXPECT_TRUE(ready_in_gap) << "on_gap ran before the connection was ready";
+    EXPECT_TRUE(resynced) << "the resync query issued from on_gap was refused";
+    EXPECT_EQ(sub.stats().gaps, 1u);
+    sub.disconnect();
+}
+
+// The new session's LISTEN is live while the hook still runs: a NOTIFY that arrives then is held, and
+// released at ready behind the gap marker -- the reader that wakes on the marker can resync on the
+// same connection at once, and every notification of the new session reaches it on a ready connection.
+TEST_F(ListenNotify, CoConsumer_ANotifyDuringTheHookIsHeldBehindTheMarker) {
+    qb::pg::tcp::notify_co_consumer sub{dsn_tcp_string()};
+    int                             connected = 0, hook_runs = 0;
+    std::vector<bool>               ready_at_delivery;
+    sub.on_connected([&] { ++connected; });
+    sub.on_notify([&](qb::pg::notification &&) { ready_at_delivery.push_back(sub.is_connected()); });
+    sub.set_handshake([&](handshake_session &hs) -> qb::io::async::task<bool> {
+        if (++hook_runs == 1)
+            co_return true;
+        // Behind the replay, so the new session listens; then publish, and let the NOTIFY arrive while
+        // the handshake still runs.
+        if (!(co_await hs.execute("SELECT 1")).ok())
+            co_return false;
+        if (!(co_await pub_->notify(std::string(kChan), "during-hook")).ok())
+            co_return false;
+        co_return (co_await hs.execute("SELECT pg_sleep(0.2)")).ok();
+    });
+    sub.enable_auto_reconnect(RetryPolicy{}.with_initial_delay(std::chrono::milliseconds(20)).with_jitter(false));
+    ASSERT_TRUE(qb::io::async::run_sync(sub.connect(dsn_tcp_string())));
+    ASSERT_TRUE(sub.listen(std::string(kChan), discard_query, discard_error).await());
+    ASSERT_TRUE(pub_->execute("SELECT pg_terminate_backend(" + std::to_string(sub.backend_pid()) + ")", discard_query, discard_error).await());
+    ASSERT_TRUE(pump_until([&] { return connected == 2; }, kDeadline)) << "the run never reconnected";
+    ASSERT_EQ(hook_runs, 2);
+    ASSERT_TRUE(pub_->notify(std::string(kChan), "after", discard_query, discard_error).await());
+    ASSERT_TRUE(pump_until([&] { return sub.stats().notifications_received == 2; }, kDeadline));
+
+    std::vector<qb::pg::notification> stream;
+    bool                              resynced = false;
+    ASSERT_TRUE(qb::io::async::run_sync([&]() -> qb::io::async::task<bool> {
+        for (int i = 0; i < 3; ++i) {
+            auto n = co_await receive_within(sub);
+            if (!n)
+                co_return false;
+            if (n->kind == notification_kind::gap)
+                resynced = (co_await sub.query("SELECT 1")).ok(); // the resync, on the same connection
+            stream.push_back(std::move(*n));
+        }
+        co_return true;
+    }()));
+    ASSERT_EQ(stream.size(), 3u);
+    EXPECT_EQ(stream[0].kind, notification_kind::gap);
+    EXPECT_EQ(stream[1].payload, "during-hook");
+    EXPECT_EQ(stream[2].payload, "after");
+    EXPECT_TRUE(resynced) << "the resync query issued on the marker was refused";
+    EXPECT_EQ(ready_at_delivery, (std::vector<bool>{true, true})) << "a notification was delivered before the session was ready";
+    sub.disconnect();
+}
+
+// A disconnect() from on_gap ends the session: the release stops -- the notifications held for the
+// session are not delivered -- and on_connected does not fire for it.
+TEST_F(ListenNotify, CbConsumer_ADisconnectFromOnGapStopsTheRelease) {
+    qb::pg::tcp::notify_cb_consumer sub{dsn_tcp_string()};
+    int                             connected = 0, hook_runs = 0, gaps = 0;
+    std::vector<std::string>        delivered;
+    sub.on_connected([&] { ++connected; });
+    sub.on_notify([&](qb::pg::notification &&n) { delivered.push_back(n.payload); });
+    sub.on_gap([&](qb::io::gap_info) {
+        ++gaps;
+        sub.disconnect();
+    });
+    sub.set_handshake([&](handshake_session &hs) -> qb::io::async::task<bool> {
+        if (++hook_runs == 1)
+            co_return true;
+        if (!(co_await hs.execute("SELECT 1")).ok())
+            co_return false;
+        if (!(co_await pub_->notify(std::string(kChan), "held")).ok())
+            co_return false;
+        co_return (co_await hs.execute("SELECT pg_sleep(0.2)")).ok();
+    });
+    sub.enable_auto_reconnect(RetryPolicy{}.with_initial_delay(std::chrono::milliseconds(20)).with_jitter(false));
+    ASSERT_TRUE(qb::io::async::run_sync(sub.connect(dsn_tcp_string())));
+    ASSERT_TRUE(sub.listen(std::string(kChan), discard_query, discard_error).await());
+    ASSERT_TRUE(pub_->execute("SELECT pg_terminate_backend(" + std::to_string(sub.backend_pid()) + ")", discard_query, discard_error).await());
+    ASSERT_TRUE(pump_until([&] { return gaps == 1 && sub.state() == qb::io::connection_state::down; }, kDeadline))
+        << "on_gap never ran, or its disconnect() did not end the session";
+    qb::pg::test::pump_for(std::chrono::milliseconds(200));
+    EXPECT_EQ(sub.down_reason(), qb::io::down_reason::user);
+    EXPECT_EQ(connected, 1) << "on_connected fired for a session on_gap had ended";
+    EXPECT_TRUE(delivered.empty()) << "a notification held for the ended session was delivered";
+    EXPECT_EQ(hook_runs, 2);
+}
+
+// The stream ends only at a terminal state: a recovered loss keeps it open, an explicit disconnect()
+// ends it -- what it held drains, then nullopt -- and down_reason() says why.
+TEST_F(ListenNotify, CoConsumer_TheStreamEndsOnlyAtDown) {
+    qb::pg::tcp::notify_co_consumer sub{dsn_tcp_string()};
+    int                             connected = 0;
+    sub.on_connected([&] { ++connected; });
+    sub.enable_auto_reconnect(RetryPolicy{}.with_initial_delay(std::chrono::milliseconds(20)).with_jitter(false));
+    ASSERT_TRUE(qb::io::async::run_sync(sub.connect(dsn_tcp_string())));
+    ASSERT_TRUE(sub.listen(std::string(kChan), discard_query, discard_error).await());
+    ASSERT_TRUE(pub_->execute("SELECT pg_terminate_backend(" + std::to_string(sub.backend_pid()) + ")", discard_query, discard_error).await());
+    ASSERT_TRUE(pump_until([&] { return connected == 2; }, kDeadline)) << "the run never reconnected";
+    ASSERT_TRUE(pub_->notify(std::string(kChan), "kept", discard_query, discard_error).await());
+    ASSERT_TRUE(pump_until([&] { return sub.stats().notifications_received == 1; }, kDeadline));
+    sub.disconnect();
+    EXPECT_EQ(sub.down_reason(), qb::io::down_reason::user);
+
+    std::vector<qb::pg::notification> stream;
+    bool                              ended = false;
+    ASSERT_TRUE(qb::io::async::run_sync([&]() -> qb::io::async::task<bool> {
+        for (int i = 0; i < 3; ++i) {
+            auto n = co_await receive_within(sub);
+            if (!n) {
+                ended = true;
+                co_return true;
+            }
+            stream.push_back(std::move(*n));
+        }
+        co_return false;
+    }()))
+        << "the stream did not end at down";
+    EXPECT_TRUE(ended);
+    ASSERT_EQ(stream.size(), 2u) << "the stream held a marker and a notification";
+    EXPECT_EQ(stream[0].kind, notification_kind::gap);
+    EXPECT_EQ(stream[1].payload, "kept");
+}
+
+// A full stream is a hole too: every NOTIFY that does not fit still reaches on_notify_dropped and the
+// counters, and ONE marker (reason overflow, lost = every drop) ends what the reader drained.
+TEST_F(ListenNotify, CoConsumer_AnOverflowIsOneCoalescedGapMarker) {
+    constexpr int                   kCapacity = 4, kPublished = 10;
+    int                             dropped_calls{};
+    qb::pg::tcp::notify_co_consumer sub(dsn_tcp_string(), kCapacity);
+    sub.on_notify_dropped([&](qb::pg::notification &&) { ++dropped_calls; });
+    ASSERT_TRUE(qb::io::async::run_sync(sub.connect(dsn_tcp_string())));
+    ASSERT_TRUE(sub.listen(std::string(kChan), discard_query, discard_error).await());
+    ASSERT_TRUE(pub_->execute("SELECT pg_notify('" + std::string(kChan) + "', g::text) FROM generate_series(1, " + std::to_string(kPublished)
+                                  + ") AS g",
+                              discard_query, discard_error)
+                    .await());
+    ASSERT_TRUE(pump_until([&] { return sub.stats().notifications_received == kPublished; }, kDeadline));
+    EXPECT_EQ(dropped_calls, kPublished - kCapacity);
+    EXPECT_EQ(sub.stats().notifications_dropped, static_cast<std::uint64_t>(kPublished - kCapacity));
+
+    std::vector<qb::pg::notification> stream;
+    ASSERT_TRUE(qb::io::async::run_sync([&]() -> qb::io::async::task<bool> {
+        for (int i = 0; i < kCapacity + 1; ++i) {
+            auto n = co_await receive_within(sub);
+            if (!n)
+                co_return false;
+            stream.push_back(std::move(*n));
+        }
+        co_return true;
+    }()));
+    ASSERT_EQ(stream.size(), static_cast<std::size_t>(kCapacity + 1));
+    for (int i = 0; i < kCapacity; ++i) {
+        EXPECT_EQ(stream[i].kind, notification_kind::notify);
+        EXPECT_EQ(stream[i].payload, std::to_string(i + 1));
+    }
+    EXPECT_EQ(stream[kCapacity].kind, notification_kind::gap) << "the drops left no marker in the stream";
+    EXPECT_EQ(stream[kCapacity].gap.reason, qb::io::gap_reason::overflow);
+    EXPECT_EQ(stream[kCapacity].gap.lost, static_cast<std::uint64_t>(kPublished - kCapacity));
+    EXPECT_EQ(sub.stats().gaps, 1u);
+
+    // After the hole, the stream takes notifications again -- the marker said where they went missing.
+    ASSERT_TRUE(pub_->notify(std::string(kChan), "next", discard_query, discard_error).await());
+    ASSERT_TRUE(qb::io::async::run_sync([&]() -> qb::io::async::task<bool> {
+        auto n = co_await receive_within(sub);
+        co_return n && n->kind == notification_kind::notify && n->payload == "next";
+    }()));
+    sub.disconnect();
+}
+
+// An explicit disconnect() ends the session (Huly QB-111, the contract's R1): the listened set goes with
+// it, and a later connect() is a fresh session -- nothing replayed, no gap marker.
+TEST_F(ListenNotify, AnExplicitDisconnectEndsTheListeningSession) {
+    qb::pg::tcp::notify_cb_consumer sub{dsn_tcp_string()};
+    int                             gaps = 0;
+    sub.on_gap([&](qb::io::gap_info) { ++gaps; });
+    ASSERT_TRUE(qb::io::async::run_sync(sub.connect(dsn_tcp_string())));
+    ASSERT_TRUE(sub.listen(std::string(kChan), discard_query, discard_error).await());
+    sub.disconnect();
+    EXPECT_TRUE(sub.listened_channels().empty()) << "disconnect() kept the listened set";
+    ASSERT_TRUE(qb::io::async::run_sync(sub.connect(dsn_tcp_string())));
+    std::string listening = "unset";
+    ASSERT_TRUE(sub.execute(
+                       "SELECT coalesce(string_agg(c, ','), '') FROM pg_listening_channels() AS c",
+                       [&](transaction &, results r) { listening = r[0][0].as<std::string>(); }, discard_error)
+                    .await());
+    EXPECT_EQ(listening, "") << "a LISTEN of the ended session was replayed";
+    EXPECT_EQ(gaps, 0) << "a fresh session was reported as a gap";
+    EXPECT_EQ(sub.stats().gaps, 0u);
+    EXPECT_EQ(sub.stats().reconnects, 0u);
+    sub.disconnect();
+}
+
+// A LISTEN written as SQL is not in the listened set, so a run does not replay it: only listen() is
+// tracked (the connection logs this once, at DEBUG).
+TEST_F(ListenNotify, ARawListenIsNotReplayed) {
+    qb::pg::tcp::notify_cb_consumer sub{dsn_tcp_string()};
+    int                             connected = 0;
+    sub.on_connected([&] { ++connected; });
+    sub.enable_auto_reconnect(RetryPolicy{}.with_initial_delay(std::chrono::milliseconds(20)).with_jitter(false));
+    ASSERT_TRUE(qb::io::async::run_sync(sub.connect(dsn_tcp_string())));
+    ASSERT_TRUE(sub.execute("LISTEN " + std::string(kChan), discard_query, discard_error).await());
+    EXPECT_TRUE(sub.listened_channels().empty());
+    ASSERT_TRUE(pub_->execute("SELECT pg_terminate_backend(" + std::to_string(sub.backend_pid()) + ")", discard_query, discard_error).await());
+    ASSERT_TRUE(pump_until([&] { return connected == 2; }, kDeadline)) << "the run never reconnected";
+    std::string listening = "unset";
+    ASSERT_TRUE(sub.execute(
+                       "SELECT coalesce(string_agg(c, ','), '') FROM pg_listening_channels() AS c",
+                       [&](transaction &, results r) { listening = r[0][0].as<std::string>(); }, discard_error)
+                    .await());
+    EXPECT_EQ(listening, "");
     sub.disconnect();
 }
 

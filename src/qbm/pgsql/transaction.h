@@ -305,6 +305,25 @@ public:
      */
     virtual void on_command_complete(const std::string &tag);
 
+    /// What a LISTEN or UNLISTEN issued through this API changed (Huly QB-111).
+    enum class subscription_change : std::uint8_t {
+        listen,      ///< `listen(channel)` succeeded
+        unlisten,    ///< `unlisten(channel)` succeeded
+        unlisten_all ///< `unlisten_all()` succeeded
+    };
+
+    /**
+     * @brief A LISTEN / UNLISTEN issued through `listen()`, `unlisten()` or `unlisten_all()` succeeded
+     *
+     * Forwarded to the parent: the connection, at the root, keeps the set of channels it listens on and
+     * replays it on every new session, before any user query (Huly QB-111). A LISTEN written as raw SQL
+     * (`execute("LISTEN x")`) does not come through here and is not replayed.
+     *
+     * @param change What changed
+     * @param channel The channel (empty for `unlisten_all`)
+     */
+    virtual void on_subscription_changed(subscription_change change, std::string_view channel);
+
     /**
      * @brief Begins a new transaction with success and error callbacks
      *

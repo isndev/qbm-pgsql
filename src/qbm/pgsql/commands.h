@@ -1268,12 +1268,34 @@ Transaction::notify(std::string_view channel, CB_SUCCESS &&on_success, CB_ERROR 
     }
 }
 
+namespace detail_subscription {
+
+/**
+ * @brief The success callback of an API LISTEN / UNLISTEN: records the change on the connection (Huly
+ *        QB-111), then calls the user's callback in whichever of its two shapes it has.
+ */
+template <typename CB_SUCCESS>
+[[nodiscard]] auto
+recording(Transaction::subscription_change change, std::string_view channel, CB_SUCCESS &&on_success) {
+    return [change, ch = std::string(channel), cb = std::forward<CB_SUCCESS>(on_success)](Transaction &t, resultset rs) mutable {
+        t.on_subscription_changed(change, ch);
+        if constexpr (std::is_invocable_v<std::decay_t<CB_SUCCESS> &, Transaction &, resultset>)
+            cb(t, std::move(rs));
+        else
+            cb(t);
+    };
+}
+
+} // namespace detail_subscription
+
 template <typename CB_SUCCESS, typename CB_ERROR>
 Transaction &
 Transaction::listen(std::string_view channel, CB_SUCCESS &&on_success, CB_ERROR &&on_error) {
     try {
         std::string sql = build_listen_sql(channel);
-        return execute(std::string_view(sql), std::forward<CB_SUCCESS>(on_success), std::forward<CB_ERROR>(on_error));
+        return execute(std::string_view(sql),
+                       detail_subscription::recording(subscription_change::listen, channel, std::forward<CB_SUCCESS>(on_success)),
+                       std::forward<CB_ERROR>(on_error));
     } catch (error::db_error const &e) {
         on_error(e);
         throw;
@@ -1285,7 +1307,9 @@ Transaction &
 Transaction::unlisten(std::string_view channel, CB_SUCCESS &&on_success, CB_ERROR &&on_error) {
     try {
         std::string sql = build_unlisten_sql(channel);
-        return execute(std::string_view(sql), std::forward<CB_SUCCESS>(on_success), std::forward<CB_ERROR>(on_error));
+        return execute(std::string_view(sql),
+                       detail_subscription::recording(subscription_change::unlisten, channel, std::forward<CB_SUCCESS>(on_success)),
+                       std::forward<CB_ERROR>(on_error));
     } catch (error::db_error const &e) {
         on_error(e);
         throw;
@@ -1295,7 +1319,9 @@ Transaction::unlisten(std::string_view channel, CB_SUCCESS &&on_success, CB_ERRO
 template <typename CB_SUCCESS, typename CB_ERROR>
 Transaction &
 Transaction::unlisten_all(CB_SUCCESS &&on_success, CB_ERROR &&on_error) {
-    return execute(std::string_view(build_unlisten_all_sql()), std::forward<CB_SUCCESS>(on_success), std::forward<CB_ERROR>(on_error));
+    return execute(std::string_view(build_unlisten_all_sql()),
+                   detail_subscription::recording(subscription_change::unlisten_all, {}, std::forward<CB_SUCCESS>(on_success)),
+                   std::forward<CB_ERROR>(on_error));
 }
 
 // --- No-callback overloads: same names as the callback API, return awaiters ---
@@ -1378,6 +1404,27 @@ pg_try_build_and_execute_void_sql(Transaction *self, Build &&build) {
         return pg_fail_void(e);
     }
     return pg_execute_void_sql(self, std::move(sql));
+}
+
+/** A LISTEN / UNLISTEN through the coroutine API: records the change on success (Huly QB-111). */
+template <typename Build>
+[[nodiscard]] inline pg_reply_awaiter<void>
+pg_subscription_sql(Transaction *self, Transaction::subscription_change change, std::string_view channel, Build &&build) {
+    std::string sql;
+    try {
+        sql = std::forward<Build>(build)();
+    } catch (error::db_error const &e) {
+        return pg_fail_void(e);
+    }
+    return pg_reply_awaiter<void>{[self, change, ch = std::string(channel), sql = std::move(sql)](pg_coro_complete<void> complete) mutable {
+        self->execute(
+            std::string_view(sql),
+            [complete, change, ch](Transaction &t, resultset) mutable {
+                t.on_subscription_changed(change, ch);
+                complete(::qb::pg::Reply<void>::success());
+            },
+            [complete](error::db_error const &e) mutable { complete(::qb::pg::Reply<void>::failure(e)); });
+    }};
 }
 
 } // namespace
@@ -1629,17 +1676,17 @@ Transaction::notify(std::string_view channel, std::string_view payload) {
 
 inline pg_reply_awaiter<void>
 Transaction::listen(std::string_view channel) {
-    return pg_try_build_and_execute_void_sql(this, [channel] { return build_listen_sql(channel); });
+    return pg_subscription_sql(this, subscription_change::listen, channel, [channel] { return build_listen_sql(channel); });
 }
 
 inline pg_reply_awaiter<void>
 Transaction::unlisten(std::string_view channel) {
-    return pg_try_build_and_execute_void_sql(this, [channel] { return build_unlisten_sql(channel); });
+    return pg_subscription_sql(this, subscription_change::unlisten, channel, [channel] { return build_unlisten_sql(channel); });
 }
 
 inline pg_reply_awaiter<void>
 Transaction::unlisten_all() {
-    return pg_execute_void_sql(this, std::string(build_unlisten_all_sql()));
+    return pg_subscription_sql(this, subscription_change::unlisten_all, {}, [] { return std::string(build_unlisten_all_sql()); });
 }
 
 } // namespace qb::pg::detail

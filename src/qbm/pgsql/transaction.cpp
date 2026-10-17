@@ -199,6 +199,12 @@ Transaction::on_command_complete(const std::string &tag) {
     _results.set_command_tag(tag);
 }
 
+void
+Transaction::on_subscription_changed(subscription_change change, std::string_view channel) {
+    if (_parent)
+        _parent->on_subscription_changed(change, channel);
+}
+
 bool
 Transaction::has_error() const {
     return _error.sqlstate != sqlstate::unknown_code;

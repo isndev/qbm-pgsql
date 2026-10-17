@@ -15,9 +15,9 @@ mismatches), [transaction.md](./transaction.md) (the `status` / `await()` path).
 
 ## Summary
 
-A query returns a `qb::pg::results` object. `results` is a public alias (`pgsql.h:3270-3276`) for the result-set class, which
+A query returns a `qb::pg::results` object. `results` is a public alias (`pgsql.h:4261-4267`) for the result-set class, which
 is defined as `qb::pg::resultset` (`resultset.h:104`). The form `detail::resultset` resolves to the same type via a
-`using namespace qb::pg;` directive (`pgsql.h:397`). Either spelling (`qb::pg::results`, `qb::pg::resultset`) is valid;
+`using namespace qb::pg;` directive (`pgsql.h:427`). Either spelling (`qb::pg::results`, `qb::pg::resultset`) is valid;
 `results` is the recommended public name. You reach a result set through three paths:
 
 - **Callback** — the success callback's second parameter, `(qb::pg::transaction&, qb::pg::results)`.
@@ -55,7 +55,7 @@ qb::pg::results owned = borrowed.deep_snapshot();   // safe to keep after the ca
 
 The coroutine path does this for you: a successful `co_await` delivers `rs.deep_snapshot()`, so the `Reply<resultset>`
 owns a deep copy and stays valid after the transaction's transient buffers are reused (
-`src/qbm/pgsql/commands.h:1392,1420,1513`).
+`src/qbm/pgsql/commands.h:1439,1467,1560`).
 
 ### `operator bool` reflects rows, not DML success
 
@@ -124,10 +124,10 @@ The `result` here is borrowing. If you need the rows after this lambda returns, 
 ### From `await()` (blocking)
 
 For a blocking drain, pass the discard sentinels and call `await()`. The returned `status` is convertible to `bool`;
-`status.results()` returns the result set for that drain (`transaction.h:811`).
+`status.results()` returns the result set for that drain (`transaction.h:830`).
 
 ```cpp
-<!-- src: qbm/pgsql/src/qbm/pgsql/transaction.h:810-813,831 -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/transaction.h:829-832,850 -->
 #include <qbm/pgsql/pgsql.h>
 
 auto st = db.execute("SELECT 1 AS x", qb::pg::discard_query, qb::pg::discard_error).await();
@@ -139,7 +139,7 @@ if (st) {
 
 `status::operator bool` is truthy only when the batch drained with no failed sub-result and
 `_error.sqlstate == sqlstate::unknown_code` (the success sentinel) — always test it before calling `results()` (
-`transaction.h:800-803`).
+`transaction.h:819-822`).
 
 ---
 

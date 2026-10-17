@@ -236,7 +236,7 @@ Ordinary chunk delivery borrows the operation and callable without copying eithe
 If cancellation detaches the sink or completion releases the operation during a call, ownership
 is retained in that operation's outermost sink invocation until it returns. Nested calls share
 that retention. This protects owned captures; it does not extend the lifetime of borrowed data.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:1188-1227,1235-1252,1931-1947,2474-2483 (CopyOperation / SinkInvocation / detach_sink; finish_copy; on_copy_data; copy_out) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:1788-1827,1835-1852,2564-2580,3284-3293 (CopyOperation / SinkInvocation / detach_sink; finish_copy; on_copy_data; copy_out) -->
 The source or sink activates only when that command reaches the wire, so an earlier
 plain SQL command cannot borrow it.
 
@@ -282,7 +282,7 @@ transaction is never joined and never ended by `query_stream`.
 > caller-owned only once its `BEGIN` has **completed** — `in_transaction()` mirrors the last `ReadyForQuery`. Started
 > before that, the stream reads the session as idle and opens (and later ends) a block of its own. `co_await` the
 > `begin()` first.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2560-2680,2574-2592,2594-2597,2652-2672,2350-2358 (in that order: query_stream; the seat/guard bookkeeping; the cursor name; the last-one-out COMMIT/ROLLBACK; in_transaction) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:3370-3490,3384-3402,3404-3407,3462-3482,3160-3168 (in that order: query_stream; the seat/guard bookkeeping; the cursor name; the last-one-out COMMIT/ROLLBACK; in_transaction) -->
 
 ---
 
@@ -324,7 +324,7 @@ db.prepare_file("mig", std::filesystem::path{"mig.sql"},
 The payload must contain fewer than 8,000 bytes. Both public forms accept 7,999 bytes and reject 8,000 bytes or more
 locally before SQL is queued, with `client_error` (`code == "00000"`). Empty payloads still omit the payload clause.
 The callback form invokes its error callback and rethrows; the coroutine form returns a failed `Reply<void>`.
-<!-- src: src/qbm/pgsql/pg_notify_sql.cpp:65-74; src/qbm/pgsql/error.cpp:144-155; src/qbm/pgsql/commands.h:1249-1256,1626-1628 -->
+<!-- src: src/qbm/pgsql/pg_notify_sql.cpp:65-74; src/qbm/pgsql/error.cpp:144-155; src/qbm/pgsql/commands.h:1249-1256,1673-1675 -->
 
 **Coroutine**
 
@@ -364,8 +364,9 @@ db.unlisten_all(qb::pg::discard_query, qb::pg::discard_error);
 `pgsql.h`](../src/qbm/pgsql/pgsql.h)). **`qb::pg::notification`** holds **`channel`**, **`payload`**, and the originating backend
 PID **`server_backend_pid`**. The handler runs on the I/O thread when a `NotificationResponse` arrives.
 
-**`notify_co_consumer`:** optional **`on_notify`**, **`on_notify_dropped`**, **`co_await receive()`**.
-**`notify_cb_consumer`** is the callback-only twin: **`on_notify`** alone, no queue, so it never drops a
+**`notify_co_consumer`:** optional **`on_notify`**, **`on_notify_dropped`**, **`co_await receive()`** — a stream that
+marks every hole (a reconnection, an overflow) with a gap marker.
+**`notify_cb_consumer`** is the callback-only twin: **`on_notify`** and **`on_gap`**, no queue, so it never drops a
 notification (until 3.3 it was an alias of `notify_co_consumer`, whose unread queue filled and dropped every later
 NOTIFY — Huly QB-1092) ([`pgsql.h`](../src/qbm/pgsql/pgsql.h)). See
 [`tests/integration/notify/listen-notify.cpp`](../tests/integration/notify/listen-notify.cpp) for the `pump_until` and ordering patterns.

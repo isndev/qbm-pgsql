@@ -77,6 +77,43 @@ TEST(ModuleSurface, UnconnectedDatabaseAccessorsReturnDefaults) {
     EXPECT_FALSE(db.parameter_status("server_version").has_value());
 }
 
+// ---------------------------------------------------------------------------
+// The reconnect contract's starting point, and the notification layout (Huly QB-111)
+// ---------------------------------------------------------------------------
+
+/// A never-connected database is idle and NOT connected: is_connected() means ready. Until 3.3 it was the
+/// io base's flag, true on a fresh handle that had never opened a socket.
+TEST(ModuleSurface, UnconnectedDatabaseIsIdleAndNotConnected) {
+    qb::pg::tcp::database db;
+    EXPECT_FALSE(db.is_connected()) << "a database that never connected reported itself connected";
+    EXPECT_EQ(db.state(), qb::io::connection_state::idle);
+    EXPECT_FALSE(db.is_reconnecting());
+    EXPECT_TRUE(db.listened_channels().empty());
+}
+
+namespace module_surface_test {
+
+/// What qb::pg::notification is laid out as: the 3.2 fields, then `kind` and `gap` (additive growth).
+struct notification_layout {
+    int                       server_backend_pid;
+    std::string               channel;
+    std::string               payload;
+    qb::pg::notification_kind kind;
+    qb::io::gap_info          gap;
+};
+
+} // namespace module_surface_test
+
+static_assert(sizeof(qb::pg::notification) == sizeof(module_surface_test::notification_layout),
+              "qb::pg::notification grew beyond its 3.3 fields: record the ABI change in the CHANGELOG");
+
+/// A notification is a NOTIFY unless it says otherwise; `gap` is meaningful only on a marker.
+TEST(ModuleSurface, ANotificationIsANotifyByDefault) {
+    const qb::pg::notification n;
+    EXPECT_EQ(n.kind, qb::pg::notification_kind::notify);
+    EXPECT_EQ(n.gap.lost, 0u);
+}
+
 int
 main(int argc, char **argv) {
     testing::InitGoogleTest(&argc, argv);

@@ -125,10 +125,11 @@ using namespace qb::pg;             // database, results, params, oid, Reply, ..
 
 `connect()` returns an awaiter — there is **no** blocking `bool connect()` and
 **no** `connect(on_ok, on_err)` callback overload. Drive it with `co_await` or
-`run_sync`. Result is `bool`: `true` is delivered when `AuthenticationOk` is
-processed. Resumption is deferred to the coroutine scheduler, so the remaining
-startup frames, including `ReadyForQuery`, are normally processed before user
-code runs; that ordering is not the success condition itself.
+`run_sync`. Result is `bool`: `true` once the connection is **ready** —
+authentication, the first `ReadyForQuery`, the `set_handshake()` hook and the
+replay of the listened channels all ran (§3.12); `false` when the attempt failed
+or was refused (`db.down_reason()`, `db.error()`). One attempt;
+`connect_with_retry(policy)` makes several.
 
 ```cpp
 qb::io::async::init();
@@ -477,7 +478,7 @@ The payload limit is exclusive and measured in bytes: 7,999 bytes are accepted, 
 with the existing `code == "00000"`. The callback form invokes its error callback and
 rethrows that error; the coroutine form returns a failed `Reply<void>`
 (`src/qbm/pgsql/pg_notify_sql.cpp:65-74`, `src/qbm/pgsql/error.cpp:144-155`,
-`src/qbm/pgsql/commands.h:1249-1256,1626-1628`).
+`src/qbm/pgsql/commands.h:1249-1256,1673-1675`).
 
 For a queue-based consumer use the dedicated client:
 
@@ -488,16 +489,30 @@ qb::io::async::run_sync(sub.connect("tcp://user:secret@localhost:5432[mydb]"));
 qb::io::async::run_sync([&]() -> qb::io::async::task<void> {
     co_await sub.listen("events");
     while (auto n = co_await sub.receive()) {             // task<std::optional<notification>>
+        if (n->kind == qb::pg::notification_kind::gap) {  // a hole: a reconnection, or an overflow (n->gap.lost)
+            // resynchronise from the table -- the connection is ready, query it here
+            continue;
+        }
         // n->channel, n->payload, n->server_backend_pid
-    }                                                    // nullopt when the channel closes (disconnect)
+    }                                                    // nullopt once the connection is down
     co_return;
 }());
 ```
 
-After a reconnect the same consumer's `receive()` serves the new connection, unread notifications
-first — `listen` again: the subscription belongs to the session.
+`listen()` / `unlisten()` / `unlisten_all()` maintain the connection's listened set
+(`listened_channels()`); every new session replays it before any other query
+(Huly QB-111). PostgreSQL does not replay the NOTIFYs a session missed, so a
+reconnection is a hole: when the new session is ready, `notify_co_consumer` puts a
+gap marker in its stream (`kind == notification_kind::gap`, `gap.reason ==
+qb::io::gap_reason::reconnect`) before the session's first notification, and
+`notify_cb_consumer` calls `on_gap(qb::io::gap_info)` before its next `on_notify`.
+A full co-consumer stream is a hole too: one marker (`overflow`, `gap.lost` drops).
+The stream ends only at `down`. `disconnect()` ends the session: the set is
+forgotten and a later `connect()` replays nothing. A `LISTEN` written as SQL is
+not replayed. `notify_cb_consumer` has no queue: nothing is ever dropped (QB-1092).
 
-`notification { int server_backend_pid; std::string channel; std::string payload; }`.
+`notification { int server_backend_pid; std::string channel; std::string payload;
+notification_kind kind /* notify | gap */; qb::io::gap_info gap; }`.
 The `notify` publisher side must use a normal (non-pooled) connection.
 
 ### 3.10 Bulk COPY, streaming, and out-of-band control
@@ -545,7 +560,7 @@ the operation and callable without copying either shared owner; retention occurs
 cancellation detaches the sink or completion releases the operation during the call. That
 ownership stays in the operation's outermost sink invocation through nested calls until return.
 Borrowed capture data still needs its own lifetime; command admission and reservation are unchanged.
-_(src/qbm/pgsql/pgsql.h:1188-1227,1235-1252,1931-1947,2474-2483)_
+_(src/qbm/pgsql/pgsql.h:1788-1827,1835-1852,2564-2580,3284-3293)_
 
 > **`copy_in` is NOT constant-memory.** It drains the entire `source` into the
 > output pipe synchronously (bounded only by the write-buffer ceiling). Only
@@ -600,7 +615,7 @@ coroutine, an actor, or a second connection's trigger; reach for `cancel()` only
 where no coroutine can run.
 During the packet write, a native TLS `WANT_READ` waits for readability alone;
 otherwise native TLS and plain writes wait for writability. A custom secure transport
-without native TLS state keeps the combined read/write fallback (`pgsql.h:2803-2814`).
+without native TLS state keeps the combined read/write fallback (`pgsql.h:3613-3624`).
 
 **Connection introspection (all `[[nodiscard]]`, libpq-style):**
 
@@ -623,7 +638,7 @@ server never sent it. The `string_view` is valid while the connection is alive.
 qb::pg::stats s = db.stats();          // a snapshot, by value: monotonic since construction
 // s.queries, s.errors, s.bytes_sent, s.bytes_received, s.notifications_received,
 // s.notifications_dropped, s.prepared_hits, s.prepared_misses, s.prepared_evicted,
-// s.last_query_duration (qb::duration)
+// s.reconnects, s.gaps (Huly QB-111), s.last_query_duration (qb::duration)
 
 db.on_query_complete([](qb::pg::query_info const &q) {    // one call per completed query
     // q.kind (qb::pg::query_kind), q.name, q.sql (string_views, valid during the call only),
@@ -648,7 +663,51 @@ db.on_query_complete({});              // remove it
   stamps the next). Without a hook a completion pays one predictable branch: the
   report is built out of line.
 - Counts never reset: a reconnect keeps them. `bytes_*` count PostgreSQL protocol
-  bytes (TLS framing excluded), the handshake included.
+  bytes (TLS framing excluded), the handshake included. `reconnects` counts the ready
+  connections reached after a lost one, `gaps` the gap markers a notify consumer
+  emitted (after a reconnection, or where its stream overflowed) — the names qbm-redis uses.
+
+### 3.12 Reconnection: the contract (Huly QB-111)
+
+A connection has a state (`qb::io::connection_state`, `<qb/io/reconnect.h>`): `idle` →
+`connecting` → `handshaking` → `ready`; from `ready`, either `reconnecting` →
+`handshaking` → `ready` (a run is armed and the server or the network took the link)
+or `down` — terminal, `down_reason()` says why: `user`, `peer`, `protocol`,
+`retries_exhausted`, `handshake_refused`. `is_connected()` is `state() == ready`.
+
+```cpp
+using namespace std::chrono_literals;
+qb::pg::tcp::database db;
+db.enable_auto_reconnect(qb::pg::RetryPolicy{}.with_initial_delay(100ms).with_max_delay(5s));
+db.set_handshake([](qb::pg::handshake_session &hs) -> qb::io::async::task<bool> {
+    // Runs on EVERY new session, before it is ready: what the session needs.
+    if (!(co_await hs.execute("SET search_path TO app")).ok())
+        co_return false;                                   // refuses: down(handshake_refused)
+    co_return (co_await hs.prepare("user_by_id", "SELECT name FROM users WHERE id = $1")).ok();
+});
+db.on_connected([] { /* ready: the first connection, and after every reconnection */ });
+db.on_disconnected([](qb::io::down_reason) { /* a ready connection was lost (user/peer/protocol) */ });
+db.on_down([](qb::io::down_reason) { /* terminal */ });
+if (!co_await db.connect(dsn)) { /* db.down_reason(), db.error() */ }
+```
+
+- **Work outside `ready` is refused** (`connection is not established`), as before
+  (Huly QB-917) — qbm-redis holds it instead. Only the hook's
+  `qb::pg::handshake_session` queues while the session is not ready; a copy kept past
+  its handshake fails with `"handshake over"`.
+- **A refusal is terminal**: SQLSTATE class 28 (credentials, authorization) or 3D000
+  (no such database), a SCRAM server proof that does not verify, or the hook returning
+  `false` / throwing — `down(handshake_refused)`, never retried. Any other startup
+  failure, a lost link or a handshake past the attempt's deadline is one more attempt.
+- **In-flight work fails once** when a ready link drops (the server's reason, or
+  `database disconnected`) and is never replayed: re-issue it after `on_connected`.
+- **`disconnect()` is terminal** whatever the policy, and ends the session: the listened
+  set is forgotten; a later `connect()` is a fresh session (no replay, no gap).
+- **Per-session state dies with the backend** — prepared statements, `SET`s, temp
+  tables: re-create what every session needs in the hook.
+- `connect_with_retry(policy)` makes the policy's attempts up front;
+  `qb::pg::RetryPolicy` is `qb::io::reconnect_policy` (`max_attempts`, `initial_delay`,
+  `max_delay`, `multiplier`, `jitter`, `connect_timeout`, `on_retry`).
 
 ---
 
@@ -659,10 +718,12 @@ db.on_query_complete({});              // remove it
 - `connect()` is an awaiter — `co_await` or `run_sync` it; a discarded
   `db.connect(...)` does nothing. There is no blocking `connect()` and no
   `connect` callback overload.
-- After `disconnect()`, ordinary `connect()` on the **same** object opens a fresh socket and
+- After `disconnect()` (terminal: `down(user)`, no reconnection run, the listened set
+  forgotten), ordinary `connect()` on the **same** object opens a fresh socket and
   handshake, clearing stale I/O buffers and protocols and the per-backend state: the new
-  session starts with an empty prepared-statement cache (prepare again after a reconnect).
-  `prepare_reconnect()` is optional, to close the old fd early; drain or fail pending queries first.
+  session starts with an empty prepared-statement cache (prepare again after a reconnect,
+  or in the `set_handshake()` hook). `prepare_reconnect()` is optional, to close the old
+  fd early; drain or fail pending queries first.
   If `disconnect()` runs inside one of that connection's
   query or fluent `.then` / `.error` callbacks, queued failures run just after
   the callback returns; new callback commands fail once with a connection error

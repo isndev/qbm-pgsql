@@ -87,7 +87,7 @@ protected:
 // --------------------------------------------------------------------------------------
 
 // is_connection_alive() is true on a live socket and false after disconnect(); it reads the
-// SO_ERROR socket state (the getsockopt path) and the is_connected_ flag.
+// SO_ERROR socket state (the getsockopt path) and the connection's session flag.
 TEST_F(PgsqlDbApiExtra, IsConnectionAliveTrueThenFalseAfterDisconnect) {
     EXPECT_TRUE(db_->is_connection_alive()) << "a freshly connected session must report alive";
     db_->disconnect();
@@ -309,8 +309,8 @@ TEST_F(PgsqlDbApiExtra, ReconnectAfterForcedErrorLandsFreshBackend) {
 // --------------------------------------------------------------------------------------
 
 // A query/execute/prepare submitted AFTER disconnect() must FAIL FAST with a connection
-// error, never hang. Before the is_connection_usable() guard (+ disconnect() clearing
-// is_connected_ synchronously), the command was enqueued on a dead connection and its
+// error, never hang. Before the is_connection_usable() guard (+ disconnect() leaving the ready
+// state synchronously), the command was enqueued on a dead connection and its
 // coroutine awaiter never resolved — run_sync blocked forever. If this regresses, the
 // run_sync calls below never return and the test times out.
 TEST_F(PgsqlDbApiExtra, QueryAfterDisconnectFailsFastInsteadOfHanging) {

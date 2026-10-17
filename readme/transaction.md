@@ -78,7 +78,7 @@ normal case inside an actor), you do **not** call `await` after every statement.
 
 ### Status and `await`
 
-<!-- src: src/qbm/pgsql/transaction.cpp:218-255, src/qbm/pgsql/transaction.h:763-819 -->
+<!-- src: src/qbm/pgsql/transaction.cpp:224-261, src/qbm/pgsql/transaction.h:782-838 -->
 
 `Transaction::await()` is a **blocking drain on the current thread**: it pumps
 `qb::io::async::listener::current.run(EVRUN_ONCE)` until both queues are empty, then returns a `status` snapshot. It is
@@ -170,7 +170,7 @@ A two-argument `begin(on_success, mode)` overload exists; it installs an empty e
 
 ### `then` / `success` / `error` chaining
 
-<!-- src: src/qbm/pgsql/transaction.h:712-740, src/qbm/pgsql/commands.h:525-611 -->
+<!-- src: src/qbm/pgsql/transaction.h:731-759, src/qbm/pgsql/commands.h:525-611 -->
 
 - `then(cb)` and `success(cb)` (aliases) push a `Then` command. When it is popped, if the parent's result is still
   success, `cb(*parent())` runs with the same `Transaction&` you chained from.
@@ -194,7 +194,7 @@ There is no separate "next" type: `then` passes `*parent()`, the parent transact
 
 ## The coroutine transaction block
 
-<!-- src: src/qbm/pgsql/commands.h:1519-1548, tests/integration/api/coro-api.cpp:248-272 -->
+<!-- src: src/qbm/pgsql/commands.h:1566-1595, tests/integration/api/coro-api.cpp:248-272 -->
 
 The coroutine path is imperative: `begin` / `execute` / `commit` (or `rollback`) are explicit, and you branch on `ok()`.
 
@@ -275,7 +275,7 @@ it has no effect on autocommit statements run outside a block.
 
 ## Savepoints
 
-<!-- src: src/qbm/pgsql/commands.h:884-905, src/qbm/pgsql/commands.h:1542-1578, src/qbm/pgsql/commands.h:156-354 -->
+<!-- src: src/qbm/pgsql/commands.h:884-905, src/qbm/pgsql/commands.h:1589-1625, src/qbm/pgsql/commands.h:156-354 -->
 
 **Callback — open a savepoint sub-block:**
 
@@ -313,8 +313,8 @@ else
 
 **Name validation.** The coroutine `savepoint`, `release_savepoint`, and `rollback_savepoint` reject names that are
 empty, longer than 63 characters, or contain anything other than alphanumerics and underscore
-(`pg_savepoint_name_ok`, `src/qbm/pgsql/commands.h:1321-1330`). An invalid name returns a
-pre-failed awaiter carrying `qb::pg::error::client_error` — no SQL is sent (`src/qbm/pgsql/commands.h:1542-1578`).
+(`pg_savepoint_name_ok`, `src/qbm/pgsql/commands.h:1347-1356`). An invalid name returns a
+pre-failed awaiter carrying `qb::pg::error::client_error` — no SQL is sent (`src/qbm/pgsql/commands.h:1589-1625`).
 This pre-check is defense-in-depth on top of the identifier quoting above: even the callback path, which does *not*
 pre-validate, cannot be made to inject SQL because the name is always quoted into a single literal identifier.
 
@@ -367,7 +367,7 @@ objects.
 
 ## Statement timeout
 
-<!-- src: src/qbm/pgsql/transaction.h:685-710, src/qbm/pgsql/commands.h:1312-1320, src/qbm/pgsql/queries.h:521-554 -->
+<!-- src: src/qbm/pgsql/transaction.h:704-729, src/qbm/pgsql/commands.h:1338-1346, src/qbm/pgsql/queries.h:521-554 -->
 
 `set_timeout(qb::duration)` arms a PostgreSQL `statement_timeout` for the **next** `BEGIN` on this connection. The
 following `begin()` (callback *or* coroutine) appends `; SET LOCAL statement_timeout = N` to the same simple-query
@@ -402,7 +402,7 @@ Key facts to get right:
 
 ## LISTEN / NOTIFY
 
-<!-- src: src/qbm/pgsql/transaction.h:464-528; src/qbm/pgsql/pg_notify_sql.h:25-92; qbm/pgsql/src/qbm/pgsql/pgsql.h:383-393,2171-2176,3069-3245 (in that order: notification; on_incoming_notify; notify_consumer / notify_cb_consumer / notify_co_consumer) -->
+<!-- src: src/qbm/pgsql/transaction.h:483-547; src/qbm/pgsql/pg_notify_sql.h:25-92; qbm/pgsql/src/qbm/pgsql/pgsql.h:406-423,2972-2977,3943-4231 (in that order: notification; on_incoming_notify; notify_consumer / notify_cb_consumer / notify_co_consumer) -->
 
 ### Publishing (NOTIFY)
 
@@ -414,7 +414,7 @@ with `notify_payload_max_bytes` (8000) bytes or more are rejected locally with a
 The bound counts bytes: 7,999 bytes are accepted, 8,000 are rejected. The local error uses the existing
 `code == "00000"` and does not publish a notification or make the connection unusable.
 The callback form invokes its error callback and rethrows; the coroutine form returns a failed `Reply<void>`.
-<!-- src: src/qbm/pgsql/pg_notify_sql.cpp:65-74; src/qbm/pgsql/error.cpp:144-155; src/qbm/pgsql/commands.h:1249-1256,1626-1628 -->
+<!-- src: src/qbm/pgsql/pg_notify_sql.cpp:65-74; src/qbm/pgsql/error.cpp:144-155; src/qbm/pgsql/commands.h:1249-1256,1673-1675 -->
 
 ```cpp
 // Callback
@@ -441,7 +441,9 @@ alone is not enough — you must give the connection somewhere to deliver inboun
 - `qb::pg::tcp::notify_cb_consumer` delivers to its `on_notify(cb)` callback only: no queue, so nothing is dropped
   (until 3.3 it was an alias of `notify_co_consumer`, Huly QB-1092).
 
-A delivered `qb::pg::notification` carries `server_backend_pid`, `channel`, and `payload`.
+A delivered `qb::pg::notification` carries `server_backend_pid`, `channel`, and `payload` — and `kind`: in a
+`notify_co_consumer`'s stream an element can be a gap marker (`kind == qb::pg::notification_kind::gap`) instead of a
+NOTIFY (Huly QB-111).
 
 ```cpp
 #include <qbm/pgsql/pgsql.h>
@@ -453,18 +455,33 @@ qb::io::async::task<void> consume() {
     if (!(co_await sub.listen("jobs")).ok())
         co_return;
 
-    // Resolves to std::optional<notification>; std::nullopt when the
-    // channel closes (e.g. on disconnect).
+    // Resolves to std::optional<notification>; std::nullopt once the
+    // connection is down (disconnect(), or a loss no run recovers).
     while (auto n = co_await sub.receive()) {
+        if (n->kind == qb::pg::notification_kind::gap) {
+            // A hole: n->gap.reason (reconnect / overflow), n->gap.lost.
+            // Resynchronise from the table -- the connection is ready.
+            continue;
+        }
         // n->channel, n->payload, n->server_backend_pid
     }
 }
 ```
 
-The consumer's queue defaults to 8192 messages. On overflow the newest message is dropped and `on_notify_dropped(cb)` (
-if set) is invoked, otherwise a warning is logged. The channel closes on disconnect, so an in-flight `receive()`
-resolves to `std::nullopt` once what was received is read. After the next `connect()` — and a new `LISTEN`: the
-subscription belongs to the session — `receive()` serves the new connection, unread notifications first.
+**The listened channels survive a reconnection** (Huly QB-111). `listen()`, `unlisten()` and `unlisten_all()`
+maintain the connection's set when the server confirms them, and every new session replays it before any other query
+— a `LISTEN` written as SQL is not tracked. PostgreSQL does not replay the NOTIFYs a session missed, so a reconnection
+is a hole, reported when the new session is ready and before any of its notifications: a gap marker in the
+co-consumer's stream (`gap.reason == qb::io::gap_reason::reconnect`), `on_gap(qb::io::gap_info)` on the callback
+consumer. The order is qbm-redis's — the hole, then what the new session received while it was handshaking (held until
+then), then `on_connected` — so the reader that learns of the hole can query the connection at once. An explicit
+`disconnect()` ends the session: the set is forgotten, and a later `connect()` replays nothing and marks no hole.
+
+The stream holds 8192 elements by default. On overflow the newest NOTIFY is dropped, `on_notify_dropped(cb)` (if set)
+is invoked, otherwise a warning is logged — and the drops are a hole too: ONE marker (`overflow`, `gap.lost` the
+coalesced drops) precedes the next notification the stream takes, or ends what the reader drained. The stream ends
+only when the connection is `down`: `receive()` yields what it holds, then `std::nullopt`. After a `connect()` from
+`down`, `receive()` serves the new connection, unread notifications first.
 
 ---
 
@@ -480,7 +497,7 @@ subscription belongs to the session — `receive()` serves the new connection, u
   `End`/`with_transaction` do it) before sending new commands.
 - **A lost connection fails every pending query automatically.** You do **not** write a disconnect handler. The built-in
   `Database::on(qb::io::async::event::disconnected)` handler calls `fail_all_pending(...)` on the root transaction (through
-  `fail_all_pending_counted`, `qbm/pgsql/src/qbm/pgsql/pgsql.h:2968`, which also counts each drained query), which drains every queued query and pending sub-transaction so suspended `co_await`
+  `fail_all_pending_counted`, `qbm/pgsql/src/qbm/pgsql/pgsql.h:3794`, which also counts each drained query), which drains every queued query and pending sub-transaction so suspended `co_await`
   awaiters resume with `client_error("database disconnected")` instead of hanging forever.
   See [connection.md](./connection.md) (Fail-all-on-disconnect).
 - **Statement timeout below 1 ms vanishes.** A sub-millisecond `set_timeout` truncates to 0 and emits no `SET LOCAL`.

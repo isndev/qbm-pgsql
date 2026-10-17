@@ -9,6 +9,49 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Added
 
+- **The connection's side of the reconnect contract (Huly QB-111; `qb/io/reconnect.h`).** A connection reports where
+  it stands and why it went down in qb-io's vocabulary, the one qbm-redis uses: `state()` (`idle`, `connecting`,
+  `handshaking`, `ready`, `reconnecting`, `down`), `down_reason()` (`user`, `peer`, `protocol`, `retries_exhausted`,
+  `handshake_refused`), and three hooks, empty until set and read only on those transitions -- `on_connected()` each
+  time the connection becomes ready, `on_disconnected(down_reason)` once for every ready connection lost (the two
+  strictly alternate), `on_down(down_reason)` when it reaches `down`. `enable_auto_reconnect(RetryPolicy)` arms a
+  reconnection run for a ready connection the server or the network takes away (`disable_auto_reconnect()`,
+  `is_reconnecting()`); `connect_with_retry(policy)` makes the policy's attempts up front; `qb::pg::RetryPolicy` is
+  `qb::io::reconnect_policy`, the type of `qb::redis::RetryPolicy` and `qb::http::RetryPolicy`. An explicit
+  `disconnect()` is terminal whatever the policy, and ends the session. Every connection, the first one included, runs
+  the whole handshake before it is ready: authentication and the first ReadyForQuery, then the hook installed with
+  `set_handshake(hook)` -- a `task<bool>(qb::pg::handshake_session &)` whose session queues on the link only while
+  that handshake runs (a copy kept past it fails with `"handshake over"`), so no other coroutine can slip a query past
+  the gate -- then the replay of the listened channels. Work submitted outside `ready` is refused, as before (Huly
+  QB-917: `connection is not established`); qbm-redis holds it instead. A refusal -- SQLSTATE class 28 (credentials,
+  authorization) or 3D000 (no such database), a server proof that does not verify, a build without OpenSSL asked for
+  SCRAM or MD5, or the hook returning `false` -- is terminal (`handshake_refused`, never retried); any other startup
+  failure, a link lost during the handshake or a handshake past the attempt's deadline is one more attempt. What was in
+  flight when a ready link dropped fails once, with the server's reason or `database disconnected`, and is never
+  replayed. `stats()` counts `reconnects` (ready connections reached after a lost one) and `gaps` (gap markers
+  emitted), the names qbm-redis uses. Pinned by `integration/connection/reconnect-contract.cpp`.
+
+- **LISTEN survives a reconnection, and the stream says where it has a hole (Huly QB-111).** `listen()`, `unlisten()`
+  and `unlisten_all()` maintain the connection's listened set (`listened_channels()`) when the server confirms them;
+  every new session replays it at AuthenticationOk, before any other query. A `LISTEN` written as SQL is not tracked
+  (the connection says so once, at DEBUG). An explicit `disconnect()` ends the session: the set is forgotten, and a
+  later `connect()` is a fresh session -- nothing replayed, no gap. PostgreSQL does not replay the NOTIFYs a session
+  missed, so a session that follows an earlier ready one opens a hole, reported when that session is ready -- in
+  qbm-redis's order: the hole, then the notifications the session received while it was handshaking (held until
+  then), then `on_connected` -- so whoever learns of the hole can resynchronise on the connection at once:
+  `notify_co_consumer` places a gap marker in its stream (`notification::kind == notification_kind::gap`,
+  `gap.reason == qb::io::gap_reason::reconnect`), `notify_cb_consumer` calls the new `on_gap(qb::io::gap_info)`. A full co-consumer stream is a hole too: the NOTIFYs that do not fit still reach
+  `on_notify_dropped` and `stats().notifications_dropped`, and ONE marker (`overflow`, `gap.lost` = the drops,
+  coalesced) precedes the next notification the stream takes, or ends what the reader drained. Markers are always on.
+  The stream ends only at `down`: `receive()` yields what it holds, then `std::nullopt`. Pinned by the
+  `CoConsumer_ARunReplaysTheListenedSetAndMarksTheGap`, `CbConsumer_OnGapComesBeforeTheNextNotify`,
+  `CoConsumer_ANotifyDuringTheHookIsHeldBehindTheMarker`, `CbConsumer_ADisconnectFromOnGapStopsTheRelease`,
+  `CoConsumer_TheStreamEndsOnlyAtDown`, `CoConsumer_AnOverflowIsOneCoalescedGapMarker`,
+  `AnExplicitDisconnectEndsTheListeningSession` and `ARawListenIsNotReplayed` cases of
+  `integration/notify/listen-notify.cpp`. ABI: `qb::pg::notification` grows by `kind` and `gap` and `qb::pg::stats` by
+  two counters (additive member growth in qbm types, allowed under the 3.3.0 ABI reading and pinned by a
+  `static_assert` against a mirror layout) -- consumers recompile with the train.
+
 - **A server error keeps every field the server sent, and notices reach a handler (Huly QB-108).** The client
   decoded all the ErrorResponse fields and kept four (message, severity, SQLSTATE, detail): `constraint_name` -- the
   field a handler of 23505 wants -- `table_name`, `schema_name`, `column_name`, `data_type_name`, `hint`, `position`,
@@ -64,6 +107,24 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
   `scripts/check-awaiter-tracking.py`, run over this module from the superproject, refuses an awaiter without it.
 
 ### Changed
+
+- **Behaviour change -- `connect()` resolves, and `is_connected()` is true, only once the handshake ran (Huly
+  QB-111).** The connected flag used to be set at AuthenticationOk, before the first ReadyForQuery, and
+  `is_connected()` was the io base's flag -- true on a database that had never connected. `connect()` and
+  `connect_with_retry()` now resolve when the handshake succeeded -- authentication, the first ReadyForQuery, the hook
+  installed with `set_handshake()` and the LISTEN replay -- (`true`) or the attempt failed, was refused or superseded
+  (`false`); a connect while a connection, a handshake or a run is in progress resolves `false` at once, and one on a
+  ready connection `true` at once. `is_connected()` is `state() == ready`. A server that refuses the session after
+  AuthenticationOk -- 3D000, the database does not exist -- now fails the connect: it used to resolve it.
+  `connect(dsn)` and `connect(connection_options)` change the stored options only while the connection is idle or
+  down, so a live connection, and the run that may recover it, keep theirs. `prepare_reconnect()` does nothing while a
+  connection, a handshake or a run owns the link: it used to close the live socket under the connection.
+
+- **Behaviour change -- a `notify_co_consumer`'s stream ends only at `down`, and it carries gap markers (Huly
+  QB-111).** A lost link used to close `receive()`'s channel; with a reconnection run armed it now stays open across
+  the loss, and the new session's notifications follow a gap marker, queued when it is ready. Without a run, or after `disconnect()`, the loss is
+  terminal and the stream ends as before. A reader distinguishes a marker by `notification::kind` -- a loop that only
+  reads `channel` and `payload` sees an element with both empty where the stream has a hole.
 
 - **Source change -- `notify_cb_consumer` is a callback-only consumer (Huly QB-1092).** It was an alias of
   `notify_co_consumer`: every NOTIFY went to `on_notify` AND into `receive()`'s bounded queue (8192 by default), which

@@ -89,15 +89,19 @@
 #include <chrono>
 #include <coroutine>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <optional>
+#include <random>
+#include <set>
 #include <string>
 #include <string_view>
 #include <type_traits>
 #include <qb/io/async.h>
 #include <qb/io/async/tcp/connector.h>
 #include <qb/io/crypto.h>
+#include <qb/io/reconnect.h>
 #ifdef QB_HAS_SSL
 #include <qb/io/tcp/ssl/socket.h>
 #endif
@@ -381,15 +385,41 @@ public:
 namespace qb::pg {
 
 /**
+ * @brief The reconnection backoff: qb-io's shared `qb::io::reconnect_policy` (`qb/io/reconnect.h`).
+ *
+ * The same type as `qb::redis::RetryPolicy` and `qb::http::RetryPolicy` (Huly QB-111): exponential backoff
+ * from `initial_delay` by `multiplier` up to `max_delay`, jittered by a quarter either way, `max_attempts`
+ * per run (-1 = unlimited), `on_retry(attempt, next_delay)` before each wait. Its `connect_timeout` bounds
+ * each attempt -- the transport and the whole handshake; zero (the default) means the connection's own
+ * `connect_timeout`, else 10 s. Used by `connect_with_retry()` and `enable_auto_reconnect()`.
+ */
+using RetryPolicy = ::qb::io::reconnect_policy;
+
+/**
+ * @brief What a `qb::pg::notification` carries (Huly QB-111).
+ */
+enum class notification_kind : std::uint8_t {
+    notify, ///< a NOTIFY the server delivered: `server_backend_pid`, `channel` and `payload` are set
+    gap,    ///< a gap marker: notifications were lost at this point of the stream; `gap` says why and how many
+};
+
+/**
  * @brief Asynchronous payload from PostgreSQL NOTIFY (after LISTEN on the same or another session).
  *
  * Delivered on the I/O thread when a `NotificationResponse` is received; see
- * `tcp::notify_cb_consumer` / `tcp::notify_co_consumer`, or `database::on_incoming_notify`.
+ * `tcp::notify_cb_consumer` / `tcp::notify_co_consumer`, or `database::on_incoming_notify`. In a
+ * `notify_co_consumer`'s stream an element can also be a gap marker (`kind == notification_kind::gap`):
+ * PostgreSQL does not replay the NOTIFYs a session missed, so the stream says where it has a hole --
+ * after a reconnection (`gap.reason == qb::io::gap_reason::reconnect`) or where the consumer's own queue
+ * was full (`overflow`, `gap.lost` notifications dropped) -- and the reader resynchronises from its
+ * source of truth.
  */
 struct notification {
-    int         server_backend_pid{};
-    std::string channel;
-    std::string payload;
+    int                server_backend_pid{};
+    std::string        channel;
+    std::string        payload;
+    notification_kind  kind = notification_kind::notify; ///< a NOTIFY, or a gap marker (Huly QB-111)
+    ::qb::io::gap_info gap{};                            ///< why and how much was lost; meaningful when `kind == gap`
 };
 
 namespace detail {
@@ -502,6 +532,114 @@ struct postgres_ssl_negotiator {
     qb::io::async::tcp::starttls_action advance(qb::io::tcp::socket &sock, int revents) noexcept;
 };
 
+template <typename QB_IO_, typename NotifyDerived>
+class Database;
+
+/**
+ * @brief What a connection shares with the handshake sessions it hands out (Huly QB-111).
+ *
+ * Held by `shared_ptr`, so a session copied out of its hook and kept past the connection reads a gate
+ * that says "over" instead of a freed connection.
+ */
+struct handshake_gate {
+    std::uint64_t live      = 0;     ///< the id of the handshake writing on the link now; 0: none
+    bool          admitting = false; ///< a session is queueing a query: the connection admits it while not ready
+};
+
+/**
+ * @brief The handshake hook's write handle (`database::set_handshake`, Huly QB-111).
+ *
+ * While a connection is not `ready` it refuses every query submitted through it (`connection is not
+ * established`), so a hook cannot use the connection itself; it is handed this session instead. The
+ * session queues on the connection's link only while the handshake it was made for runs: a copy kept
+ * past the hook, or used after the link dropped, fails every query with "handshake over" -- no other
+ * coroutine can slip a query past the gate while the hook is suspended. Its queries run before any user
+ * query of the new session, in the order they are awaited.
+ */
+class handshake_session {
+public:
+    /** @brief Simple-query protocol (`Reply<resultset>`), like `database::execute(sql)`. */
+    [[nodiscard]] pg_reply_awaiter<resultset>
+    execute(std::string_view sql) {
+        return admitted<resultset>([sql = std::string(sql)](Transaction &root, pg_coro_complete<resultset> complete) {
+            root.execute(
+                std::string_view(sql),
+                [complete](Transaction &, resultset rs) mutable { complete(::qb::pg::Reply<resultset>::success(rs.deep_snapshot())); },
+                [complete](error::db_error const &e) mutable { complete(::qb::pg::Reply<resultset>::failure(e)); });
+        });
+    }
+
+    /** @brief Same as `execute(sql)`. */
+    [[nodiscard]] pg_reply_awaiter<resultset>
+    query(std::string_view sql) {
+        return execute(sql);
+    }
+
+    /**
+     * @brief Prepare a named statement on the new session (`Reply<PreparedQuery>`), like
+     *        `database::prepare(name, sql, types)` -- the statements a session needs are prepared here.
+     */
+    [[nodiscard]] pg_reply_awaiter<PreparedQuery>
+    prepare(std::string_view name, std::string_view sql, type_oid_sequence types = {}) {
+        return admitted<PreparedQuery>([n = std::string(name), q = std::string(sql),
+                                        t = std::move(types)](Transaction &root, pg_coro_complete<PreparedQuery> complete) mutable {
+            root.prepare(
+                std::string_view(n), std::string_view(q), std::move(t),
+                [complete](Transaction &, PreparedQuery const &pq) mutable {
+                    complete(::qb::pg::Reply<PreparedQuery>::success(PreparedQuery{pq}));
+                },
+                [complete](error::db_error const &e) mutable { complete(::qb::pg::Reply<PreparedQuery>::failure(e)); });
+        });
+    }
+
+    /** @brief Execute a statement prepared on this session (`Reply<resultset>`). */
+    [[nodiscard]] pg_reply_awaiter<resultset>
+    execute(std::string_view name, QueryParams &&params) {
+        return admitted<resultset>(
+            [n = std::string(name), p = std::move(params)](Transaction &root, pg_coro_complete<resultset> complete) mutable {
+                root.execute(
+                    std::string_view(n), std::move(p),
+                    [complete](Transaction &, resultset rs) mutable { complete(::qb::pg::Reply<resultset>::success(rs.deep_snapshot())); },
+                    [complete](error::db_error const &e) mutable { complete(::qb::pg::Reply<resultset>::failure(e)); });
+            });
+    }
+
+    /** @brief Whether this session may still queue: its handshake is the one running on the link. */
+    [[nodiscard]] bool
+    live() const noexcept {
+        return _gate && _id != 0 && _gate->live == _id;
+    }
+
+private:
+    template <typename, typename>
+    friend class Database;
+
+    handshake_session(Transaction &root, std::shared_ptr<handshake_gate> gate, std::uint64_t id) noexcept
+        : _root(&root)
+        , _gate(std::move(gate))
+        , _id(id) {}
+
+    /// The awaiter of one query: queued through the gate when awaited, or failed when the handshake is over.
+    template <typename Payload, typename Queue>
+    [[nodiscard]] pg_reply_awaiter<Payload>
+    admitted(Queue &&queue) {
+        return pg_reply_awaiter<Payload>{[root = _root, gate = _gate, id = _id,
+                                          queue = std::forward<Queue>(queue)](pg_coro_complete<Payload> complete) mutable {
+            if (!gate || id == 0 || gate->live != id) {
+                complete(::qb::pg::Reply<Payload>::failure(error::connection_error("handshake over")));
+                return;
+            }
+            gate->admitting = true;
+            auto admitted   = qb::scope_guard([&gate] { gate->admitting = false; });
+            queue(*root, std::move(complete));
+        }};
+    }
+
+    Transaction                    *_root;
+    std::shared_ptr<handshake_gate> _gate;
+    std::uint64_t                   _id;
+};
+
 /**
  * @brief PostgreSQL database client implementation
  *
@@ -538,21 +676,136 @@ public:
     using pg_protocol = qb::protocol::pgsql<Database<QB_IO_, NotifyDerived>>;
 
 private:
-    connection_options   conn_opts_;            ///< Database connection options
-    client_options_type  client_opts_;          ///< Client-supplied startup options (sent in the StartupMessage)
-    client_options_type  server_params_;        ///< Server-reported ParameterStatus cache (NOT echoed back at connect)
-    integer              serverPid_{};          ///< Server process ID
-    integer              serverSecret_{};       ///< Server secret for protocol operations
-    PreparedQueryStorage storage_;              ///< Storage for prepared statements
-    bool                 is_connected_ = false; ///< Flag indicating if the connection is established
+    connection_options   conn_opts_;      ///< Database connection options
+    client_options_type  client_opts_;    ///< Client-supplied startup options (sent in the StartupMessage)
+    client_options_type  server_params_;  ///< Server-reported ParameterStatus cache (NOT echoed back at connect)
+    integer              serverPid_{};    ///< Server process ID
+    integer              serverSecret_{}; ///< Server secret for protocol operations
+    PreparedQueryStorage storage_;        ///< Storage for prepared statements
 
-    /// Outstanding `co_await connect()` handshake (coroutine resume + validity token)
-    bool                    connect_coroutine_pending_{false};
-    bool                    connect_handshake_failed_{false};
-    std::coroutine_handle<> connect_suspend_handle_{};
-    std::shared_ptr<bool>   connect_suspend_valid_{};
-    /// Bumps on each new handshake / reconnect prep so stale `callback(timeout)` ignores
-    std::uint64_t connect_timer_generation_{0};
+public:
+    /// The handshake hook: `true` lets the new connection become ready, `false` refuses it for good.
+    using handshake_hook = std::function<qb::io::async::task<bool>(handshake_session &)>;
+
+private:
+    // --- The reconnect contract (Huly QB-111; qb/io/reconnect.h) ----------------------------------
+    /// How establish_() runs its attempts.
+    enum class run_mode : std::uint8_t {
+        single,   ///< a plain connect(): one attempt, and its failure is the link's cause
+        run,      ///< connect_with_retry(): the policy's attempts, spent = retries_exhausted
+        recovery, ///< the reconnection run of a lost ready connection: `reconnecting` between attempts
+    };
+
+    /// How one connection attempt -- the transport, then the handshake -- ended.
+    enum class attempt_outcome : std::uint8_t {
+        ready,            ///< the connection is ready on the new link
+        transport_failed, ///< no link, a lost link, a startup the server failed, a deadline: another attempt may follow
+        refused,          ///< the server (SQLSTATE class 28, 3D000), the authentication check or the hook refused it
+        cancelled,        ///< superseded (disconnect(), a new connect(), destruction): the new owner decides
+    };
+
+    /// The protocol's own handshake on a link: authentication, then the first ReadyForQuery.
+    enum class startup_outcome : std::uint8_t { pending, up, refused, failed };
+
+    /// What the attempt waits on while the protocol handshake runs: settled by the message handlers, by
+    /// the link's loss and by the destructor -- shared, so a settle after destruction finds no freed object.
+    struct startup_slot {
+        startup_outcome         outcome = startup_outcome::pending;
+        std::coroutine_handle<> waiter{};
+
+        void
+        settle(startup_outcome value) noexcept {
+            if (outcome != startup_outcome::pending)
+                return;
+            outcome = value;
+            if (auto h = std::exchange(waiter, {}))
+                qb::io::async::coro_scheduler().schedule_resume(h);
+        }
+    };
+
+    /// The LISTEN replay queued at AuthenticationOk, awaited by the handshake once its hook returned.
+    struct replay_slot {
+        bool                           done = false;
+        std::optional<error::db_error> error{};
+        std::coroutine_handle<>        waiter{};
+
+        void
+        settle(std::optional<error::db_error> failure) noexcept {
+            if (done)
+                return;
+            done  = true;
+            error = std::move(failure);
+            if (auto h = std::exchange(waiter, {}))
+                qb::io::async::coro_scheduler().schedule_resume(h);
+        }
+    };
+
+    /// Awaits a startup or replay slot; the frame holds the slot, never the connection.
+    template <typename Slot>
+    struct slot_awaiter {
+        std::shared_ptr<Slot> slot;
+
+        [[nodiscard]] bool
+        await_ready() const noexcept {
+            if constexpr (std::is_same_v<Slot, startup_slot>)
+                return slot->outcome != startup_outcome::pending;
+            else
+                return slot->done;
+        }
+        void
+        await_suspend(std::coroutine_handle<> h) noexcept {
+            qb::io::async::track_suspension(h, "pgsql handshake");
+            slot->waiter = h;
+        }
+        void
+        await_resume() const noexcept {}
+    };
+
+    /// Where a connect() reports: its awaiter's coroutine.
+    struct connect_completion {
+        std::coroutine_handle<> waiter{};
+        bool                    ok = false;
+
+        void
+        settle(bool value) {
+            ok = value;
+            if (auto h = std::exchange(waiter, {}))
+                qb::io::async::coro_scheduler().schedule_resume(h);
+        }
+    };
+
+    std::optional<RetryPolicy> _reconnect_policy{};
+    qb::io::connection_state   _state         = qb::io::connection_state::idle;
+    qb::io::down_reason        _down_reason   = qb::io::down_reason::user;
+    qb::io::down_reason        _loss_cause    = qb::io::down_reason::peer; ///< why the last link went away
+    bool                       _session_live  = false;                     ///< an authenticated protocol session runs on the installed link
+    bool                       _link_open     = false;                     ///< a link is installed and its teardown has not begun
+    bool                       _cause_set     = false;                     ///< the client named _loss_cause before it dropped the link
+    bool                       _session_ready = false;                     ///< the installed link reached ready: its loss fires on_disconnected
+    bool                       _recovering    = false;                     ///< a reconnection run is in progress (is_reconnecting())
+    bool                       _ever_ready    = false;                     ///< a connection was ready once: the next one follows a gap
+    /// Bumped by disconnect(), by every connect() that starts a lifecycle and by every terminal transition:
+    /// the run, the attempt and the handshake that captured an older value were superseded and step aside.
+    std::uint64_t                   _epoch           = 0;
+    std::uint64_t                   _user_down_epoch = 0; ///< the epoch disconnect() left a ready link in
+    std::uint64_t                   _handshake_seq   = 0;
+    std::shared_ptr<handshake_gate> _gate            = std::make_shared<handshake_gate>();
+    std::shared_ptr<startup_slot>   _startup{};
+    std::shared_ptr<replay_slot>    _replay{};
+    error::db_error                 _refusal{"handshake refused"}; ///< what refused the last handshake
+    handshake_hook                  _hs_hook{};
+    /// The channels listen() / unlisten() / unlisten_all() leave this connection listening on: replayed at
+    /// the AuthenticationOk of every new session. A LISTEN written as raw SQL is not in it.
+    std::set<std::string, std::less<>> _listened{};
+    std::deque<::qb::pg::notification> _held_notifications{};      ///< received while handshaking: released at ready
+    bool                               _raw_listen_seen   = false; ///< a CommandComplete "LISTEN" no API call claimed yet
+    bool                               _raw_listen_logged = false;
+    // Observability hooks: empty until set, read only on the cold transitions.
+    std::function<void()>                    _on_connected{};
+    std::function<void(qb::io::down_reason)> _on_disconnected{};
+    std::function<void(qb::io::down_reason)> _on_down{};
+    std::shared_ptr<bool>                    _alive{std::make_shared<bool>(true)};
+
     /// Owned handshake-deadline timer. MUST be a ScopedTimeout (cancelled on destruction),
     /// not a fire-and-forget async::callback: the latter is a self-deleting heap Timeout that
     /// outlives this Database and would dereference a freed `this` if the connection is dropped
@@ -580,22 +833,73 @@ private:
         }
     }
 
+    template <typename Fn, typename... Args>
+    static void
+    notify_(Fn &hook, char const *what, Args... args) noexcept {
+        if (!hook)
+            return;
+        try {
+            hook(args...);
+        } catch (std::exception const &ex) {
+            QB_LOG_WARN("[pgsql] " << what << " hook threw: " << ex.what());
+        } catch (...) {
+            QB_LOG_WARN("[pgsql] " << what << " hook threw a non-std exception");
+        }
+    }
+
+    /// The notify consumer's part of a transition, when the derived class is one.
+    template <typename Fn>
     void
-    try_resume_connect_wait() {
-        if (!connect_coroutine_pending_)
+    consumer_(Fn &&fn) {
+        if constexpr (!std::is_same_v<NotifyDerived, void>)
+            std::forward<Fn>(fn)(*static_cast<NotifyDerived *>(this));
+    }
+
+    /// The cause a transport loss the client did not ask for maps to.
+    [[nodiscard]] static qb::io::down_reason
+    cause_of_(int reason) noexcept {
+        using qb::io::async::event::disconnect_reason;
+        switch (static_cast<disconnect_reason>(reason)) {
+            case disconnect_reason::protocol_error:
+            case disconnect_reason::message_too_large:
+            case disconnect_reason::buffer_overflow:
+                return qb::io::down_reason::protocol;
+            default:
+                return qb::io::down_reason::peer;
+        }
+    }
+
+    /// Whether the protocol handshake of the installed link is still waiting for its outcome.
+    [[nodiscard]] bool
+    startup_pending_() const noexcept {
+        return _startup && _startup->outcome == startup_outcome::pending;
+    }
+
+    /// The server or the client's own check refused the startup: terminal for the attempt and for any run.
+    void
+    refuse_startup_(error::db_error const &why) {
+        _refusal = why;
+        _error   = why;
+        if (_startup)
+            _startup->settle(startup_outcome::refused);
+    }
+
+    /// Whether the handshake `id` is the one writing on the link now.
+    [[nodiscard]] bool
+    handshake_live_(std::uint64_t id) const noexcept {
+        return id != 0 && _gate->live == id && _link_open;
+    }
+
+    /// Tear the link down now, naming the cause; on(disconnected) runs before this returns, or right after
+    /// the message handler that called it.
+    void
+    drop_link_(qb::io::down_reason cause) noexcept {
+        if (!_link_open)
             return;
-        const bool terminal = is_connected_ || connect_handshake_failed_ || (has_error() && !is_connected_);
-        if (!terminal)
-            return;
-        auto h                     = connect_suspend_handle_;
-        auto v                     = connect_suspend_valid_;
-        connect_coroutine_pending_ = false;
-        connect_suspend_handle_    = {};
-        connect_suspend_valid_.reset();
-        if (v && !*v)
-            return;
-        if (h)
-            qb::io::async::coro_scheduler().schedule_resume(h);
+        _loss_cause = cause;
+        _cause_set  = true;
+        _link_open  = false;
+        this->disconnect_now();
     }
 
 #ifndef QB_HAS_SSL
@@ -622,9 +926,10 @@ private:
                                                 << " authentication, which this build cannot perform: qb was built without OpenSSL "
                                                    "(QB_HAS_SSL undefined / QB_WITH_SSL=OFF). Rebuild qb with OpenSSL, or configure the "
                                                    "PostgreSQL role for 'trust' or 'password' (cleartext) authentication.");
-        connect_handshake_failed_ = true;
-        is_connected_             = false;
-        try_resume_connect_wait();
+        // Retrying cannot heal a build without OpenSSL: a refusal, terminal (Huly QB-111).
+        refuse_startup_(error::connection_error{
+            std::string("the server requested ") + method + " authentication, which this build cannot perform (qb built without OpenSSL)"
+        });
     }
 #endif // !QB_HAS_SSL
 
@@ -685,179 +990,474 @@ private:
         return std::min(cfg, std::chrono::duration_cast<qb::duration>(std::chrono::seconds(2)));
     }
 
+    /// The deadline of one attempt: the policy's, else the connection's `connect_timeout`, else 10 s.
+    [[nodiscard]] qb::duration
+    attempt_timeout_(qb::duration policy_timeout) const noexcept {
+        if (policy_timeout > qb::duration::zero())
+            return policy_timeout;
+        if (conn_opts_.connect_timeout > qb::duration::zero())
+            return conn_opts_.connect_timeout;
+        return std::chrono::duration_cast<qb::duration>(std::chrono::seconds(10));
+    }
+
     /**
-     * @brief Starts outbound TCP using the async framework (`qb::io::async::tcp::connect`).
-     *
-     * Uses the same connector path as Redis: non-blocking `n_connect`, `EV_WRITE` completion,
-     * and an optional deadline (`connect_timeout` or default 10s). The coroutine awaiter is
-     * resumed from `try_resume_connect_wait()` after TCP + PostgreSQL pre-startup steps or on
-     * failure.
-     *
-     * @param h Coroutine handle to resume when the handshake attempt finishes (success or failure)
-     * @param valid Shared flag cleared when the awaiter is destroyed (ignore stale callbacks)
-     * @param timeout_override If positive, overrides `conn_opts_.connect_timeout` for this attempt
+     * @brief Awaits one transport connect -- TCP, and for a secure database the SSLRequest and the TLS
+     *        handshake -- and hands the socket back, open or not. The socket is the frame's: a frame
+     *        destroyed first closes it, and a callback that fires after the frame is gone does nothing.
      */
-    void
-    start_connect_from_awaiter(std::coroutine_handle<> h, std::shared_ptr<bool> valid, qb::duration timeout_override) {
-        ++connect_timer_generation_;
-        const std::uint64_t timer_gen = connect_timer_generation_;
-
-        connect_suspend_handle_    = h;
-        connect_suspend_valid_     = std::move(valid);
-        connect_coroutine_pending_ = true;
-        connect_handshake_failed_  = false;
-        _error                     = error::db_error{"unknown error"};
-
-        if (is_connected_) {
-            try_resume_connect_wait();
-            return;
-        }
-
-        const double t_out =
-            timeout_override > qb::duration::zero()
-                ? qb::detail::to_ev_seconds(timeout_override)
-                : (conn_opts_.connect_timeout > qb::duration::zero() ? qb::detail::to_ev_seconds(conn_opts_.connect_timeout) : 10.0);
-
-        const qb::io::uri connect_uri{conn_opts_.schema + "://" + conn_opts_.uri};
-        auto              awaiter_valid = connect_suspend_valid_;
-
+    struct transport_awaiter {
         using transport_sock = std::remove_cvref_t<typename QB_IO_::transport_io_type>;
-        auto cb              = [this, timer_gen, t_out, awaiter_valid](transport_sock &&sock) {
-            if (awaiter_valid && !*awaiter_valid)
-                return;
-            on_transport_ready(std::move(sock), timer_gen, t_out);
-        };
 
-        if constexpr (transport_sock::is_secure()) {
-#ifdef QB_HAS_SSL
-            // PostgreSQL negotiates TLS in-band (the cleartext SSLRequest packet) BEFORE
-            // the handshake. Drive the whole connect → SSLRequest → TLS handshake through
-            // the connector's STARTTLS path so it runs fully asynchronously on the event
-            // loop (no blocking send/recv/handshake). A server that declines SSL fails the
-            // connect — a secure database requires TLS; use the plain tcp::database for
-            // cleartext.
-            // ssl_verify_mode::full -> verify the chain + host (the connector passes the remote host to
-            // ssl::socket::init_client); ::none -> encrypt only. The socket's ssl::Context (built below)
-            // governs verification, so the STARTTLS connector is handed a ready socket, not a verify bool.
-            const bool verify = (conn_opts_.ssl_verify == qb::pg::ssl_verify_mode::full);
-            if (!verify) {
-                // P2: encrypt-only (ssl_verify=none, the documented libpq-matching default) does NOT
-                // check the server certificate chain or hostname, leaving an active-MITM window on an
-                // untrusted network. SCRAM-SHA-256 mutual auth (enforced since the P1 fix) still
-                // authenticates the server, but non-SCRAM auth and the TLS channel itself are
-                // unprotected. Surface it ONCE so an unverified secure connection is never silent.
-                static std::atomic<bool> warned_unverified_tls{false};
-                if (!warned_unverified_tls.exchange(true, std::memory_order_relaxed)) {
-                    QB_LOG_WARN("[pgsql] TLS WITHOUT certificate verification (ssl_verify=none): the server "
-                                "certificate chain/hostname is NOT verified. Set ssl_verify_mode::full to "
-                                "authenticate the server (or rely on SCRAM-SHA-256 mutual auth).");
-                }
-            }
-            auto tls = make_client_tls_context();
-            if (!tls.ok()) {
-                // Fail CLOSED on a bad CA/cert/key path rather than silently connecting without it.
-                connect_handshake_failed_ = true;
-                _error                    = error::connection_error{"pgsql: TLS context configuration failed: " + tls.error()};
-                try_resume_connect_wait();
-                return;
-            }
-            transport_sock sock{std::move(tls)};
-            qb::io::async::tcp::starttls_connect<transport_sock, postgres_ssl_negotiator>(std::move(sock), connect_uri, std::move(cb),
-                                                                                          qb::detail::from_ev_seconds(t_out));
-#else
-            connect_handshake_failed_ = true;
-            _error                    = error::connection_error{"ssl transport requires QB_HAS_SSL"};
-            try_resume_connect_wait();
-#endif
-        } else {
-            qb::io::async::tcp::connect<transport_sock>(connect_uri, std::move(cb), qb::detail::from_ev_seconds(t_out));
+        Database                     &db;
+        qb::duration                  timeout;
+        std::optional<transport_sock> sock{};
+        std::coroutine_handle<>       handle{};
+        std::shared_ptr<bool>         valid{std::make_shared<bool>(true)};
+        bool                          failed_now = false; ///< nothing was started (a TLS context that cannot be built)
+
+        transport_awaiter(Database &d, qb::duration t)
+            : db(d)
+            , timeout(t) {}
+        transport_awaiter(transport_awaiter const &)            = delete;
+        transport_awaiter &operator=(transport_awaiter const &) = delete;
+        ~transport_awaiter() {
+            *valid = false;
         }
-    }
+
+        [[nodiscard]] bool
+        await_ready() const noexcept {
+            return false;
+        }
+
+        bool
+        await_suspend(std::coroutine_handle<> h) {
+            qb::io::async::track_suspension(h, "pgsql connect");
+            handle  = h;
+            auto cb = [this, v = valid](transport_sock &&s) {
+                if (!*v)
+                    return; // the frame is gone; the socket closes with s
+                sock.emplace(std::move(s));
+                qb::io::async::coro_scheduler().schedule_resume(handle);
+            };
+            const qb::io::uri connect_uri{db.conn_opts_.schema + "://" + db.conn_opts_.uri};
+            if constexpr (transport_sock::is_secure()) {
+#ifdef QB_HAS_SSL
+                // PostgreSQL negotiates TLS in-band (the cleartext SSLRequest packet) BEFORE
+                // the handshake. Drive the whole connect → SSLRequest → TLS handshake through
+                // the connector's STARTTLS path so it runs fully asynchronously on the event
+                // loop (no blocking send/recv/handshake). A server that declines SSL fails the
+                // connect — a secure database requires TLS; use the plain tcp::database for
+                // cleartext.
+                // ssl_verify_mode::full -> verify the chain + host (the connector passes the remote host to
+                // ssl::socket::init_client); ::none -> encrypt only. The socket's ssl::Context (built below)
+                // governs verification, so the STARTTLS connector is handed a ready socket, not a verify bool.
+                const bool verify = (db.conn_opts_.ssl_verify == qb::pg::ssl_verify_mode::full);
+                if (!verify) {
+                    // P2: encrypt-only (ssl_verify=none, the documented libpq-matching default) does NOT
+                    // check the server certificate chain or hostname, leaving an active-MITM window on an
+                    // untrusted network. SCRAM-SHA-256 mutual auth (enforced since the P1 fix) still
+                    // authenticates the server, but non-SCRAM auth and the TLS channel itself are
+                    // unprotected. Surface it ONCE so an unverified secure connection is never silent.
+                    static std::atomic<bool> warned_unverified_tls{false};
+                    if (!warned_unverified_tls.exchange(true, std::memory_order_relaxed)) {
+                        QB_LOG_WARN("[pgsql] TLS WITHOUT certificate verification (ssl_verify=none): the server "
+                                    "certificate chain/hostname is NOT verified. Set ssl_verify_mode::full to "
+                                    "authenticate the server (or rely on SCRAM-SHA-256 mutual auth).");
+                    }
+                }
+                auto tls = db.make_client_tls_context();
+                if (!tls.ok()) {
+                    // Fail CLOSED on a bad CA/cert/key path rather than silently connecting without it.
+                    db._error  = error::connection_error{"pgsql: TLS context configuration failed: " + tls.error()};
+                    failed_now = true;
+                    return false;
+                }
+                transport_sock s{std::move(tls)};
+                qb::io::async::tcp::starttls_connect<transport_sock, postgres_ssl_negotiator>(std::move(s), connect_uri, std::move(cb),
+                                                                                              timeout);
+#else
+                db._error  = error::connection_error{"ssl transport requires QB_HAS_SSL"};
+                failed_now = true;
+                return false;
+#endif
+            } else {
+                qb::io::async::tcp::connect<transport_sock>(connect_uri, std::move(cb), timeout);
+            }
+            return true;
+        }
+
+        transport_sock
+        await_resume() {
+            return sock ? std::move(*sock) : transport_sock{};
+        }
+    };
 
     /**
-     * @brief Switches to the PostgreSQL protocol, starts read/write watchers, sends startup.
+     * @brief Install an opened socket as the connection's link and start the PostgreSQL session on it.
      *
-     * Schedules the existing application-level handshake timeout (authentication / ReadyForQuery),
-     * distinct from the TCP connector deadline in `start_connect_from_awaiter`.
+     * Every connect path funnels through here -- a plain `connect()`, `connect_with_retry()` and each
+     * attempt of a reconnection run -- so this is where the previous session's state goes:
+     * - the bytes and the protocol of the previous link (a bare reconnect sent the bytes of the queries
+     *   `disconnect()` failed ahead of the StartupMessage, Huly QB-202);
+     * - the per-backend state: the prepared statements and the protocol `Close` messages still owed to
+     *   them, the ParameterStatus cache, the transaction status and the cancel key (a bare reconnect kept
+     *   the statement cache, and an `execute(name)` of the old backend's statement failed on the server
+     *   with 26000 instead of being refused client-side, Huly QB-1095);
+     * - the SCRAM mutual-auth gate: a stale `_scram_server_verified` from a previous login would let an
+     *   impersonating server on this link skip SASL and send a bare AuthenticationOk.
+     * Then the StartupMessage leaves, the connection is `handshaking`, and the attempt's deadline covers
+     * the whole handshake -- authentication, the user's hook and the LISTEN replay.
      *
-     * @param timer_gen Generation counter; stale timers ignore the callback after reconnect
-     * @param t_out Handshake timeout in seconds passed to `async::callback`
-     */
-    void
-    attach_pg_protocol_and_handshake_timer(std::uint64_t timer_gen, double t_out) {
-        this->template switch_protocol<pg_protocol>(*this);
-        this->start();
-        send_startup_message();
-
-        // Owned, cancellable deadline (see connect_deadline_timer_): reassigning here cancels
-        // any prior pending timer, and ~Database cancels this one — so the callback can never
-        // fire into a freed `this`. The timer_gen guard still covers an in-place reconnect.
-        connect_deadline_timer_ = qb::io::async::scoped_callback(std::function<void()>([this, t_out, timer_gen]() {
-                                                                     if (timer_gen != connect_timer_generation_)
-                                                                         return;
-                                                                     if (!connect_coroutine_pending_ || is_connected_)
-                                                                         return;
-                                                                     QB_LOG_WARN("[pgsql] Connection timed out after " << t_out << "s");
-                                                                     _error                    = error::db_error{"connection timeout"};
-                                                                     connect_handshake_failed_ = true;
-                                                                     try_resume_connect_wait();
-                                                                 }),
-                                                                 qb::detail::from_ev_seconds(t_out));
-
-        try_resume_connect_wait();
-    }
-
-    /**
-     * @brief Installs the ready transport and starts the PostgreSQL session.
-     *
-     * The connector delivers a fully-established socket: for a **secure** database it
-     * has already run the cleartext SSLRequest negotiation AND the TLS handshake
-     * asynchronously (via `starttls_connect` + `postgres_ssl_negotiator`); for a
-     * **plain** database it is the connected cleartext TCP socket. Either way this
-     * switches to the PostgreSQL protocol and sends the startup message — there is no
-     * blocking send/recv/handshake on the event loop anymore.
-     *
-     * @param sock Ready transport socket; empty/closed if the connect or TLS handshake failed.
-     * @param timer_gen Generation counter passed through to the handshake timer.
-     * @param t_out Authentication / ReadyForQuery timeout in seconds.
+     * @param sock The connected transport (a secure one has run its SSLRequest and TLS handshake).
+     * @param limit The attempt's deadline.
      */
     template <typename Sock_>
     void
-    on_transport_ready(Sock_ &&sock, std::uint64_t timer_gen, double t_out) {
-        if (!sock.is_open()) {
-            connect_handshake_failed_ = true;
-            _error                    = error::connection_error{"connection / TLS handshake failed"};
-            try_resume_connect_wait();
-            return;
-        }
-        // What the previous connection left -- the bytes of the queries disconnect() failed, still in
-        // out(), and the protocol -- goes before the new transport is installed: a bare reconnect sent
-        // those bytes ahead of the StartupMessage (Huly QB-202). prepare_reconnect() resets the
-        // buffers too; this is the choke point every connect path funnels through.
+    install_link_(Sock_ &&sock, qb::duration limit) {
         this->reset_for_reconnect();
-        // The per-backend state of the previous session died with it: the prepared statements (and the
-        // Closes still owed to them), the ParameterStatus cache and the transaction status. Reset here,
-        // not only in prepare_reconnect(): a bare connect() after disconnect() kept the statement cache,
-        // and an execute(name) of the old backend's statement was sent and failed on the server with
-        // 26000 instead of being refused client-side (Huly QB-1095).
         storage_.clear();
         server_params_.clear();
-        _txn_status       = 'I';
-        this->transport() = std::forward<Sock_>(sock);
-        // Re-arm the SCRAM mutual-auth gate at the START of every handshake. These flags gate
-        // AuthenticationOk in on_authentication; they are also cleared in prepare_reconnect(), but a
-        // *bare* reconnect — connect() after disconnect() with no prepare_reconnect(), a supported and
-        // tested path (ReconnectWithoutPrepareReconnectIsUsable) — would otherwise carry a stale
-        // _scram_server_verified=true from a prior successful SCRAM login into the new handshake. An
-        // impersonating server on the second connection could then skip SASL entirely and send a bare
-        // AuthenticationOk to a client that never re-authenticated. on_transport_ready is the single
-        // choke point every connect path funnels through immediately before send_startup_message(), so
-        // resetting here (not only in prepare_reconnect) closes the reuse bypass on ALL connect paths.
+        _txn_status            = 'I';
+        serverPid_             = 0;
+        serverSecret_          = 0;
+        this->transport()      = std::forward<Sock_>(sock);
         _scram_pending         = false;
         _scram_server_verified = false;
         _password_salt.clear();
         _auth_message.clear();
-        attach_pg_protocol_and_handshake_timer(timer_gen, t_out);
+        _error                 = error::db_error{"unknown error"};
+        _current_command       = root_transaction();
+        _current_query         = nullptr;
+        _query_sent            = false;
+        _ready_for_query       = false;
+        _raw_listen_seen       = false;
+        _link_open             = true;
+        _cause_set             = false;
+        _session_ready         = false;
+        _session_live          = false;
+        _state                 = qb::io::connection_state::handshaking;
+        const std::uint64_t id = ++_handshake_seq;
+        _gate->live            = id;
+        _startup               = std::make_shared<startup_slot>();
+        _replay.reset();
+        _held_notifications.clear(); // a session that never became ready has no notifications to give
+        this->template switch_protocol<pg_protocol>(*this);
+        this->start();
+        send_startup_message();
+        // Owned, cancellable deadline (see connect_deadline_timer_): reassigning here cancels the previous
+        // one, and ~Database cancels this one -- the callback never fires into a freed `this`. A handshake
+        // still running when it falls is a transport failure: the link drops, and a run may try again.
+        connect_deadline_timer_ = qb::io::async::scoped_callback(std::function<void()>([this, id, limit]() {
+                                                                     if (!handshake_live_(id))
+                                                                         return;
+                                                                     QB_LOG_WARN("[pgsql] handshake did not complete within "
+                                                                                 << qb::detail::to_ev_seconds(limit) << "s; dropping the link");
+                                                                     drop_link_(qb::io::down_reason::peer);
+                                                                     _error = error::db_error{"connection timeout"};
+                                                                 }),
+                                                                 limit);
+    }
+
+    /**
+     * @brief The new session's part of the handshake that cannot wait for a coroutine: run at
+     *        AuthenticationOk, before the first ReadyForQuery can dispatch anything (Huly QB-111).
+     * @details The listened set is replayed: one simple query of `LISTEN` statements, queued first, so it
+     *          leaves before the hook's queries. The NOTIFYs it lets through before the session is ready
+     *          are held, and released at `ready` behind the gap marker (`enter_ready_()`).
+     */
+    void
+    begin_session_() {
+        if (_listened.empty())
+            return;
+        std::string sql;
+        for (auto const &channel : _listened) {
+            sql += build_listen_sql(channel);
+            sql += ';';
+        }
+        auto slot = std::make_shared<replay_slot>();
+        _replay   = slot;
+        admit_([&] {
+            this->execute(
+                std::string_view(sql),
+                [this, slot](Transaction &, resultset) {
+                    _raw_listen_seen = false; // the replay's LISTENs are not raw SQL
+                    slot->settle(std::nullopt);
+                },
+                [this, slot](error::db_error const &e) {
+                    _raw_listen_seen = false;
+                    slot->settle(e);
+                });
+        });
+    }
+
+    /// Queue a query of the handshake while the connection is not ready.
+    template <typename Fn>
+    void
+    admit_(Fn &&fn) {
+        _gate->admitting = true;
+        auto admitted    = qb::scope_guard([this] { _gate->admitting = false; });
+        std::forward<Fn>(fn)();
+    }
+
+    /// The handshake succeeded: the connection is usable, then the user is told.
+    void
+    enter_ready_() {
+        const bool follows_gap = _ever_ready; // an earlier ready session of this lifecycle: the server published meanwhile
+        if (follows_gap)
+            ++_stats.reconnects; // a ready connection reached after a lost one
+        _state         = qb::io::connection_state::ready;
+        _session_ready = true;
+        _recovering    = false;
+        _ever_ready    = true;
+        _gate->live    = 0;
+        _startup.reset();
+        _replay.reset();
+        connect_deadline_timer_.reset();
+        // In this order, as qbm-redis releases a ready connection: the hole first, then what the new
+        // session received while it was handshaking, then the user is told. Whoever learns of the gap can
+        // query at once -- the connection is ready. A callback that disconnects or connects again (the
+        // epoch moves) stops the release: what is left belonged to a session that is over.
+        const auto epoch = _epoch;
+        if (follows_gap) {
+            consumer_([](auto &consumer) { consumer.on_pg_notify_gap(::qb::io::gap_info{::qb::io::gap_reason::reconnect, 0}); });
+            if (epoch != _epoch || _state != qb::io::connection_state::ready)
+                return;
+        }
+        while (!_held_notifications.empty()) {
+            auto n = std::move(_held_notifications.front());
+            _held_notifications.pop_front();
+            deliver_notification_(std::move(n));
+            if (epoch != _epoch || _state != qb::io::connection_state::ready)
+                return;
+        }
+        notify_(_on_connected, "on_connected");
+    }
+
+    /// Terminal: a consumer's stream drains then ends, the user is told. Supersedes the current owner.
+    void
+    enter_down_(qb::io::down_reason reason) {
+        _state       = qb::io::connection_state::down;
+        _down_reason = reason;
+        _recovering  = false;
+        _held_notifications.clear();
+        if (reason == qb::io::down_reason::handshake_refused)
+            _error = _refusal;
+        else if (reason == qb::io::down_reason::retries_exhausted)
+            _error = error::connection_error{"reconnection attempts exhausted"};
+        const auto epoch = ++_epoch;
+        settle_down_(reason, epoch);
+    }
+
+    void
+    settle_down_(qb::io::down_reason reason, std::uint64_t epoch) {
+        consumer_([](auto &consumer) { consumer.on_pg_notify_down(); });
+        if (epoch != _epoch)
+            return; // a callback connected again: the client did not stay down
+        notify_(_on_down, "on_down", reason);
+    }
+
+    /// The reconnection run: the policy's attempts, until ready, refused, spent or superseded.
+    qb::io::async::task<void>
+    run_(RetryPolicy policy, std::shared_ptr<bool> alive, std::uint64_t epoch) {
+        // A task first runs at the scheduler's next drain, not at spawn(): the client may be gone by then.
+        if (!*alive || epoch != _epoch)
+            co_return;
+        QB_LOG_INFO("[pgsql] auto-reconnect starting");
+        const bool ok = co_await establish_(std::move(policy), run_mode::recovery, alive, epoch);
+        if (!*alive)
+            co_return;
+        if (ok)
+            QB_LOG_INFO("[pgsql] auto-reconnect succeeded");
+        else
+            QB_LOG_WARN("[pgsql] auto-reconnect failed");
+    }
+
+    /**
+     * @brief The one engine behind every connect form and the reconnection run: attempts until the
+     *        connection is ready, the handshake is refused, the policy is spent, or the lifecycle is
+     *        superseded.
+     * @param policy The attempts and their backoff (one attempt for a plain connect()).
+     * @param mode A plain connect() (its failure is the link's cause), an explicit run
+     *             (connect_with_retry), or the reconnection run (`reconnecting` between attempts).
+     */
+    qb::io::async::task<bool>
+    establish_(RetryPolicy policy, run_mode mode, std::shared_ptr<bool> alive, std::uint64_t epoch) {
+        static thread_local std::mt19937 rng{std::random_device{}()};
+        const auto         between = mode == run_mode::recovery ? qb::io::connection_state::reconnecting : qb::io::connection_state::connecting;
+        const qb::duration limit   = attempt_timeout_(policy.connect_timeout);
+        int                attempt = 0;
+        while (policy.allows_attempt(attempt)) {
+            if (!*alive || epoch != _epoch)
+                co_return false;
+            ++attempt;
+            _state             = between;
+            const auto outcome = co_await attempt_(limit, alive, epoch);
+            if (!*alive || epoch != _epoch || outcome == attempt_outcome::cancelled)
+                co_return false; // disconnect(), a new connect() or destruction owns the state now
+            if (outcome == attempt_outcome::ready)
+                co_return true;
+            if (outcome == attempt_outcome::refused) {
+                enter_down_(qb::io::down_reason::handshake_refused);
+                co_return false;
+            }
+            _state = between; // the attempt's link is gone: the run waits, or ends
+            if (!policy.allows_attempt(attempt))
+                break;
+            const qb::duration wait = policy.next_delay(attempt, &rng);
+            notify_(policy.on_retry, "on_retry", attempt, wait);
+            if (!*alive || epoch != _epoch)
+                co_return false; // on_retry disconnected
+            co_await qb::io::async::sleep(wait);
+        }
+        if (!*alive || epoch != _epoch)
+            co_return false;
+        enter_down_(mode == run_mode::single ? _loss_cause : qb::io::down_reason::retries_exhausted);
+        co_return false;
+    }
+
+    /// One attempt: the transport, then the handshake on the new link.
+    qb::io::async::task<attempt_outcome>
+    attempt_(qb::duration limit, std::shared_ptr<bool> alive, std::uint64_t epoch) {
+        transport_awaiter connecting{*this, limit};
+        auto              sock = co_await connecting;
+        if (!*alive || epoch != _epoch)
+            co_return attempt_outcome::cancelled; // the socket closes with this frame
+        if (!sock.is_open()) {
+            if (!connecting.failed_now)
+                _error = error::connection_error{"connection / TLS handshake failed"};
+            _loss_cause = qb::io::down_reason::peer;
+            co_return attempt_outcome::transport_failed;
+        }
+        install_link_(std::move(sock), limit);
+        co_return co_await handshake_(alive, epoch);
+    }
+
+    /**
+     * @brief The handshake on a fresh link: the protocol's, the user's hook, the LISTEN replay.
+     * @details The protocol's own handshake is message-driven (authentication, ParameterStatus,
+     *          BackendKeyData, the first ReadyForQuery); this coroutine waits for its outcome. A server
+     *          that refuses the session -- SQLSTATE class 28 (credentials, authorization) or 3D000 (no
+     *          such database) -- or a server proof that does not verify is a refusal: terminal. Any other
+     *          failure of the startup, a link lost on the way or a deadline is one more attempt. The hook
+     *          then runs with a `handshake_session`, and the replay queued at AuthenticationOk is awaited:
+     *          a replay the server failed is one more attempt (only class 28 and 3D000 refuse).
+     */
+    qb::io::async::task<attempt_outcome>
+    handshake_(std::shared_ptr<bool> alive, std::uint64_t epoch) {
+        const std::uint64_t id      = _gate->live;
+        auto                startup = _startup;
+        co_await slot_awaiter<startup_slot>{startup};
+        if (!*alive || epoch != _epoch)
+            co_return attempt_outcome::cancelled;
+        if (startup->outcome == startup_outcome::refused)
+            co_return finish_attempt_(attempt_outcome::refused);
+        if (startup->outcome != startup_outcome::up || !handshake_live_(id))
+            co_return finish_attempt_(attempt_outcome::transport_failed);
+        if (_hs_hook) {
+            // A copy: the hook may be replaced while it runs, and the closure it calls must outlive it.
+            auto              hook    = _hs_hook;
+            bool              verdict = false;
+            std::string       why;
+            handshake_session session{*root_transaction(), _gate, id};
+            try {
+                verdict = co_await hook(session);
+            } catch (std::exception const &ex) {
+                why = ex.what();
+            } catch (...) {
+                why = "the handshake hook threw";
+            }
+            if (!*alive || epoch != _epoch)
+                co_return attempt_outcome::cancelled;
+            if (!handshake_live_(id))
+                co_return finish_attempt_(attempt_outcome::transport_failed); // the link went away under the hook
+            if (!verdict) {
+                _refusal = error::connection_error{
+                    why.empty() ? std::string{"the handshake hook refused the connection"} : "the handshake hook threw: " + why
+                };
+                co_return finish_attempt_(attempt_outcome::refused);
+            }
+        }
+        if (auto replay = _replay) {
+            co_await slot_awaiter<replay_slot>{replay};
+            if (!*alive || epoch != _epoch)
+                co_return attempt_outcome::cancelled;
+            if (!handshake_live_(id))
+                co_return finish_attempt_(attempt_outcome::transport_failed);
+            if (replay->error) {
+                QB_LOG_WARN("[pgsql] LISTEN replay failed: " << replay->error->what());
+                _error = *replay->error;
+                co_return finish_attempt_(attempt_outcome::transport_failed);
+            }
+        }
+        enter_ready_();
+        co_return attempt_outcome::ready;
+    }
+
+    /// An attempt that ends before ready leaves no handshake live and no link.
+    attempt_outcome
+    finish_attempt_(attempt_outcome outcome) {
+        _gate->live = 0;
+        _startup.reset();
+        _replay.reset();
+        connect_deadline_timer_.reset();
+        drop_link_(qb::io::down_reason::peer); // a link already gone keeps the cause it went with
+        return outcome;
+    }
+
+    /// Start a lifecycle from idle or down, or say why not.
+    [[nodiscard]] bool
+    begin_lifecycle_() {
+        if (_state != qb::io::connection_state::idle && _state != qb::io::connection_state::down)
+            return false; // a connection, a handshake or a run is in progress: it owns the state
+        ++_epoch;
+        _state = qb::io::connection_state::connecting;
+        consumer_([](auto &consumer) { consumer.on_pg_notify_lifecycle_start(); });
+        return true;
+    }
+
+    qb::io::async::task<void>
+    connect_flow_(RetryPolicy policy, std::shared_ptr<connect_completion> done, std::shared_ptr<bool> alive, std::uint64_t epoch) {
+        const bool ok = co_await establish_(std::move(policy), run_mode::single, alive, epoch);
+        done->settle(ok && *alive && _state == qb::io::connection_state::ready);
+    }
+
+    /// Start one connect() attempt for `done`; false when the client was busy (nothing started).
+    bool
+    begin_connect_(qb::duration timeout, std::shared_ptr<connect_completion> done) {
+        if (!begin_lifecycle_())
+            return false;
+        auto policy = RetryPolicy{}.with_max_attempts(1).with_connect_timeout(attempt_timeout_(timeout));
+        qb::io::async::coro_scheduler().spawn(connect_flow_(std::move(policy), std::move(done), _alive, _epoch));
+        return true;
+    }
+
+    /// The connection's part of a LISTEN / UNLISTEN that `listen()` / `unlisten()` / `unlisten_all()` ran.
+    void
+    on_subscription_changed(subscription_change change, std::string_view channel) override {
+        _raw_listen_seen = false; // the CommandComplete "LISTEN" was this call's
+        switch (change) {
+            case subscription_change::listen:
+                _listened.emplace(channel);
+                break;
+            case subscription_change::unlisten:
+                if (auto it = _listened.find(channel); it != _listened.end())
+                    _listened.erase(it);
+                break;
+            case subscription_change::unlisten_all:
+                _listened.clear();
+                break;
+        }
+    }
+
+    /// A CommandComplete "LISTEN" that no API call claimed by ReadyForQuery was raw SQL: not replayed.
+    QB_NOINLINE QB_COLD void
+    note_raw_listen_() noexcept {
+        _raw_listen_seen = false;
+        if (_state != qb::io::connection_state::ready)
+            return; // a LISTEN of the handshake hook runs again with the hook on every session
+        if (std::exchange(_raw_listen_logged, true))
+            return;
+        QB_LOG_DEBUG("[pgsql] a LISTEN written as SQL is not replayed after a reconnection; use listen(channel), which is");
     }
 
     /**
@@ -1065,7 +1665,7 @@ private:
     bool
     process_query(Transaction *cmd) {
         _ready_for_query = false;
-        if (!is_connected_)
+        if (!_session_live)
             return false;
         if (!cmd)
             cmd = root_transaction();
@@ -1088,10 +1688,10 @@ private:
                 QB_LOG_DEBUG("[pgsql] error processing query not valid");
                 _error = error::client_error{"query couldn't be processed check logs for more infos"};
                 on_error_query(error());
-                if (!is_connected_)
+                if (!_session_live)
                     return false;
                 const bool dispatched = process_query(_current_command);
-                if (!dispatched && is_connected_)
+                if (!dispatched && _session_live)
                     _ready_for_query = true;
                 return dispatched;
             }
@@ -1104,7 +1704,7 @@ private:
                 ++_completion_callback_depth;
                 auto callback_guard = qb::scope_guard([this] { finish_query_callback(); });
                 next_cmd->pop_transaction();
-                if (!is_connected_)
+                if (!_session_live)
                     return false;
                 if (next_cmd->result())
                     break;
@@ -1121,9 +1721,9 @@ private:
      */
     void
     process_if_query_ready() {
-        if (_ready_for_query && is_connected_) {
+        if (_ready_for_query && _session_live) {
             const bool dispatched = process_query(_current_command);
-            if (!dispatched && is_connected_)
+            if (!dispatched && _session_live)
                 _ready_for_query = true;
         }
     }
@@ -1304,16 +1904,14 @@ public:
                 // client's own SCRAM proof leaks nothing, so nothing else stops it.
                 if (_scram_pending && !_scram_server_verified) {
                     QB_LOG_CRIT("[pgsql] AuthenticationOk without a verified SCRAM server signature — refusing (possible MITM/impersonation)");
-                    connect_handshake_failed_ = true;
-                    is_connected_             = false;
-                    try_resume_connect_wait();
+                    refuse_startup_(error::connection_error{"AuthenticationOk without a verified SCRAM server signature"});
                     break;
                 }
                 QB_LOG_INFO("[pgsql] Authenticated with server");
-                is_connected_ = true;
+                _session_live = true;
                 // Apply keepalive settings if configured (P1-1)
                 apply_keepalive_settings();
-                try_resume_connect_wait();
+                begin_session_();
             } break;
             case Cleartext: {
                 QB_LOG_INFO("[pgsql] Clear text authentication requested");
@@ -1505,9 +2103,7 @@ public:
                     break;
                 } catch (std::exception &ex) {
                     QB_LOG_CRIT("[pgsql] SCRAM-SHA-256 Failed verifying server signature: " << ex.what());
-                    connect_handshake_failed_ = true;
-                    is_connected_             = false;
-                    try_resume_connect_wait();
+                    refuse_startup_(error::connection_error{std::string("SCRAM-SHA-256 server signature: ") + ex.what()});
                 }
 #endif // QB_HAS_SSL
             } break;
@@ -1534,6 +2130,8 @@ public:
         command_complete cmpl;
         msg.read(cmpl.command_tag);
         QB_LOG_DEBUG("[pgsql] Command complete (" << cmpl.command_tag << ")");
+        if (cmpl.command_tag.size() == 6 && cmpl.command_tag[0] == 'L' && cmpl.command_tag == "LISTEN") [[unlikely]]
+            _raw_listen_seen = true; // cleared by listen()'s own completion, before ReadyForQuery reads it
         if (_current_command)
             _current_command->on_command_complete(cmpl.command_tag);
     }
@@ -1565,9 +2163,28 @@ public:
         error::query_error err(
             std::make_shared<const ::qb::pg::server_error_fields>(std::move(static_cast<::qb::pg::server_error_fields &>(notice))));
 
+        if (startup_pending_()) [[unlikely]] {
+            on_startup_error_(err);
+            return;
+        }
         on_error_query(err);
-        if (connect_coroutine_pending_ && !is_connected_)
-            try_resume_connect_wait();
+    }
+
+    /**
+     * @brief The server answered the StartupMessage with an error (Huly QB-111).
+     * @details SQLSTATE class 28 (invalid authorization: a wrong password, a role that may not log in, a
+     *          pg_hba rejection) and 3D000 (the database does not exist) refuse the session: no run retries
+     *          them. Anything else -- 57P03 (the server is starting up), 53300 (too many connections), ... --
+     *          fails this attempt only; the server closes the link after a startup error either way.
+     */
+    QB_NOINLINE QB_COLD void
+    on_startup_error_(error::db_error const &err) {
+        _error = err;
+        if (err.code.size() == 5 && (err.code.starts_with("28") || err.code == "3D000")) {
+            refuse_startup_(err);
+            return;
+        }
+        _startup->settle(startup_outcome::failed);
     }
 
     /**
@@ -1623,8 +2240,12 @@ public:
         _ready_clock     = qb::mono_now();
         _ready_clock_set = true;
         auto clock_guard = qb::scope_guard([this] { _ready_clock_set = false; });
+        if (startup_pending_() && _session_live) [[unlikely]]
+            _startup->settle(startup_outcome::up);
         on_success_query();
-        if (!is_connected_)
+        if (_raw_listen_seen) [[unlikely]]
+            note_raw_listen_();
+        if (!_session_live)
             return; // a success callback may have disconnected this session
         char stat(0);
         msg.read(stat);
@@ -1636,7 +2257,7 @@ public:
                         "(SQLSTATE implicit); issue ROLLBACK before new commands");
         }
 
-        if (!process_query(_current_command) && is_connected_) {
+        if (!process_query(_current_command) && _session_live) {
             _ready_for_query = true;
             QB_LOG_DEBUG("[pgsql] Database " << conn_opts_.uri << "[" << conn_opts_.database << "]"
                                              << " is ready for query (" << stat << ")");
@@ -1802,6 +2423,18 @@ public:
         n.server_backend_pid = static_cast<int>(pid);
         n.channel            = std::move(channel);
         n.payload            = std::move(payload);
+        if (_state != qb::io::connection_state::ready) [[unlikely]] {
+            // The replayed LISTEN is live while the hook still runs: what arrives now waits for `ready`,
+            // behind the gap the new session opened (Huly QB-111).
+            _held_notifications.push_back(std::move(n));
+            return;
+        }
+        deliver_notification_(std::move(n));
+    }
+
+    /// Hand one NOTIFY to the consumer, the plain database's handler, or the log.
+    void
+    deliver_notification_(::qb::pg::notification &&n) {
         if constexpr (!std::is_same_v<NotifyDerived, void>) {
             static_cast<NotifyDerived *>(this)->consume_pg_notify(std::move(n));
         } else if (inbound_notify_handler_) {
@@ -1855,7 +2488,7 @@ public:
             static constexpr std::size_t kMaxCopyDataBody = 1u << 30; // 1 GiB
             while (true) {
                 std::optional<std::string> chunk = (*source)();
-                if (!is_connected_)
+                if (!_session_live)
                     return; // the source may have disconnected the session
                 // The source may destroy its own awaiting coroutine. Its scope guard
                 // detaches the callback, but this local shared_ptr keeps the current
@@ -1878,11 +2511,11 @@ public:
             }
         } catch (...) {
             QB_LOG_WARN("[pgsql] copy_in source threw; aborting the COPY with CopyFail");
-            if (is_connected_)
+            if (_session_live)
                 send_copy_fail();
             return;
         }
-        if (!is_connected_)
+        if (!_session_live)
             return;
         message done(copy_done_tag);
         send_message(done);
@@ -2043,29 +2676,45 @@ public:
     /**
      * @brief Destructor
      *
-     * Ensures the connected flag is reset. The actual connection
-     * cleanup is handled by the TCP client base class.
+     * Marks the connection gone for every engine coroutine that is still suspended (they check the
+     * liveness token before touching `*this`), and settles the protocol-handshake wait, which no message
+     * can settle any more, so its attempt unwinds instead of staying suspended. A session copied out of
+     * a handshake hook fails from here on with "handshake over". The socket is closed by the TCP client
+     * base class.
      */
     ~Database() {
-        is_connected_ = false;
+        *_alive          = false;
+        _gate->live      = 0;
+        _gate->admitting = false;
+        if (auto startup = std::exchange(_startup, nullptr))
+            startup->settle(startup_outcome::failed);
+        if (auto replay = std::exchange(_replay, nullptr))
+            replay->settle(error::connection_error{"database destroyed"});
     }
 
     /**
      * @struct connect_awaiter
-     * @brief Coroutine awaiter for `co_await db.connect()` (see also `run_sync` in tests).
+     * @brief Coroutine awaiter for `co_await db.connect()` (see also `run_sync` in tests): `true` once the
+     *        connection is ready.
+     * @details Ready means the whole handshake ran on the new connection: authentication, the first
+     *          ReadyForQuery, the hook installed with `set_handshake()` and the replay of the listened
+     *          channels (Huly QB-111). Resolves `false` when the attempt failed, was refused or was
+     *          superseded by `disconnect()` -- the connection is then `down`, `down_reason()` says why and
+     *          `error()` holds the failure -- and at once when a connection, a handshake or a reconnection
+     *          run is already in progress. Resolves `true` at once on a connection that is already ready.
      */
     struct connect_awaiter {
-        Database<QB_IO_, NotifyDerived> &db;
-        qb::duration                     timeout{};
-        std::shared_ptr<bool>            valid{std::make_shared<bool>(true)};
+        Database<QB_IO_, NotifyDerived>    &db;
+        qb::duration                        timeout{};
+        std::shared_ptr<connect_completion> done{};
 
         explicit connect_awaiter(Database<QB_IO_, NotifyDerived> &d, qb::duration t = qb::duration::zero()) noexcept
             : db(d)
             , timeout(t) {}
 
         ~connect_awaiter() {
-            if (valid)
-                *valid = false;
+            if (done)
+                done->waiter = {}; // a frame destroyed while connecting is never resumed
         }
 
         connect_awaiter(connect_awaiter const &)            = delete;
@@ -2075,39 +2724,48 @@ public:
 
         [[nodiscard]] bool
         await_ready() const noexcept {
-            return db.is_connected_;
+            return db._state == qb::io::connection_state::ready;
         }
 
-        void
+        bool
         await_suspend(std::coroutine_handle<> h) {
             qb::io::async::track_suspension(h, "pgsql connect");
-            db.start_connect_from_awaiter(h, valid, timeout);
+            done         = std::make_shared<connect_completion>();
+            done->waiter = h;
+            if (db.begin_connect_(timeout, done))
+                return true;
+            done->waiter = {};
+            return false; // busy: resolves false at once
         }
 
         [[nodiscard]] bool
         await_resume() const noexcept {
-            return db.is_connected_;
+            return done ? done->ok : db._state == qb::io::connection_state::ready;
         }
     };
 
     /**
-     * @brief Start async connection (`co_await` or `run_sync(db.connect())`).
+     * @brief Start async connection (`co_await` or `run_sync(db.connect())`): `true` once the connection
+     *        is ready (see `connect_awaiter`). One attempt; `connect_with_retry()` makes several.
      */
     [[nodiscard]] connect_awaiter
     connect() {
         return connect_awaiter{*this, qb::duration::zero()};
     }
 
-    /** @brief Same as connect() with an explicit timeout override. */
+    /** @brief Same as connect() with an explicit timeout override: the deadline of the transport connect
+     *         and, from the StartupMessage on, of the whole handshake. */
     [[nodiscard]] connect_awaiter
     connect(qb::duration timeout) {
         return connect_awaiter{*this, timeout};
     }
 
-    /** @brief Parse connection string then connect. */
+    /** @brief Parse connection string then connect. The options change only while the connection is idle
+     *         or down: a live connection, and the reconnection run that may follow it, keep theirs. */
     [[nodiscard]] connect_awaiter
     connect(std::string const &conn_opts) {
-        conn_opts_ = connection_options::parse(conn_opts);
+        if (_state == qb::io::connection_state::idle || _state == qb::io::connection_state::down)
+            conn_opts_ = connection_options::parse(conn_opts);
         return connect();
     }
 
@@ -2118,12 +2776,155 @@ public:
      * this overload to also set the fields that are NOT expressible in the string —
      * notably `ssl_verify` (TLS verification level), `connect_timeout`, and the keepalive
      * settings. Typical: `auto o = connection_options::parse(dsn); o.ssl_verify =
-     * ssl_verify_mode::full; co_await db.connect(o);`.
+     * ssl_verify_mode::full; co_await db.connect(o);`. As with the string form, the options change
+     * only while the connection is idle or down.
      */
     [[nodiscard]] connect_awaiter
     connect(connection_options opts) {
-        conn_opts_ = std::move(opts);
+        if (_state == qb::io::connection_state::idle || _state == qb::io::connection_state::down)
+            conn_opts_ = std::move(opts);
         return connect();
+    }
+
+    /**
+     * @brief Connect with exponential-backoff retry: the policy's attempts, each a transport connect and a
+     *        whole handshake, until the connection is ready (Huly QB-111).
+     *
+     * Attempt 1 is immediate; between attempts the run sleeps the policy's `next_delay()` (jittered) and
+     * calls `on_retry(attempt, next_delay)` first. A handshake the server refuses -- SQLSTATE class 28 or
+     * 3D000 -- or that the hook refuses ends the run at once, `down` with `handshake_refused`; a spent
+     * policy ends it `down` with `retries_exhausted`. Resolves `false` at once when a connection, a
+     * handshake or a run is already in progress. If the connection is destroyed while the run waits, the
+     * task ends without touching it.
+     *
+     * @param policy The attempts and their backoff (defaults: unlimited attempts).
+     * @return A task yielding `true` once the connection is ready, `false` otherwise.
+     */
+    qb::io::async::task<bool>
+    connect_with_retry(RetryPolicy policy = RetryPolicy{}) {
+        if (_state == qb::io::connection_state::ready)
+            co_return true;
+        if (!begin_lifecycle_())
+            co_return false;
+        co_return co_await establish_(std::move(policy), run_mode::run, _alive, _epoch);
+    }
+
+    /** @brief Parse connection string then `connect_with_retry(policy)` (the options change only while idle or down). */
+    qb::io::async::task<bool>
+    connect_with_retry(std::string const &conn_opts, RetryPolicy policy = RetryPolicy{}) {
+        if (_state == qb::io::connection_state::idle || _state == qb::io::connection_state::down)
+            conn_opts_ = connection_options::parse(conn_opts);
+        co_return co_await connect_with_retry(std::move(policy));
+    }
+
+    /**
+     * @brief Arm the reconnection run for a lost ready connection (Huly QB-111).
+     * @details A loss the client did not ask for -- the server closed or reset the link, a message the
+     *          parser refused -- starts a run of the policy's attempts, each one a whole handshake
+     *          (authentication, the hook, the replay of the listened channels); an explicit
+     *          `disconnect()` never does. The policy is read when the loss happens: arming it later arms
+     *          the next loss. Work submitted while the connection is not ready is refused, as before
+     *          (`connection is not established`); what was in flight when the link dropped fails once, with
+     *          `database disconnected`, and is never replayed.
+     * @param policy Retry/backoff policy of the run.
+     * @return *this
+     */
+    Database<QB_IO_, NotifyDerived> &
+    enable_auto_reconnect(RetryPolicy policy = RetryPolicy{}) noexcept {
+        _reconnect_policy = std::move(policy);
+        return *this;
+    }
+
+    /** @brief Disarm the reconnection run for the next loss (a run in progress still finishes). */
+    Database<QB_IO_, NotifyDerived> &
+    disable_auto_reconnect() noexcept {
+        _reconnect_policy.reset();
+        return *this;
+    }
+
+    /** @brief Whether a reconnection run is in progress: from the loss until it is ready or down. */
+    [[nodiscard]] bool
+    is_reconnecting() const noexcept {
+        return _recovering;
+    }
+
+    /**
+     * @brief Whether the connection is ready: the whole handshake ran on the current link (Huly QB-111).
+     * @details `state() == qb::io::connection_state::ready`. Until 3.3 this was the io base's flag, true
+     *          on a database that had never connected; it hides that flag now.
+     */
+    [[nodiscard]] bool
+    is_connected() const noexcept {
+        return _state == qb::io::connection_state::ready;
+    }
+
+    /** @brief Where the connection stands (`qb::io::connection_state`, Huly QB-111). */
+    [[nodiscard]] qb::io::connection_state
+    state() const noexcept {
+        return _state;
+    }
+
+    /** @brief Why the connection is down; meaningful in `connection_state::down` (Huly QB-111). */
+    [[nodiscard]] qb::io::down_reason
+    down_reason() const noexcept {
+        return _down_reason;
+    }
+
+    /**
+     * @brief Install the handshake hook: it runs on every connection, the first one included, after the
+     *        protocol's handshake and before the connection is ready (Huly QB-111).
+     * @details The hook receives a `qb::pg::handshake_session&` -- the only way to send a query while the
+     *          connection is not ready -- and returns `true` to let the connection become ready. `false`, or
+     *          a throw, refuses it: the connection goes `down` with `handshake_refused` and no run retries
+     *          it. A query of the hook that fails is the hook's to judge; a link lost under the hook is one
+     *          more attempt. Its typical work is what a new session needs before the program's own
+     *          queries: `SET` a session parameter, prepare the statements the program executes by name.
+     *          Set it before `connect()`; an empty function removes it.
+     * @return *this
+     */
+    Database<QB_IO_, NotifyDerived> &
+    set_handshake(handshake_hook hook) {
+        _hs_hook = std::move(hook);
+        return *this;
+    }
+
+    /** @brief Called each time the connection becomes ready: the first connection, and after every
+     *         reconnection (Huly QB-111). */
+    Database<QB_IO_, NotifyDerived> &
+    on_connected(std::function<void()> hook) {
+        _on_connected = std::move(hook);
+        return *this;
+    }
+
+    /**
+     * @brief Called once for every ready connection lost, with its cause (`user`, `peer`, `protocol`)
+     *        (Huly QB-111).
+     * @details After the work in flight on it failed, before the reconnection decision: `state()` reads
+     *          `reconnecting` or `down` as the policy stands, and a hook that disarms the policy prevents
+     *          the run. `on_connected` and `on_disconnected` strictly alternate.
+     */
+    Database<QB_IO_, NotifyDerived> &
+    on_disconnected(std::function<void(qb::io::down_reason)> hook) {
+        _on_disconnected = std::move(hook);
+        return *this;
+    }
+
+    /** @brief Called each time the connection reaches `down`, with the reason (Huly QB-111). */
+    Database<QB_IO_, NotifyDerived> &
+    on_down(std::function<void(qb::io::down_reason)> hook) {
+        _on_down = std::move(hook);
+        return *this;
+    }
+
+    /**
+     * @brief The channels this connection keeps listening on across reconnections (Huly QB-111).
+     * @details Maintained by `listen()`, `unlisten()` and `unlisten_all()` when the server confirms them,
+     *          replayed at the start of every new session of the same lifecycle, and cleared by an explicit
+     *          `disconnect()`, which ends the session. A `LISTEN` written as SQL is not in it.
+     */
+    [[nodiscard]] std::set<std::string, std::less<>> const &
+    listened_channels() const noexcept {
+        return _listened;
     }
 
     /** @brief Use an existing transport channel (e.g. pool) then handshake. */
@@ -2264,6 +3065,12 @@ protected:
         ++_stats.notifications_dropped;
     }
 
+    /// A notify consumer emitted a gap marker (`stats().gaps`, Huly QB-111).
+    void
+    count_gap() noexcept {
+        ++_stats.gaps;
+    }
+
 public:
     /**
      * @brief Enable TCP keepalive for the connection (P1-1)
@@ -2281,22 +3088,25 @@ public:
         conn_opts_.keepalive_idle     = idle;
         conn_opts_.keepalive_probes   = probes;
 
-        if (is_connected_) {
+        if (_session_live) {
             apply_keepalive_settings();
         }
     }
 
     /**
-     * @brief A new query may only be enqueued while the handle is connected.
+     * @brief A new query may only be enqueued while the connection is ready (Huly QB-917, QB-111).
      *
-     * Overrides Transaction::is_connection_usable() so coroutine entry points and
-     * the callback command queue fail fast on a disconnected handle instead of
-     * enqueuing a command that can never be sent. `is_connected_` is cleared
-     * synchronously by disconnect() and by on(disconnected).
+     * Overrides Transaction::is_connection_usable() so coroutine entry points and the callback command
+     * queue fail fast -- once, with `connection is not established` -- instead of enqueuing a command
+     * that could leave before the handshake, or never. qbm-pgsql REFUSES work outside `ready` (idle,
+     * connecting, handshaking, reconnecting, down); qbm-redis holds it. The one exception is the
+     * handshake's own queries, queued through a live `handshake_session` and the LISTEN replay.
+     * `disconnect()` and the loss of a ready link leave `ready` synchronously, before the work in flight
+     * fails, so a failure callback that submits again is refused too.
      */
     [[nodiscard]] bool
     is_connection_usable() const noexcept override {
-        return is_connected_;
+        return _state == qb::io::connection_state::ready || _gate->admitting;
     }
 
     /**
@@ -2309,7 +3119,7 @@ public:
      */
     bool
     is_connection_alive() const {
-        if (!is_connected_) {
+        if (!_session_live) {
             return false;
         }
 
@@ -2933,31 +3743,47 @@ public:
     }
 
     /**
-     * @brief Disconnection handler
-     *
-     * Called when the connection to the database server is lost.
-     * Updates the connection state and raises an error for any pending queries.
+     * @brief The link is gone: what was in flight on it fails, and the connection decides what follows
+     *        (Huly QB-111).
+     * @details A handshaking link's loss only fails the handshake's queries: the attempt that installed it
+     *          decides (another attempt, or down). A ready link's loss leaves `ready` first -- a failure
+     *          callback that submits again is refused, never queued on a link that is gone -- then fails
+     *          the work in flight and queued, once, with `database disconnected`; then `on_disconnected`
+     *          fires with the cause, BEFORE the reconnection decision (a hook that disarms the policy
+     *          prevents the run); then a run starts when the cause is not `user` and a policy is armed,
+     *          else the connection is down.
      *
      * @param ev Disconnection event
      */
     void
     on(qb::io::async::event::disconnected const &ev) {
-        if (connect_coroutine_pending_) {
-            connect_handshake_failed_ = true;
-            _error                    = error::client_error("database disconnected");
-            try_resume_connect_wait();
+        const bool was_ready = _session_ready;
+        const bool was_live  = _session_live;
+        _session_ready       = false;
+        _session_live        = false;
+        _link_open           = false;
+        _gate->live          = 0; // no session of this link may queue any more
+        if (!_cause_set)
+            _loss_cause = cause_of_(ev.reason);
+        _cause_set       = false;
+        const auto cause = _loss_cause;
+        // The backend cancel key is per-connection; drop it so a post-disconnect
+        // cancel() can't address a recycled PID on the server.
+        serverPid_    = 0;
+        serverSecret_ = 0;
+        if (auto startup = _startup)
+            startup->settle(startup_outcome::failed); // the attempt that installed the link decides
+        if (was_ready && cause != qb::io::down_reason::user) {
+            _state = _reconnect_policy ? qb::io::connection_state::reconnecting : qb::io::connection_state::down;
+            if (!_reconnect_policy)
+                _down_reason = cause;
         }
-        if (is_connected_) {
-            is_connected_ = false;
+        if (was_live) {
             if (_completion_callback_depth != 0)
                 _deferred_disconnect = DeferredDisconnect::transport;
             else
                 on_error_query(error::client_error("database disconnected"));
         }
-        // The backend cancel key is per-connection; drop it so a post-disconnect
-        // cancel() can't address a recycled PID on the server.
-        serverPid_    = 0;
-        serverSecret_ = 0;
         // on_error_query() only fails the single in-flight query. Drain every
         // queued query too. A nested disconnect during a completion callback defers
         // this drain until the callback returns, preserving its Transaction owner.
@@ -2970,28 +3796,48 @@ public:
             _current_query   = nullptr;
             _ready_for_query = false;
         }
-        if constexpr (!std::is_same_v<NotifyDerived, void>) {
-            if constexpr (requires {
-                              std::declval<NotifyDerived &>().on_pg_notify_consumer_disconnected(
-                                  std::declval<qb::io::async::event::disconnected const &>());
-                          }) {
-                static_cast<NotifyDerived *>(this)->on_pg_notify_consumer_disconnected(ev);
-            }
+        if (!was_ready)
+            return;
+        if (cause == qb::io::down_reason::user) {
+            // disconnect() is already down: what remains is to say so, in order -- unless a connect() since
+            // then started another lifecycle, which this down must not end.
+            const bool current = _epoch == _user_down_epoch;
+            notify_(_on_disconnected, "on_disconnected", cause);
+            if (current && _epoch == _user_down_epoch)
+                settle_down_(cause, _epoch);
+            return;
         }
+        // The state the connection is heading for -- set above, readable from the hook; the hook may still
+        // change the policy, and a callback may have connected or disconnected meanwhile (the epoch says so).
+        const auto epoch = _epoch;
+        notify_(_on_disconnected, "on_disconnected", cause);
+        if (epoch != _epoch)
+            return; // the hook disconnected or connected: that call owns the state now
+        if (!_reconnect_policy) {
+            enter_down_(cause);
+            return;
+        }
+        _state      = qb::io::connection_state::reconnecting;
+        _recovering = true;
+        auto policy = *_reconnect_policy;
+        qb::io::async::coro_scheduler().spawn(run_(std::move(policy), _alive, _epoch));
     }
 
     /**
-     * @brief Explicitly reset session state before reconnecting this client
+     * @brief Close the previous link's descriptor early and clear its per-backend state.
      *
-     * A later ordinary `connect()` opens a fresh TCP/TLS transport and resets stale I/O state before
-     * the new handshake. Call this optional helper to close the old fd and clear cached
-     * per-backend state explicitly before `co_await connect()` or `run_sync(connect(...))`.
+     * Optional: every `connect()` installs its link through the same reset (fresh buffers and protocol,
+     * an empty prepared-statement cache, no ParameterStatus, an idle transaction status, a re-armed
+     * SCRAM gate), so a bare `connect()` after `disconnect()` needs none of it. Call it to release the
+     * old descriptor before the next `connect()`. Does nothing while a connection, a handshake or a
+     * reconnection run owns the link.
      *
      * @pre No pending queries on this connection (finish or drain the transaction queue first).
      */
     void
     prepare_reconnect() noexcept {
-        ++connect_timer_generation_;
+        if (_state != qb::io::connection_state::idle && _state != qb::io::connection_state::down)
+            return;
         // Transport is a private base of `tcp::client`; use public `in`/`out`/`transport`.
         this->in().reset();
         this->out().reset();
@@ -2999,21 +3845,12 @@ public:
         // `n_connect()` path requires a closed socket so `init()` opens a new fd.
         this->transport().close();
         this->reset_io_state();
-        is_connected_              = false;
-        connect_handshake_failed_  = false;
-        connect_coroutine_pending_ = false;
-        connect_suspend_handle_    = {};
-        connect_suspend_valid_.reset();
         serverPid_    = 0;
         serverSecret_ = 0;
         server_params_.clear(); // server ParameterStatus is per-backend; drop the stale cache
-        // P7: prepared statements are per-backend. After reconnecting to a NEW backend PID, a cached
-        // statement name no longer exists server-side, so a later execute(name,...) would Bind to a
-        // Parse the backend never saw (SQLSTATE 26000 invalid_sql_statement_name). Drop the cache so
-        // callers re-Parse rather than trusting a name the fresh backend does not know.
+        // P7: prepared statements are per-backend: a fresh backend does not know a cached name.
         storage_.clear();
-        // P9: transaction status is per-session; a handle dropped mid-block must not keep reporting
-        // a stale 'T'/'E' from in_transaction() until the next ReadyForQuery.
+        // P9: transaction status is per-session.
         _txn_status = 'I';
         // P1: the next handshake renegotiates SCRAM from scratch; clear the mutual-auth gate.
         _scram_pending         = false;
@@ -3026,7 +3863,11 @@ public:
     }
 
     /**
-     * @brief Explicitly disconnects from the database
+     * @brief Disconnect for good: terminal, `down` with `down_reason::user` (Huly QB-111)
+     *
+     * Whatever the reconnection policy, an explicit disconnect starts no run, and it ends the session:
+     * the listened channels are forgotten, and a later `connect()` starts a fresh session -- no LISTEN
+     * replayed, no gap marker. A connection, a handshake or a run in progress is abandoned.
      *
      * Fails every in-flight and queued query, then completes the io teardown before it returns.
      * From inside a query or fluent transaction callback, queued failures run after it returns:
@@ -3039,31 +3880,64 @@ public:
      */
     void
     disconnect() {
-        // Mark the handle down before teardown so a new query is refused immediately.
-        // Keep the active callback's Transaction owner queued until it returns; its scope
-        // guard drains pending work at that point. Outside a callback, fail synchronously.
-        if (is_connected_) {
-            is_connected_ = false;
-            if (_completion_callback_depth != 0) {
-                _deferred_disconnect = DeferredDisconnect::client;
-            } else {
-                on_error_query(error::connection_error("database disconnected by client"));
-                fail_all_pending_counted(error::connection_error("database disconnected by client"));
-                _current_command = root_transaction();
-            }
+        switch (_state) {
+            case qb::io::connection_state::idle:
+            case qb::io::connection_state::down:
+                return;
+            case qb::io::connection_state::ready:
+                // Leave `ready` before teardown so a new query is refused immediately.
+                _state           = qb::io::connection_state::down;
+                _down_reason     = qb::io::down_reason::user;
+                _user_down_epoch = ++_epoch;
+                end_session_();
+                // The teardown, in the call (drop_link_ -> disconnect_now()): on(disconnected) says so and
+                // settles down. It used to be a deferred disconnect() followed by a nested listener pass,
+                // which re-entered the coroutine scheduler from a coroutine body (Huly QB-253).
+                drop_link_(qb::io::down_reason::user);
+                return;
+            default:
+                ++_epoch; // the attempt or the run in progress steps aside at its next step
+                end_session_();
+                drop_link_(qb::io::down_reason::user);
+                enter_down_(qb::io::down_reason::user);
+                return;
         }
-        // The teardown, in the call. It used to be a deferred disconnect() followed by a nested
-        // listener pass, and that pass re-entered the coroutine scheduler's run_ready() when
-        // disconnect() was called from a coroutine body: an abort in a debug build (Huly QB-253).
-        this->disconnect_now();
+    }
+
+private:
+    /**
+     * @brief An explicit disconnect ends the session: what was queued fails now, with the client's
+     *        reason, and the session's state -- the listened set, the gap a next connection would follow
+     *        -- is forgotten.
+     * @details Keep the active callback's Transaction owner queued until it returns; its scope guard
+     *          drains pending work at that point. Outside a callback, fail synchronously.
+     */
+    void
+    end_session_() {
+        _listened.clear();
+        _ever_ready = false;
+        if (!_session_live)
+            return;
+        _session_live = false;
+        if (_completion_callback_depth != 0) {
+            _deferred_disconnect = DeferredDisconnect::client;
+        } else {
+            on_error_query(error::connection_error("database disconnected by client"));
+            fail_all_pending_counted(error::connection_error("database disconnected by client"));
+            _current_command = root_transaction();
+        }
     }
 };
 
 /**
  * @brief CRTP base for LISTEN/NOTIFY consumers (mirrors `RedisConsumer` + derived).
  *
- * `Derived` must implement `deliver_pg_notify(::qb::pg::notification &&)` and inherit this class as
- * `notify_consumer<QB_IO_, Derived>` (see `notify_cb_consumer`, `notify_co_consumer`).
+ * `Derived` implements `deliver_pg_notify(::qb::pg::notification &&)` and inherits this class as
+ * `notify_consumer<QB_IO_, Derived>` (see `notify_cb_consumer`, `notify_co_consumer`). The connection
+ * calls three more hooks, defaulted here, that a consumer hides when it needs them (Huly QB-111):
+ * `on_pg_notify_gap(gap_info)` when a session that follows an earlier ready one becomes ready, before any
+ * notification of that session; `on_pg_notify_down()` when the connection reaches `down`;
+ * `on_pg_notify_lifecycle_start()` when a `connect()` leaves `idle` or `down`.
  */
 template <typename QB_IO_, typename Derived>
 class notify_consumer : public Database<QB_IO_, Derived> {
@@ -3078,23 +3952,45 @@ public:
     consume_pg_notify(::qb::pg::notification &&n) {
         static_cast<Derived *>(this)->deliver_pg_notify(std::move(n));
     }
+
+    void
+    on_pg_notify_gap(::qb::io::gap_info) {}
+    void
+    on_pg_notify_down() {}
+    void
+    on_pg_notify_lifecycle_start() {}
 };
 
 /**
- * @brief LISTEN/NOTIFY consumer that delivers to a callback only (Huly QB-1092; see `redis::tcp::cb_consumer`).
+ * @brief LISTEN/NOTIFY consumer that delivers to callbacks only (Huly QB-1092; see `redis::tcp::cb_consumer`).
  *
  * Every NOTIFY goes to `on_notify`, on the connection's thread, as it is read; nothing is queued, so
- * nothing is ever dropped. Until 3.3 this name was an alias of `notify_co_consumer`, whose bounded queue
- * a callback-only program never reads: it filled after 8192 notifications, and every later NOTIFY was
- * counted and logged as dropped although the callback had handled it. An exception escaping the callback
- * is contained and logged. Without a callback a NOTIFY is logged at INFO. Normal queries run on the same
- * connection. LISTEN is per session: LISTEN again after a reconnect.
+ * nothing is ever dropped -- until 3.3 this name was an alias of `notify_co_consumer`, whose queue a
+ * callback-only program never read: it filled, and every later NOTIFY was counted and logged as dropped.
+ * A hole in the stream is reported to `on_gap` (Huly QB-111): after a reconnection the server's
+ * NOTIFYs of the gap are lost, so `on_gap({qb::io::gap_reason::reconnect, 0})` is called when the new
+ * session is ready, before its first `on_notify` and before `on_connected` -- the moment to resynchronise
+ * from the source of truth, on this very connection if need be: it accepts queries already. An exception
+ * escaping either callback is contained and logged. Normal queries run on the same connection.
  */
 template <typename QB_IO_>
 class notify_cb_consumer : public notify_consumer<QB_IO_, notify_cb_consumer<QB_IO_>> {
     using base_type = notify_consumer<QB_IO_, notify_cb_consumer<QB_IO_>>;
 
     std::function<void(::qb::pg::notification &&)> on_notify_{};
+    std::function<void(::qb::io::gap_info)>        on_gap_{};
+
+    template <typename Fn, typename Arg>
+    static void
+    call_(Fn &fn, Arg &&arg, char const *what) noexcept {
+        try {
+            fn(std::forward<Arg>(arg));
+        } catch (std::exception const &ex) {
+            QB_LOG_WARN("[pgsql] notify_cb_consumer " << what << " callback error: " << ex.what());
+        } catch (...) {
+            QB_LOG_WARN("[pgsql] notify_cb_consumer " << what << " callback threw a non-std exception");
+        }
+    }
 
 public:
     notify_cb_consumer()
@@ -3110,30 +4006,49 @@ public:
         return *this;
     }
 
+    /** @brief The callback told of each hole in the stream, before the next `on_notify` (Huly QB-111). */
+    notify_cb_consumer<QB_IO_> &
+    on_gap(std::function<void(::qb::io::gap_info)> cb) {
+        on_gap_ = std::move(cb);
+        return *this;
+    }
+
     void
     deliver_pg_notify(::qb::pg::notification &&n) {
-        if (!on_notify_) {
-            QB_LOG_INFO("[pgsql] NOTIFY pid=" << n.server_backend_pid << " channel=" << n.channel << " payload=" << n.payload);
+        if (on_notify_) {
+            call_(on_notify_, std::move(n), "on_notify");
             return;
         }
-        try {
-            on_notify_(std::move(n));
-        } catch (std::exception const &ex) {
-            QB_LOG_WARN("[pgsql] notify_cb_consumer on_notify callback error: " << ex.what());
-        } catch (...) {
-            QB_LOG_WARN("[pgsql] notify_cb_consumer on_notify callback threw a non-std exception");
+        QB_LOG_INFO("[pgsql] NOTIFY pid=" << n.server_backend_pid << " channel=" << n.channel << " payload=" << n.payload);
+    }
+
+    void
+    on_pg_notify_gap(::qb::io::gap_info info) {
+        this->count_gap();
+        if (on_gap_) {
+            call_(on_gap_, info, "on_gap");
+            return;
         }
+        QB_LOG_INFO("[pgsql] notify_cb_consumer: notifications were lost here (" << ::qb::io::gap_reason_name(info.reason)
+                                                                                 << "); set on_gap to resynchronise");
     }
 };
 
 /**
- * @brief LISTEN/NOTIFY consumer with `co_await receive()` (see `redis::tcp::co_consumer`): a bounded queue
- * of notifications, plus an optional `on_notify` callback called before each one is queued.
+ * @brief LISTEN/NOTIFY consumer with `co_await receive()` (see `redis::tcp::co_consumer`): a bounded
+ *        stream of notifications and gap markers, plus an optional `on_notify` callback.
  *
- * A disconnect closes the queue: `receive()` yields what was already received, then `std::nullopt`
- * for as long as the consumer stays disconnected. After the next `connect()` it serves the new
- * connection, starting with anything received before the disconnect and not yet read. LISTEN is
- * per session: LISTEN again after a reconnect.
+ * The stream holds up to `notify_channel_capacity()` elements (8192 by default). It ends only when the
+ * connection reaches `down` (Huly QB-111): `receive()` then yields what it holds and `std::nullopt` --
+ * `down_reason()` says why. A loss the reconnection run recovers does not end it: the run replays the
+ * listened channels and the stream says where it has a hole, with a gap marker
+ * (`notification::kind == notification_kind::gap`) placed before the first notification of the new
+ * session (`gap.reason == qb::io::gap_reason::reconnect`). A full stream is a hole too: the NOTIFY
+ * that does not fit is counted in `stats().notifications_dropped`, handed to `on_notify_dropped` (or
+ * logged), and a marker with `gap.reason == overflow` and `gap.lost` -- every drop up to the next
+ * delivered notification, coalesced -- precedes the next notification the stream takes, or ends what the
+ * reader drained. Markers are always on. A later `connect()` after `down` serves a new stream, starting
+ * with what the old one held and was not read.
  */
 template <typename QB_IO_>
 class notify_co_consumer : public notify_consumer<QB_IO_, notify_co_consumer<QB_IO_>> {
@@ -3141,30 +4056,50 @@ class notify_co_consumer : public notify_consumer<QB_IO_, notify_co_consumer<QB_
     using notify_channel_type = qb::io::async::channel<::qb::pg::notification>;
 
     static constexpr std::size_t default_notify_channel_capacity = 8192;
+    /// Room beyond the capacity: a marker queued with the notification after it, and the last marker of a
+    /// stream that ends full -- so a marker never needs a place a notification took.
+    static constexpr std::size_t marker_room = 2;
 
-    std::size_t                                    notify_capacity_ = default_notify_channel_capacity;
-    std::unique_ptr<notify_channel_type>           notify_channel_  = std::make_unique<notify_channel_type>(default_notify_channel_capacity);
+    std::size_t                          notify_capacity_ = default_notify_channel_capacity;
+    std::unique_ptr<notify_channel_type> notify_channel_ = std::make_unique<notify_channel_type>(default_notify_channel_capacity + marker_room);
     std::function<void(::qb::pg::notification &&)> on_notify_dropped_{};
     std::function<void(::qb::pg::notification &&)> on_notify_callback_{};
+    std::optional<::qb::io::gap_info>              pending_gap_{};    ///< losses no marker in the stream carries yet
+    std::deque<::qb::io::gap_info>                 marker_infos_{};   ///< what each marker in the stream says, oldest first
+    bool                                           marker_is_tail_{}; ///< the last element queued is a marker not yet read
 
-    /**
-     * @brief The queue of the current connection.
-     * @details A channel closes for good, and the consumer outlives its connections: the queue a
-     *          disconnect closed is replaced as soon as the consumer is connected again -- observed
-     *          here, by the first `receive()` or NOTIFY of the new connection -- carrying over, in
-     *          order, what was received and not yet read. Until then a closed queue made every later
-     *          NOTIFY a drop reported as "buffer full", and `receive()` yield `std::nullopt` for good
-     *          (Huly QB-252, the redis `co_consumer` defect's twin).
-     */
-    notify_channel_type &
-    current_notify_channel() {
-        if (notify_channel_->is_closed() && this->is_connected()) {
-            auto fresh = std::make_unique<notify_channel_type>(notify_capacity_);
-            while (auto unread = notify_channel_->try_recv())
-                (void) fresh->try_send(std::move(*unread)); // never full: same capacity, at most as many
-            notify_channel_ = std::move(fresh);
+    /// Merge a loss into `into`: a reconnection among them makes the reason; drops add up.
+    static void
+    merge_(::qb::io::gap_info &into, ::qb::io::gap_info const &loss) noexcept {
+        if (loss.reason == ::qb::io::gap_reason::reconnect)
+            into.reason = ::qb::io::gap_reason::reconnect;
+        into.lost += loss.lost;
+    }
+
+    /// A loss at the current end of the stream: into the marker that already ends it, else pending.
+    void
+    note_loss_(::qb::io::gap_info const &loss) {
+        if (marker_is_tail_) {
+            merge_(marker_infos_.back(), loss);
+            return;
         }
-        return *notify_channel_;
+        if (pending_gap_)
+            merge_(*pending_gap_, loss);
+        else
+            pending_gap_ = loss;
+    }
+
+    /// Queue the pending loss as a marker; the caller made sure there is room for it.
+    void
+    queue_marker_() {
+        ::qb::pg::notification marker;
+        marker.kind = ::qb::pg::notification_kind::gap;
+        if (!notify_channel_->try_send(std::move(marker)))
+            return; // closed: the stream already ended
+        marker_infos_.push_back(*pending_gap_);
+        pending_gap_.reset();
+        marker_is_tail_ = true;
+        this->count_gap();
     }
 
 public:
@@ -3174,10 +4109,11 @@ public:
     explicit notify_co_consumer(std::string const &opts, std::size_t notify_capacity = default_notify_channel_capacity)
         : base_type(opts)
         , notify_capacity_(notify_capacity)
-        , notify_channel_(std::make_unique<notify_channel_type>(notify_capacity)) {}
+        , notify_channel_(std::make_unique<notify_channel_type>(notify_capacity + marker_room)) {}
 
     /**
-     * @brief Optional callback invoked for each NOTIFY before the message is queued for `receive()`.
+     * @brief Optional callback invoked for each NOTIFY before it is queued for `receive()` (markers are
+     *        not passed to it).
      */
     notify_co_consumer<QB_IO_> &
     on_notify(std::function<void(::qb::pg::notification &&)> cb) {
@@ -3192,25 +4128,62 @@ public:
                 on_notify_callback_(::qb::pg::notification{n});
             } catch (std::exception const &ex) {
                 QB_LOG_WARN("[pgsql] notify_co_consumer on_notify callback error: " << ex.what());
+            } catch (...) {
+                QB_LOG_WARN("[pgsql] notify_co_consumer on_notify callback threw a non-std exception");
             }
         }
-        if (current_notify_channel().try_send(std::move(n)))
-            return;
+        if (notify_channel_->size() < notify_capacity_) {
+            if (pending_gap_)
+                queue_marker_(); // the hole goes before the first notification after it
+            if (notify_channel_->try_send(std::move(n))) {
+                marker_is_tail_ = false;
+                return;
+            }
+        }
         this->count_notification_dropped();
+        note_loss_(::qb::io::gap_info{::qb::io::gap_reason::overflow, 1});
         if (on_notify_dropped_) {
             try {
                 on_notify_dropped_(std::move(n));
             } catch (std::exception const &ex) {
                 QB_LOG_WARN("[pgsql] notify_co_consumer on_notify_dropped error: " << ex.what());
+            } catch (...) {
+                QB_LOG_WARN("[pgsql] notify_co_consumer on_notify_dropped threw a non-std exception");
             }
         } else {
             QB_LOG_WARN("[pgsql] notify_co_consumer: notification dropped (buffer full)");
         }
     }
 
+    /// A reconnected session is ready (Huly QB-111): the hole's marker is queued now, unless the stream is full,
+    /// ahead of the notifications that session received while it was handshaking.
     void
-    on_pg_notify_consumer_disconnected(qb::io::async::event::disconnected const &) {
-        notify_channel_->close(); // receive() drains what is buffered, then yields std::nullopt
+    on_pg_notify_gap(::qb::io::gap_info info) {
+        note_loss_(info);
+        if (pending_gap_ && notify_channel_->size() < notify_capacity_ + 1)
+            queue_marker_();
+    }
+
+    /// The connection is down: the stream ends -- its last hole said first -- and drains, then nullopt.
+    void
+    on_pg_notify_down() {
+        if (pending_gap_)
+            queue_marker_(); // marker_room keeps a place for it
+        notify_channel_->close();
+    }
+
+    /**
+     * @brief A connect() leaves `down`: a new stream, carrying over, in order, what the old one held and
+     *        was not read (Huly QB-252: a closed channel never reopens).
+     */
+    void
+    on_pg_notify_lifecycle_start() {
+        if (!notify_channel_->is_closed())
+            return;
+        auto fresh = std::make_unique<notify_channel_type>(notify_capacity_ + marker_room);
+        while (auto unread = notify_channel_->try_recv())
+            (void) fresh->try_send(std::move(*unread)); // never full: same capacity, at most as many
+        notify_channel_ = std::move(fresh);
     }
 
     notify_co_consumer<QB_IO_> &
@@ -3219,14 +4192,18 @@ public:
         return *this;
     }
 
+    /** @brief How many elements the stream holds before a NOTIFY is dropped (markers have their own room). */
     [[nodiscard]] std::size_t
     notify_channel_capacity() const noexcept {
         return notify_capacity_;
     }
 
     /**
-     * @brief Await the next NOTIFY; `std::nullopt` once the consumer is disconnected and what it had
-     *        received is read. After a reconnect it serves the new connection.
+     * @brief Await the next element of the stream: a NOTIFY or a gap marker (`kind`); `std::nullopt`
+     *        once the connection is down and what the stream held is read (Huly QB-111).
+     *
+     * A hole the reader caught up with -- drops after the last notification queued -- is queued as a
+     * marker here, so a reader that drained the stream still learns of it.
      *
      * Implemented as a direct coroutine member (NOT an immediately-invoked lambda
      * `[this]{...}()`): the lambda closure would be a temporary destroyed at the end
@@ -3236,7 +4213,16 @@ public:
      */
     [[nodiscard]] qb::io::async::task<std::optional<::qb::pg::notification>>
     receive() {
-        co_return co_await current_notify_channel().recv();
+        if (pending_gap_ && notify_channel_->size() == 0 && !notify_channel_->is_closed())
+            queue_marker_();
+        auto next = co_await notify_channel_->recv();
+        if (next && next->kind == ::qb::pg::notification_kind::gap && !marker_infos_.empty()) {
+            next->gap = marker_infos_.front();
+            marker_infos_.pop_front();
+            if (marker_infos_.empty())
+                marker_is_tail_ = false;
+        }
+        co_return next;
     }
 
     ~notify_co_consumer() {
@@ -3257,6 +4243,11 @@ public:
  */
 template <typename QB_IO_>
 using database = detail::Database<QB_IO_, void>;
+
+/**
+ * @brief The handshake hook's write handle (`database::set_handshake`, Huly QB-111).
+ */
+using handshake_session = detail::handshake_session;
 
 /**
  * @brief Type alias for transaction base class
