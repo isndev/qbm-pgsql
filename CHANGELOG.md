@@ -304,9 +304,9 @@ in lockstep with the qb framework; see the qb CHANGELOG for what makes that rele
 
   | was | now | `template<` | `inline` |
   |---|---|---|---|
-  | `resultset.inl` (204 L) | tail of `resultset.h` (was included from `resultset.h:839`) | 18 → 18 | 5 → 5 |
-  | `transaction.inl` (528 L) | tail of `commands.h` (was included from `commands.h:703`) | 25 → 25 | 17 → 17 |
-  | `transaction_coro.inl` (262 L) | tail of `commands.h`, inside `namespace qb::pg::detail` (was included from `transaction.inl:526`) | *(counted with `commands.h` above)* | |
+  | `resultset.inl` (204 L) | tail of `resultset.h` (was included from [`resultset.h` L839](https://github.com/isndev/qbm-pgsql/blob/0b4b9ee3516a08c0b456ab5ca2551bb7e3a61e45/src/resultset.h#L839)) | 18 → 18 | 5 → 5 |
+  | `transaction.inl` (528 L) | tail of `commands.h` (was included from [`commands.h` L703](https://github.com/isndev/qbm-pgsql/blob/0b4b9ee3516a08c0b456ab5ca2551bb7e3a61e45/src/commands.h#L703)) | 25 → 25 | 17 → 17 |
+  | `transaction_coro.inl` (262 L) | tail of `commands.h`, inside `namespace qb::pg::detail` (was included from [`transaction.inl` L526](https://github.com/isndev/qbm-pgsql/blob/0b4b9ee3516a08c0b456ab5ca2551bb7e3a61e45/src/transaction.inl#L526)) | *(counted with `commands.h` above)* | |
 
   (`transaction.inl` is 528 lines, not the 527 `wc -l` reports — it ships without a trailing
   newline.)
@@ -320,7 +320,7 @@ in lockstep with the qb framework; see the qb CHANGELOG for what makes that rele
 
   Verified by comparing the preprocessed token stream of `commands.h` and `resultset.h` before and
   after: both are identical (`commands.h` differs by exactly one blank line and zero tokens). A
-  control confirmed the comparison can fail. `resultset.h:1-838` and `commands.h:1-702` are
+  control confirmed the comparison can fail. [`resultset.h` L1-L838](https://github.com/isndev/qbm-pgsql/blob/8abbbd2964f393de77011d9e0416ea3a2a962284/src/qbm/pgsql/resultset.h#L1-L838) and [`commands.h` L1-L702](https://github.com/isndev/qbm-pgsql/blob/8abbbd2964f393de77011d9e0416ea3a2a962284/src/qbm/pgsql/commands.h#L1-L702) are
   unchanged, so existing citations into either class still land.
 
   This only breaks a consumer who included a fragment **directly** — `#include
@@ -342,7 +342,7 @@ in lockstep with the qb framework; see the qb CHANGELOG for what makes that rele
   superproject root and the `package` preset.
 
 - **`transaction_coro.inl` ran seven `#include` directives inside `namespace qb::pg::detail`.**
-  It was spliced into `transaction.inl:526`, which is *between* that namespace's braces, so its own
+  It was spliced into [`transaction.inl` L526](https://github.com/isndev/qbm-pgsql/blob/0b4b9ee3516a08c0b456ab5ca2551bb7e3a61e45/src/transaction.inl#L526), which is *between* that namespace's braces, so its own
   `#include <cctype> <filesystem> <fstream> <sstream> <string>` and two local includes were
   processed in there. They were harmless only because `transaction.inl`'s block, at namespace scope,
   had already pulled the same headers in first — the fragment silently depended on its includer to
