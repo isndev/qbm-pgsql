@@ -734,6 +734,22 @@ struct TypeConverter<qb::uuid> {
     }
 
     /**
+     * @brief Appends the text form of a UUID to `out`: `to_text` without its string
+     *
+     * The array literal renderers write each element in place (Huly QB-1087); the 36
+     * characters come from the formatter behind `uuids::to_string`.
+     *
+     * @param out The string the text is appended to
+     * @param value The UUID to convert
+     */
+    static void
+    append_text(std::string &out, const qb::uuid &value) {
+        char text[36];
+        uuids::detail::uuid_text(value, text, false);
+        out.append(text, sizeof(text));
+    }
+
+    /**
      * @brief Converts PostgreSQL binary format to a UUID
      *
      * Handles binary format conversion from PostgreSQL's UUID type
@@ -809,6 +825,18 @@ struct TypeConverter<qb::wall_time> {
      * @return std::string The PostgreSQL text representation of the timestamp
      */
     static std::string to_text(const qb::wall_time &value);
+
+    /**
+     * @brief Appends the text form of a timestamp to `out`: what `to_text` returns, written in
+     *        place (the array literal renderers, Huly QB-1087)
+     *
+     * Its characters are digits and `-`, ` `, `:`, `.`, `+` only, so an array literal quotes it
+     * without escaping anything. On a throw, `out` is unchanged.
+     *
+     * @param out The string the text is appended to
+     * @param value The timestamp to convert
+     */
+    static void append_text(std::string &out, const qb::wall_time &value);
 
     /**
      * @brief Converts PostgreSQL binary format to a Timestamp
@@ -1205,6 +1233,12 @@ struct type_mapping<numeric> {
 std::string decode_pg_numeric(const byte *data, std::size_t size);
 
 /**
+ * @brief Append the canonical decimal text of a binary NUMERIC (value bytes, no length prefix)
+ *        to `out`: what decode_pg_numeric returns, written in place (Huly QB-1087).
+ */
+void append_pg_numeric_text(std::string &out, const byte *data, std::size_t size);
+
+/**
  * @brief Encode a decimal string into PostgreSQL binary NUMERIC value bytes (no
  *        length prefix). Inverse of decode_pg_numeric; mirrors set_var_from_str.
  *
@@ -1233,6 +1267,9 @@ struct TypeConverter<numeric> {
     }
 
     static value_type from_binary(std::span<const byte> buffer);
+
+    /// Append the text `from_binary(buffer).str()` holds to `out`, without the `numeric` (Huly QB-1087).
+    static void append_text_from_binary(std::string &out, std::span<const byte> buffer);
 
     static value_type
     from_text(const std::string &text) {
@@ -1666,59 +1703,99 @@ parse_pg_array_text(const std::string &text) {
 }
 
 /**
+ * @brief Append `text` to `out` as a quoted PostgreSQL array element: `"`, the text with every
+ *        `\` and `"` escaped by a `\`, then `"`.
+ * @details Written through a pointer into room sized for the worst case (every byte escaped),
+ *          then trimmed: no call per escaped byte, no branch per byte (Huly QB-1087).
+ */
+inline void
+append_pg_array_quoted(std::string &out, std::string_view text) {
+    const std::size_t at = out.size();
+    out.resize(at + 2 * text.size() + 2);
+    char *p = out.data() + at;
+    *p++    = '"';
+    for (const char c : text) {
+        *p = '\\'; // kept only before a byte that needs it: no branch per byte
+        p += static_cast<std::size_t>((c == '"') | (c == '\\'));
+        *p++ = c;
+    }
+    *p++ = '"';
+    out.resize(static_cast<std::size_t>(p - out.data()));
+}
+
+/**
+ * @brief Append one present array element's PostgreSQL text to `out`, quoted as array_out
+ *        quotes it -- the one place that decides it, for render_pg_array_text and for
+ *        `results::json()`'s binary arrays.
+ * @details Every string element is quoted (with `\` and `"` escaped), so it round-trips
+ *          whatever it holds. Timestamp and JSON/JSONB text is quoted too: their whitespace,
+ *          delimiters and JSON `null` are element content, not array syntax; a timestamp's
+ *          text holds nothing to escape. UUID, timestamp and NUMERIC text is written in place;
+ *          other scalars use their own `to_text`.
+ */
+template <typename T>
+void
+append_pg_array_element(std::string &out, const T &value) {
+    if constexpr (std::is_same_v<T, std::string> || std::is_same_v<T, std::string_view>) {
+        append_pg_array_quoted(out, value);
+    } else if constexpr (std::is_same_v<T, qb::wall_time>) {
+        out += '"';
+        TypeConverter<qb::wall_time>::append_text(out, value);
+        out += '"';
+    } else if constexpr (std::is_same_v<T, qb::json> || std::is_same_v<T, qb::jsonb>) {
+        append_pg_array_quoted(out, TypeConverter<T>::to_text(value));
+    } else if constexpr (std::is_same_v<T, numeric>) {
+        out += value.str();
+    } else if constexpr (std::is_same_v<T, qb::uuid>) {
+        TypeConverter<qb::uuid>::append_text(out, value);
+    } else {
+        out += TypeConverter<T>::to_text(value);
+    }
+}
+
+/**
+ * @brief Append the PostgreSQL text of one present binary array element of type `T` (value
+ *        bytes, no length prefix) to `out`: `append_pg_array_element(out, TypeConverter<T>::from_binary(value))`,
+ *        without a typed value where it would only be formatted again -- a TEXT element is its
+ *        bytes, a NUMERIC one is decoded straight into `out` (Huly QB-1087).
+ */
+template <typename T>
+void
+append_pg_binary_element(std::string &out, std::span<const byte> value) {
+    if constexpr (std::is_same_v<T, std::string>) {
+        append_pg_array_quoted(out, std::string_view(value.data(), value.size()));
+    } else if constexpr (std::is_same_v<T, numeric>) {
+        TypeConverter<numeric>::append_text_from_binary(out, value);
+    } else {
+        append_pg_array_element(out, TypeConverter<T>::from_binary(value));
+    }
+}
+
+/**
  * @brief Render a std::vector<Elem> as a PostgreSQL array literal, the inverse of
- *        parse_pg_array_text (Huly QB-109): `{1,2,3}`, `{"a b","c\"d",NULL}`, `{}`. Every
- *        string element is quoted (with `\` and `"` escaped), so it round-trips whatever it
- *        holds. Timestamp and JSON/JSONB text is quoted too: their whitespace,
- *        delimiters and JSON `null` are element content, not array syntax. Other
- *        scalars use their own `to_text`; a `std::nullopt` element is `NULL`.
+ *        parse_pg_array_text (Huly QB-109): `{1,2,3}`, `{"a b","c\"d",NULL}`, `{}`. Each present
+ *        element is written by append_pg_array_element; a `std::nullopt` element is `NULL`.
  */
 template <typename Elem>
 std::string
 render_pg_array_text(const std::vector<Elem> &vec) {
     using traits = pg_array_elem<Elem>;
-    using inner  = typename traits::inner;
     std::string out;
     out.reserve(2 + vec.size() * 8);
     out += '{';
-    const auto append_quoted = [&out](std::string_view text) {
-        out += '"';
-        std::size_t first = 0;
-        for (std::size_t i = 0; i < text.size(); ++i) {
-            if (text[i] == '"' || text[i] == '\\') {
-                out.append(text.data() + first, i - first);
-                out += '\\';
-                first = i;
-            }
-        }
-        if (first < text.size())
-            out.append(text.data() + first, text.size() - first);
-        out += '"';
-    };
     bool first = true;
     for (const Elem &e : vec) {
         if (!first)
             out += ',';
-        first              = false;
-        const inner *value = nullptr;
+        first = false;
         if constexpr (traits::nullable) {
             if (!e.has_value()) {
-                out += "NULL";
+                out.append("NULL", 4);
                 continue;
             }
-            value = &*e;
+            append_pg_array_element(out, *e);
         } else {
-            value = &e;
-        }
-        if constexpr (std::is_same_v<inner, std::string> || std::is_same_v<inner, std::string_view>) {
-            append_quoted(*value);
-        } else if constexpr (std::is_same_v<inner, qb::wall_time> || std::is_same_v<inner, qb::json> || std::is_same_v<inner, qb::jsonb>) {
-            const auto text = TypeConverter<inner>::to_text(*value);
-            append_quoted(text);
-        } else if constexpr (std::is_same_v<inner, numeric>) {
-            out += value->str();
-        } else {
-            out += TypeConverter<inner>::to_text(*value);
+            append_pg_array_element(out, e);
         }
     }
     out += '}';

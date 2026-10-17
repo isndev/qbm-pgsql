@@ -33,7 +33,7 @@ here so you can navigate the implementation — application code never includes 
   `type_mapping<T>` specialization for any new supported type. <!-- src: src/qbm/pgsql/type_mapping.h:58-63 -->
 - **`numeric` is mapped too.** Its `type_mapping<numeric>` specialization lives in
   [`src/qbm/pgsql/type_converter.h`](../src/qbm/pgsql/type_converter.h) (where `numeric` is declared), so `get_type_oid<numeric>()` returns
-  `1700`, not `705`. <!-- src: src/qbm/pgsql/type_converter.h:1191-1194 -->
+  `1700`, not `705`. <!-- src: src/qbm/pgsql/type_converter.h:1219-1222 -->
 - **`TypeConverter<T>`.** The encode/decode engine ([`src/qbm/pgsql/type_converter.h`](../src/qbm/pgsql/type_converter.h)): `to_binary` /
   `to_text` (send) and `from_binary` / `from_text` (receive). Unsupported types fail to compile via `static_assert`.
 
@@ -69,7 +69,7 @@ epoch). The converter performs an exact integer shift between that epoch and the
 no floating-point rounding. <!-- src: src/qbm/pgsql/type_converter.h:237-245 -->
 
 Reads of **both** `timestamp` (OID `1114`) and `timestamptz` (OID `1184`) columns decode into `qb::wall_time` — the two
-share an identical micros-since-2000 wire layout. <!-- src: src/qbm/pgsql/type_converter.h:772-774 -->
+share an identical micros-since-2000 wire layout. <!-- src: src/qbm/pgsql/type_converter.h:788-790 -->
 
 ```cpp
 #include <qbm/pgsql/pgsql.h>
@@ -129,10 +129,11 @@ rather than silently truncating. <!-- src: src/qbm/pgsql/type_converter.h:384-39
 `float` / `double` carry `NaN`, `Infinity`, and `-Infinity` correctly in both binary and
 text. <!-- src: src/qbm/pgsql/type_converter.h:527-563 -->
 
-The NUMERIC binary decoder retains scale and its existing special-value behavior. It formats limbs with integer
-conversion and transfers the finished decimal string into the owning `numeric` carrier; the public value remains
-an owned string. Array rendering reads that carrier directly without an intermediate text copy.
-<!-- src: src/qbm/pgsql/type_converter.cpp:703-761,896-915; src/qbm/pgsql/type_converter.h:1718-1719 -->
+The NUMERIC binary decoder retains scale and its existing special-value behavior. It writes the digits in place
+(`append_pg_numeric_text`): into the owning `numeric` carrier, or, for a binary `numeric[]` that `results::json()`
+exports, straight into the array literal (Huly QB-1087); the public value remains an owned string. Typed array
+rendering reads that carrier directly without an intermediate text copy.
+<!-- src: src/qbm/pgsql/type_converter.cpp:711-788,923-946; src/qbm/pgsql/type_converter.h:1747-1748 -->
 
 ### Text and binary blobs
 
@@ -152,7 +153,7 @@ an owned string. Array rendering reads that carrier directly without an intermed
 - **`qb::json` → `json` (114).** Sent and received as JSON text with a length prefix.
 - **`qb::jsonb` → `jsonb` (3802).** Sent in PostgreSQL's `jsonb_recv` binary form (a version byte `1` followed by UTF-8
   JSON). Unlike string-like types, **`jsonb` stays binary on the result wire** — it is not in the text-preferring
-  set. <!-- src: src/qbm/pgsql/type_converter.h:942-983; src/qbm/pgsql/common.h:432 (jsonb binary case) -->
+  set. <!-- src: src/qbm/pgsql/type_converter.h:970-1011; src/qbm/pgsql/common.h:432 (jsonb binary case) -->
 
 ```cpp
 #include <qbm/pgsql/pgsql.h>
@@ -170,14 +171,14 @@ PostgreSQL number would change **decimal value** when parsed into that DOM; this
 whose decimal value changes and decimals rounded by `double`, even inside arrays or objects. Equal
 values with different spellings, such as `1.2300` and `1.23`, remain readable. A valid number beyond
 the DOM floating range (for example `1e400`) also throws `client_error`; malformed JSON follows the
-separate `std::runtime_error` parse path. <!-- src: src/qbm/pgsql/type_converter.cpp:508-607 -->
+separate `std::runtime_error` parse path. <!-- src: src/qbm/pgsql/type_converter.cpp:516-615 -->
 
 Typed decoding validates each floating lexeme while building the DOM in supported
 nlohmann configurations. Other versions or configurations retain the checked public
 parser with the same value and error contract. A later rejection may follow allocation
 of an owning DOM prefix; that prefix is destroyed and never returned. Exact canonical
 text access avoids DOM construction. Library and consumer JSON build flags must agree.
-<!-- src: src/qbm/pgsql/type_converter.cpp:561-607 -->
+<!-- src: src/qbm/pgsql/type_converter.cpp:569-615 -->
 
 For an exact value, read the server's canonical JSONB text directly from the field:
 
@@ -197,13 +198,13 @@ the direct converter's legacy four-byte-prefixed compatibility does not extend t
 The text is exact relative to PostgreSQL's canonical `jsonb::text` output, which may already
 differ from the input in spaces, key order or
 duplicate keys. `jsonb_text_copy()` makes an owning copy. SQL NULL throws `value_is_null`; invalid
-OID, format or version throws `client_error`. <!-- src: src/qbm/pgsql/resultset.cpp:186-213,264-276 -->
+OID, format or version throws `client_error`. <!-- src: src/qbm/pgsql/resultset.cpp:188-215,266-278 -->
 
 ### UUID
 
 `qb::uuid` ↔ `uuid` (2950). Binary form is the 16 raw bytes; text form is the canonical
 `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`. Decode accepts either the bare 16 bytes or a 4-byte-prefixed 20-byte
-buffer. <!-- src: src/qbm/pgsql/type_converter.h:696-770 -->
+buffer. <!-- src: src/qbm/pgsql/type_converter.h:696-786 -->
 
 ```cpp
 qb::uuid id = result[0][0].as<qb::uuid>(); // src: tests/integration/datatypes/datatypes-roundtrip.cpp:358
@@ -218,7 +219,7 @@ specializations), and a column whose array can hold NULL elements is read as `st
 same specialisations, for every element type below, on both the result and the parameter side (a `nullopt` element
 binds as the NULL element, has-null flag raised). The TEXT format (a column served by the simple query protocol) is
 parsed and rendered too: `from_text` reads the `{a,"b c",NULL}` literal with its quoting and escapes, `to_text` writes
-it. <!-- src: src/qbm/pgsql/param_serializer.h:579-605; src/qbm/pgsql/type_converter.h:1404-1786 -->
+it. <!-- src: src/qbm/pgsql/param_serializer.h:579-605; src/qbm/pgsql/type_converter.h:1441-1863 -->
 
 ```cpp
 #include <qbm/pgsql/pgsql.h>
@@ -255,14 +256,14 @@ From a `const qb::json`, build the element explicitly — `std::optional<qb::jso
 nlohmann 3.12, MSVC rejects copy-initialising the optional from it, and a brace list such as
 `{doc, std::nullopt}` then fails to compile or falls back to `vector(count, value)`, converting
 the document to a count.
-<!-- src: src/qbm/pgsql/common.h:440-453; src/qbm/pgsql/type_converter.h:1678-1726 -->
+<!-- src: src/qbm/pgsql/common.h:440-453; src/qbm/pgsql/type_converter.h:1712-1803 -->
 
 Limits:
 
 - **1-D only, loudly.** A multi-dimensional array — `ndim > 1` on the binary wire, a nested `{` in the text literal —
   throws `field_type_mismatch`: a flat `std::vector<T>` cannot hold its shape, and until 3.2 the decoder flattened it
   row-major in silence. Unnest it in SQL (`ARRAY(SELECT unnest(col))`) or read the column as text. The send path
-  declares a 1-D array. <!-- src: src/qbm/pgsql/type_converter.h:1427-1430 -->
+  declares a 1-D array. <!-- src: src/qbm/pgsql/type_converter.h:1464-1467 -->
 - **Decoding covers the element types above; binding goes further.** `as<std::vector<T>>()` decodes the listed types. A
   `std::vector<T>` *parameter* binds for any element type with a scalar converter and a PostgreSQL array companion —
   including `qb::date`, `qb::time_of_day`, `qb::time_of_day_tz` and `qb::calendar_interval`
@@ -275,7 +276,7 @@ Limits:
   element, and until 3.2 it default-constructed the slot (`{1,NULL,3}` read as `{1,0,3}`). Read the column as
   `std::vector<std::optional<T>>` and the element is `std::nullopt`. A malformed value (a truncated header, an element
   running past the buffer, an unterminated literal) throws `client_error`, never an empty or partial vector.
-  <!-- src: src/qbm/pgsql/type_converter.h:1449-1456, :1637-1646 -->
+  <!-- src: src/qbm/pgsql/type_converter.h:1486-1493, :1674-1683 -->
 
 To declare an array parameter type explicitly in `prepare`, pass the array OID (the `oid` enum carries `*_array`
 members, e.g. `oid::int4_array`).
@@ -396,7 +397,7 @@ not convert its bytes into PostgreSQL's binary NUMERIC layout. Use the exact-dec
 | `qb::pg::detail::numeric`            | `numeric` / `decimal` | 1700 | Wraps an exact decimal **string**; the binary digit-array codec preserves arbitrary precision. Not an arithmetic type (value-equality only).                                                                        |
 | `std::chrono::duration<Rep, Period>` | `interval`            | 1186 | Convenience "total span" mapping. **Lossy**: on receive, months/days are folded into the span (per `EXTRACT(EPOCH)`); on send only the microseconds component is written. Use `qb::calendar_interval` for fidelity. |
 
-<!-- src: src/qbm/pgsql/type_mapping.h:148-168; src/qbm/pgsql/type_converter.h:1191-1194 -->
+<!-- src: src/qbm/pgsql/type_mapping.h:148-168; src/qbm/pgsql/type_converter.h:1219-1222 -->
 
 The `qb::*` civil types are public (`qb` namespace, `qb/system/time.h`). For an exact-decimal prepared parameter, bind
 `qb::pg::detail::numeric`: its `TypeConverter` writes the binary NUMERIC header and digits, and its `type_mapping`

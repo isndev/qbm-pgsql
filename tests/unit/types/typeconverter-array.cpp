@@ -26,6 +26,8 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 #include "../../shared/pg_wire_ground_truth.hpp"
 #include <qbm/pgsql/pgsql.h>
@@ -463,6 +465,89 @@ TEST(TypeConverterArrayText, ExtendedUuidAndNumericKeepScalarValues) {
     EXPECT_EQ(render_pg_array_text(std::vector<qb::wall_time>{}), "{}");
     EXPECT_EQ(render_pg_array_text(std::vector<qb::json>{}), "{}");
     EXPECT_EQ(render_pg_array_text(std::vector<qb::jsonb>{}), "{}");
+}
+
+// The element appenders write in place, after what `out` already holds, the text the converters
+// return (Huly QB-1087); render_pg_array_text writes each element through them.
+TEST(TypeConverterArrayText, ElementAppendersWriteWhatTheConvertersReturn) {
+    std::vector<qb::uuid> ids;
+    for (const char *hex :
+         {"00000000000000000000000000000000", "ffffffffffffffffffffffffffffffff", "550e8400e29b41d4a716446655440000",
+          "0123456789abcdef0123456789abcdef"}) {
+        const auto  value = TypeConverter<qb::uuid>::from_binary(hex_to_bytes(hex));
+        std::string out   = "x,";
+        TypeConverter<qb::uuid>::append_text(out, value);
+        EXPECT_EQ(out, "x," + uuids::to_string(value)) << hex;
+        ids.push_back(value);
+    }
+    EXPECT_EQ(render_pg_array_text(ids), "{00000000-0000-0000-0000-000000000000,ffffffff-ffff-ffff-ffff-ffffffffffff,"
+                                         "550e8400-e29b-41d4-a716-446655440000,01234567-89ab-cdef-0123-456789abcdef}");
+
+    // Timestamps on both sides of 1970 (both formatter paths) and near the ends of the clock's range:
+    // the text to_text returns, made only of characters an array literal never escapes, which is why
+    // append_pg_array_element quotes it without scanning it.
+    std::vector<std::optional<qb::wall_time>> instants;
+    std::string                               literal = "{";
+    for (const long long micros :
+         {-9223286400000000LL, -8520336000000000LL, -999999LL, -1LL, 0LL, 1LL, 946684799999999LL, 1710513045123456LL, 7289654399999999LL,
+          9223286400000000LL}) {
+        const qb::wall_time value = qb::wall_from_unix_nanos(micros * 1000);
+        const std::string   text  = TypeConverter<qb::wall_time>::to_text(value);
+        std::string         out   = "x,";
+        TypeConverter<qb::wall_time>::append_text(out, value);
+        EXPECT_EQ(out, "x," + text) << micros;
+        EXPECT_EQ(text.find_first_not_of("0123456789-: .+"), std::string::npos) << text;
+        instants.emplace_back(value);
+        literal += '"' + text + "\",";
+    }
+    instants.emplace_back(std::nullopt);
+    EXPECT_EQ(render_pg_array_text(instants), literal + "NULL}");
+    EXPECT_EQ(TypeConverter<qb::wall_time>::to_text(qb::wall_from_unix_nanos(-999999000LL)), "1969-12-31 23:59:59.000001+00");
+    EXPECT_EQ(TypeConverter<qb::wall_time>::to_text(qb::wall_from_unix_nanos(1710513045123456000LL)), "2024-03-15 14:30:45.123456+00");
+
+    // NUMERIC: every value a live server wrote, decoded straight into `out` from its bytes.
+    std::vector<std::optional<numeric>> numbers;
+    std::string                         numbers_literal = "{";
+    const auto                          check_numeric   = [&](const qb::pg::test::gt::numeric::Case &golden) {
+        const auto  wire = hex_to_bytes(golden.hex);
+        std::string out  = "x,";
+        TypeConverter<numeric>::append_text_from_binary(out, wire);
+        EXPECT_EQ(out, std::string("x,") + golden.expect) << golden.hex;
+        std::string direct = "x,";
+        append_pg_numeric_text(direct, wire.data(), wire.size());
+        EXPECT_EQ(direct, out) << golden.hex;
+        EXPECT_EQ(TypeConverter<numeric>::from_binary(wire).str(), golden.expect) << golden.hex;
+        numbers.emplace_back(numeric(golden.expect));
+        numbers_literal += std::string(golden.expect) + ",";
+    };
+    for (const auto &golden : qb::pg::test::gt::numeric::finite)
+        check_numeric(golden);
+    for (const auto &golden : qb::pg::test::gt::numeric::specials)
+        check_numeric(golden);
+    numbers.emplace_back(std::nullopt);
+    EXPECT_EQ(render_pg_array_text(numbers), numbers_literal + "NULL}");
+
+    // Quoting: `\` and `"` escaped, every other byte as it is.
+    const std::pair<std::string_view, std::string_view> quoted[] = {
+        {"", R"("")"},
+        {"plain", R"("plain")"},
+        {"\"", R"("\"")"},
+        {"\\", R"("\\")"},
+        {R"(a"b\c)", R"("a\"b\\c")"},
+        {R"(""\\)", R"("\"\"\\\\")"},
+        {"{x},NULL \t", "\"{x},NULL \t\""},
+    };
+    std::vector<std::string> strings;
+    std::string              strings_literal = "{";
+    for (const auto &[text, expected] : quoted) {
+        std::string out = "x,";
+        append_pg_array_quoted(out, text);
+        EXPECT_EQ(out, "x," + std::string(expected)) << text;
+        strings.emplace_back(text);
+        strings_literal += std::string(expected) + ",";
+    }
+    strings_literal.back() = '}';
+    EXPECT_EQ(render_pg_array_text(strings), strings_literal);
 }
 
 // to_binary for every registered array element type frames as [int32 body-len][body]

@@ -746,9 +746,9 @@ public:
     static void write_integer(std::vector<byte>& buffer, integer value); // public — TypeConverter<T>'s only access specifier is `public:` (type_converter.h:132, :686-687)
 };
 // Specializations: qb::uuid, qb::wall_time (timestamptz/timestamp), qb::json, qb::jsonb,
-// std::chrono::duration (type_converter.h:1019), std::string (:1131), numeric (:1220),
-// qb::date (type_converter.h:1258), qb::time_of_day (:1280), qb::time_of_day_tz (:1302),
-// qb::calendar_interval (type_converter.h:1322), std::vector<std::byte> (:1347)
+// std::chrono::duration (type_converter.h:1047), std::string (:1159), numeric (:1254),
+// qb::date (type_converter.h:1295), qb::time_of_day (:1317), qb::time_of_day_tz (:1339),
+// qb::calendar_interval (type_converter.h:1359), std::vector<std::byte> (:1384)
 // (the retired qb::Timestamp / qb::UtcTimestamp / qb::LocalTimestamp are NOT specialized).
 } // namespace qb::pg::detail
 ```
@@ -759,7 +759,7 @@ for both `std::vector<T>` and `std::vector<std::optional<T>>`. Supported element
 `smallint`, `integer`, `bigint`, `float`, `double`, `std::string`, `qb::uuid`, `qb::wall_time`,
 `qb::pg::detail::numeric`, `qb::json` and `qb::jsonb`. The last five map to `uuid[]` (2951),
 `timestamptz[]` (1185), `numeric[]` (1231), `json[]` (199) and `jsonb[]` (3807).
-<!-- src: src/qbm/pgsql/type_converter.h:1782-1786 -->
+<!-- src: src/qbm/pgsql/type_converter.h:1859-1863 -->
 
 `from_binary` consumes array value bytes without a length prefix; `to_binary` writes the
 length prefix. `from_text` and `to_text` consume/produce PostgreSQL array literals.
@@ -767,16 +767,26 @@ SQL NULL elements require `std::optional<T>`; JSON `null` is a present element. 
 and JSON/JSONB text elements are quoted and escaped. Empty arrays remain empty arrays,
 and multi-dimensional arrays throw `error::field_type_mismatch`.
 `results::json()` supports these binary arrays too: JSON/JSONB elements retain their wire text
-without DOM conversion; the array literal preserves NULL elements and lower bounds.
+without DOM conversion; the array literal preserves NULL elements and lower bounds. It writes the
+literal into one string (Huly QB-1087): `decode_pg_array` validates the framing once and yields
+element views, the `[lower:upper]=` prefix comes first, and `append_pg_binary_element<T>` appends
+each present element in place -- through `TypeConverter<qb::uuid>::append_text`,
+`TypeConverter<qb::wall_time>::append_text`, `TypeConverter<numeric>::append_text_from_binary`
+(`append_pg_numeric_text`) and `append_pg_array_quoted` -- with no typed vector and no string per
+element. `render_pg_array_text` writes its elements through `append_pg_array_element`, the one
+place that decides which elements are quoted.
 Temporary element views are internal to that rendering call; the exported JSON owns its strings.
 No public array converter for `std::vector<std::string_view>` is provided.
-<!-- src: src/qbm/pgsql/resultset.cpp:449-469; src/qbm/pgsql/type_converter.h:1782-1786 -->
+<!-- src: src/qbm/pgsql/resultset.cpp:424-500; src/qbm/pgsql/type_converter.h:1712-1803,1859-1863 -->
 
 `TypeConverter<qb::wall_time>::to_text` keeps UTC text and its `+00` suffix. Years 1970–9999
 use a stack formatter over the existing qb calendar; other years retain the previous formatter.
 `TypeConverter<numeric>::from_binary` still returns an owning `numeric` with the same scale
 and special values; integer limb formatting and transfer of the decoded string change no signature.
-<!-- src: src/qbm/pgsql/type_converter.cpp:138-204,703-761,896-915 -->
+`TypeConverter<qb::wall_time>::append_text` writes `to_text`'s text into a caller's string, and
+`decode_pg_numeric`, `from_binary` and `append_text_from_binary` decode through
+`append_pg_numeric_text`, which writes the digits in place (Huly QB-1087).
+<!-- src: src/qbm/pgsql/type_converter.cpp:138-212,711-788,923-946 -->
 
 ## Error Handling
 

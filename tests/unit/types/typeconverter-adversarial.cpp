@@ -37,13 +37,16 @@
  * @ingroup Pgsql
  */
 
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <gtest/gtest.h>
+#include <iterator>
 #include <limits>
 #include <optional>
+#include <random>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -316,6 +319,103 @@ TEST(TCAdversarialNumeric, ScalePreservingRoundTrip) {
         TypeConverter<numeric>::to_binary(numeric(v), buf);
         EXPECT_EQ(TypeConverter<numeric>::from_binary(buf).str(), v) << "value=" << v;
     }
+}
+
+namespace typeconverter_adversarial_test {
+
+// The string-building decoder append_pg_numeric_text replaced (Huly QB-1087), kept as the reference
+// the in-place one is held to.
+std::string
+reference_decode_pg_numeric(const byte *data, std::size_t size) {
+    auto rd16 = [](const byte *p) -> std::uint16_t {
+        std::uint16_t be;
+        std::memcpy(&be, p, sizeof(be));
+        return qb::endian::from_big_endian(be);
+    };
+    if (size < 8)
+        return "0";
+    const std::uint16_t ndigits = rd16(data + 0);
+    const std::int16_t  weight  = static_cast<std::int16_t>(rd16(data + 2));
+    const std::uint16_t sign    = rd16(data + 4);
+    const std::uint16_t dscale  = rd16(data + 6);
+    if (sign == 0xC000)
+        return "NaN";
+    if (sign == 0xD000)
+        return "Infinity";
+    if (sign == 0xF000)
+        return "-Infinity";
+    if (size < static_cast<std::size_t>(8) + static_cast<std::size_t>(ndigits) * 2)
+        return "0";
+    const auto append_limb = [](std::string &dest, std::uint16_t limb, bool pad_four) {
+        char       digits[5];
+        const auto end   = std::to_chars(digits, digits + sizeof(digits), limb).ptr;
+        const auto count = static_cast<std::size_t>(end - digits);
+        if (pad_four && count < 4)
+            dest.append(4 - count, '0');
+        dest.append(digits, count);
+    };
+    std::string out;
+    if (sign == 0x4000)
+        out += '-';
+    if (weight < 0) {
+        out += '0';
+    } else {
+        for (int i = 0; i <= weight; ++i)
+            append_limb(out, (i < ndigits) ? rd16(data + 8 + i * 2) : 0, i != 0);
+    }
+    if (dscale > 0) {
+        out += '.';
+        std::string frac;
+        for (int idx = weight + 1; static_cast<int>(frac.size()) < dscale; ++idx)
+            append_limb(frac, (idx >= 0 && idx < ndigits) ? rd16(data + 8 + idx * 2) : 0, true);
+        frac.resize(static_cast<std::size_t>(dscale));
+        out += frac;
+    }
+    return out;
+}
+
+} // namespace typeconverter_adversarial_test
+
+// The in-place NUMERIC decoder (Huly QB-1087) writes what the string-building one wrote, for every
+// header shape: random digit counts, weights (with the int16 extremes), scales, signs (the special
+// words and 0x8000 among them) and limbs (canonical and above 9999), and truncated digit streams.
+TEST(TCAdversarialNumeric, InPlaceDecodeMatchesTheStringBuildingDecoder) {
+    using typeconverter_adversarial_test::reference_decode_pg_numeric;
+    std::mt19937        rng(1087);
+    const std::uint16_t signs[] = {0x0000, 0x4000, 0x0000, 0x4000, 0xC000, 0xD000, 0xF000, 0x8000};
+    const auto          put     = [](std::vector<byte> &b, std::uint16_t w) {
+        b.push_back(static_cast<byte>(w >> 8));
+        b.push_back(static_cast<byte>(w & 0xff));
+    };
+    for (int round = 0; round < 20000; ++round) {
+        const std::uint16_t ndigits = static_cast<std::uint16_t>(rng() % 12);
+        std::int16_t        weight  = static_cast<std::int16_t>(static_cast<int>(rng() % 24) - 12);
+        if (round % 2000 == 0)
+            weight = round % 4000 == 0 ? std::numeric_limits<std::int16_t>::min() : std::int16_t{2000};
+        const std::uint16_t dscale = rng() % 3 == 0 ? std::uint16_t{0} : static_cast<std::uint16_t>(rng() % 40);
+        std::vector<byte>   wire;
+        put(wire, ndigits);
+        put(wire, static_cast<std::uint16_t>(weight));
+        put(wire, signs[rng() % std::size(signs)]);
+        put(wire, dscale);
+        for (std::uint16_t i = 0; i < ndigits; ++i)
+            put(wire, static_cast<std::uint16_t>(rng() % 8 == 0 ? rng() % 65536 : rng() % 10000));
+        std::size_t size = wire.size();
+        if (rng() % 10 == 0)
+            size = rng() % (size + 1); // a truncated header or digit stream
+        std::string out = "x";
+        append_pg_numeric_text(out, wire.data(), size);
+        ASSERT_EQ(out, "x" + reference_decode_pg_numeric(wire.data(), size)) << "round " << round;
+        ASSERT_EQ(decode_pg_numeric(wire.data(), size), out.substr(1)) << "round " << round;
+    }
+    // The longest integer part a header can claim, 32768 limbs, with a five-digit limb and a scale.
+    std::vector<byte> widest;
+    for (std::uint16_t w : {std::uint16_t{1}, std::uint16_t{32767}, std::uint16_t{0x4000}, std::uint16_t{3}, std::uint16_t{65535}})
+        put(widest, w);
+    std::string out;
+    append_pg_numeric_text(out, widest.data(), widest.size());
+    EXPECT_EQ(out.size(), 1 + 5 + 32767 * 4 + 1 + 3);
+    EXPECT_EQ(out, reference_decode_pg_numeric(widest.data(), widest.size()));
 }
 
 // ============================================================================

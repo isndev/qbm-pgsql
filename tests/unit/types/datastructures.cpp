@@ -708,6 +708,119 @@ TEST(ResultsetPopulated, JsonSerializationJsonArraysKeepExactElementText) {
     }
 }
 
+// json() writes a binary array's literal in place (Huly QB-1087): no typed vector, no string per
+// element, the bounds first. Every spelling stays what the decode-then-render path wrote -- NULL
+// elements, lower bounds, the quoting and escaping of TEXT, UUID case, the timestamp formatter on
+// both sides of 1970 and the six-digit fraction, every NUMERIC scale and special value as a live
+// server wrote it (gt::numeric), and the integer and float extremes.
+TEST(ResultsetPopulated, JsonSerializationBinaryArraysKeepEverySpelling) {
+    using qb::pg::test::hex_to_bytes;
+    // One-dimensional array_send bytes: header, then each element (std::nullopt is SQL NULL).
+    const auto array = [](std::uint32_t element_oid, std::int32_t lower, const std::vector<std::optional<std::string>> &elements) {
+        std::string wire;
+        const auto  put = [&wire](std::uint32_t value) {
+            for (unsigned shift : {24u, 16u, 8u, 0u})
+                wire.push_back(static_cast<char>((value >> shift) & 0xffu));
+        };
+        put(1);
+        put(1);
+        put(element_oid);
+        put(static_cast<std::uint32_t>(elements.size()));
+        put(static_cast<std::uint32_t>(lower));
+        for (const auto &element : elements) {
+            if (!element) {
+                put(0xffffffffu);
+                continue;
+            }
+            put(static_cast<std::uint32_t>(element->size()));
+            wire += *element;
+        }
+        return wire;
+    };
+    const auto bytes = [](const char *hex) {
+        const auto b = hex_to_bytes(hex);
+        return std::optional<std::string>(std::string(b.begin(), b.end()));
+    };
+    struct Case {
+        const char *name;
+        oid         type;
+        std::string wire;
+        std::string text;
+    };
+    std::vector<Case> cases;
+
+    std::vector<std::optional<std::string>> numerics;
+    std::string                             numeric_text;
+    const auto                              add_numeric = [&](const qb::pg::test::gt::numeric::Case &golden) {
+        numerics.push_back(bytes(golden.hex));
+        numeric_text += std::string(numeric_text.empty() ? "" : ",") + golden.expect;
+    };
+    for (const auto &golden : qb::pg::test::gt::numeric::finite)
+        add_numeric(golden);
+    numerics.emplace_back(std::nullopt);
+    numeric_text += ",NULL";
+    for (const auto &golden : qb::pg::test::gt::numeric::specials)
+        add_numeric(golden);
+    cases.push_back(
+        {"numeric", oid::numeric_array, array(1700, -3, numerics),
+         "[-3:" + std::to_string(-3 + static_cast<int>(numerics.size()) - 1) + "]={" + numeric_text + "}"});
+
+    cases.push_back(
+        {"uuid", oid::uuid_array,
+         array(2950, 1,
+               {bytes("00000000000000000000000000000000"), bytes("ffffffffffffffffffffffffffffffff"), std::nullopt,
+                bytes("550e8400e29b41d4a716446655440000"), bytes("0123456789abcdef0123456789abcdef")}),
+         "{00000000-0000-0000-0000-000000000000,ffffffff-ffff-ffff-ffff-ffffffffffff,NULL,"
+         "550e8400-e29b-41d4-a716-446655440000,01234567-89ab-cdef-0123-456789abcdef}"});
+
+    cases.push_back(
+        {"timestamptz", oid::timestamptz_array,
+         array(1184, 0,
+               {bytes("ffde5dcb74228000"), bytes("fffca2fec4b8ddc1"), std::nullopt, bytes("ffffffffffffffff"), bytes("0000000000000000"),
+                bytes(qb::pg::test::gt::temporal::ts_2024_03_15), bytes("001688e5b1d43fff")}),
+         R"([0:6]={"1700-01-01 00:00:00+00","1969-12-31 23:59:59.000001+00",NULL,"1999-12-31 23:59:59.999999+00",)"
+         R"("2000-01-01 00:00:00+00","2024-03-15 14:30:45.123456+00","2200-12-31 23:59:59.999999+00"})"});
+
+    const std::string long_plain(64, 'q');
+    const std::string many_quotes(20, '"');
+    std::string       many_quotes_text = "\"";
+    for (std::size_t i = 0; i < many_quotes.size(); ++i)
+        many_quotes_text += "\\\"";
+    many_quotes_text += '"';
+    cases.push_back(
+        {"text", oid::text_array,
+         array(25, 1,
+               {std::string(), std::string("\""), std::string("\\"), std::string("NULL"), std::nullopt, std::string("a,b"), std::string("{x}"),
+                std::string("  sp  "), long_plain, many_quotes, std::string(R"(mixed "q" and \b\)")}),
+         R"({"","\"","\\","NULL",NULL,"a,b","{x}","  sp  ",)" + ('"' + long_plain + '"') + "," + many_quotes_text
+             + R"(,"mixed \"q\" and \\b\\"})"});
+
+    cases.push_back(
+        {"int8", oid::int8_array, array(20, 1, {bytes("8000000000000000"), bytes("0000000000000000"), bytes("7fffffffffffffff")}),
+         "{-9223372036854775808,0,9223372036854775807}"});
+
+    cases.push_back(
+        {"float8", oid::float8_array,
+         array(701, 1,
+               {bytes("7ff8000000000000"), bytes("7ff0000000000000"), bytes("fff0000000000000"), std::nullopt, bytes("3ff8000000000000")}),
+         "{NaN,Infinity,-Infinity,NULL,1.5}"});
+
+    std::vector<std::string> names;
+    std::vector<std::string> values;
+    for (const Case &c : cases) {
+        names.emplace_back(c.name);
+        values.push_back(c.wire);
+    }
+    PopulatedResult pr(std::move(names), {std::move(values)});
+    for (std::size_t i = 0; i < cases.size(); ++i) {
+        pr.impl.row_description()[i].type_oid    = cases[i].type;
+        pr.impl.row_description()[i].format_code = protocol_data_format::Binary;
+    }
+    const auto result = pr.rs().json();
+    for (const Case &c : cases)
+        EXPECT_EQ(result[0][c.name], c.text) << c.name;
+}
+
 TEST(ResultsetPopulated, JsonSerializationRejectsInvalidJsonbVersionAndArrayBoundOverflow) {
     PopulatedResult bad_version({"doc"}, {{std::string("\x02", 1) + "[[1,2]]"}});
     bad_version.impl.row_description()[0].type_oid    = oid::jsonb;

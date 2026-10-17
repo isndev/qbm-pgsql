@@ -364,14 +364,16 @@ bounds and NULL elements. JSON/JSONB element text is copied without DOM conversi
 decimals and whitespace survive; JSONB version bytes are checked and removed per element.
 The projection's temporary element views borrow the field only during rendering; the exported
 JSON owns its strings. This does not add a public `std::vector<std::string_view>` array result
-type. NUMERIC remains an owning decimal-string carrier; its integer limb formatter and internal
-array rendering avoid intermediate string copies without changing its value or scale.
-<!-- src: src/qbm/pgsql/resultset.cpp:449-469; src/qbm/pgsql/type_converter.cpp:703-761,896-915; src/qbm/pgsql/type_converter.h:1718-1719 -->
+type. NUMERIC remains an owning decimal-string carrier. The projection writes a binary array's
+literal in place -- the bounds first, then each element's UUID, timestamp, NUMERIC or quoted text
+appended to the one output string, with no typed vector and no string per element (Huly QB-1087) --
+without changing any value, scale or spelling.
+<!-- src: src/qbm/pgsql/resultset.cpp:424-500; src/qbm/pgsql/type_converter.cpp:711-788,923-946; src/qbm/pgsql/type_converter.h:1738-1754 -->
 
 `qb::wall_time` text remains UTC with `+00` and six fractional digits when a fraction is present.
 Years 1970–9999 use the existing qb calendar and a stack formatter; pre-1970 and later years keep
 the previous formatter. This selects an implementation path, not a new range of accepted instants.
-<!-- src: src/qbm/pgsql/type_converter.cpp:138-204 -->
+<!-- src: src/qbm/pgsql/type_converter.cpp:138-212 -->
 
 Binary JSON/JSONB decoding preserves JSON structure: `[[1,2]]` remains an array
 of arrays. A pair-shaped array is never inferred to be an object.
@@ -787,7 +789,7 @@ if (!co_await db.connect(dsn)) { /* db.down_reason(), db.error() */ }
   lower bounds (`[lower:upper]=...`), and SQL NULL becomes JSON null. A
   multi-dimensional array or unsupported binary OID throws instead of exporting
   a changed value. Each exported row owns its values and moves into the output array;
-  repeated exports preserve the source. <!-- src: src/qbm/pgsql/resultset.cpp:555-568 -->
+  repeated exports preserve the source. <!-- src: src/qbm/pgsql/resultset.cpp:586-599 -->
 - **`execute_file` / `prepare_file` read the file synchronously** (blocking) on
   the I/O thread.
 - **Never use the retired time tokens** (§3.6). `timestamptz`/`timestamp` →
