@@ -113,6 +113,12 @@ if (QB_HAS_SSL AND TARGET qbm-pgsql-test-system-cancel-request-wire)
     target_include_directories(qbm-pgsql-test-system-cancel-request-wire PRIVATE "${QB_ROOT_DIR}/tests/io/shared")
 endif ()
 qpg_test(system inline-query-order system/query/inline-query-order.cpp EXTRA_LABELS protocol coroutine)
+# connect(dsn, raw_io) runs the handshake on the transport it is given, against a fake backend (Huly QB-1096).
+qpg_test(system adopted-transport system/connection/adopted-transport.cpp EXTRA_LABELS connection)
+if (QB_HAS_SSL AND TARGET qbm-pgsql-test-system-adopted-transport)
+    # The TLS case reuses qb's test certificate (ssl_fixtures.h).
+    target_include_directories(qbm-pgsql-test-system-adopted-transport PRIVATE "${QB_ROOT_DIR}/tests/io/shared")
+endif ()
 
 # -----------------------------------------------------------------------------
 # INTEGRATION — live postgres:5432 (REQUIRES live, RESOURCE_LOCK)

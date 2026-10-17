@@ -162,6 +162,18 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Fixed
 
+- **`connect(dsn, raw_io)` runs the handshake on the transport it is given (Huly QB-1096).** The overload was
+  documented as adopting an already-connected transport, but it stored the transport and then dialled `dsn` itself:
+  the transport was never used (and stayed open in the client until the next connect). It now adopts it for the FIRST
+  connection of the lifecycle -- the whole handshake (authentication, the hook, the LISTEN replay) runs on it -- while
+  `dsn` still names the session and the address a reconnection run or a later `connect()` dials. On
+  `tcp::ssl::database` the caller must already have run the PostgreSQL TLS negotiation on it (the SSLRequest, the
+  server's `'S'`, the TLS handshake). A transport that is not open fails the attempt (`down`, `down_reason::peer`);
+  on a busy or ready connection the call resolves `false` and closes the moved-in transport unused, since the
+  connection already has its link. Pinned daemon-free by `system/connection/adopted-transport.cpp`: adoption, a
+  reconnection dialling the DSN, a closed transport, a ready client, and a TLS-negotiated transport on a secure
+  database.
+
 - **A bare reconnect starts with an empty prepared-statement cache (Huly QB-1095).** Prepared statements belong to
   the backend session, but only `prepare_reconnect()` cleared the cache: `connect()` after `disconnect()` -- a
   supported path -- kept it, so an `execute(name)` of a statement the old backend held passed the client's check (a

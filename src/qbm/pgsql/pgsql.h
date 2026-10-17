@@ -796,10 +796,11 @@ private:
     handshake_hook                  _hs_hook{};
     /// The channels listen() / unlisten() / unlisten_all() leave this connection listening on: replayed at
     /// the AuthenticationOk of every new session. A LISTEN written as raw SQL is not in it.
-    std::set<std::string, std::less<>> _listened{};
-    std::deque<::qb::pg::notification> _held_notifications{};      ///< received while handshaking: released at ready
-    bool                               _raw_listen_seen   = false; ///< a CommandComplete "LISTEN" no API call claimed yet
-    bool                               _raw_listen_logged = false;
+    std::set<std::string, std::less<>>                _listened{};
+    std::deque<::qb::pg::notification>                _held_notifications{}; ///< received while handshaking: released at ready
+    std::optional<typename QB_IO_::transport_io_type> _adopted{};            ///< connect(dsn, raw_io)'s transport, until its attempt takes it
+    bool                                              _raw_listen_seen   = false; ///< a CommandComplete "LISTEN" no API call claimed yet
+    bool                                              _raw_listen_logged = false;
     // Observability hooks: empty until set, read only on the cold transitions.
     std::function<void()>                    _on_connected{};
     std::function<void(qb::io::down_reason)> _on_disconnected{};
@@ -1429,6 +1430,42 @@ private:
         auto policy = RetryPolicy{}.with_max_attempts(1).with_connect_timeout(attempt_timeout_(timeout));
         qb::io::async::coro_scheduler().spawn(connect_flow_(std::move(policy), std::move(done), _alive, _epoch));
         return true;
+    }
+
+    /// Start a lifecycle on a transport connect(dsn, raw_io) was given; false when busy or ready (nothing taken).
+    bool
+    begin_adopt_(typename QB_IO_::transport_io_type &&raw_io, qb::duration timeout, std::shared_ptr<connect_completion> done) {
+        if (!begin_lifecycle_())
+            return false;
+        _adopted.emplace(std::move(raw_io));
+        qb::io::async::coro_scheduler().spawn(adopted_flow_(attempt_timeout_(timeout), std::move(done), _alive, _epoch));
+        return true;
+    }
+
+    /// One attempt on the adopted transport: the handshake on it, or down -- never a dial of the DSN.
+    qb::io::async::task<void>
+    adopted_flow_(qb::duration limit, std::shared_ptr<connect_completion> done, std::shared_ptr<bool> alive, std::uint64_t epoch) {
+        if (!*alive || epoch != _epoch) {
+            done->settle(false);
+            co_return;
+        }
+        auto sock = std::move(*_adopted);
+        _adopted.reset();
+        attempt_outcome outcome = attempt_outcome::transport_failed;
+        if (sock.is_open()) {
+            install_link_(std::move(sock), limit);
+            outcome = co_await handshake_(alive, epoch);
+        } else {
+            _loss_cause = qb::io::down_reason::peer;
+            _error      = error::connection_error{"the transport given to connect(dsn, raw_io) is not open"};
+        }
+        if (!*alive) {
+            done->settle(false);
+            co_return;
+        }
+        if (epoch == _epoch && outcome != attempt_outcome::ready && outcome != attempt_outcome::cancelled)
+            enter_down_(outcome == attempt_outcome::refused ? qb::io::down_reason::handshake_refused : _loss_cause);
+        done->settle(outcome == attempt_outcome::ready && _state == qb::io::connection_state::ready);
     }
 
     /// The connection's part of a LISTEN / UNLISTEN that `listen()` / `unlisten()` / `unlisten_all()` ran.
@@ -2702,15 +2739,22 @@ public:
      *          superseded by `disconnect()` -- the connection is then `down`, `down_reason()` says why and
      *          `error()` holds the failure -- and at once when a connection, a handshake or a reconnection
      *          run is already in progress. Resolves `true` at once on a connection that is already ready.
+     *          An awaiter made by `connect(dsn, raw_io)` carries that transport and adopts it when awaited
+     *          (Huly QB-1096); destroyed unawaited, it closes it.
      */
     struct connect_awaiter {
-        Database<QB_IO_, NotifyDerived>    &db;
-        qb::duration                        timeout{};
-        std::shared_ptr<connect_completion> done{};
+        Database<QB_IO_, NotifyDerived>                  &db;
+        qb::duration                                      timeout{};
+        std::shared_ptr<connect_completion>               done{};
+        std::optional<typename QB_IO_::transport_io_type> adopted{}; ///< the transport to run the handshake on, if any
 
         explicit connect_awaiter(Database<QB_IO_, NotifyDerived> &d, qb::duration t = qb::duration::zero()) noexcept
             : db(d)
             , timeout(t) {}
+
+        connect_awaiter(Database<QB_IO_, NotifyDerived> &d, typename QB_IO_::transport_io_type &&raw_io)
+            : db(d)
+            , adopted(std::in_place, std::move(raw_io)) {}
 
         ~connect_awaiter() {
             if (done)
@@ -2724,7 +2768,9 @@ public:
 
         [[nodiscard]] bool
         await_ready() const noexcept {
-            return db._state == qb::io::connection_state::ready;
+            // An adopting connect always goes through await_suspend: on a ready connection it must still
+            // close the transport it was given, and say false.
+            return !adopted && db._state == qb::io::connection_state::ready;
         }
 
         bool
@@ -2732,10 +2778,11 @@ public:
             qb::io::async::track_suspension(h, "pgsql connect");
             done         = std::make_shared<connect_completion>();
             done->waiter = h;
-            if (db.begin_connect_(timeout, done))
+            if (adopted ? db.begin_adopt_(std::move(*adopted), timeout, done) : db.begin_connect_(timeout, done))
                 return true;
+            adopted.reset(); // busy or ready: the transport was not adopted, and closes here
             done->waiter = {};
-            return false; // busy: resolves false at once
+            return false; // resolves false at once
         }
 
         [[nodiscard]] bool
@@ -2927,12 +2974,36 @@ public:
         return _listened;
     }
 
-    /** @brief Use an existing transport channel (e.g. pool) then handshake. */
+    /**
+     * @brief Adopt an already-connected transport and run the handshake on it (Huly QB-1096).
+     *
+     * For a transport a program already holds -- one from a pool, one a supervisor handed over: the
+     * first connection of the new lifecycle uses it, with the whole handshake (authentication, the hook
+     * installed with `set_handshake()`, the LISTEN replay) under the connection's `connect_timeout`.
+     * `conn_opts` is the session's DSN all the same: it names the user and the database the
+     * StartupMessage carries, and the address a reconnection run (`enable_auto_reconnect`) or a later
+     * `connect()` dials -- only the first connection adopts.
+     *
+     * The transport must be connected. For `tcp::ssl::database` the caller must ALSO have run the
+     * PostgreSQL TLS negotiation on it -- the SSLRequest packet, the server's `'S'`, then the TLS
+     * handshake -- because the client writes the StartupMessage at once, as on a plain socket.
+     *
+     * Resolves `true` once the connection is ready. A transport that is not open fails the attempt:
+     * `false`, the connection `down` with `down_reason::peer`. While a connection, a handshake or a run is
+     * in progress, or once the connection is ready, the call resolves `false` and closes the moved-in
+     * transport unused -- the connection already has its link and the transport was not adopted; a plain
+     * `connect()` on a ready connection resolves `true`, since it asks for no particular transport. The
+     * options change only while the connection is idle or down. Until 3.3 this overload stored the
+     * transport and then dialled `conn_opts` itself, so the given transport was never used.
+     *
+     * @param conn_opts The session's DSN
+     * @param raw_io The connected transport to adopt
+     */
     [[nodiscard]] connect_awaiter
     connect(std::string const &conn_opts, typename QB_IO_::transport_io_type &&raw_io) {
-        conn_opts_        = connection_options::parse(conn_opts);
-        this->transport() = std::move(raw_io);
-        return connect();
+        if (_state == qb::io::connection_state::idle || _state == qb::io::connection_state::down)
+            conn_opts_ = connection_options::parse(conn_opts);
+        return connect_awaiter{*this, std::move(raw_io)};
     }
 
     /**

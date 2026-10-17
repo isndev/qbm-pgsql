@@ -90,12 +90,12 @@ transport aliases in `qb::pg::tcp`:
 | `qb::pg::tcp::database`      | `qb::io::transport::tcp` (cleartext) | always                            |
 | `qb::pg::tcp::ssl::database` | `qb::io::transport::stcp` (TLS)      | only when `QB_HAS_SSL` is defined |
 
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:4318,4345 (in that order: tcp::database; tcp::ssl::database) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:4389,4416 (in that order: tcp::database; tcp::ssl::database) -->
 
 The transport is a **compile-time** choice baked into the alias. The connection string scheme (`tcp`, `ssl`, `socket`)
 does **not** switch it: a `tcp://…` string on a `tcp::ssl::database` still negotiates TLS, and an `ssl://…` string on a
 `tcp::database` does **not**. Pick the alias for the security you want; the scheme only feeds host/port resolution.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:1042,1043 -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:1043,1044 -->
 
 There are also `notify_cb_consumer` / `notify_co_consumer` aliases for dedicated LISTEN/NOTIFY clients;
 see [queries.md](./queries.md).
@@ -127,7 +127,7 @@ rarely build it by hand — a connection string is parsed into it — but these 
 the 10 s default. It bounds each attempt: the transport connect and, from the StartupMessage on, the whole handshake —
 authentication, the hook and the LISTEN replay. A `RetryPolicy` with its own `connect_timeout` uses that for its
 attempts (Huly QB-111).
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:993-1001 -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:994-1002 -->
 
 > The connection string carries `user`, `password`, `database`, and the `host:port`. The remaining fields (
 `connect_timeout`, `ssl_verify`, keepalive) are **not** expressed in the string — set them on a `connection_options`
@@ -198,7 +198,7 @@ qb::pg::tcp::database db("tcp://user:secret@localhost:5432[mydb]");  // stores o
 co_await db.connect();                          // uses the stored options
 ```
 
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2668-2674 (the explicit Database string ctor) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2705-2711 (the explicit Database string ctor) -->
 
 The `connect()` overloads, all returning `connect_awaiter`:
 
@@ -208,10 +208,10 @@ The `connect()` overloads, all returning `connect_awaiter`:
 | `connect(qb::duration timeout)`                               | same, with a per-attempt deadline overriding `connect_timeout`               |
 | `connect(std::string const& dsn)`                             | re-parse `dsn` into the stored options, then connect                         |
 | `connect(connection_options opts)`                            | replace the stored options with `opts` (e.g. to set `ssl_verify`), then connect |
-| `connect(std::string const& dsn, transport_io_type&& raw_io)` | adopt an already-connected socket (e.g. from a pool), then run the handshake |
+| `connect(std::string const& dsn, transport_io_type&& raw_io)` | adopt an already-connected transport (e.g. from a pool) for the first connection and run the handshake on it; `dsn` still names the session, and a reconnection dials it. On `tcp::ssl::database` the caller must have run the SSLRequest and the TLS handshake. Busy or ready: `false`, the transport closed unused (Huly QB-1096) |
 | `connect_with_retry(RetryPolicy policy)` (a `task<bool>`, also DSN-first) | the policy's attempts, each a whole handshake, until ready, refused or spent |
 
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2747-2787,2930-2936,2803-2818 (in that order: four connect overloads; the transport overload; connect_with_retry) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2794-2834,2977-3007,2850-2865 (in that order: four connect overloads; the transport overload; connect_with_retry) -->
 
 There is **no** callback overload for `connect` (unlike `execute` / `prepare`). Use one of:
 
@@ -235,7 +235,7 @@ why. Re-awaiting a ready connection resolves `true` at once; a connect while a c
 reconnection run is in progress resolves `false` at once. Until 3.3 it resolved at `AuthenticationOk`, before the
 first `ReadyForQuery` — a server that refused the session after authentication (3D000) still reported success (Huly
 QB-111).
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2725-2744 (connect_awaiter await_ready / await_suspend / await_resume) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2769-2791 (connect_awaiter await_ready / await_suspend / await_resume) -->
 
 ---
 
@@ -244,7 +244,7 @@ QB-111).
 After the TCP socket is connected, the client switches to the PostgreSQL protocol, starts its read/write watchers, and
 sends the **startup message**: protocol version 3.0 plus null-terminated `user` and `database` name/value pairs (and any
 client options).
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:1144-1146,1475-1491 (in that order: switch_protocol + start + send_startup_message, in install_link_; create_startup_message) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:1145-1147,1512-1528 (in that order: switch_protocol + start + send_startup_message, in install_link_; create_startup_message) -->
 
 The server then drives one of the supported authentication exchanges, handled in `on_authentication`:
 
@@ -272,7 +272,7 @@ they hit the `default:` throw. That throw is contained at the `noexcept` `onMess
 connection: the attempt fails (a plain `connect()` resolves `false`, a run tries again) — it does **not** call
 `std::terminate`. The same containment applies to a malformed SCRAM server message (including a mismatched
 nonce). You therefore see an unsupported or hostile auth method as a failed connect, not a descriptive auth-method error.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:1124-1127,1899-1909,2110-2113 (in that order: gate re-armed in install_link_; AuthenticationOk refused without a verified server signature; the default arm's throw) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:1125-1128,1936-1946,2147-2150 (in that order: gate re-armed in install_link_; AuthenticationOk refused without a verified server signature; the default arm's throw) -->
 
 The `AuthenticationOk` row in the table above is therefore conditional: it lets the session go on *only after* the
 mutual-auth gate is satisfied for a SCRAM handshake.
@@ -285,7 +285,7 @@ RFC 5802: `p=tls-server-end-point` when bound; `y` over TLS when the server did 
 can detect a downgrade that stripped it); `n` on a cleartext link. Negotiation is automatic; check the result with
 `db.used_channel_binding()`.
 <!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h (on_authentication, used_channel_binding); qb/src/qb/io/tcp/ssl/socket.cpp (tls_server_end_point) -->
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:1970-1990,2037-2045 (in that order: gs2 cbind-flag negotiation; cbind_input) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2007-2027,2074-2082 (in that order: gs2 cbind-flag negotiation; cbind_input) -->
 
 ---
 
@@ -337,7 +337,7 @@ even here; it is the TLS channel itself and any non-SCRAM auth that stay unprote
 > connect. libpq's intermediate `verify-ca` (chain without hostname) is intentionally not offered: it accepts a valid
 > certificate issued for a *different* host, leaving an active-MITM window. `disable`/`prefer` map to the transport
 > choice — `tcp::database` never sends an SSLRequest; `tcp::ssl::database` requires TLS.
-<!-- src: qbm/pgsql/src/qbm/pgsql/common.h:127-146,173; qbm/pgsql/src/qbm/pgsql/pgsql.h:947-956,1054-1068 -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/common.h:127-146,173; qbm/pgsql/src/qbm/pgsql/pgsql.h:948-957,1055-1069 -->
 
 ---
 
@@ -348,13 +348,13 @@ even here; it is the TLS channel itself and any non-SCRAM auth that stay unprote
 `is_connection_alive()` returns `false` if the client is not connected, otherwise inspects the socket's `SO_ERROR`. It
 performs **no** wire round-trip, so a half-open or silently dropped connection can read as alive until a keepalive probe
 or the next query fails.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:3117-3148 (is_connection_alive) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:3188-3219 (is_connection_alive) -->
 
 TCP keepalive is configured through `connection_options` or
 `enable_keepalive(int interval, int idle = 60, int probes = 3)`. Settings are applied to the socket **after** the
 connection is established (on `Authentication OK`); calling `enable_keepalive` before connecting only stores them. An
 `interval` of 0 leaves keepalive disabled.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:3080-3094,1910-1915,3676-3723 (in that order: enable_keepalive; applied on AuthenticationOk; apply_keepalive_settings) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:3151-3165,1947-1952,3747-3794 (in that order: enable_keepalive; applied on AuthenticationOk; apply_keepalive_settings) -->
 
 ```cpp
 qb::pg::tcp::database db;
@@ -362,7 +362,7 @@ db.enable_keepalive(/*interval=*/10, /*idle=*/60, /*probes=*/3);  // stored now,
 co_await db.connect("tcp://user:secret@localhost:5432[mydb]");
 ```
 
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:3080-3094 (enable_keepalive) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:3151-3165 (enable_keepalive) -->
 
 ### Connection introspection
 
@@ -385,7 +385,7 @@ int pid = db.backend_pid();  // 0 until connected
 ```
 
 The returned `std::string_view` from `parameter_status` is valid only while this connection is alive.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:3175-3188,3190-3197,3220-3262 (in that order: parameter_status; backend_pid; server_version) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:3246-3259,3261-3268,3291-3333 (in that order: parameter_status; backend_pid; server_version) -->
 
 ### Statistics and the query hook
 
@@ -419,7 +419,7 @@ A query is one round trip of the serial queue: `query_kind::simple` (`execute(sq
 callback or awaiter; it must not drive the connection, its views die with the call, and an exception escaping it is
 contained and logged. Without a hook a completion pays one predictable branch; the duration costs one clock read per
 query on a busy connection, because the instant a ReadyForQuery is handled both ends one query and stamps the next.
-<!-- src: qbm/pgsql/src/qbm/pgsql/stats.h:31,50,75 (in that order: query_kind; query_info; stats); qbm/pgsql/src/qbm/pgsql/pgsql.h:3033-3039,3056-3059,1546-1548,1557-1568 (in that order: stats; on_query_complete; clock_now; count_query) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/stats.h:31,50,75 (in that order: query_kind; query_info; stats); qbm/pgsql/src/qbm/pgsql/pgsql.h:3104-3110,3127-3130,1583-1585,1594-1605 (in that order: stats; on_query_complete; clock_now; count_query) -->
 
 ### Cancelling a running query
 
@@ -461,7 +461,7 @@ if (!r.ok() && r.error().sqlstate == qb::pg::sqlstate::query_canceled)
     handle_timeout();
 ```
 
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:3492-3533,3535-3628 (cancel; cancel_async) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:3563-3604,3606-3699 (cancel; cancel_async) -->
 
 **`cancel_async()` (Huly QB-113) is the form to reach for.** It drives the cancel connection through the same async
 connector the session connects through — `qb::io::async::tcp::connect` for a plain database, the STARTTLS connector with
@@ -472,7 +472,7 @@ the session's own connect applies. Its connect budget is `cancel()`'s (`connect_
 or unreachable endpoint costs the caller's coroutine that budget, never the loop.
 For the packet write, native TLS `WANT_READ` waits on readability alone; native TLS otherwise waits on writability,
 as a plain write does. A custom secure transport without native TLS state retains the combined read/write fallback.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:3613-3624 -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:3684-3695 -->
 
 > **`cancel()` is SYNCHRONOUS / BLOCKING — it is *not* non-blocking like the rest of the client.** Unlike every other
 > operation (which is event-loop-driven and `co_await`-only), `cancel()` opens its out-of-band socket and sends the
@@ -499,7 +499,7 @@ stopped — without a loop pass, so it is safe from a coroutine body. From insid
 queued failures run when that callback returns, preserving its transaction owner; teardown follows message dispatch.
 Coroutines awaiting failed queries resume on the caller's next pass. Until 3.3, `disconnect()` ran a nested loop pass,
 which aborted a debug build when called from a coroutine (Huly QB-253, QB-627).
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:3865-3905,3915-3929 (disconnect; end_session_) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:3936-3976,3986-4000 (disconnect; end_session_) -->
 
 The **same** object can call the ordinary `connect()` overloads after `disconnect()` without a preparation step: the connector opens a fresh socket,
 clears stale I/O buffers and protocols before installing that transport, and performs a new handshake. This is tested
@@ -509,8 +509,8 @@ client-side ("not registered") until it is prepared again — until Huly QB-1095
 such an `execute(name)` failed on the server with 26000. `prepare_reconnect()` remains available to close the old fd
 before the next `connect()`. Do **not** call it while SQL is still queued on this object — drain or fail the queue
 first.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:1116-1159 (install_link_); qbm/pgsql/tests/integration/connection/connection-lifecycle.cpp:228-258 (ReconnectWithoutPrepareReconnectIsUsable) -->
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:3826-3863 (prepare_reconnect) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:1117-1160 (install_link_); qbm/pgsql/tests/integration/connection/connection-lifecycle.cpp:228-258 (ReconnectWithoutPrepareReconnectIsUsable) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:3897-3934 (prepare_reconnect) -->
 
 ```cpp
 ASSERT_TRUE(qb::io::async::run_sync(db.connect(dsn)));
@@ -587,7 +587,7 @@ hanging forever. `fail_all_pending` swaps the queues out before draining, so an 
 does not re-enter the traversal. The connection drains through `fail_all_pending_counted`, which hands the traversal a
 `drained_query_observer`: every drained query is counted in `stats()` and reported to an `on_query_complete` hook before
 its own error callback runs (Huly QB-115).
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:3745-3824,3794 (in that order: the on disconnected handler; the fail_all_pending_counted call); qbm/pgsql/src/qbm/pgsql/transaction.h:266; qbm/pgsql/src/qbm/pgsql/transaction.cpp:149-178 -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:3816-3895,3865 (in that order: the on disconnected handler; the fail_all_pending_counted call); qbm/pgsql/src/qbm/pgsql/transaction.h:266; qbm/pgsql/src/qbm/pgsql/transaction.cpp:149-178 -->
 
 This also covers a malformed wire message and an unsupported/hostile auth method: both mark the protocol invalid (
 `not_ok()`), which disposes the I/O layer and fires `event::disconnected`, whose handler fails pending work; during a

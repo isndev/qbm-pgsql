@@ -147,7 +147,11 @@ Overloads (all return `connect_awaiter`): `connect()` (stored options),
 `connect(std::string const& dsn)` (re-parse then connect),
 `connect(connection_options opts)` (fully-specified options — the only way to set
 the fields the DSN string cannot carry, esp. `ssl_verify`),
-`connect(dsn, transport_io_type&& raw_io)` (adopt a pooled socket).
+`connect(dsn, transport_io_type&& raw_io)` (adopt an already-connected transport for the
+first connection: the handshake runs on it, a reconnection dials the DSN; on
+`tcp::ssl::database` the caller must have run the SSLRequest and the TLS handshake on it;
+on a busy or ready connection it resolves `false` and closes the transport unused —
+Huly QB-1096).
 
 `connection_options` fields (parsed from the DSN or set by hand):
 `alias`, `schema`, `uri` (`host:port` or `/path` for a Unix socket), `database`,
@@ -560,7 +564,7 @@ the operation and callable without copying either shared owner; retention occurs
 cancellation detaches the sink or completion releases the operation during the call. That
 ownership stays in the operation's outermost sink invocation through nested calls until return.
 Borrowed capture data still needs its own lifetime; command admission and reservation are unchanged.
-_(src/qbm/pgsql/pgsql.h:1788-1827,1835-1852,2564-2580,3284-3293)_
+_(src/qbm/pgsql/pgsql.h:1825-1864,1872-1889,2601-2617,3355-3364)_
 
 > **`copy_in` is NOT constant-memory.** It drains the entire `source` into the
 > output pipe synchronously (bounded only by the write-buffer ceiling). Only
@@ -615,7 +619,7 @@ coroutine, an actor, or a second connection's trigger; reach for `cancel()` only
 where no coroutine can run.
 During the packet write, a native TLS `WANT_READ` waits for readability alone;
 otherwise native TLS and plain writes wait for writability. A custom secure transport
-without native TLS state keeps the combined read/write fallback (`pgsql.h:3613-3624`).
+without native TLS state keeps the combined read/write fallback (`pgsql.h:3684-3695`).
 
 **Connection introspection (all `[[nodiscard]]`, libpq-style):**
 
