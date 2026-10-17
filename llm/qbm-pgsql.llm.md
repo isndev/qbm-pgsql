@@ -545,7 +545,7 @@ the operation and callable without copying either shared owner; retention occurs
 cancellation detaches the sink or completion releases the operation during the call. That
 ownership stays in the operation's outermost sink invocation through nested calls until return.
 Borrowed capture data still needs its own lifetime; command admission and reservation are unchanged.
-_(src/qbm/pgsql/pgsql.h:1180-1219,1227-1244,1923-1939,2466-2475)_
+_(src/qbm/pgsql/pgsql.h:1188-1227,1235-1252,1931-1947,2474-2483)_
 
 > **`copy_in` is NOT constant-memory.** It drains the entire `source` into the
 > output pipe synchronously (bounded only by the write-buffer ceiling). Only
@@ -600,7 +600,7 @@ coroutine, an actor, or a second connection's trigger; reach for `cancel()` only
 where no coroutine can run.
 During the packet write, a native TLS `WANT_READ` waits for readability alone;
 otherwise native TLS and plain writes wait for writability. A custom secure transport
-without native TLS state keeps the combined read/write fallback (`pgsql.h:2795-2806`).
+without native TLS state keeps the combined read/write fallback (`pgsql.h:2803-2814`).
 
 **Connection introspection (all `[[nodiscard]]`, libpq-style):**
 
@@ -660,8 +660,9 @@ db.on_query_complete({});              // remove it
   `db.connect(...)` does nothing. There is no blocking `connect()` and no
   `connect` callback overload.
 - After `disconnect()`, ordinary `connect()` on the **same** object opens a fresh socket and
-  handshake, clearing stale I/O buffers and protocols. `prepare_reconnect()` is optional
-  for an explicit fd and per-backend state reset; drain or fail pending queries first.
+  handshake, clearing stale I/O buffers and protocols and the per-backend state: the new
+  session starts with an empty prepared-statement cache (prepare again after a reconnect).
+  `prepare_reconnect()` is optional, to close the old fd early; drain or fail pending queries first.
   If `disconnect()` runs inside one of that connection's
   query or fluent `.then` / `.error` callbacks, queued failures run just after
   the callback returns; new callback commands fail once with a connection error

@@ -420,8 +420,8 @@ minimal root that adds a qb *source* tree first and this module second.
 - **An unwrapped `co_await` is not interruptible.** `pg_reply_awaiter` registers no cancellation hook, so `kill()`
   neither wakes nor unwinds a coroutine parked on one. Wrap it in `ctx.cancellable(...)` when it runs inside an actor.
 - **Reuse is supported.** After `disconnect()`, ordinary `connect()` on the same `database` object opens a fresh socket and
-  handshakes again; the transport path clears stale I/O buffers and protocols. `prepare_reconnect()` is optional but
-  recommended when you also want to close the old fd and clear cached per-backend state before reconnecting.
+  handshakes again; the transport path clears stale I/O buffers, protocols and the per-backend state (prepared
+  statements do not survive a reconnect). `prepare_reconnect()` is optional, to close the old fd earlier.
 - **Connect timeout is not the statement timeout.** The `connect(qb::duration)` timeout bounds the handshake.
   `set_timeout(qb::duration)` arms a server-side `SET LOCAL statement_timeout` on the next `BEGIN` and is cleared at
   `COMMIT` / `ROLLBACK`.

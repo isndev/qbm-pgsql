@@ -236,7 +236,7 @@ Ordinary chunk delivery borrows the operation and callable without copying eithe
 If cancellation detaches the sink or completion releases the operation during a call, ownership
 is retained in that operation's outermost sink invocation until it returns. Nested calls share
 that retention. This protects owned captures; it does not extend the lifetime of borrowed data.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:1180-1219,1227-1244,1923-1939,2466-2475 (CopyOperation / SinkInvocation / detach_sink; finish_copy; on_copy_data; copy_out) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:1188-1227,1235-1252,1931-1947,2474-2483 (CopyOperation / SinkInvocation / detach_sink; finish_copy; on_copy_data; copy_out) -->
 The source or sink activates only when that command reaches the wire, so an earlier
 plain SQL command cannot borrow it.
 
@@ -282,7 +282,7 @@ transaction is never joined and never ended by `query_stream`.
 > caller-owned only once its `BEGIN` has **completed** — `in_transaction()` mirrors the last `ReadyForQuery`. Started
 > before that, the stream reads the session as idle and opens (and later ends) a block of its own. `co_await` the
 > `begin()` first.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2552-2672,2566-2584,2586-2589,2644-2664,2342-2350 (in that order: query_stream; the seat/guard bookkeeping; the cursor name; the last-one-out COMMIT/ROLLBACK; in_transaction) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:2560-2680,2574-2592,2594-2597,2652-2672,2350-2358 (in that order: query_stream; the seat/guard bookkeeping; the cursor name; the last-one-out COMMIT/ROLLBACK; in_transaction) -->
 
 ---
 

@@ -258,6 +258,43 @@ TEST_F(ConnectionLifecycle, ReconnectWithoutPrepareReconnectIsUsable) {
     EXPECT_EQ(decoded, 1);
 }
 
+/**
+ * @brief A new session starts with an empty prepared-statement cache, however it was reached.
+ *
+ * Prepared statements belong to the backend session: the new backend a reconnect lands on has none.
+ * `prepare_reconnect()` cleared the cache, but a bare `connect()` after `disconnect()` -- a supported
+ * path -- kept it: an `execute(name)` of a statement the old backend held then passed the client's
+ * check, was sent, and failed on the server with 26000 (`invalid_sql_statement_name`), counted as a
+ * cache HIT. It must be refused client-side, as a miss, before any byte is sent, and preparing the
+ * name again must work (Huly QB-1095).
+ */
+TEST_F(ConnectionLifecycle, ABareReconnectStartsWithAnEmptyStatementCache) {
+    ASSERT_TRUE(qb::io::async::run_sync(db_->connect(dsn_tcp_string())));
+    ASSERT_TRUE(db_->prepare("qb_stale_stmt", "SELECT 7", type_oid_sequence{}, discard_prepare, discard_error).await());
+    db_->disconnect();
+    ASSERT_TRUE(qb::io::async::run_sync(db_->connect(dsn_tcp_string())));
+
+    const auto     before = db_->stats();
+    sqlstate::code seen   = sqlstate::unknown_code;
+    const bool     ok     = static_cast<bool>(db_->execute(
+                                                     "qb_stale_stmt", params{},
+                                                     [](transaction &, results) { ADD_FAILURE() << "a statement of the old backend ran"; },
+                                                     [&](error::db_error const &e) { seen = e.sqlstate; })
+                                                  .await());
+    EXPECT_FALSE(ok);
+    EXPECT_NE(seen, sqlstate::invalid_sql_statement_name) << "the stale name was sent to the new backend (26000)";
+    EXPECT_EQ(db_->stats().prepared_misses, before.prepared_misses + 1) << "a stale name is a miss, refused before the wire";
+    EXPECT_EQ(db_->stats().prepared_hits, before.prepared_hits);
+
+    int decoded = -1;
+    ASSERT_TRUE(db_->prepare("qb_stale_stmt", "SELECT 8", type_oid_sequence{}, discard_prepare, discard_error).await());
+    ASSERT_TRUE(
+        db_->execute(
+               "qb_stale_stmt", params{}, [&](transaction &, results r) { decoded = r.size() == 1u ? r[0][0].as<int>() : -1; }, discard_error)
+            .await());
+    EXPECT_EQ(decoded, 8);
+}
+
 // --------------------------------------------------------------------------------------
 // Disconnect drains the whole queue
 // --------------------------------------------------------------------------------------

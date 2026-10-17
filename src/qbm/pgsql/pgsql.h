@@ -835,6 +835,14 @@ private:
         // those bytes ahead of the StartupMessage (Huly QB-202). prepare_reconnect() resets the
         // buffers too; this is the choke point every connect path funnels through.
         this->reset_for_reconnect();
+        // The per-backend state of the previous session died with it: the prepared statements (and the
+        // Closes still owed to them), the ParameterStatus cache and the transaction status. Reset here,
+        // not only in prepare_reconnect(): a bare connect() after disconnect() kept the statement cache,
+        // and an execute(name) of the old backend's statement was sent and failed on the server with
+        // 26000 instead of being refused client-side (Huly QB-1095).
+        storage_.clear();
+        server_params_.clear();
+        _txn_status       = 'I';
         this->transport() = std::forward<Sock_>(sock);
         // Re-arm the SCRAM mutual-auth gate at the START of every handshake. These flags gate
         // AuthenticationOk in on_authentication; they are also cleared in prepare_reconnect(), but a

@@ -92,6 +92,14 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Fixed
 
+- **A bare reconnect starts with an empty prepared-statement cache (Huly QB-1095).** Prepared statements belong to
+  the backend session, but only `prepare_reconnect()` cleared the cache: `connect()` after `disconnect()` -- a
+  supported path -- kept it, so an `execute(name)` of a statement the old backend held passed the client's check (a
+  cache hit), was sent, and failed on the server with 26000 (`invalid_sql_statement_name`) instead of being refused
+  client-side. Every connect path now resets the per-backend state where it installs the new transport: the statement
+  cache (and the protocol `Close` messages still owed to it), the ParameterStatus cache and the transaction status.
+  Pinned by `ABareReconnectStartsWithAnEmptyStatementCache`.
+
 - **A prepared statement the cache evicts is closed on the server (Huly QB-207).** The LRU's eviction was local
   bookkeeping only: the backend kept every statement the connection ever prepared — 101 after 101 prepares into the
   default 100-slot cache, without bound on a long-lived session — and preparing an evicted name again, the recovery the
