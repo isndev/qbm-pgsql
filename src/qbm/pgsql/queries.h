@@ -39,6 +39,7 @@
 #include "./error.h"
 #include "./param_serializer.h"
 #include "./protocol.h"
+#include "./stats.h"
 #include "./type_mapping.h"
 
 namespace qb::pg::detail {
@@ -169,6 +170,18 @@ public:
     bool
     has(std::string_view name) const {
         return _prepared_queries.find(std::string(name)) != _prepared_queries.cend();
+    }
+
+    /**
+     * @brief The cached statement named @p name, without promoting it (an observer's read)
+     *
+     * @param name Name of the prepared query
+     * @return PreparedQuery const* The statement, or nullptr when it is not cached
+     */
+    [[nodiscard]] PreparedQuery const *
+    find(std::string_view name) const {
+        const auto it = _prepared_queries.find(std::string(name));
+        return it == _prepared_queries.cend() ? nullptr : &it->second.query;
     }
 
     /**
@@ -427,7 +440,29 @@ public:
      * @param err Error information
      */
     virtual void on_error(error::db_error const &err) const = 0;
+
+    /**
+     * @brief What this query is, for `database::on_query_complete` (Huly QB-115)
+     *
+     * Fills `kind`, and `name` / `sql` when the query has them; the views live as long as
+     * the query. The connection fills `duration`, `ok` and `error`.
+     *
+     * @return query_info The query's description
+     */
+    [[nodiscard]] virtual query_info describe() const = 0;
 };
+
+/**
+ * @brief A `query_info` with only its `kind`, `name` and `sql` set
+ */
+[[nodiscard]] inline query_info
+describe_query(query_kind kind, std::string_view name = {}, std::string_view sql = {}) noexcept {
+    query_info info;
+    info.kind = kind;
+    info.name = name;
+    info.sql  = sql;
+    return info;
+}
 
 /**
  * @brief Base implementation of SQL query with callbacks
@@ -522,6 +557,11 @@ public:
         m.write(sql);
         return m;
     }
+
+    [[nodiscard]] query_info
+    describe() const final {
+        return describe_query(query_kind::begin);
+    }
 };
 
 /**
@@ -556,6 +596,11 @@ public:
         m.write("commit");
         return m;
     }
+
+    [[nodiscard]] query_info
+    describe() const final {
+        return describe_query(query_kind::commit);
+    }
 };
 
 /**
@@ -589,6 +634,11 @@ public:
         message m(query_tag);
         m.write("rollback");
         return m;
+    }
+
+    [[nodiscard]] query_info
+    describe() const final {
+        return describe_query(query_kind::rollback);
     }
 };
 
@@ -653,6 +703,11 @@ public:
         m.write("savepoint " + pg_quote_identifier(_name));
         return m;
     }
+
+    [[nodiscard]] query_info
+    describe() const final {
+        return describe_query(query_kind::savepoint, _name);
+    }
 };
 
 /**
@@ -690,6 +745,11 @@ public:
         message m(query_tag);
         m.write("release savepoint " + pg_quote_identifier(_name));
         return m;
+    }
+
+    [[nodiscard]] query_info
+    describe() const final {
+        return describe_query(query_kind::release_savepoint, _name);
     }
 };
 
@@ -729,6 +789,11 @@ public:
         m.write("rollback to savepoint " + pg_quote_identifier(_name));
         return m;
     }
+
+    [[nodiscard]] query_info
+    describe() const final {
+        return describe_query(query_kind::rollback_savepoint, _name);
+    }
 };
 
 /**
@@ -767,6 +832,11 @@ public:
         m.write(_expression);
 
         return m;
+    }
+
+    [[nodiscard]] query_info
+    describe() const final {
+        return describe_query(query_kind::simple, {}, _expression);
     }
 };
 
@@ -819,6 +889,11 @@ public:
         if (_storage.has_pending_close())
             return close_evicted_statements_before(_storage, parse_describe_sync());
         return parse_describe_sync();
+    }
+
+    [[nodiscard]] query_info
+    describe() const final {
+        return describe_query(query_kind::prepare, _query.name, _query.expression);
     }
 
 private:
@@ -887,6 +962,13 @@ public:
         if (_storage.has_pending_close()) [[unlikely]]
             return close_evicted_statements_before(_storage, bind_execute_sync());
         return bind_execute_sync();
+    }
+
+    /// The statement's SQL when it is still cached (an observer's read: no LRU promotion).
+    [[nodiscard]] query_info
+    describe() const final {
+        PreparedQuery const *const query = _storage.find(_query_name);
+        return describe_query(query_kind::execute, _query_name, query ? std::string_view{query->expression} : std::string_view{});
     }
 
 private:

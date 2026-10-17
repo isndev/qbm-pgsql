@@ -567,6 +567,9 @@ TEST_F(ListenNotify, CoConsumer_CapacityTwo_DropBoundary) {
         << "the third notification never overflowed the capacity-two queue";
     EXPECT_EQ(dropped.load(std::memory_order_relaxed), 1);
     EXPECT_EQ(dropped_payload, "three");
+    // The connection counts them too (Huly QB-115): three received, one of them dropped.
+    EXPECT_EQ(sub.stats().notifications_received, 3u);
+    EXPECT_EQ(sub.stats().notifications_dropped, 1u);
 
     ASSERT_TRUE(qb::io::async::run_sync([&]() -> qb::io::async::task<bool> {
         auto first  = co_await sub.receive();
@@ -591,6 +594,8 @@ TEST_F(ListenNotify, PlainDatabase_OnIncomingNotify) {
 
     EXPECT_TRUE(pump_until([&] { return hits >= 1; }, kDeadline)) << "plain database did not surface its own notification";
     EXPECT_EQ(hits, 1);
+    EXPECT_EQ(pub_->stats().notifications_received, 1u);
+    EXPECT_EQ(pub_->stats().notifications_dropped, 0u) << "a plain database queues nothing, so drops nothing";
     pub_->on_incoming_notify({});
     ASSERT_TRUE(pub_->unlisten_all(discard_query, discard_error).await());
 }

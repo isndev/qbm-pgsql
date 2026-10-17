@@ -146,7 +146,7 @@ Transaction::pop_query() {
 }
 
 void
-Transaction::fail_all_pending(error::db_error const &err) {
+Transaction::fail_all_pending(error::db_error const &err, drained_query_observer *observer) {
     _result = false;
     // Swap the queues out before draining so an on_error callback that enqueues
     // new work (or otherwise mutates this node) cannot make the loops re-enter
@@ -160,6 +160,8 @@ Transaction::fail_all_pending(error::db_error const &err) {
         auto q = std::move(queries.front());
         queries.pop();
         if (q) {
+            if (observer)
+                observer->on_drained_query(*q, err);
             try {
                 q->on_error(err);
             } catch (...) {
@@ -171,7 +173,7 @@ Transaction::fail_all_pending(error::db_error const &err) {
         auto sub = std::move(subs.front());
         subs.pop();
         if (sub)
-            sub->fail_all_pending(err);
+            sub->fail_all_pending(err, observer);
     }
 }
 

@@ -350,6 +350,7 @@ not require actors — but inside `qb::Main` it is what most deployments do, whi
 | **Pub/sub**               | `notify`, `listen` / `unlisten` / `unlisten_all`, an `on_incoming_notify` hook, and a `notify_co_consumer` with `co_await receive()`.                                                                                                 |
 | **Errors**                | `Reply<T>` carries either a result or a typed `error::db_error` (severity, SQLSTATE, detail); `Transaction::await()` returns a `status`.                                                                                              |
 | **Cancellation**          | `cancel_async()` — the out-of-band `CancelRequest` without blocking the event loop (`task<bool>`), over TLS when the session used it; `cancel()` is the blocking form for a thread that is yours. |
+| **Observability**         | `db.stats()` — monotonic counts (queries, errors, protocol bytes, notifications received / dropped, prepared hits / misses / evictions) and the last query's duration; `db.on_query_complete(fn)` — one `query_info` (kind, name, SQL, duration, outcome) per completed query, one branch when unset. |
 
 ---
 

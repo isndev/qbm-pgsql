@@ -527,7 +527,7 @@ the operation and callable without copying either shared owner; retention occurs
 cancellation detaches the sink or completion releases the operation during the call. That
 ownership stays in the operation's outermost sink invocation through nested calls until return.
 Borrowed capture data still needs its own lifetime; command admission and reservation are unchanged.
-_(src/qbm/pgsql/pgsql.h:1073-1112,1120-1137,1805-1821,2283-2292)_
+_(src/qbm/pgsql/pgsql.h:1164-1203,1211-1228,1901-1917,2425-2434)_
 
 > **`copy_in` is NOT constant-memory.** It drains the entire `source` into the
 > output pipe synchronously (bounded only by the write-buffer ceiling). Only
@@ -582,7 +582,7 @@ coroutine, an actor, or a second connection's trigger; reach for `cancel()` only
 where no coroutine can run.
 During the packet write, a native TLS `WANT_READ` waits for readability alone;
 otherwise native TLS and plain writes wait for writability. A custom secure transport
-without native TLS state keeps the combined read/write fallback (`pgsql.h:2612-2623`).
+without native TLS state keeps the combined read/write fallback (`pgsql.h:2754-2765`).
 
 **Connection introspection (all `[[nodiscard]]`, libpq-style):**
 
@@ -598,6 +598,39 @@ int  pid = db.backend_pid();           // PQbackendPID; 0 if not connected
 `"server_version"`, `"server_encoding"`, `"client_encoding"`, `"TimeZone"`,
 `"integer_datetimes"`, `"standard_conforming_strings"` — `std::nullopt` if the
 server never sent it. The `string_view` is valid while the connection is alive.
+
+### 3.11 Observability: `stats()` and `on_query_complete` (Huly QB-115)
+
+```cpp
+qb::pg::stats s = db.stats();          // a snapshot, by value: monotonic since construction
+// s.queries, s.errors, s.bytes_sent, s.bytes_received, s.notifications_received,
+// s.notifications_dropped, s.prepared_hits, s.prepared_misses, s.prepared_evicted,
+// s.last_query_duration (qb::duration)
+
+db.on_query_complete([](qb::pg::query_info const &q) {    // one call per completed query
+    // q.kind (qb::pg::query_kind), q.name, q.sql (string_views, valid during the call only),
+    // q.duration, q.ok, q.error (const db_error*, null on success)
+});
+db.on_query_complete({});              // remove it
+```
+
+- **A query is one round trip** of the serial queue — `query_kind::simple`, `prepare`,
+  `execute`, `begin`, `commit`, `rollback`, `savepoint`, `release_savepoint`,
+  `rollback_savepoint`. The inline `query(sql, args...)` is two (prepare of the unnamed
+  statement, then execute). One that failed before it was sent — refused locally (an
+  unknown statement name), or drained by a disconnect — counts as a query **and** an
+  error, with a zero duration. A call refused at submission on a disconnected handle
+  never entered the queue and is not counted (the coroutine and callback forms agree).
+- **The hook** runs on the connection's thread as the query completes, before the
+  query's own callback or awaiter. Keep it short; it must not drive the connection.
+  `sql` may carry literal values (a password in `ALTER ROLE ... PASSWORD`): never log
+  it raw. An exception escaping it is contained and logged.
+- **Cost.** The counters are plain `std::uint64_t` adds; the duration takes one clock
+  read per query on a busy connection (the ReadyForQuery instant ends one query and
+  stamps the next). Without a hook a completion pays one predictable branch: the
+  report is built out of line.
+- Counts never reset: a reconnect keeps them. `bytes_*` count PostgreSQL protocol
+  bytes (TLS framing excluded), the handshake included.
 
 ---
 
@@ -617,7 +650,8 @@ server never sent it. The `string_view` is valid while the connection is alive.
   and coroutine calls return failed replies meanwhile.
 - On a lost connection the disconnect handler calls `fail_all_pending(...)`, so
   every queued query and sub-transaction resumes its awaiter with an error
-  instead of hanging.
+  instead of hanging; each drained query is counted in `stats()` and reported to
+  an `on_query_complete` hook first.
 - Prepared-statement parameters are always **binary**; `params` serialization
   must match the declared OID's binary input. Each bind value is length-prefixed
   by a signed int32, so a single parameter ≥ 2 GiB is **rejected** (throws

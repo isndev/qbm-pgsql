@@ -873,7 +873,7 @@ private:
     send_startup_message() {
         message m(empty_tag);
         create_startup_message(m);
-        *this << m;
+        send_message(m);
     }
 
     /**
@@ -908,6 +908,90 @@ private:
     enum class DeferredDisconnect { none, client, transport };
     DeferredDisconnect _deferred_disconnect = DeferredDisconnect::none;
 
+    // --- Observability (Huly QB-115) -----------------------------------------------------------
+    ::qb::pg::stats                                   _stats{};                 ///< The counts kept here; prepared_* are storage_'s
+    std::function<void(::qb::pg::query_info const &)> _query_hook{};            ///< on_query_complete; empty: nothing is reported
+    qb::mono_time                                     _query_sent_at{};         ///< When the current query's message was written
+    bool                                              _query_sent = false;      ///< The current query left the client
+    qb::mono_time                                     _ready_clock{};           ///< The clock, read once per ReadyForQuery handler
+    bool                                              _ready_clock_set = false; ///< Inside that handler: _ready_clock is the time
+
+    /// The time: inside a ReadyForQuery handler the instant read on entry, which the query it completes
+    /// and the next one it sends share -- one clock read per query on a busy connection.
+    [[nodiscard]] qb::mono_time
+    clock_now() const noexcept {
+        return _ready_clock_set ? _ready_clock : qb::mono_now();
+    }
+
+    /**
+     * @brief One query completed: counted, and reported to the `on_query_complete` hook if any.
+     * @param query The query
+     * @param sent Whether its message left the client (its duration is then measured)
+     * @param err Its failure; null on success
+     */
+    void
+    count_query(ISqlQuery const &query, bool sent, error::db_error const *err) noexcept {
+        ++_stats.queries;
+        if (err)
+            ++_stats.errors;
+        qb::duration took{};
+        if (sent) {
+            took                       = clock_now() - _query_sent_at;
+            _stats.last_query_duration = took;
+        }
+        if (_query_hook) [[unlikely]]
+            report_query(query, took, err);
+    }
+
+    /// Out of line and cold: without a hook a completion pays one branch. An exception escaping the
+    /// hook is contained and logged -- the hook runs inside the protocol handler.
+    QB_NOINLINE QB_COLD void
+    report_query(ISqlQuery const &query, qb::duration took, error::db_error const *err) noexcept {
+        try {
+            auto info     = query.describe();
+            info.duration = took;
+            info.ok       = err == nullptr;
+            info.error    = err;
+            _query_hook(info);
+        } catch (std::exception const &e) {
+            QB_LOG_WARN("[pgsql] on_query_complete hook threw: " << e.what());
+        } catch (...) {
+            QB_LOG_WARN("[pgsql] on_query_complete hook threw a non-std exception");
+        }
+    }
+
+    /// Counts the queries a disconnect drains; the in-flight one keeps its send time.
+    struct drain_counter final : drained_query_observer {
+        Database &db;
+
+        explicit drain_counter(Database &owner) noexcept
+            : db(owner) {}
+
+        void
+        on_drained_query(ISqlQuery const &query, error::db_error const &err) noexcept override {
+            const bool sent = &query == db._current_query && std::exchange(db._query_sent, false);
+            db.count_query(query, sent, &err);
+        }
+    };
+
+    /// Fail every queued query of the connection, each one counted and reported (Huly QB-115).
+    void
+    fail_all_pending_counted(error::db_error const &err) {
+        drain_counter counter{*this};
+        root_transaction()->fail_all_pending(err, &counter);
+        _query_sent = false;
+    }
+
+    /// Write one protocol message, counting the bytes the output buffer took.
+    void
+    send_message(message const &m) {
+        const auto before = this->out().size();
+        *this << m;
+        const auto after = this->out().size();
+        if (after > before)
+            _stats.bytes_sent += static_cast<std::uint64_t>(after - before);
+    }
+
     void
     finish_query_callback() {
         if (--_completion_callback_depth != 0 || _deferred_disconnect == DeferredDisconnect::none)
@@ -916,9 +1000,9 @@ private:
         const auto reason    = _deferred_disconnect;
         _deferred_disconnect = DeferredDisconnect::none;
         if (reason == DeferredDisconnect::client)
-            root_transaction()->fail_all_pending(error::connection_error("database disconnected by client"));
+            fail_all_pending_counted(error::connection_error("database disconnected by client"));
         else
-            root_transaction()->fail_all_pending(error::client_error("database disconnected"));
+            fail_all_pending_counted(error::client_error("database disconnected"));
         _current_command = root_transaction();
         _current_query   = nullptr;
         _ready_for_query = false;
@@ -971,7 +1055,10 @@ private:
 
         if (_current_query) {
             if (qb::likely(_current_query->is_valid())) {
-                *this << _current_query->get();
+                const auto msg = _current_query->get();
+                _query_sent_at = clock_now();
+                _query_sent    = true;
+                send_message(msg);
                 return true;
             } else {
                 QB_LOG_DEBUG("[pgsql] error processing query not valid");
@@ -1026,12 +1113,14 @@ private:
             return;
         if (!_current_command) {
             _current_query = nullptr;
+            _query_sent    = false;
             return;
         }
         auto query     = _current_command->pop_query();
         _current_query = nullptr; // a callback may disconnect and re-enter error handling
         ++_completion_callback_depth;
         auto callback_guard = qb::scope_guard([this] { finish_query_callback(); });
+        count_query(*query, std::exchange(_query_sent, false), nullptr);
         query->on_success();
     }
 
@@ -1047,6 +1136,7 @@ private:
             return;
         if (!_current_command) {
             _current_query = nullptr;
+            _query_sent    = false;
             return;
         }
         _current_command->result(false);
@@ -1054,6 +1144,7 @@ private:
         _current_query = nullptr;
         ++_completion_callback_depth;
         auto callback_guard = qb::scope_guard([this] { finish_query_callback(); });
+        count_query(*query, std::exchange(_query_sent, false), &err);
         query->on_error(err);
     }
 
@@ -1205,7 +1296,7 @@ public:
                 message pm(password_message_tag);
                 pm.write(conn_opts_.password);
 
-                *this << pm;
+                send_message(pm);
             } break;
             case MD5Password: {
 #ifndef QB_HAS_SSL
@@ -1225,7 +1316,7 @@ public:
                 message pm(password_message_tag);
                 pm.write(md5digest);
 
-                *this << pm;
+                send_message(pm);
 #endif // QB_HAS_SSL
             } break;
             case SCRAM_SHA256: {
@@ -1278,7 +1369,7 @@ public:
                 pm.write(selected_mechanism);
                 pm.write(static_cast<qb::pg::integer>(data.size()));
                 pm.write_sv(data);
-                *this << pm;
+                send_message(pm);
 #endif // QB_HAS_SSL
             } break;
             case SCRAM_SHA256_CLIENT_PROOF: {
@@ -1354,7 +1445,7 @@ public:
 
                 message pm(password_message_tag);
                 pm.write_sv(client_final_message);
-                *this << pm;
+                send_message(pm);
                 _password_salt = std::move(saltedPassword);
 #endif // QB_HAS_SSL
             } break;
@@ -1498,6 +1589,10 @@ public:
      */
     void
     on_ready_for_query(message &msg) {
+        // One clock read serves the query this completes and the next one process_query sends.
+        _ready_clock     = qb::mono_now();
+        _ready_clock_set = true;
+        auto clock_guard = qb::scope_guard([this] { _ready_clock_set = false; });
         on_success_query();
         if (!is_connected_)
             return; // a success callback may have disconnected this session
@@ -1655,7 +1750,7 @@ public:
     send_copy_fail() {
         message fail(copy_fail_tag);
         fail.write(std::string("qbm-pgsql: COPY FROM STDIN aborted by client"));
-        *this << fail;
+        send_message(fail);
     }
 
     /**
@@ -1672,6 +1767,7 @@ public:
             QB_LOG_WARN("[pgsql] Malformed NotificationResponse");
             return;
         }
+        ++_stats.notifications_received;
         ::qb::pg::notification n;
         n.server_backend_pid = static_cast<int>(pid);
         n.channel            = std::move(channel);
@@ -1746,7 +1842,7 @@ public:
                     const std::size_t take = std::min(rest.size(), kMaxCopyDataBody);
                     message           d(copy_data_tag);
                     d.write_sv(rest.substr(0, take));
-                    *this << d;
+                    send_message(d);
                     rest.remove_prefix(take);
                 }
             }
@@ -1759,7 +1855,7 @@ public:
         if (!is_connected_)
             return;
         message done(copy_done_tag);
-        *this << done;
+        send_message(done);
     }
 
     /**
@@ -2074,6 +2170,52 @@ public:
         return storage_.max_size();
     }
 
+    /**
+     * @brief What this connection has done: a snapshot, by value (Huly QB-115).
+     *
+     * Monotonic counts since the object was constructed -- two snapshots give a rate, and a
+     * reconnect resets nothing -- plus the send-to-completion time of the last query that was
+     * sent. A query is one round trip of the serial queue (`qb::pg::query_kind`); one that failed
+     * before it was sent (refused locally, or drained by a disconnect) counts as a query and an
+     * error. See `qb::pg::stats` for each field.
+     */
+    [[nodiscard]] ::qb::pg::stats
+    stats() const noexcept {
+        ::qb::pg::stats snapshot  = _stats;
+        snapshot.prepared_hits    = storage_.hits();
+        snapshot.prepared_misses  = storage_.misses();
+        snapshot.prepared_evicted = static_cast<std::uint64_t>(storage_.evicted_count());
+        return snapshot;
+    }
+
+    /**
+     * @brief Be told of every completed query (Huly QB-115).
+     *
+     * @p hook receives one `qb::pg::query_info` per query, on the connection's thread, as the
+     * query completes and before its own callback or awaiter sees the result: success, server
+     * error, local refusal, or a failure drained by a disconnect. Keep it short; it must not drive
+     * this connection (no query, no `disconnect()`). The views it receives are valid only during
+     * the call, and `sql` may carry literal values: never log it raw. An exception escaping it is
+     * contained and logged. An empty `std::function` -- the default -- removes it; without a hook
+     * a completion costs one predictable branch.
+     *
+     * @param hook The callable, or an empty one to remove it
+     * @return *this
+     */
+    Database<QB_IO_, NotifyDerived> &
+    on_query_complete(std::function<void(::qb::pg::query_info const &)> hook) {
+        _query_hook = std::move(hook);
+        return *this;
+    }
+
+protected:
+    /// A notify consumer could not queue a notification (`stats().notifications_dropped`).
+    void
+    count_notification_dropped() noexcept {
+        ++_stats.notifications_dropped;
+    }
+
+public:
     /**
      * @brief Enable TCP keepalive for the connection (P1-1)
      *
@@ -2733,6 +2875,7 @@ public:
      */
     void
     on(typename pg_protocol::message msg) {
+        _stats.bytes_received += static_cast<std::uint64_t>(msg->buffer_size());
         const auto it = routes_.find(msg->tag());
         if (qb::likely(it != routes_.end()))
             (this->*(it->second))(*msg);
@@ -2773,7 +2916,7 @@ public:
             if (_deferred_disconnect == DeferredDisconnect::none)
                 _deferred_disconnect = DeferredDisconnect::transport;
         } else {
-            root_transaction()->fail_all_pending(error::client_error("database disconnected"));
+            fail_all_pending_counted(error::client_error("database disconnected"));
             _current_command = root_transaction();
             _current_query   = nullptr;
             _ready_for_query = false;
@@ -2829,6 +2972,7 @@ public:
         _error                 = error::db_error{"unknown error"};
         _current_command       = root_transaction();
         _current_query         = nullptr;
+        _query_sent            = false;
         _ready_for_query       = false;
     }
 
@@ -2855,7 +2999,7 @@ public:
                 _deferred_disconnect = DeferredDisconnect::client;
             } else {
                 on_error_query(error::connection_error("database disconnected by client"));
-                root_transaction()->fail_all_pending(error::connection_error("database disconnected by client"));
+                fail_all_pending_counted(error::connection_error("database disconnected by client"));
                 _current_command = root_transaction();
             }
         }
@@ -2957,6 +3101,7 @@ public:
         }
         if (current_notify_channel().try_send(std::move(n)))
             return;
+        this->count_notification_dropped();
         if (on_notify_dropped_) {
             try {
                 on_notify_dropped_(std::move(n));

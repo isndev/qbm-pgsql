@@ -53,6 +53,27 @@ namespace qb::pg::detail {
 using namespace qb::pg;
 
 /**
+ * @brief Told of each queued query `Transaction::fail_all_pending` fails (Huly QB-115)
+ *
+ * The connection passes one when it drains its queue on a disconnect, so a query that
+ * completes without a round trip is still counted in `database::stats()` and reported to its
+ * `on_query_complete` hook. Called before the query's own error callback.
+ */
+class drained_query_observer {
+public:
+    /**
+     * @brief One drained query
+     *
+     * @param query The query being failed
+     * @param err The error it is failed with
+     */
+    virtual void on_drained_query(ISqlQuery const &query, error::db_error const &err) noexcept = 0;
+
+protected:
+    ~drained_query_observer() = default;
+};
+
+/**
  * @brief Base class for database transaction operations
  *
  * The Transaction class provides the core functionality for managing
@@ -239,8 +260,10 @@ public:
      * not re-enter this traversal.
      *
      * @param err Error delivered to every drained query's on_error.
+     * @param observer Told of each drained query before its on_error runs (the connection's
+     *        statistics and its `on_query_complete` hook, Huly QB-115); null for none.
      */
-    void fail_all_pending(error::db_error const &err);
+    void fail_all_pending(error::db_error const &err, drained_query_observer *observer = nullptr);
 
     /**
      * @brief Handles the result status of a sub-command

@@ -24,6 +24,9 @@
  *  - A syntax error mid-transaction puts the block into the failed (E) state; ROLLBACK clears
  *    it and a follow-up query succeeds (the failed-block recovery path).
  *  - `reconnect after a forced server error` (55P02-free re-handshake on a fresh backend).
+ *  - `stats()` and `on_query_complete()` (Huly QB-115): one report per round trip with its kind,
+ *    name, SQL and duration; exact protocol byte counts; the queries a disconnect drains; a
+ *    throwing hook contained.
  *
  * Tier: integration (REQUIRES live postgres). Uses the shared skip-not-fail fixture; when
  * the daemon is unreachable the binary is `GTEST_SKIP`-ped, never hard-failed.
@@ -33,7 +36,9 @@
 #include <chrono>
 #include <gtest/gtest.h>
 #include <memory>
+#include <stdexcept>
 #include <string>
+#include <vector>
 #include <qb/io/async.h>
 #include <qb/io/async/coroutine.h>
 #include <qb/io/async/coroutine/utils.h>
@@ -360,6 +365,164 @@ TEST_F(PgsqlDbApiExtra, CallbackCommandsAfterDisconnectFailFast) {
     auto outcome = db_->await();
     EXPECT_FALSE(outcome()) << "a rejected callback batch must also fail its fluent status";
     EXPECT_NE(std::string_view(outcome.error().what()).find("connection is not established"), std::string_view::npos);
+}
+
+// --------------------------------------------------------------------------------------
+// stats() and on_query_complete (Huly QB-115)
+// --------------------------------------------------------------------------------------
+
+namespace database_api_extra_test {
+
+/// What the hook saw of one query, copied out of the call (its views die with it).
+struct seen_query {
+    query_kind   kind{};
+    std::string  name;
+    std::string  sql;
+    bool         ok = false;
+    std::string  code;
+    qb::duration duration{};
+};
+
+/// Install a hook that records every completed query into @p seen.
+void
+record_queries(qb::pg::tcp::database &db, std::vector<seen_query> &seen) {
+    db.on_query_complete([&seen](query_info const &q) {
+        seen.push_back({q.kind, std::string(q.name), std::string(q.sql), q.ok, q.error ? q.error->code : std::string{}, q.duration});
+    });
+}
+
+} // namespace database_api_extra_test
+
+/**
+ * @brief Every round trip is counted and reported, one per query: success, server error, local
+ *        refusal, and the protocol's transaction / savepoint commands, each with its kind, name
+ *        and SQL, in completion order.
+ */
+TEST_F(PgsqlDbApiExtra, StatsAndQueryHookSeeEveryRoundTrip) {
+    using database_api_extra_test::seen_query;
+    std::vector<seen_query> seen;
+    database_api_extra_test::record_queries(*db_, seen);
+    const auto before = db_->stats();
+
+    ASSERT_TRUE(db_->execute("SELECT 1", discard_query, discard_error).await());
+    ASSERT_TRUE(db_->prepare("qb115_stmt", "SELECT $1::int", type_oid_sequence{oid::int4}, discard_prepare, discard_error).await());
+    ASSERT_TRUE(db_->execute("qb115_stmt", params{5}, discard_query, discard_error).await());
+    EXPECT_FALSE(db_->execute("SELEC 1", discard_query, discard_error).await());                // server error, 42601
+    EXPECT_FALSE(db_->execute("qb115_never", params{1}, discard_query, discard_error).await()); // refused locally, never sent
+    ASSERT_TRUE(db_->begin([](Transaction &tr) { tr.savepoint("qb115_sp", [](Transaction &) {}, discard_error); }, discard_error).await());
+    EXPECT_FALSE(db_->begin([](Transaction &tr) { tr.execute("SELEC 2", discard_query, discard_error); }, discard_error).await());
+
+    const auto after = db_->stats();
+    ASSERT_EQ(seen.size(), 12u);
+    EXPECT_EQ(after.queries - before.queries, 12u);
+    EXPECT_EQ(after.errors - before.errors, 3u);
+    EXPECT_EQ(after.prepared_hits - before.prepared_hits, 1u);
+    EXPECT_EQ(after.prepared_misses - before.prepared_misses, 1u);
+    EXPECT_EQ(after.prepared_evicted, before.prepared_evicted);
+
+    struct expected {
+        query_kind  kind;
+        char const *name;
+        char const *sql;
+        bool        ok;
+    };
+    const expected want[] = {
+        {query_kind::simple, "", "SELECT 1", true},
+        {query_kind::prepare, "qb115_stmt", "SELECT $1::int", true},
+        {query_kind::execute, "qb115_stmt", "SELECT $1::int", true},
+        {query_kind::simple, "", "SELEC 1", false},
+        {query_kind::execute, "qb115_never", "", false},
+        {query_kind::begin, "", "", true},
+        {query_kind::savepoint, "qb115_sp", "", true},
+        {query_kind::release_savepoint, "qb115_sp", "", true},
+        {query_kind::commit, "", "", true},
+        {query_kind::begin, "", "", true},
+        {query_kind::simple, "", "SELEC 2", false},
+        {query_kind::rollback, "", "", true},
+    };
+    for (std::size_t i = 0; i < seen.size(); ++i) {
+        SCOPED_TRACE("query #" + std::to_string(i));
+        EXPECT_EQ(seen[i].kind, want[i].kind);
+        EXPECT_EQ(seen[i].name, want[i].name);
+        EXPECT_EQ(seen[i].sql, want[i].sql);
+        EXPECT_EQ(seen[i].ok, want[i].ok);
+    }
+    EXPECT_EQ(seen[3].code, "42601") << "the hook carries the server's error";
+    EXPECT_EQ(seen[4].duration, qb::duration::zero()) << "a query refused locally was never sent: no duration";
+    for (std::size_t i : {0u, 1u, 2u, 3u, 5u, 8u})
+        EXPECT_GT(seen[i].duration, qb::duration::zero()) << "query #" << i << " made a round trip";
+    EXPECT_GT(after.last_query_duration, qb::duration::zero());
+
+    // Removing the hook stops the reports, not the counts.
+    db_->on_query_complete({});
+    ASSERT_TRUE(db_->execute("SELECT 2", discard_query, discard_error).await());
+    EXPECT_EQ(seen.size(), 12u);
+    EXPECT_EQ(db_->stats().queries, after.queries + 1);
+}
+
+/**
+ * @brief The byte counters count PostgreSQL protocol messages exactly, both ways.
+ *
+ * `SELECT 1` on the simple-query protocol: the client writes one Query message, 'Q' + int32
+ * length + "SELECT 1\0" = 1 + 4 + 9 = 14 bytes. The server answers RowDescription (34: 1 + 4 +
+ * int16 count + "?column?\0" + 18 bytes of field metadata), DataRow (12: 1 + 4 + int16 + int32 + "1"),
+ * CommandComplete (14: 1 + 4 + "SELECT 1\0") and ReadyForQuery (6) = 66 bytes.
+ */
+TEST_F(PgsqlDbApiExtra, StatsCountProtocolBytesBothWays) {
+    const auto before = db_->stats();
+    ASSERT_TRUE(db_->execute("SELECT 1", discard_query, discard_error).await());
+    const auto after = db_->stats();
+    EXPECT_EQ(after.bytes_sent - before.bytes_sent, 14u);
+    EXPECT_EQ(after.bytes_received - before.bytes_received, 66u);
+    EXPECT_GT(before.bytes_sent, 0u) << "the handshake's messages are counted too";
+    EXPECT_GT(before.bytes_received, 0u);
+}
+
+/**
+ * @brief The queries a disconnect fails are counted and reported too: the one in flight with the
+ *        time it had been out, the queued ones never sent.
+ */
+TEST_F(PgsqlDbApiExtra, StatsCountTheQueriesADisconnectDrains) {
+    using database_api_extra_test::seen_query;
+    std::vector<seen_query> seen;
+    database_api_extra_test::record_queries(*db_, seen);
+    const auto before = db_->stats();
+
+    int failures = 0;
+    for (int i = 0; i < 3; ++i)
+        db_->execute(
+            "SELECT pg_sleep(0.05)", [](Transaction &, results) { ADD_FAILURE() << "a drained query succeeded"; },
+            [&failures](error::db_error const &) { ++failures; });
+    db_->disconnect();
+
+    EXPECT_EQ(failures, 3);
+    const auto after = db_->stats();
+    EXPECT_EQ(after.queries - before.queries, 3u);
+    EXPECT_EQ(after.errors - before.errors, 3u);
+    ASSERT_EQ(seen.size(), 3u);
+    for (auto const &q : seen) {
+        EXPECT_EQ(q.kind, query_kind::simple);
+        EXPECT_FALSE(q.ok);
+    }
+    EXPECT_GT(seen[0].duration, qb::duration::zero()) << "the first query was in flight";
+    EXPECT_EQ(seen[1].duration, qb::duration::zero()) << "a queued query was never sent";
+    EXPECT_EQ(seen[2].duration, qb::duration::zero());
+}
+
+/// A throwing hook is contained: the query still completes and the connection stays usable.
+TEST_F(PgsqlDbApiExtra, AThrowingQueryHookIsContained) {
+    int calls = 0;
+    db_->on_query_complete([&calls](query_info const &) {
+        ++calls;
+        throw std::runtime_error("intentional hook throw");
+    });
+    bool decoded = false;
+    ASSERT_TRUE(db_->execute(
+                       "SELECT 7", [&decoded](Transaction &, results r) { decoded = r.size() == 1U && r[0][0].as<int>() == 7; }, discard_error)
+                    .await());
+    EXPECT_TRUE(decoded);
+    EXPECT_EQ(calls, 1);
+    db_->on_query_complete({});
 }
 
 int

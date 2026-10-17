@@ -47,7 +47,7 @@ stateDiagram-v2
 
 ### One object, two queues
 
-<!-- src: src/qbm/pgsql/transaction.h:71-76, src/qbm/pgsql/transaction.cpp:117-151 -->
+<!-- src: src/qbm/pgsql/transaction.h:92-97, src/qbm/pgsql/transaction.cpp:117-151 -->
 
 `Transaction` holds:
 
@@ -66,7 +66,7 @@ flowchart TB
 ```
 
 A command (lifecycle unit) pushes one or more queries (wire units). `Transaction` is **non-copyable and non-movable** —
-the default, copy, and move constructors and assignment operators are all deleted (`src/qbm/pgsql/transaction.h:82-90`). Hold it
+the default, copy, and move constructors and assignment operators are all deleted (`src/qbm/pgsql/transaction.h:103-111`). Hold it
 by reference or pointer; never by value.
 
 ### The loop drives completion
@@ -78,7 +78,7 @@ normal case inside an actor), you do **not** call `await` after every statement.
 
 ### Status and `await`
 
-<!-- src: src/qbm/pgsql/transaction.cpp:216-253, src/qbm/pgsql/transaction.h:740-796 -->
+<!-- src: src/qbm/pgsql/transaction.cpp:218-255, src/qbm/pgsql/transaction.h:763-819 -->
 
 `Transaction::await()` is a **blocking drain on the current thread**: it pumps
 `qb::io::async::listener::current.run(EVRUN_ONCE)` until both queues are empty, then returns a `status` snapshot. It is
@@ -170,7 +170,7 @@ A two-argument `begin(on_success, mode)` overload exists; it installs an empty e
 
 ### `then` / `success` / `error` chaining
 
-<!-- src: src/qbm/pgsql/transaction.h:689-717, src/qbm/pgsql/commands.h:525-611 -->
+<!-- src: src/qbm/pgsql/transaction.h:712-740, src/qbm/pgsql/commands.h:525-611 -->
 
 - `then(cb)` and `success(cb)` (aliases) push a `Then` command. When it is popped, if the parent's result is still
   success, `cb(*parent())` runs with the same `Transaction&` you chained from.
@@ -269,7 +269,7 @@ it has no effect on autocommit statements run outside a block.
 > transaction (`in_transaction()`), it fails fast with a `client_error` rather than sending a second `BEGIN` that
 > PostgreSQL would warn `25001` on and silently flatten (the inner scope's COMMIT/ROLLBACK would end the *outer*
 > transaction, losing isolation). Use savepoints for nested units of work.
-<!-- src: src/qbm/pgsql/with_transaction.h:84-92, src/qbm/pgsql/transaction.h:179-182 -->
+<!-- src: src/qbm/pgsql/with_transaction.h:84-92, src/qbm/pgsql/transaction.h:200-203 -->
 
 ---
 
@@ -298,7 +298,7 @@ roll back to it, or release it aborts the outer block. The `name` is **quoted as
 identifier** (double-quoted, embedded `"` doubled, matching libpq's `PQescapeIdentifier`) before it enters the
 simple-query string — on **both** the callback (`SavePointQuery` / `EndSavePointQuery`) and coroutine paths — so a name
 can never inject a second statement.
-<!-- src: src/qbm/pgsql/commands.h:233-266,319-344, src/qbm/pgsql/transaction.cpp:77-92, src/qbm/pgsql/queries.h:595-612,650-653,688-691,726-729 -->
+<!-- src: src/qbm/pgsql/commands.h:233-266,319-344, src/qbm/pgsql/transaction.cpp:77-92, src/qbm/pgsql/queries.h:645-662,700-703,743-746,786-789 -->
 
 **Coroutine — explicit control:**
 
@@ -367,7 +367,7 @@ objects.
 
 ## Statement timeout
 
-<!-- src: src/qbm/pgsql/transaction.h:662-687, src/qbm/pgsql/commands.h:1312-1320, src/qbm/pgsql/queries.h:486-519 -->
+<!-- src: src/qbm/pgsql/transaction.h:685-710, src/qbm/pgsql/commands.h:1312-1320, src/qbm/pgsql/queries.h:521-554 -->
 
 `set_timeout(qb::duration)` arms a PostgreSQL `statement_timeout` for the **next** `BEGIN` on this connection. The
 following `begin()` (callback *or* coroutine) appends `; SET LOCAL statement_timeout = N` to the same simple-query
@@ -402,7 +402,7 @@ Key facts to get right:
 
 ## LISTEN / NOTIFY
 
-<!-- src: src/qbm/pgsql/transaction.h:441-505; src/qbm/pgsql/pg_notify_sql.h:25-92; qbm/pgsql/src/qbm/pgsql/pgsql.h:383-393,2045-2050,2876-3010 (in that order: notification; on_incoming_notify; notify_consumer / notify_co_consumer / notify_cb_consumer) -->
+<!-- src: src/qbm/pgsql/transaction.h:464-528; src/qbm/pgsql/pg_notify_sql.h:25-92; qbm/pgsql/src/qbm/pgsql/pgsql.h:383-393,2141-2146,3020-3155 (in that order: notification; on_incoming_notify; notify_consumer / notify_co_consumer / notify_cb_consumer) -->
 
 ### Publishing (NOTIFY)
 
@@ -477,8 +477,8 @@ subscription belongs to the session — `receive()` serves the new connection, u
   `ReadyForQuery` `'E'`) after an in-block error; the client does **not** auto-`ROLLBACK`. Issue `ROLLBACK` (or let
   `End`/`with_transaction` do it) before sending new commands.
 - **A lost connection fails every pending query automatically.** You do **not** write a disconnect handler. The built-in
-  `Database::on(qb::io::async::event::disconnected)` handler calls `fail_all_pending(...)` on the root transaction (
-  `qbm/pgsql/src/qbm/pgsql/pgsql.h:2776`), which drains every queued query and pending sub-transaction so suspended `co_await`
+  `Database::on(qb::io::async::event::disconnected)` handler calls `fail_all_pending(...)` on the root transaction (through
+  `fail_all_pending_counted`, `qbm/pgsql/src/qbm/pgsql/pgsql.h:2919`, which also counts each drained query), which drains every queued query and pending sub-transaction so suspended `co_await`
   awaiters resume with `client_error("database disconnected")` instead of hanging forever.
   See [connection.md](./connection.md) (Fail-all-on-disconnect).
 - **Statement timeout below 1 ms vanishes.** A sub-millisecond `set_timeout` truncates to 0 and emits no `SET LOCAL`.

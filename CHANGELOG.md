@@ -9,6 +9,21 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Added
 
+- **`database::stats()` and `database::on_query_complete()` (Huly QB-115).** `stats()` returns a `qb::pg::stats`
+  snapshot by value: monotonic `std::uint64_t` counts since construction — `queries`, `errors`, `bytes_sent`,
+  `bytes_received` (PostgreSQL protocol bytes, the handshake included, TLS framing excluded), `notifications_received`,
+  `notifications_dropped` (what a `notify_co_consumer`'s bounded channel refused), `prepared_hits`, `prepared_misses`,
+  `prepared_evicted` — and `last_query_duration`. `on_query_complete(fn)` calls `fn` once per completed query with a
+  `qb::pg::query_info` (`kind` — `qb::pg::query_kind` — `name`, `sql`, `duration`, `ok`, `error`), on the connection's
+  thread, before the query's own callback or awaiter; an exception escaping it is contained and logged. A query is one
+  round trip of the serial queue; one that failed before it was sent (refused locally, drained by a disconnect) is
+  counted and reported with a zero duration. Without a hook a completion pays one predictable branch; the duration
+  costs one clock read per query on a busy connection (the ReadyForQuery instant ends one query and stamps the next).
+  New header `qbm/pgsql/stats.h`. ABI: `Database` gains the counters, the hook and the clock state (additive member
+  growth in a qbm class, allowed under the 3.3.0 ABI reading); the internal `ISqlQuery` gains the pure virtual
+  `describe()`, and `Transaction::fail_all_pending` an optional `drained_query_observer *` — consumers recompile with
+  the train.
+
 - **The prepared-statement cache has a public bound, and counts its hits and misses (Huly QB-207).**
   `db.prepared_cache_capacity(n)` sets the LRU's bound (100 by default; `0` restores it) and
   `db.prepared_cache_capacity()` reads it. `PreparedStorage::hits()` / `misses()` count the named executions found
