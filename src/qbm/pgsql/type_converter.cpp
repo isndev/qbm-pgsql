@@ -754,15 +754,15 @@ append_pg_numeric_text(std::string &out, const byte *data, std::size_t size) {
     const std::size_t at             = out.size();
     out.resize(at + 1 + integer_digits + 1 + static_cast<std::size_t>(dscale) + 4);
     char      *p        = out.data() + at;
-    const auto put_limb = [&p](std::uint16_t limb, bool pad_four) {
+    const auto put_limb = [](char *w, std::uint16_t limb, bool pad_four) -> char * { // returns the end of what it wrote
         if (pad_four && limb < 10000) {
-            p[0] = static_cast<char>('0' + limb / 1000);
-            p[1] = static_cast<char>('0' + limb / 100 % 10);
-            p[2] = static_cast<char>('0' + limb / 10 % 10);
-            p[3] = static_cast<char>('0' + limb % 10);
-            p += 4;
+            w[0] = static_cast<char>('0' + limb / 1000);
+            w[1] = static_cast<char>('0' + limb / 100 % 10);
+            w[2] = static_cast<char>('0' + limb / 10 % 10);
+            w[3] = static_cast<char>('0' + limb % 10);
+            return w + 4;
         } else {
-            p = std::to_chars(p, p + 5, limb).ptr; // the leading limb, unpadded, or a five-digit one
+            return std::to_chars(w, w + 5, limb).ptr; // the leading limb, unpadded, or a five-digit one
         }
     };
     if (sign == 0x4000)
@@ -773,7 +773,7 @@ append_pg_numeric_text(std::string &out, const byte *data, std::size_t size) {
         *p++ = '0';
     } else {
         for (int i = 0; i <= weight; ++i)
-            put_limb((i < ndigits) ? rd16(data + 8 + i * 2) : 0, i != 0);
+            p = put_limb(p, (i < ndigits) ? rd16(data + 8 + i * 2) : 0, i != 0);
     }
 
     // Fraction part: exactly dscale digits, limbs from index weight+1 onward.
@@ -781,7 +781,7 @@ append_pg_numeric_text(std::string &out, const byte *data, std::size_t size) {
         *p++                 = '.';
         char *const fraction = p;
         for (int idx = weight + 1; p - fraction < dscale; ++idx)
-            put_limb((idx >= 0 && idx < ndigits) ? rd16(data + 8 + idx * 2) : 0, true);
+            p = put_limb(p, (idx >= 0 && idx < ndigits) ? rd16(data + 8 + idx * 2) : 0, true);
         p = fraction + dscale;
     }
     out.resize(static_cast<std::size_t>(p - out.data()));
