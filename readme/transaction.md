@@ -402,7 +402,7 @@ Key facts to get right:
 
 ## LISTEN / NOTIFY
 
-<!-- src: src/qbm/pgsql/transaction.h:483-547; src/qbm/pgsql/pg_notify_sql.h:25-92; qbm/pgsql/src/qbm/pgsql/pgsql.h:406-423,2972-2977,3943-4231 (in that order: notification; on_incoming_notify; notify_consumer / notify_cb_consumer / notify_co_consumer) -->
+<!-- src: src/qbm/pgsql/transaction.h:483-547; src/qbm/pgsql/pg_notify_sql.h:25-92; qbm/pgsql/src/qbm/pgsql/pgsql.h:406-423,3043-3048,4014-4302 (in that order: notification; on_incoming_notify; notify_consumer / notify_cb_consumer / notify_co_consumer) -->
 
 ### Publishing (NOTIFY)
 
@@ -497,7 +497,7 @@ only when the connection is `down`: `receive()` yields what it holds, then `std:
   `End`/`with_transaction` do it) before sending new commands.
 - **A lost connection fails every pending query automatically.** You do **not** write a disconnect handler. The built-in
   `Database::on(qb::io::async::event::disconnected)` handler calls `fail_all_pending(...)` on the root transaction (through
-  `fail_all_pending_counted`, `qbm/pgsql/src/qbm/pgsql/pgsql.h:3794`, which also counts each drained query), which drains every queued query and pending sub-transaction so suspended `co_await`
+  `fail_all_pending_counted`, `qbm/pgsql/src/qbm/pgsql/pgsql.h:3865`, which also counts each drained query), which drains every queued query and pending sub-transaction so suspended `co_await`
   awaiters resume with `client_error("database disconnected")` instead of hanging forever.
   See [connection.md](./connection.md) (Fail-all-on-disconnect).
 - **Statement timeout below 1 ms vanishes.** A sub-millisecond `set_timeout` truncates to 0 and emits no `SET LOCAL`.

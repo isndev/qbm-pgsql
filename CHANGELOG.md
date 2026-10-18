@@ -139,10 +139,40 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
   NUMERIC formats its limbs with integer conversion instead of `printf`, transfers decoded text into its owning
   carrier, and renders that carrier directly inside arrays. UTC timestamp text uses the existing qb calendar
   and a stack buffer for years 1970–9999; other years keep the previous formatter. JSON/JSONB array projection
-  borrows element text only while rendering, and quoted strings are appended in runs between escapes.
+  borrows element text only while rendering.
   The final result owns its text; public types, scale, special values, NULLs and wire-format selection are unchanged.
   Completed JSON row objects move into the output array instead of copying their keys and strings.
   Repeated exports preserve the source result and each returned projection remains independently owned.
+
+- **`results::json()` writes a binary array's literal in place (Huly QB-1087).** QB-206 asks for `uuid[]`,
+  `timestamptz[]`, `numeric[]`, `json[]` and `jsonb[]` results in binary, so the export re-renders the
+  literal the text format would have carried. It decoded the array into a vector of typed values, built a string
+  per UUID, timestamp and NUMERIC element (two for a NUMERIC with a fraction), grew the literal from an
+  eight-bytes-per-element guess, escaped quoted text with a call per escaped byte, and copied the whole
+  literal again behind its `[lower:upper]=` bounds. It now validates the framing once, writes the bounds first
+  and appends every element into one string reserved from the wire size: UUID and timestamp text through
+  `append_text`, NUMERIC limbs decoded straight into the output (`append_pg_numeric_text`, which
+  `decode_pg_numeric` and `from_binary` share), quoted text escaped without a branch per byte. callgrind, g++-14
+  Release, one 32-element array with 16 NULLs (`BM_JsonExportExtendedArray`), instructions per export:
+  uuid 10692 -> 5715, timestamptz 18935 -> 10217, numeric 35492 -> 12685, json 20899 -> 12874, jsonb
+  21028 -> 12938, int4 7634 -> 5416, text 9042 -> 5535; on json, the branch simulator's mispredictions fall from
+  173 to 26.
+  Every spelling is unchanged, pinned by a test that also passes on the previous renderer, and NUMERIC by a
+  differential test against the string-building decoder over 20 000 random headers. `render_pg_array_text`
+  writes its elements through the same appenders. A malformed array that is wrong in two places may report the
+  framing fault before the element fault; both throw.
+
+- **`encode_pg_numeric` writes its limbs in place (Huly QB-1088).** Encoding a NUMERIC parameter built the
+  integer and fraction digits in strings, padded each into a new one by concatenation, collected the limbs in
+  a `std::vector<int>` and grew the output with an insert per 16-bit word. type_converter.cpp exhausts g++'s
+  `inline-unit-growth` budget, so whether those string helpers were inlined into the function depended on the
+  rest of the TU: under `-march=native`, the benchmarks preset's, train 3's rewrite of the TU left two
+  `std::string` move constructors out of line (1641 -> 1411 instructions, +28 instructions per call), while
+  the portable `-march=x86-64` build was unaffected. The encoder now reads each limb straight from the digits
+  into one output buffer, the only allocation: 858 instructions whose only calls are the buffer's, and per
+  `BM_EncodeWideNumeric` call (callgrind, g++-14) 3892 -> 696 instructions with `-march=native` and
+  3927 -> 698 with `-march=x86-64`. Its bytes and rejections are those of the string-building encoder, held
+  by a differential test over 20000 random decimal texts and the edge cases.
 
 - **Typed JSONB decoding combines precision validation and DOM construction where supported (Huly QB-945).**
   Audited nlohmann versions and configurations reuse its DOM builder and numeric formatter.
@@ -161,6 +191,18 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
   `readme/results.md` and the llm gotchas.
 
 ### Fixed
+
+- **`connect(dsn, raw_io)` runs the handshake on the transport it is given (Huly QB-1096).** The overload was
+  documented as adopting an already-connected transport, but it stored the transport and then dialled `dsn` itself:
+  the transport was never used (and stayed open in the client until the next connect). It now adopts it for the FIRST
+  connection of the lifecycle -- the whole handshake (authentication, the hook, the LISTEN replay) runs on it -- while
+  `dsn` still names the session and the address a reconnection run or a later `connect()` dials. On
+  `tcp::ssl::database` the caller must already have run the PostgreSQL TLS negotiation on it (the SSLRequest, the
+  server's `'S'`, the TLS handshake). A transport that is not open fails the attempt (`down`, `down_reason::peer`);
+  on a busy or ready connection the call resolves `false` and closes the moved-in transport unused, since the
+  connection already has its link. Pinned daemon-free by `system/connection/adopted-transport.cpp`: adoption, a
+  reconnection dialling the DSN, a closed transport, a ready client, and a TLS-negotiated transport on a secure
+  database.
 
 - **A bare reconnect starts with an empty prepared-statement cache (Huly QB-1095).** Prepared statements belong to
   the backend session, but only `prepare_reconnect()` cleared the cache: `connect()` after `disconnect()` -- a

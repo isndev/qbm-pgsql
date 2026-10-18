@@ -147,7 +147,11 @@ Overloads (all return `connect_awaiter`): `connect()` (stored options),
 `connect(std::string const& dsn)` (re-parse then connect),
 `connect(connection_options opts)` (fully-specified options — the only way to set
 the fields the DSN string cannot carry, esp. `ssl_verify`),
-`connect(dsn, transport_io_type&& raw_io)` (adopt a pooled socket).
+`connect(dsn, transport_io_type&& raw_io)` (adopt an already-connected transport for the
+first connection: the handshake runs on it, a reconnection dials the DSN; on
+`tcp::ssl::database` the caller must have run the SSLRequest and the TLS handshake on it;
+on a busy or ready connection it resolves `false` and closes the transport unused —
+Huly QB-1096).
 
 `connection_options` fields (parsed from the DSN or set by hand):
 `alias`, `schema`, `uri` (`host:port` or `/path` for a Unix socket), `database`,
@@ -360,14 +364,16 @@ bounds and NULL elements. JSON/JSONB element text is copied without DOM conversi
 decimals and whitespace survive; JSONB version bytes are checked and removed per element.
 The projection's temporary element views borrow the field only during rendering; the exported
 JSON owns its strings. This does not add a public `std::vector<std::string_view>` array result
-type. NUMERIC remains an owning decimal-string carrier; its integer limb formatter and internal
-array rendering avoid intermediate string copies without changing its value or scale.
-<!-- src: src/qbm/pgsql/resultset.cpp:449-469; src/qbm/pgsql/type_converter.cpp:703-761,896-915; src/qbm/pgsql/type_converter.h:1718-1719 -->
+type. NUMERIC remains an owning decimal-string carrier. The projection writes a binary array's
+literal in place -- the bounds first, then each element's UUID, timestamp, NUMERIC or quoted text
+appended to the one output string, with no typed vector and no string per element (Huly QB-1087) --
+without changing any value, scale or spelling.
+<!-- src: src/qbm/pgsql/resultset.cpp:424-500; src/qbm/pgsql/type_converter.cpp:711-788,921-944; src/qbm/pgsql/type_converter.h:1738-1754 -->
 
 `qb::wall_time` text remains UTC with `+00` and six fractional digits when a fraction is present.
 Years 1970–9999 use the existing qb calendar and a stack formatter; pre-1970 and later years keep
 the previous formatter. This selects an implementation path, not a new range of accepted instants.
-<!-- src: src/qbm/pgsql/type_converter.cpp:138-204 -->
+<!-- src: src/qbm/pgsql/type_converter.cpp:138-212 -->
 
 Binary JSON/JSONB decoding preserves JSON structure: `[[1,2]]` remains an array
 of arrays. A pair-shaped array is never inferred to be an object.
@@ -560,7 +566,7 @@ the operation and callable without copying either shared owner; retention occurs
 cancellation detaches the sink or completion releases the operation during the call. That
 ownership stays in the operation's outermost sink invocation through nested calls until return.
 Borrowed capture data still needs its own lifetime; command admission and reservation are unchanged.
-_(src/qbm/pgsql/pgsql.h:1788-1827,1835-1852,2564-2580,3284-3293)_
+_(src/qbm/pgsql/pgsql.h:1825-1864,1872-1889,2601-2617,3355-3364)_
 
 > **`copy_in` is NOT constant-memory.** It drains the entire `source` into the
 > output pipe synchronously (bounded only by the write-buffer ceiling). Only
@@ -615,7 +621,7 @@ coroutine, an actor, or a second connection's trigger; reach for `cancel()` only
 where no coroutine can run.
 During the packet write, a native TLS `WANT_READ` waits for readability alone;
 otherwise native TLS and plain writes wait for writability. A custom secure transport
-without native TLS state keeps the combined read/write fallback (`pgsql.h:3613-3624`).
+without native TLS state keeps the combined read/write fallback (`pgsql.h:3684-3695`).
 
 **Connection introspection (all `[[nodiscard]]`, libpq-style):**
 
@@ -783,7 +789,7 @@ if (!co_await db.connect(dsn)) { /* db.down_reason(), db.error() */ }
   lower bounds (`[lower:upper]=...`), and SQL NULL becomes JSON null. A
   multi-dimensional array or unsupported binary OID throws instead of exporting
   a changed value. Each exported row owns its values and moves into the output array;
-  repeated exports preserve the source. <!-- src: src/qbm/pgsql/resultset.cpp:555-568 -->
+  repeated exports preserve the source. <!-- src: src/qbm/pgsql/resultset.cpp:586-599 -->
 - **`execute_file` / `prepare_file` read the file synchronously** (blocking) on
   the I/O thread.
 - **Never use the retired time tokens** (§3.6). `timestamptz`/`timestamp` →

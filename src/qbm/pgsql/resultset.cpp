@@ -22,7 +22,9 @@
 #include "./resultset.h"
 #include <algorithm>
 #include <assert.h>
+#include <charconv>
 #include <cstring>
+#include <iterator>
 #include <limits>
 #include <utility>
 #include "./protocol.h"
@@ -416,56 +418,85 @@ array_header_int(std::span<const std::byte> wire, std::size_t offset) {
     return qb::endian::from_big_endian(network);
 }
 
-std::string
-with_binary_array_bounds(const resultset::row::value_type &field, std::string text) {
-    const auto wire = field.view();
+/// Append the `[lower:upper]=` that PostgreSQL's array_out writes before a one-dimensional array whose
+/// lower bound is not 1; nothing for the default bound or an empty array.
+void
+append_binary_array_bounds(std::string &out, std::span<const std::byte> wire) {
     const auto ndim = array_header_int(wire, 0);
     if (ndim == 0)
-        return text; // '{}' has no dimension header or lower bound.
+        return; // '{}' has no dimension header or lower bound.
     if (ndim != 1)
         throw error::field_type_mismatch("results::json(): only one-dimensional binary arrays are supported");
 
     const auto length = array_header_int(wire, 12);
     const auto lower  = array_header_int(wire, 16);
     if (lower == 1)
-        return text;
+        return;
     if (length <= 0)
         throw error::client_error("results::json(): invalid dimension size for a bounded binary array");
     const std::int64_t upper = static_cast<std::int64_t>(lower) + length - 1;
     if (upper < std::numeric_limits<std::int32_t>::min() || upper > std::numeric_limits<std::int32_t>::max())
         throw error::client_error("results::json(): binary array upper bound overflows int32");
-    return "[" + std::to_string(lower) + ":" + std::to_string(upper) + "]=" + text;
+    char digits[11]; // an int32 in decimal
+    out += '[';
+    out.append(digits, std::to_chars(std::begin(digits), std::end(digits), lower).ptr);
+    out += ':';
+    out.append(digits, std::to_chars(std::begin(digits), std::end(digits), static_cast<std::int32_t>(upper)).ptr);
+    out.append("]=", 2);
+}
+
+/// The literal PostgreSQL's array_out writes for a one-dimensional binary array, rendered into one string
+/// (Huly QB-1087): decode_pg_array validates the framing once and yields element views, which borrow the
+/// still-live field storage for this call only; the bounds come first, then `append_element(out, view)`
+/// writes each present element in place -- no typed vector, no string per element, no copy of the literal
+/// behind its bounds. Multi-dimensional arrays throw `error::field_type_mismatch` from the decoder.
+template <typename AppendElement>
+std::string
+render_binary_array(const resultset::row::value_type &field, AppendElement append_element) {
+    const auto wire     = field.view();
+    const auto elements = detail::decode_pg_array<std::optional<std::string_view>>(
+        std::span<const byte>(reinterpret_cast<const byte *>(wire.data()), wire.size()));
+    std::string out;
+    out.reserve(2 * wire.size() + 2 * elements.size() + 16); // most element texts fit in twice their wire bytes
+    append_binary_array_bounds(out, wire);
+    out += '{';
+    bool first = true;
+    for (const auto &element : elements) {
+        if (!first)
+            out += ',';
+        first = false;
+        if (element)
+            append_element(out, *element);
+        else
+            out.append("NULL", 4);
+    }
+    out += '}';
+    return out;
 }
 
 template <typename T>
 std::string
 binary_array_text(const resultset::row::value_type &field) {
-    // The decoder validates element lengths and rejects ndim > 1. The vector
-    // loses the lower bound, so retain that header metadata in the text literal.
-    return with_binary_array_bounds(field, binary_field_text<std::vector<std::optional<T>>>(field));
+    return render_binary_array(field, [](std::string &out, std::string_view element) {
+        detail::append_pg_binary_element<T>(out, std::span<const byte>(element.data(), element.size()));
+    });
 }
 
 std::string
 binary_json_array_text(const resultset::row::value_type &field, bool jsonb) {
     // Projection exports text. A JSON DOM would round long decimal values or
-    // reject them through the typed JSONB codec, and would rewrite whitespace.
-    // Decode only array framing. Local views borrow the still-live field storage;
-    // rendering returns an owning string before any view leaves this function.
-    const auto wire     = field.view();
-    auto       elements = detail::decode_pg_array<std::optional<std::string_view>>(
-        std::span<const byte>(reinterpret_cast<const byte *>(wire.data()), wire.size()));
-    for (auto &element : elements) {
-        if (!element)
-            continue;
+    // reject them through the typed JSONB codec, and would rewrite whitespace:
+    // each element's wire text is quoted as it is.
+    return render_binary_array(field, [jsonb](std::string &out, std::string_view element) {
         if (jsonb) {
-            if (element->size() < 2 || element->front() != '\x01')
+            if (element.size() < 2 || element.front() != '\x01')
                 throw error::client_error("results::json(): unsupported JSONB array element version or empty payload");
-            element->remove_prefix(1);
-        } else if (element->empty()) {
+            element.remove_prefix(1);
+        } else if (element.empty()) {
             throw error::client_error("results::json(): empty JSON array element payload");
         }
-    }
-    return with_binary_array_bounds(field, detail::render_pg_array_text(elements));
+        detail::append_pg_array_quoted(out, element);
+    });
 }
 
 std::string

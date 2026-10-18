@@ -118,8 +118,8 @@ public:
         query_stream(std::string sql, std::size_t batch_size, RowFn on_row);
 
     // Connection introspection / control:
-    bool cancel();                                      // out-of-band PostgreSQL CancelRequest (SYNCHRONOUS, ≤2s, plaintext); NOT [[nodiscard]] (pgsql.h:3512-3513)
-    [[nodiscard]] qb::io::async::task<bool> cancel_async(); // the same request, non-blocking, TLS on a secure database (pgsql.h:3557-3558)
+    bool cancel();                                      // out-of-band PostgreSQL CancelRequest (SYNCHRONOUS, ≤2s, plaintext); NOT [[nodiscard]] (pgsql.h:3583-3584)
+    [[nodiscard]] qb::io::async::task<bool> cancel_async(); // the same request, non-blocking, TLS on a secure database (pgsql.h:3628-3629)
     [[nodiscard]] bool in_transaction() const noexcept; // backend session in a transaction block ('T'/'E')
     [[nodiscard]] bool used_channel_binding() const noexcept; // SCRAM-SHA-256-PLUS tls-server-end-point binding negotiated
     [[nodiscard]] std::optional<std::string_view> parameter_status(std::string_view key) const; // PQparameterStatus
@@ -163,6 +163,7 @@ struct tcp {
 - `connect_awaiter connect()`: Starts the async handshake using previously set options. `co_await` or `run_sync` it; resolves to `bool`.
 - `connect_awaiter connect(std::string const &conn_opts_str)`: Re-parses the DSN, then connects. DSN form `tcp://[user[:pass]@]host[:port][database]` — the database name is in **square brackets**.
 - `connect_awaiter connect(connection_options opts)`: Connects with a fully-specified options struct. Use this overload (not the DSN string) to set fields the DSN cannot carry — `ssl_verify` (TLS verification level), `ssl_root_cert`/`ssl_cert`/`ssl_key` (optional private-CA + client-cert mTLS PEM paths for `ssl://`), `connect_timeout`, and keepalive. Example: `auto o = connection_options::parse(dsn); o.ssl_verify = ssl_verify_mode::full; o.ssl_root_cert = "ca.pem"; co_await db.connect(o);`.
+- `connect_awaiter connect(std::string const &conn_opts_str, transport_io_type &&raw_io)`: Adopts an already-connected transport (one from a pool, one a supervisor handed over) for the FIRST connection of the lifecycle and runs the whole handshake on it (authentication, the `set_handshake()` hook, the LISTEN replay); the DSN still names the user and the database, and the address a reconnection run or a later `connect()` dials -- only the first connection adopts. The transport must be connected; for `tcp::ssl::database` the caller must ALSO have run the PostgreSQL TLS negotiation on it (the SSLRequest packet, the server's `'S'`, the TLS handshake), since the client writes the StartupMessage at once. A transport that is not open fails the attempt (`false`, `down`, `down_reason::peer`). While a connection, a handshake or a run is in progress, or on a ready connection, it resolves `false` and closes the moved-in transport unused: the connection already has its link and the transport was not adopted (a plain `connect()` on a ready connection resolves `true`: it asks for no particular transport). Until 3.3 the overload stored the transport and dialled the DSN itself, so the transport was never used. (Huly QB-1096)
 - `connect_awaiter connect(qb::duration timeout)`: Connects, overriding the attempt's deadline (the transport connect and, from the StartupMessage on, the whole handshake).
 - Every `connect()` form resolves `true` once the connection is `ready` and `false` when the attempt failed, was refused or superseded (the connection is then `down`: `down_reason()`, `error()`); `false` at once while a connection, a handshake or a run is in progress, `true` at once on a ready connection. The string and `connection_options` forms change the stored options only while the connection is idle or down. (Huly QB-111)
 - `task<bool> connect_with_retry(RetryPolicy policy = {})` (and a DSN-first overload): the policy's attempts, each a transport connect and a whole handshake; between attempts the policy's `next_delay()` (jittered) after `on_retry(attempt, next_delay)`. A refusal ends it at once (`handshake_refused`), a spent policy `down(retries_exhausted)`. `qb::pg::RetryPolicy` is `qb::io::reconnect_policy` (`max_attempts` -1 = unlimited, `initial_delay`, `max_delay`, `multiplier`, `jitter`, `connect_timeout` -- zero: the connection's own `connect_timeout`, else 10 s -- `on_retry`). (Huly QB-111)
@@ -171,13 +172,13 @@ struct tcp {
 - `Database &set_handshake(handshake_hook hook)`: a `task<bool>(qb::pg::handshake_session &)` run on EVERY connection, the first one included, after authentication and the first ReadyForQuery and before the connection is ready. `false` or a throw refuses the connection for good (`handshake_refused`). The session (`execute(sql)`, `query(sql)`, `prepare(name, sql, types)`, `execute(name, params)`, `live()`) is the only way to queue while the connection is not ready -- the connection itself refuses work outside `ready` -- and only while its own handshake runs: a kept copy fails with `"handshake over"`. (Huly QB-111)
 - `on_connected(fn)` (each time the connection becomes ready), `on_disconnected(fn(down_reason))` (once per ready connection lost, cause `user` / `peer` / `protocol`, after the in-flight work failed and before the reconnection decision -- a hook that disarms the policy prevents the run; it alternates strictly with `on_connected`), `on_down(fn(down_reason))` (each time the connection reaches `down`). Empty until set; an exception escaping one is contained and logged. (Huly QB-111)
 - `listened_channels()`: the channels `listen()` / `unlisten()` / `unlisten_all()` left the connection listening on, maintained when the server confirms them and replayed at the start of every new session; cleared by `disconnect()`. A `LISTEN` written as SQL is not in it. (Huly QB-111)
-- `void disconnect()`: Marks the connection down and refuses new queries immediately; callback commands receive one connection error and coroutine calls return failed replies. Outside a completion callback, it fails in-flight/queued work and completes io teardown before returning, without a loop pass (safe from a coroutine body). Teardown shuts the sending side down, so the server reads EOF and the backend leaves `pg_stat_activity` while the object lives (qb-io, Huly QB-1060); the descriptor is released at destruction or the next `connect()`. When called inside a query or fluent `.then` / `.error` callback, queued failures run after that callback returns so its transaction owner stays alive; io teardown follows message dispatch. A later ordinary `connect()` on the same object opens a fresh socket and handshake and starts the session with an empty prepared-statement cache, an empty ParameterStatus cache and an idle transaction status (Huly QB-1095); `prepare_reconnect()` is optional, to close the old fd early. The overload taking an existing transport uses that supplied transport.
+- `void disconnect()`: Marks the connection down and refuses new queries immediately; callback commands receive one connection error and coroutine calls return failed replies. Outside a completion callback, it fails in-flight/queued work and completes io teardown before returning, without a loop pass (safe from a coroutine body). Teardown shuts the sending side down, so the server reads EOF and the backend leaves `pg_stat_activity` while the object lives (qb-io, Huly QB-1060); the descriptor is released at destruction or the next `connect()`. When called inside a query or fluent `.then` / `.error` callback, queued failures run after that callback returns so its transaction owner stays alive; io teardown follows message dispatch. A later ordinary `connect()` on the same object opens a fresh socket and handshake and starts the session with an empty prepared-statement cache, an empty ParameterStatus cache and an idle transaction status (Huly QB-1095); `prepare_reconnect()` is optional, to close the old fd early.
 - **Streaming / bulk-load (coroutine, `co_await`-only; each returns `qb::io::async::task<Reply<T>>`):**
     - `copy_out(std::string sql, std::function<void(std::string_view)> sink) -> task<Reply<resultset>>`: Runs a `COPY … TO STDOUT` and delivers each `CopyData` chunk to `sink` as it arrives. Streams in **constant memory** (rows are never buffered in a result set). The `string_view` is valid only during the call. Resolves to `ok()` on success.
     - `copy_in(std::string sql, std::function<std::optional<std::string>()> source) -> task<Reply<resultset>>`: Runs a `COPY … FROM STDIN`, calling `source` repeatedly and sending each returned chunk as `CopyData` until it returns `std::nullopt` (then `CopyDone`). A throwing `source` aborts the COPY with `CopyFail`. Resolves to `ok()` (the `COPY n` count) on success; the connection stays usable on error. **NOT constant-memory** — it drains the whole source into the output pipe synchronously (capped by the write-buffer ceiling); only `copy_out` and `query_stream` stream in constant memory.
     - `copy_in(std::string sql, std::string data) -> task<Reply<resultset>>`: Convenience overload that sends the entire `data` payload in one shot.
     - The connection admits one COPY at a time, in either direction. A second COPY returns a failed `Reply` without sending SQL or invoking its source/sink. Destroying the awaiting coroutine detaches its callback; its command keeps the reservation until completion, so a later COPY cannot answer the old server response. A source that destroys its own waiter causes its returned chunk to be discarded and `CopyFail` to be sent without another source call.
-    - A COPY OUT sink and its owned captures stay alive until its invocation returns, including self-cancellation or disconnect; detachment prevents later calls. Ordinary chunk delivery borrows the operation and callable without copying either shared owner. Cancellation or completion during the call retains the needed ownership in the operation's outermost sink invocation, shared by nested calls until return. Borrowed capture data needs its own lifetime. Command admission and query association remain unchanged (`src/qbm/pgsql/pgsql.h:1788-1827,1835-1852,2564-2580,3284-3293`).
+    - A COPY OUT sink and its owned captures stay alive until its invocation returns, including self-cancellation or disconnect; detachment prevents later calls. Ordinary chunk delivery borrows the operation and callable without copying either shared owner. Cancellation or completion during the call retains the needed ownership in the operation's outermost sink invocation, shared by nested calls until return. Borrowed capture data needs its own lifetime. Command admission and query association remain unchanged (`src/qbm/pgsql/pgsql.h:1825-1864,1872-1889,2601-2617,3355-3364`).
     - `query_stream(std::string sql, std::size_t batch_size, RowFn on_row) -> task<Reply<void>>`: Streams a large result via a server-side `CURSOR` (`DECLARE`/`FETCH`, `batch_size` rows per round trip), invoking `on_row` per row in **constant memory**. Auto-manages a transaction when idle (`BEGIN`/`COMMIT`, `ROLLBACK` on failure); when `in_transaction()` it declares the cursor in the caller's transaction and touches only the cursor. Cursor names are unique per connection (`qb_stream_cursor_<n>`), so streams **may overlap** on one `database` — and because a session has a single transaction, overlapping streams **share** the self-opened block: the first opens it, later ones only join, the last one out `COMMIT`s (or `ROLLBACK`s if any participant failed), so a server error in one stream aborts the block for the others. A caller-opened transaction is recognised as caller-owned only once its `BEGIN` has **completed** (`in_transaction()` mirrors the last `ReadyForQuery`), so do not start a stream while your own `begin()` is still in flight. `on_row` exceptions are rethrown after the cursor is closed and any self-opened transaction rolled back. `batch_size` is clamped to ≥ 1.
 - **Connection introspection / control:**
     - `bool cancel()`: Sends an out-of-band PostgreSQL `CancelRequest` on a short-lived **separate** connection (libpq `PQcancel` style). It is **synchronous / blocking** (capped at ≤ 2s) and plaintext even when the main link is SSL. Surfaces on the in-flight query as `sqlstate::query_canceled` (57014). Note: it briefly blocks the calling thread — prefer `cancel_async()`.
@@ -185,7 +186,7 @@ struct tcp {
     - `bool in_transaction() const noexcept`: True when the backend session is in a transaction block (`'T'`) or a failed transaction block (`'E'`); false when idle (`'I'`).
     - Packet-write readiness in `cancel_async()`: native TLS `WANT_READ` waits for read only;
       other native TLS/plain writes wait for write. Custom secure transports without native
-      TLS state retain the combined read/write fallback (`pgsql.h:3613-3624`).
+      TLS state retain the combined read/write fallback (`pgsql.h:3684-3695`).
     - `bool used_channel_binding() const noexcept`: True when **SCRAM-SHA-256-PLUS** with `tls-server-end-point` channel binding was negotiated (only over TLS, when the server offers the `-PLUS` mechanism).
     - `std::optional<std::string_view> parameter_status(std::string_view key) const`: Value of a server `ParameterStatus` report (libpq `PQparameterStatus`); e.g. `"server_version"`, `"server_encoding"`, `"TimeZone"`. `std::nullopt` if the key was never reported.
     - `int server_version() const`: Server version as a libpq-style integer (`PQserverVersion`), e.g. `160002` for 16.2. Returns 0 if the `server_version` parameter is unknown.
@@ -485,7 +486,7 @@ namespace qb::pg {
 
 ### `qb::pg::results` (alias for `qb::pg::resultset`)
 
-Represents the set of rows returned by a query. The class is declared publicly as `qb::pg::resultset` in `resultset.h`; `qb::pg::results` is its public alias (`qbm/pgsql/src/qbm/pgsql/pgsql.h:4267`). Both spellings are valid, with `results` preferred for application code. Row and field are reachable as `qb::pg::results::row` / `qb::pg::results::field`.
+Represents the set of rows returned by a query. The class is declared publicly as `qb::pg::resultset` in `resultset.h`; `qb::pg::results` is its public alias (`qbm/pgsql/src/qbm/pgsql/pgsql.h:4338`). Both spellings are valid, with `results` preferred for application code. Row and field are reachable as `qb::pg::results::row` / `qb::pg::results::field`.
 
 **Definition (`qbm/pgsql/src/qbm/pgsql/resultset.h`):**
 ```cpp
@@ -745,9 +746,9 @@ public:
     static void write_integer(std::vector<byte>& buffer, integer value); // public — TypeConverter<T>'s only access specifier is `public:` (type_converter.h:132, :686-687)
 };
 // Specializations: qb::uuid, qb::wall_time (timestamptz/timestamp), qb::json, qb::jsonb,
-// std::chrono::duration (type_converter.h:1019), std::string (:1131), numeric (:1220),
-// qb::date (type_converter.h:1258), qb::time_of_day (:1280), qb::time_of_day_tz (:1302),
-// qb::calendar_interval (type_converter.h:1322), std::vector<std::byte> (:1347)
+// std::chrono::duration (type_converter.h:1047), std::string (:1159), numeric (:1254),
+// qb::date (type_converter.h:1295), qb::time_of_day (:1317), qb::time_of_day_tz (:1339),
+// qb::calendar_interval (type_converter.h:1359), std::vector<std::byte> (:1384)
 // (the retired qb::Timestamp / qb::UtcTimestamp / qb::LocalTimestamp are NOT specialized).
 } // namespace qb::pg::detail
 ```
@@ -758,7 +759,7 @@ for both `std::vector<T>` and `std::vector<std::optional<T>>`. Supported element
 `smallint`, `integer`, `bigint`, `float`, `double`, `std::string`, `qb::uuid`, `qb::wall_time`,
 `qb::pg::detail::numeric`, `qb::json` and `qb::jsonb`. The last five map to `uuid[]` (2951),
 `timestamptz[]` (1185), `numeric[]` (1231), `json[]` (199) and `jsonb[]` (3807).
-<!-- src: src/qbm/pgsql/type_converter.h:1782-1786 -->
+<!-- src: src/qbm/pgsql/type_converter.h:1859-1863 -->
 
 `from_binary` consumes array value bytes without a length prefix; `to_binary` writes the
 length prefix. `from_text` and `to_text` consume/produce PostgreSQL array literals.
@@ -766,16 +767,26 @@ SQL NULL elements require `std::optional<T>`; JSON `null` is a present element. 
 and JSON/JSONB text elements are quoted and escaped. Empty arrays remain empty arrays,
 and multi-dimensional arrays throw `error::field_type_mismatch`.
 `results::json()` supports these binary arrays too: JSON/JSONB elements retain their wire text
-without DOM conversion; the array literal preserves NULL elements and lower bounds.
+without DOM conversion; the array literal preserves NULL elements and lower bounds. It writes the
+literal into one string (Huly QB-1087): `decode_pg_array` validates the framing once and yields
+element views, the `[lower:upper]=` prefix comes first, and `append_pg_binary_element<T>` appends
+each present element in place -- through `TypeConverter<qb::uuid>::append_text`,
+`TypeConverter<qb::wall_time>::append_text`, `TypeConverter<numeric>::append_text_from_binary`
+(`append_pg_numeric_text`) and `append_pg_array_quoted` -- with no typed vector and no string per
+element. `render_pg_array_text` writes its elements through `append_pg_array_element`, the one
+place that decides which elements are quoted.
 Temporary element views are internal to that rendering call; the exported JSON owns its strings.
 No public array converter for `std::vector<std::string_view>` is provided.
-<!-- src: src/qbm/pgsql/resultset.cpp:449-469; src/qbm/pgsql/type_converter.h:1782-1786 -->
+<!-- src: src/qbm/pgsql/resultset.cpp:424-500; src/qbm/pgsql/type_converter.h:1712-1803,1859-1863 -->
 
 `TypeConverter<qb::wall_time>::to_text` keeps UTC text and its `+00` suffix. Years 1970–9999
 use a stack formatter over the existing qb calendar; other years retain the previous formatter.
 `TypeConverter<numeric>::from_binary` still returns an owning `numeric` with the same scale
 and special values; integer limb formatting and transfer of the decoded string change no signature.
-<!-- src: src/qbm/pgsql/type_converter.cpp:138-204,703-761,896-915 -->
+`TypeConverter<qb::wall_time>::append_text` writes `to_text`'s text into a caller's string, and
+`decode_pg_numeric`, `from_binary` and `append_text_from_binary` decode through
+`append_pg_numeric_text`, which writes the digits in place (Huly QB-1087).
+<!-- src: src/qbm/pgsql/type_converter.cpp:138-212,711-788,921-944 -->
 
 ## Error Handling
 

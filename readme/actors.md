@@ -326,7 +326,7 @@ The two arities are fixed and checked at compile time: the success handler is `(
 `(Transaction&)` alone, and the error handler takes `(error::db_error const&)` — one argument, no transaction. The
 shipped no-ops `qb::pg::discard_query` and `qb::pg::discard_error` have exactly those signatures and are the right
 placeholder when you read the side effects elsewhere.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:4281-4289 (discard_query_results_t; discard_error_t) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:4352-4360 (discard_query_results_t; discard_error_t) -->
 
 `this` is safe in a callback in a way it is not in a coroutine, but only because of a difference worth naming: the
 callback is invoked from the reply path of a connection the actor owns, and the actor's `KillEvent` handler
@@ -359,7 +359,7 @@ here because an actor is where the cost lands.
   a coroutine. Inside its own query or fluent `.then` / `.error` callback, queued failures run after it returns, then teardown
   follows message dispatch (Huly QB-627). Until 3.3 it ran one `EVRUN_NOWAIT` pass after close, which re-entered the
   coroutine scheduler when called from a coroutine (an abort in a debug build — Huly QB-253).
-  <!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:3881-3905,3915-3929 (in that order: disconnect, its teardown through drop_link_ and disconnect_now; end_session_, the immediate or deferred drain) -->
+  <!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:3952-3976,3986-4000 (in that order: disconnect, its teardown through drop_link_ and disconnect_now; end_session_, the immediate or deferred drain) -->
 
 ---
 
