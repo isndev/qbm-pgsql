@@ -9,7 +9,7 @@
  * so a wrong endianness conversion in the reader is caught (this is decode-vs-bytes,
  * not a serializer self-round-trip).
  *
- * The auto-detect heuristic in ParamUnserializer::read_string (param_unserializer.cpp:184)
+ * The auto-detect heuristic in ParamUnserializer::read_string (param_unserializer.cpp:178)
  * has a documented limitation for large BYTEA-shaped buffers whose first bytes look
  * like a binary length prefix; HeuristicMisfiresOnLengthPrefixShapedBytea pins that
  * exact behavior (replacing the prior `result[0] == 4` bug-baked-in assertion).
@@ -229,7 +229,7 @@ TEST_F(UnserializerPrimitives, ReadStringRecoversTruncatedPrefix) {
 // Documented heuristic limitation (was: ASSERT_EQ(result[0], 4) bug-baked-in).
 //
 // read_string auto-detects binary format when buffer.size() in [4, 1 MiB] and one
-// of the first three bytes is 0 (param_unserializer.cpp:184). A 1 MiB BYTEA filled
+// of the first three bytes is 0 (param_unserializer.cpp:178). A 1 MiB BYTEA filled
 // with i % 256 begins 00 01 02 03 ... : byte[0] == 0 triggers the binary path,
 // the first 4 bytes are read as a big-endian length (0x00010203 = 66051), and the
 // returned string starts at offset 4 (value 0x04). The prior test asserted
@@ -265,7 +265,7 @@ TEST_F(UnserializerPrimitives, TextShapedByteaIsReturnedRaw) {
 
 // ---------------------------------------------------------------------------
 // read_bool: binary length-prefix form, every text spelling, raw single byte.
-// (param_unserializer.cpp:257-285 — previously entirely uncovered.)
+// Implementation: ParamUnserializer::read_bool, including rejection of empty input.
 // ---------------------------------------------------------------------------
 
 TEST_F(UnserializerPrimitives, ReadBoolEmptyBufferThrows) {
@@ -325,7 +325,7 @@ TEST_F(UnserializerPrimitives, ReadBoolRawSingleByteLastResort) {
 }
 
 // ---------------------------------------------------------------------------
-// read_string binary-detection branch (param_unserializer.cpp:184 TRUE path):
+// read_string binary-detection branch (param_unserializer.cpp:178 TRUE path):
 // a small buffer whose first bytes look like a length prefix is read as binary.
 // ---------------------------------------------------------------------------
 

@@ -192,6 +192,10 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Fixed
 
+- **Primitive-reader test comments name the current branches (Huly QB-1102).** Correct the
+  binary auto-detection reference and replace retired module/SQLSTATE/boolean-reader coordinates
+  with their actual symbols. No decoder, query path or test assertion changes.
+
 - **`connect(dsn, raw_io)` runs the handshake on the transport it is given (Huly QB-1096).** The overload was
   documented as adopting an already-connected transport, but it stored the transport and then dialled `dsn` itself:
   the transport was never used (and stayed open in the client until the next connect). It now adopts it for the FIRST
