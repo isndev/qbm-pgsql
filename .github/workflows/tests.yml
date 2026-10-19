@@ -116,7 +116,8 @@ jobs:
       QB_PG_SSL_DSN: 'tcp://test:test@localhost:5432[test]'
       # One place to change the server. Referenced by the uid probe and by `docker run`, so the
       # uid that is chowned and the image that is started can never drift apart.
-      PG_IMAGE: 'postgres:17-alpine'
+      # postgres:17-alpine, immutable ECR mirror; review with the release image checklist.
+      PG_IMAGE: 'public.ecr.aws/docker/library/postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24'
       # Pinned, and the reason is measured rather than inherited: the ubuntu-latest default
       # compiler is GNU 13.3.0, which this project targets nowhere, and which hits
       # `internal compiler error: in build_special_member_call` on the coroutine ramps in the
