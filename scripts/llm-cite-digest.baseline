@@ -31,22 +31,22 @@ llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/transaction.h:489-501	371ffdb8d432	templa
 llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/type_converter.cpp:138-212	c7dbcc4a91dd	TypeConverter<qb::wall_time>::to_text(const qb::wall_time &value) {
 llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/type_converter.cpp:711-788	b4793b1bc9ab	decode_pg_numeric(const byte *data, std::size_t size) {
 llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/type_converter.cpp:921-944	9612faccafbe	TypeConverter<numeric>::from_binary(std::span<const byte> buffer) {
-llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/type_converter.h:1712-1803	a15c49fd30a5	append_pg_array_quoted(std::string &out, std::string_view text) {
-llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/type_converter.h:1859-1863	393396e1e05c	QB_PG_DEFINE_ARRAY_CONVERTER(qb::uuid, static_cast<integer>(oid::uuid...
+llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/type_converter.h:1677-1768	a15c49fd30a5	append_pg_array_quoted(std::string &out, std::string_view text) {
+llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/type_converter.h:1824-1828	393396e1e05c	QB_PG_DEFINE_ARRAY_CONVERTER(qb::uuid, static_cast<integer>(oid::uuid...
 llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/type_mapping.h:58-63	1d898ef4b879	template <typename T, typename Enable = void>
 llm/qbm-pgsql.llm.api.md	stats.h:31-31	75254081911a	enum class query_kind : std::uint8_t {
 llm/qbm-pgsql.llm.api.md	stats.h:50-50	96125e55b64b	struct query_info {
 llm/qbm-pgsql.llm.api.md	stats.h:75-75	8db3196a350c	struct stats {
-llm/qbm-pgsql.llm.api.md	type_converter.h:1047-1047	f35a19148070	struct TypeConverter<std::chrono::duration<Rep, Period>> {
-llm/qbm-pgsql.llm.api.md	type_converter.h:1159-1159	2ea2442b025a	struct TypeConverter<std::string> {
-llm/qbm-pgsql.llm.api.md	type_converter.h:1254-1254	08899155e3f1	struct TypeConverter<numeric> {
-llm/qbm-pgsql.llm.api.md	type_converter.h:1295-1295	eb52156ec808	struct TypeConverter<qb::date> {
-llm/qbm-pgsql.llm.api.md	type_converter.h:1317-1317	a036a2eb131a	struct TypeConverter<qb::time_of_day> {
+llm/qbm-pgsql.llm.api.md	type_converter.h:1012-1012	f35a19148070	struct TypeConverter<std::chrono::duration<Rep, Period>> {
+llm/qbm-pgsql.llm.api.md	type_converter.h:1124-1124	2ea2442b025a	struct TypeConverter<std::string> {
+llm/qbm-pgsql.llm.api.md	type_converter.h:1219-1219	08899155e3f1	struct TypeConverter<numeric> {
+llm/qbm-pgsql.llm.api.md	type_converter.h:1260-1260	eb52156ec808	struct TypeConverter<qb::date> {
+llm/qbm-pgsql.llm.api.md	type_converter.h:1282-1282	a036a2eb131a	struct TypeConverter<qb::time_of_day> {
+llm/qbm-pgsql.llm.api.md	type_converter.h:1304-1304	9ae4d1e8f38c	struct TypeConverter<qb::time_of_day_tz> {
 llm/qbm-pgsql.llm.api.md	type_converter.h:132-132	5055bd28810c	public:
-llm/qbm-pgsql.llm.api.md	type_converter.h:1339-1339	9ae4d1e8f38c	struct TypeConverter<qb::time_of_day_tz> {
-llm/qbm-pgsql.llm.api.md	type_converter.h:1359-1359	83990a235a8d	struct TypeConverter<qb::calendar_interval> {
-llm/qbm-pgsql.llm.api.md	type_converter.h:1384-1384	f295c514857a	struct TypeConverter<std::vector<std::byte>> {
-llm/qbm-pgsql.llm.api.md	type_converter.h:686-687	e9e35cf613f8	static void
+llm/qbm-pgsql.llm.api.md	type_converter.h:1324-1324	83990a235a8d	struct TypeConverter<qb::calendar_interval> {
+llm/qbm-pgsql.llm.api.md	type_converter.h:1349-1349	f295c514857a	struct TypeConverter<std::vector<std::byte>> {
+llm/qbm-pgsql.llm.api.md	type_converter.h:651-652	e9e35cf613f8	static void
 llm/qbm-pgsql.llm.md	pgsql.h:3684-3695	c0a478f5184b	int events = EV_WRITE; // A plain would-block write needs output capa...
 llm/qbm-pgsql.llm.md	src/qbm/pgsql/commands.h:1249-1256	66990ac08294	Transaction::notify(std::string_view channel, std::string_view payloa...
 llm/qbm-pgsql.llm.md	src/qbm/pgsql/commands.h:1673-1675	daa78edff6fc	Transaction::notify(std::string_view channel, std::string_view payloa...
@@ -61,4 +61,4 @@ llm/qbm-pgsql.llm.md	src/qbm/pgsql/resultset.cpp:586-599	42d2afa147c6	qb::json
 llm/qbm-pgsql.llm.md	src/qbm/pgsql/type_converter.cpp:138-212	c7dbcc4a91dd	TypeConverter<qb::wall_time>::to_text(const qb::wall_time &value) {
 llm/qbm-pgsql.llm.md	src/qbm/pgsql/type_converter.cpp:711-788	b4793b1bc9ab	decode_pg_numeric(const byte *data, std::size_t size) {
 llm/qbm-pgsql.llm.md	src/qbm/pgsql/type_converter.cpp:921-944	9612faccafbe	TypeConverter<numeric>::from_binary(std::span<const byte> buffer) {
-llm/qbm-pgsql.llm.md	src/qbm/pgsql/type_converter.h:1738-1754	1e18b1a80575	append_pg_array_element(std::string &out, const T &value) {
+llm/qbm-pgsql.llm.md	src/qbm/pgsql/type_converter.h:1703-1719	1e18b1a80575	append_pg_array_element(std::string &out, const T &value) {

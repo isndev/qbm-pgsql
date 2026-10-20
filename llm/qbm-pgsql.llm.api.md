@@ -743,12 +743,12 @@ public:
     static std::string to_text(const value_type& value);
     static value_type from_binary(std::span<const byte> buffer);
     static value_type from_text(const std::string& text);
-    static void write_integer(std::vector<byte>& buffer, integer value); // public — TypeConverter<T>'s only access specifier is `public:` (type_converter.h:132, :686-687)
+    static void write_integer(std::vector<byte>& buffer, integer value); // public — TypeConverter<T>'s only access specifier is `public:` (type_converter.h:132, :651-652)
 };
 // Specializations: qb::uuid, qb::wall_time (timestamptz/timestamp), qb::json, qb::jsonb,
-// std::chrono::duration (type_converter.h:1047), std::string (:1159), numeric (:1254),
-// qb::date (type_converter.h:1295), qb::time_of_day (:1317), qb::time_of_day_tz (:1339),
-// qb::calendar_interval (type_converter.h:1359), std::vector<std::byte> (:1384)
+// std::chrono::duration (type_converter.h:1012), std::string (:1124), numeric (:1219),
+// qb::date (type_converter.h:1260), qb::time_of_day (:1282), qb::time_of_day_tz (:1304),
+// qb::calendar_interval (type_converter.h:1324), std::vector<std::byte> (:1349)
 // (the retired qb::Timestamp / qb::UtcTimestamp / qb::LocalTimestamp are NOT specialized).
 } // namespace qb::pg::detail
 ```
@@ -759,7 +759,7 @@ for both `std::vector<T>` and `std::vector<std::optional<T>>`. Supported element
 `smallint`, `integer`, `bigint`, `float`, `double`, `std::string`, `qb::uuid`, `qb::wall_time`,
 `qb::pg::detail::numeric`, `qb::json` and `qb::jsonb`. The last five map to `uuid[]` (2951),
 `timestamptz[]` (1185), `numeric[]` (1231), `json[]` (199) and `jsonb[]` (3807).
-<!-- src: src/qbm/pgsql/type_converter.h:1859-1863 -->
+<!-- src: src/qbm/pgsql/type_converter.h:1824-1828 -->
 
 `from_binary` consumes array value bytes without a length prefix; `to_binary` writes the
 length prefix. `from_text` and `to_text` consume/produce PostgreSQL array literals.
@@ -777,7 +777,7 @@ element. `render_pg_array_text` writes its elements through `append_pg_array_ele
 place that decides which elements are quoted.
 Temporary element views are internal to that rendering call; the exported JSON owns its strings.
 No public array converter for `std::vector<std::string_view>` is provided.
-<!-- src: src/qbm/pgsql/resultset.cpp:424-500; src/qbm/pgsql/type_converter.h:1712-1803,1859-1863 -->
+<!-- src: src/qbm/pgsql/resultset.cpp:424-500; src/qbm/pgsql/type_converter.h:1677-1768,1824-1828 -->
 
 `TypeConverter<qb::wall_time>::to_text` keeps UTC text and its `+00` suffix. Years 1970–9999
 use a stack formatter over the existing qb calendar; other years retain the previous formatter.
