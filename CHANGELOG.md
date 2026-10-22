@@ -108,10 +108,12 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Changed
 
-- **Qualified timestamp converters share the canonical binary decoder.** Direct
-  `const`/reference-qualified `TypeConverter` instantiations now delegate to the
-  existing `qb::wall_time` specialization. Raw and legacy-prefixed representations,
-  negative fractional timestamps and malformed-buffer diagnostics are unchanged.
+- **Qualified timestamp converters share an inline binary decoder.** Direct
+  `const`/reference-qualified `TypeConverter` instantiations and the existing out-of-line
+  `qb::wall_time` specialization use the same template implementation. Qualified calls
+  can inline it without paying an additional call to the canonical specialization.
+  Raw and legacy-prefixed representations, negative fractional timestamps and
+  malformed-buffer diagnostics are unchanged.
 
 - **Behaviour change -- `connect()` resolves, and `is_connected()` is true, only once the handshake ran (Huly
   QB-111).** The connected flag used to be set at AuthenticationOk, before the first ReadyForQuery, and

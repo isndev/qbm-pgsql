@@ -110,6 +110,55 @@ safe_timegm(const std::tm &in) noexcept {
 }
 
 /**
+ * @brief Decode the shared binary contract for a possibly qualified wall_time.
+ *
+ * The template remains visible to qualified TypeConverter callers. The canonical
+ * non-template entry point delegates to it from type_converter.cpp.
+ */
+template <typename T>
+inline std::decay_t<T>
+wall_time_from_binary(std::span<const byte> buffer) {
+    static_assert(std::is_same_v<std::decay_t<T>, qb::wall_time>);
+    // PostgreSQL timestamp is in microseconds since 2000-01-01
+    if (buffer.size() < 8) { // at least 8 bytes for timestamp
+        throw std::runtime_error("Buffer too small for timestamp");
+    }
+
+    // Difference between PostgreSQL epoch (2000-01-01) and Unix epoch (1970-01-01)
+    constexpr int64_t POSTGRES_EPOCH_DIFF = 946684800LL; // seconds
+
+    // Create a temporary variable to hold the timestamp
+    int64_t pg_usecs = 0;
+
+    // The field value is normally EXACTLY 8 bytes — the protocol layer strips
+    // any length prefix. A legacy/defensive path also accepts a 4-byte prefix
+    // (>= 12 bytes total). A size of 9..11 would make the prefixed read run
+    // 1..3 bytes past the buffer on attacker-controlled col_size, so reject it
+    // rather than read out of bounds.
+    if (buffer.size() == 8) {
+        std::memcpy(&pg_usecs, buffer.data(), 8);
+    } else if (buffer.size() >= 12) {
+        std::memcpy(&pg_usecs, buffer.data() + 4, 8);
+    } else {
+        throw std::runtime_error("Malformed timestamp buffer size");
+    }
+
+    // Convert big-endian to native order
+    pg_usecs = qb::endian::from_big_endian(pg_usecs);
+
+    // Convert to Unix seconds and microseconds
+    int64_t unix_secs  = (pg_usecs / 1000000) + POSTGRES_EPOCH_DIFF;
+    int64_t unix_usecs = pg_usecs % 1000000;
+
+    if (unix_usecs < 0) {
+        unix_secs--;
+        unix_usecs += 1000000;
+    }
+
+    return qb::wall_from_unix_seconds(unix_secs) + std::chrono::microseconds(unix_usecs);
+}
+
+/**
  * @brief Unified PostgreSQL type conversion system
  *
  * Primary template class providing bidirectional conversion between C++ types
@@ -425,8 +474,7 @@ public:
 
             return qb::uuid(uuid_bytes);
         } else if constexpr (std::is_same_v<value_type, qb::wall_time>) {
-            // Qualified instantiations share the canonical specialization's binary contract.
-            return TypeConverter<value_type>::from_binary(buffer);
+            return wall_time_from_binary<T>(buffer);
         } else if constexpr (detail::ParamUnserializer::is_optional<value_type>::value) {
             // The buffer here is the field's VALUE bytes (the protocol strips the
             // per-field length prefix), and SQL NULL is decided by the caller via
