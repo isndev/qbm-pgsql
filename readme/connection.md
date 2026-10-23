@@ -421,6 +421,26 @@ contained and logged. Without a hook a completion pays one predictable branch; t
 query on a busy connection, because the instant a ReadyForQuery is handled both ends one query and stamps the next.
 <!-- src: qbm/pgsql/src/qbm/pgsql/stats.h:31,50,75 (in that order: query_kind; query_info; stats); qbm/pgsql/src/qbm/pgsql/pgsql.h:3104-3110,3127-3130,1583-1585,1594-1605 (in that order: stats; on_query_complete; clock_now; count_query) -->
 
+
+### Prometheus snapshot adapter
+
+Include `<qbm/pgsql/metrics.h>` explicitly and describe a value returned by `db.stats()`:
+
+```cpp
+qb::metrics::snapshot snapshot;
+qb::metrics::describe(snapshot, db.stats(), {{"connection", "catalog"}, {"core", "1"}});
+```
+<!-- src: qbm/pgsql/src/qbm/pgsql/metrics.h:21 -->
+
+The eleven integer fields become exact `qb_pgsql_<field>_total` counters. The last sent
+query's duration becomes `qb_pgsql_last_query_duration_seconds`, a gauge in seconds;
+its initial zero is unobserved, not a measured zero-duration query. There is no reconstructed
+histogram, no hook installation and no added query-path instrumentation.
+A registry source can call this adapter synchronously on the connection's core. Keep its
+`source_handle` after the database member, so it unregisters before the database is destroyed.
+Use distinct stable connection/core labels; do not expose SQL or credentials. Equal labels
+are summed during canonicalization, unsuitable for unrelated last-duration gauges.
+
 ### Cancelling a running query
 
 `cancel_async()` and `cancel()` abort the query currently executing on the connection. Because the link is a single

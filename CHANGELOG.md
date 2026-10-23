@@ -9,6 +9,11 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Added
 
+- **Explicit PostgreSQL metrics adapter (Huly QB-154).** Include `<qbm/pgsql/metrics.h>`
+  to describe a `stats()` snapshot into `qb::metrics::snapshot`, with caller-owned labels.
+  Integer counters remain exact; the last sent query's duration is a seconds gauge.
+  No client hook, polling, histogram reconstruction or default instrumentation is added.
+
 - **The connection's side of the reconnect contract (Huly QB-111; `qb/io/reconnect.h`).** A connection reports where
   it stands and why it went down in qb-io's vocabulary, the one qbm-redis uses: `state()` (`idle`, `connecting`,
   `handshaking`, `ready`, `reconnecting`, `down`), `down_reason()` (`user`, `peer`, `protocol`, `retries_exhausted`,

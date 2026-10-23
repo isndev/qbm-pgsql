@@ -954,6 +954,16 @@ struct stats {                           // stats.h:75
 - Internals that feed it: `ISqlQuery::describe()` (each query's kind, name and SQL), and
   `Transaction::fail_all_pending(err, drained_query_observer *)`, through which the connection counts a drained queue.
 
+### Metrics adapter (`<qbm/pgsql/metrics.h>`, Huly QB-154)
+
+`void qb::metrics::describe(qb::metrics::snapshot&, qb::pg::stats const&, qb::metrics::label_set labels)`.
+Explicit include, not part of the `pgsql.h` umbrella. Out-of-line in `qbm::pgsql`; no
+HTTP dependency, hook installation or clock reads. Emits exact integer counters named
+`qb_pgsql_<field>_total` for all eleven integer fields above, and gauge
+`qb_pgsql_last_query_duration_seconds` (chrono seconds, initial zero means unobserved).
+Caller supplies stable labels distinguishing sources; canonicalize sums equal label sets,
+which is unsuitable for unrelated last-duration gauges. _(metrics.h:21)_
+
 ## Protocol Details
 
 ### `qb::protocol::pgsql<IO_>`

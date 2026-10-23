@@ -87,6 +87,7 @@ qb_register_module(
         src/qbm/pgsql/queries.cpp
         src/qbm/pgsql/pg_notify_sql.cpp
         src/qbm/pgsql/pgsql.cpp
+        src/qbm/pgsql/metrics.cpp
         DEFINES
         QBM_PGSQL_VERSION="${PROJECT_VERSION}"
         # The one file under src/qbm/pgsql/ that is NOT part of this module's public surface.

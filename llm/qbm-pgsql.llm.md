@@ -640,6 +640,17 @@ int  pid = db.backend_pid();           // PQbackendPID; 0 if not connected
 `"integer_datetimes"`, `"standard_conforming_strings"` — `std::nullopt` if the
 server never sent it. The `string_view` is valid while the connection is alive.
 
+### Snapshot metrics export (Huly QB-154)
+
+Explicitly include `<qbm/pgsql/metrics.h>` and call
+`qb::metrics::describe(snapshot, db.stats(), {{"connection", "catalog"}, {"core", "1"}})`
+on the database's owner thread. It emits `qb_pgsql_<counter>_total` for all eleven
+integer fields and gauge `qb_pgsql_last_query_duration_seconds`, without a hook or
+new client work. The last value starts at zero (unobserved); do not reconstruct a
+histogram from it. Use stable connection/core labels, never SQL/credentials. A
+`Registry::add_source` callback is synchronous; retain its `source_handle` after
+client members so it unregisters before their destruction. _(metrics.h:21)_
+
 ### 3.11 Observability: `stats()` and `on_query_complete` (Huly QB-115)
 
 ```cpp
