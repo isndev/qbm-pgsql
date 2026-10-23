@@ -118,3 +118,15 @@ macOS and 34 on `ubuntu-latest`, measured. qbm-http has to derive part of its fl
 because `ubuntu-latest` cannot build its four HTTP/3 tests. If a capability gate is ever added to this
 module, its floor has to become derived in the same way — a constant would then be red on a host that
 is merely different, not broken.
+
+## Immutable service images
+
+The test lane pins its service image through the ECR mirror by OCI digest; the origin
+family remains visible in the workflow. Review this pin during release preparation,
+or earlier for a registry incident. Resolve the index from the actual registry and
+retain the required Linux platform manifests before changing it. Do not replace a
+failed digest with a floating tag.
+
+Keep the uid probe and daemon on the single `PG_IMAGE` value. Validate an authenticated
+query with TLS enabled on the exact image, preserve the zero-skip test contract, and
+clean up the owned instance.

@@ -213,43 +213,7 @@ TypeConverter<qb::wall_time>::append_text(std::string &out, const qb::wall_time 
 
 qb::wall_time
 TypeConverter<qb::wall_time>::from_binary(std::span<const byte> buffer) {
-    // PostgreSQL timestamp is in microseconds since 2000-01-01
-    if (buffer.size() < 8) { // at least 8 bytes for timestamp
-        throw std::runtime_error("Buffer too small for timestamp");
-    }
-
-    // Difference between PostgreSQL epoch (2000-01-01) and Unix epoch (1970-01-01)
-    constexpr int64_t POSTGRES_EPOCH_DIFF = 946684800LL; // seconds
-
-    // Create a temporary variable to hold the timestamp
-    int64_t pg_usecs = 0;
-
-    // The field value is normally EXACTLY 8 bytes — the protocol layer strips
-    // any length prefix. A legacy/defensive path also accepts a 4-byte prefix
-    // (>= 12 bytes total). A size of 9..11 would make the prefixed read run
-    // 1..3 bytes past the buffer on attacker-controlled col_size, so reject it
-    // rather than read out of bounds.
-    if (buffer.size() == 8) {
-        std::memcpy(&pg_usecs, buffer.data(), 8);
-    } else if (buffer.size() >= 12) {
-        std::memcpy(&pg_usecs, buffer.data() + 4, 8);
-    } else {
-        throw std::runtime_error("Malformed timestamp buffer size");
-    }
-
-    // Convert big-endian to native order
-    pg_usecs = qb::endian::from_big_endian(pg_usecs);
-
-    // Convert to Unix seconds and microseconds
-    int64_t unix_secs  = (pg_usecs / 1000000) + POSTGRES_EPOCH_DIFF;
-    int64_t unix_usecs = pg_usecs % 1000000;
-
-    if (unix_usecs < 0) {
-        unix_secs--;
-        unix_usecs += 1000000;
-    }
-
-    return qb::wall_from_unix_seconds(unix_secs) + std::chrono::microseconds(unix_usecs);
+    return wall_time_from_binary<qb::wall_time>(buffer);
 }
 
 qb::wall_time

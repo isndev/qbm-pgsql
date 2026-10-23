@@ -108,6 +108,13 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Changed
 
+- **Qualified timestamp converters share an inline binary decoder.** Direct
+  `const`/reference-qualified `TypeConverter` instantiations and the existing out-of-line
+  `qb::wall_time` specialization use the same template implementation. Qualified calls
+  can inline it without paying an additional call to the canonical specialization.
+  Raw and legacy-prefixed representations, negative fractional timestamps and
+  malformed-buffer diagnostics are unchanged.
+
 - **Behaviour change -- `connect()` resolves, and `is_connected()` is true, only once the handshake ran (Huly
   QB-111).** The connected flag used to be set at AuthenticationOk, before the first ReadyForQuery, and
   `is_connected()` was the io base's flag -- true on a database that had never connected. `connect()` and
@@ -191,6 +198,10 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
   `readme/results.md` and the llm gotchas.
 
 ### Fixed
+
+- **Primitive-reader test comments name the current branches (Huly QB-1102).** Correct the
+  binary auto-detection reference and replace retired module/SQLSTATE/boolean-reader coordinates
+  with their actual symbols. No decoder, query path or test assertion changes.
 
 - **`connect(dsn, raw_io)` runs the handshake on the transport it is given (Huly QB-1096).** The overload was
   documented as adopting an already-connected transport, but it stored the transport and then dialled `dsn` itself:

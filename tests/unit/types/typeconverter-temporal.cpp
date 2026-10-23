@@ -223,7 +223,7 @@ TEST(TypeConverterTemporalBinary, WallTimeRejectsShortPrefixedBuffer) {
 }
 
 // A pre-2000 sub-second instant encodes to NEGATIVE pg-epoch micros; from_binary's
-// unix_usecs<0 borrow (type_converter.cpp:247-250) must reproduce the exact instant, not
+// unix_usecs<0 borrow (type_converter.h:153-156) must reproduce the exact instant, not
 // truncate toward zero.
 TEST(TypeConverterTemporalBinary, WallTimePre2000NegativeMicrosRoundTrip) {
     qb::wall_time in = TypeConverter<qb::wall_time>::from_text("1999-12-31 23:59:59.500000");
@@ -239,6 +239,53 @@ TEST(TypeConverterTemporalBinary, WallTimePre2000NegativeMicrosRoundTrip) {
 
     qb::wall_time out = TypeConverter<qb::wall_time>::from_binary(wire);
     EXPECT_EQ(qb::unix_micros(out), qb::unix_micros(in));
+}
+
+TEST(TypeConverterTemporalBinary, QualifiedWallTimeUsesTheSameBinaryContract) {
+    const struct {
+        const char *hex;
+        int64_t     unix_us;
+    } cases[] = {
+        {"0002b6b29f385180", 1710513045123456LL}, // PostgreSQL ground truth
+        {"0000000000000000", 946684800000000LL},  // PostgreSQL epoch
+        {"ffffffffffffffff", 946684799999999LL},  // one microsecond before that epoch
+        {"fffffffffff85ee0", 946684799500000LL}   // a negative fractional second
+    };
+    auto expect_value = [](const std::vector<byte> &buffer, int64_t unix_us) {
+        EXPECT_EQ(qb::unix_micros(TypeConverter<qb::wall_time>::from_binary(buffer)), unix_us);
+        EXPECT_EQ(qb::unix_micros(TypeConverter<const qb::wall_time>::from_binary(buffer)), unix_us);
+        EXPECT_EQ(qb::unix_micros(TypeConverter<qb::wall_time &>::from_binary(buffer)), unix_us);
+        EXPECT_EQ(qb::unix_micros(TypeConverter<const qb::wall_time &>::from_binary(buffer)), unix_us);
+    };
+    for (const auto &value : cases) {
+        SCOPED_TRACE(value.hex);
+        auto wire = hex_to_bytes(value.hex);
+        expect_value(wire, value.unix_us);
+        auto prefixed = hex_to_bytes("00000008");
+        prefixed.insert(prefixed.end(), wire.begin(), wire.end());
+        expect_value(prefixed, value.unix_us);
+        // Preserve the legacy >=12-byte acceptance, including ignored trailing bytes.
+        prefixed.push_back(byte{0x7f});
+        expect_value(prefixed, value.unix_us);
+    }
+    for (std::size_t size = 0; size < 12; ++size) {
+        if (size == 8)
+            continue;
+        SCOPED_TRACE(size);
+        const std::vector<byte> buffer(size, byte{0x01});
+        const auto              expect_rejection = [&]<typename T>() {
+            try {
+                (void) TypeConverter<T>::from_binary(buffer);
+                ADD_FAILURE() << "malformed timestamp must be rejected";
+            } catch (const std::runtime_error &error) {
+                EXPECT_STREQ(error.what(), size < 8 ? "Buffer too small for timestamp" : "Malformed timestamp buffer size");
+            }
+        };
+        expect_rejection.template operator()<qb::wall_time>();
+        expect_rejection.template operator()<const qb::wall_time>();
+        expect_rejection.template operator()<qb::wall_time &>();
+        expect_rejection.template operator()<const qb::wall_time &>();
+    }
 }
 
 // ----------------------------------------------------------------------------
@@ -317,14 +364,14 @@ TEST(TypeConverterTemporalText, TimestampMicrosAndTz) {
 }
 
 // A microsecond fraction with more digits than fit in an int overflows the STRICT parse
-// and must throw the module's client_error (type_converter.cpp:312-315) — never silently
+// and must throw the module's client_error (type_converter.cpp:276-279) — never silently
 // mis-scale a hostile fraction.
 TEST(TypeConverterTemporalText, TimestampMicrosFractionOverflowThrows) {
     EXPECT_THROW(TypeConverter<qb::wall_time>::from_text("2024-01-01 00:00:00.99999999999999999999"), qb::pg::error::client_error);
 }
 
 // A wrong date separator ('/' instead of '-') fails the literal-'-' match in the field
-// parser and throws std::runtime_error (type_converter.cpp:286-294) — a distinct path from
+// parser and throws std::runtime_error (type_converter.cpp:250-258) — a distinct path from
 // the no-leading-digit "bad ts" case above.
 TEST(TypeConverterTemporalText, TimestampWrongSeparatorThrows) {
     EXPECT_THROW(TypeConverter<qb::wall_time>::from_text("2024/01/01 00:00:00"), std::runtime_error);

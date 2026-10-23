@@ -368,7 +368,7 @@ type. NUMERIC remains an owning decimal-string carrier. The projection writes a 
 literal in place -- the bounds first, then each element's UUID, timestamp, NUMERIC or quoted text
 appended to the one output string, with no typed vector and no string per element (Huly QB-1087) --
 without changing any value, scale or spelling.
-<!-- src: src/qbm/pgsql/resultset.cpp:424-500; src/qbm/pgsql/type_converter.cpp:711-788,921-944; src/qbm/pgsql/type_converter.h:1738-1754 -->
+<!-- src: src/qbm/pgsql/resultset.cpp:424-500; src/qbm/pgsql/type_converter.cpp:675-752,885-908; src/qbm/pgsql/type_converter.h:1751-1767 -->
 
 `qb::wall_time` text remains UTC with `+00` and six fractional digits when a fraction is present.
 Years 1970–9999 use the existing qb calendar and a stack formatter; pre-1970 and later years keep
@@ -402,6 +402,8 @@ qb::wall_time at = rs[0][0].as<qb::wall_time>();
 - **`timestamptz` (OID 1184) maps to `qb::wall_time`**, round-tripped as integer
   microseconds. A `timestamp` column (OID 1114) also decodes into `qb::wall_time`
   via the identical wire layout.
+  Direct cv/ref-qualified converter instantiations use the same binary decoder,
+  including its raw/prefixed-buffer acceptance and malformed-length diagnostics.
 - The PostgreSQL wire epoch (int64 microseconds since 2000-01-01 UTC) is an
   **internal native encoding** inside the type layer; it is never surfaced as a
   `qb::duration`.

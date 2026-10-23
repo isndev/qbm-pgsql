@@ -28,7 +28,7 @@ void init();
 }
 
 // ---------------------------------------------------------------------------
-// qb::pg::init() (pgsql.cpp:194)
+// qb::pg::init() initializes the module field reader.
 // ---------------------------------------------------------------------------
 
 /// init() runs the one-time module setup (field-reader initialization) with no daemon and
@@ -54,7 +54,7 @@ TEST(ModuleSurface, ClientErrorWrapsExceptionMessage) {
 }
 
 // ---------------------------------------------------------------------------
-// sqlstate::code_to_state unknown sentinel (sqlstates.cpp:748)
+// qb::pg::sqlstate::code_to_state returns unknown_code for an unknown code.
 // ---------------------------------------------------------------------------
 
 /// An unrecognized 5-char SQLSTATE maps to the unknown_code sentinel; a real code resolves
