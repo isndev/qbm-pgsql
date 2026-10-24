@@ -12,4 +12,4 @@
 #
 # The public qb-io pump named by the module guide lives in qb, not qbm-pgsql. The root guard
 # resolves it against the qb source; this standalone module guard records that boundary.
-llm/qbm-pgsql.llm.md	symbol:run_once	qb::io::async::run_once is defined in qb/src/qb/io/async/listener.h:1618; qbm-pgsql only calls it.
+llm/qbm-pgsql.llm.md	symbol:run_once	qb::io::async::run_once is defined in qb/src/qb/io/async/listener.h:1626; qbm-pgsql only calls it.

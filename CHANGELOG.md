@@ -204,6 +204,11 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Fixed
 
+- **CancelRequest test observation ordering (Huly QB-113).** Read the fake backend's
+  startup-complete flag after joining its thread. Receiving the startup messages
+  does not order the server's later flag publication; the early assertion could
+  fail despite a successful cancellation. Runtime behavior is unchanged.
+
 - **Inline the shared timestamp decode into the canonical entry on GCC and Clang.**
   `TypeConverter<qb::wall_time>::from_binary` uses `[[gnu::flatten]]` on these compilers; MSVC keeps its existing
   definition. The shared `wall_time_from_binary` validation, eight-byte and prefixed inputs, negative epochs and

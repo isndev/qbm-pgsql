@@ -126,7 +126,7 @@ open_session(qb::pg::tcp::database &db, std::uint16_t port) {
     const std::string dsn = "tcp://test:test@127.0.0.1:" + std::to_string(port) + "[test]";
     if (!static_cast<bool>(qb::io::async::run_sync(db.connect(dsn))))
         return false;
-    // AuthenticationOk resumes connect(); the K that follows is processed by the next passes.
+    // connect() completes the handshake; retain an explicit check of the distributed key.
     const auto deadline = std::chrono::steady_clock::now() + 5s;
     while (db.backend_pid() != static_cast<int>(kBackendPid) && std::chrono::steady_clock::now() < deadline)
         qb::io::async::run(EVRUN_NOWAIT);
@@ -162,7 +162,6 @@ TEST(PgsqlCancelWire, CancelAsyncSendsTheCancelRequestOnASecondConnectionWithout
     {
         qb::pg::tcp::database db;
         ASSERT_TRUE(open_session(db, port)) << "the fake backend's AuthenticationOk + BackendKeyData never made a session";
-        EXPECT_TRUE(res.session_up.load());
 
         // Arm the witness only after this coroutine has started the operation. The defer is
         // therefore causally inside the cancel interval, rather than an earlier callback that
@@ -181,6 +180,8 @@ TEST(PgsqlCancelWire, CancelAsyncSendsTheCancelRequestOnASecondConnectionWithout
     backend.join();
     listener.disconnect();
 
+    // Receiving the startup does not order the server's later publication; the join does.
+    EXPECT_TRUE(res.session_up.load());
     EXPECT_TRUE(delivered) << "cancel_async() must report the request delivered";
     ASSERT_TRUE(res.second_conn.load()) << "no second connection reached the backend";
     ASSERT_TRUE(res.got_16.load()) << "the cancel connection did not carry 16 bytes";
