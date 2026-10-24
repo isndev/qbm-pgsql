@@ -199,6 +199,13 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Fixed
 
+- **The canonical `TypeConverter<qb::wall_time>::from_binary` carries the decode again (macOS
+  validation, 2026-10-23).** Apple clang 21 had emitted the shared `wall_time_from_binary` template
+  once, out of line, and the canonical entry as a lone tail call to it: one more taken branch per
+  timestamp. The entry is `[[gnu::flatten]]` on GCC and Clang; its instructions are v3.2.1's again
+  (42.97 against 42.93 per decode, `BM_DecodeTimestamptz` +15 % before), and the remaining cycle gap
+  vanishes under `-falign-functions=64` (placement).
+
 - **Primitive-reader test comments name the current branches (Huly QB-1102).** Correct the
   binary auto-detection reference and replace retired module/SQLSTATE/boolean-reader coordinates
   with their actual symbols. No decoder, query path or test assertion changes.
