@@ -211,6 +211,12 @@ TypeConverter<qb::wall_time>::append_text(std::string &out, const qb::wall_time 
     out += "+00";
 }
 
+// Flattened: the canonical entry carries the template's body. Left to itself, Apple clang 21 emitted the template once,
+// out of line, and this entry as a lone tail call to it -- one more taken branch per decode, BM_DecodeTimestamptz
+// +15 % against v3.2.1 on an M4 Pro.
+#if defined(__GNUC__)
+[[gnu::flatten]]
+#endif
 qb::wall_time
 TypeConverter<qb::wall_time>::from_binary(std::span<const byte> buffer) {
     return wall_time_from_binary<qb::wall_time>(buffer);

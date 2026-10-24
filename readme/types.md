@@ -133,7 +133,7 @@ The NUMERIC binary decoder retains scale and its existing special-value behavior
 (`append_pg_numeric_text`): into the owning `numeric` carrier, or, for a binary `numeric[]` that `results::json()`
 exports, straight into the array literal (Huly QB-1087); the public value remains an owned string. Typed array
 rendering reads that carrier directly without an intermediate text copy.
-<!-- src: src/qbm/pgsql/type_converter.cpp:675-752,885-908; src/qbm/pgsql/type_converter.h:1760-1761 -->
+<!-- src: src/qbm/pgsql/type_converter.cpp:681-758,891-914; src/qbm/pgsql/type_converter.h:1760-1761 -->
 
 ### Text and binary blobs
 
@@ -171,14 +171,14 @@ PostgreSQL number would change **decimal value** when parsed into that DOM; this
 whose decimal value changes and decimals rounded by `double`, even inside arrays or objects. Equal
 values with different spellings, such as `1.2300` and `1.23`, remain readable. A valid number beyond
 the DOM floating range (for example `1e400`) also throws `client_error`; malformed JSON follows the
-separate `std::runtime_error` parse path. <!-- src: src/qbm/pgsql/type_converter.cpp:480-579 -->
+separate `std::runtime_error` parse path. <!-- src: src/qbm/pgsql/type_converter.cpp:486-585 -->
 
 Typed decoding validates each floating lexeme while building the DOM in supported
 nlohmann configurations. Other versions or configurations retain the checked public
 parser with the same value and error contract. A later rejection may follow allocation
 of an owning DOM prefix; that prefix is destroyed and never returned. Exact canonical
 text access avoids DOM construction. Library and consumer JSON build flags must agree.
-<!-- src: src/qbm/pgsql/type_converter.cpp:533-579 -->
+<!-- src: src/qbm/pgsql/type_converter.cpp:539-585 -->
 
 For an exact value, read the server's canonical JSONB text directly from the field:
 

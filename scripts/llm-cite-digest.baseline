@@ -30,8 +30,8 @@ llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/pgsql.h:3355-3364	ffc7f5e94922	copy_out(s
 llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/resultset.cpp:424-500	c46dba93262f	append_binary_array_bounds(std::string &out, std::span<const std::byt...
 llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/transaction.h:489-501	371ffdb8d432	template <typename CB_SUCCESS, typename CB_ERROR>
 llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/type_converter.cpp:138-212	c7dbcc4a91dd	TypeConverter<qb::wall_time>::to_text(const qb::wall_time &value) {
-llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/type_converter.cpp:675-752	b4793b1bc9ab	decode_pg_numeric(const byte *data, std::size_t size) {
-llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/type_converter.cpp:885-908	9612faccafbe	TypeConverter<numeric>::from_binary(std::span<const byte> buffer) {
+llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/type_converter.cpp:681-758	b4793b1bc9ab	decode_pg_numeric(const byte *data, std::size_t size) {
+llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/type_converter.cpp:891-914	9612faccafbe	TypeConverter<numeric>::from_binary(std::span<const byte> buffer) {
 llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/type_converter.h:1725-1816	a15c49fd30a5	append_pg_array_quoted(std::string &out, std::string_view text) {
 llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/type_converter.h:1872-1876	393396e1e05c	QB_PG_DEFINE_ARRAY_CONVERTER(qb::uuid, static_cast<integer>(oid::uuid...
 llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/type_mapping.h:58-63	1d898ef4b879	template <typename T, typename Enable = void>
@@ -61,6 +61,6 @@ llm/qbm-pgsql.llm.md	src/qbm/pgsql/pgsql.h:3355-3364	ffc7f5e94922	copy_out(std::
 llm/qbm-pgsql.llm.md	src/qbm/pgsql/resultset.cpp:424-500	c46dba93262f	append_binary_array_bounds(std::string &out, std::span<const std::byt...
 llm/qbm-pgsql.llm.md	src/qbm/pgsql/resultset.cpp:586-599	42d2afa147c6	qb::json
 llm/qbm-pgsql.llm.md	src/qbm/pgsql/type_converter.cpp:138-212	c7dbcc4a91dd	TypeConverter<qb::wall_time>::to_text(const qb::wall_time &value) {
-llm/qbm-pgsql.llm.md	src/qbm/pgsql/type_converter.cpp:675-752	b4793b1bc9ab	decode_pg_numeric(const byte *data, std::size_t size) {
-llm/qbm-pgsql.llm.md	src/qbm/pgsql/type_converter.cpp:885-908	9612faccafbe	TypeConverter<numeric>::from_binary(std::span<const byte> buffer) {
+llm/qbm-pgsql.llm.md	src/qbm/pgsql/type_converter.cpp:681-758	b4793b1bc9ab	decode_pg_numeric(const byte *data, std::size_t size) {
+llm/qbm-pgsql.llm.md	src/qbm/pgsql/type_converter.cpp:891-914	9612faccafbe	TypeConverter<numeric>::from_binary(std::span<const byte> buffer) {
 llm/qbm-pgsql.llm.md	src/qbm/pgsql/type_converter.h:1751-1767	1e18b1a80575	append_pg_array_element(std::string &out, const T &value) {

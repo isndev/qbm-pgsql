@@ -383,7 +383,7 @@ type. NUMERIC remains an owning decimal-string carrier. The projection writes a 
 literal in place -- the bounds first, then each element's UUID, timestamp, NUMERIC or quoted text
 appended to the one output string, with no typed vector and no string per element (Huly QB-1087) --
 without changing any value, scale or spelling.
-<!-- src: src/qbm/pgsql/resultset.cpp:424-500; src/qbm/pgsql/type_converter.cpp:675-752,885-908; src/qbm/pgsql/type_converter.h:1751-1767 -->
+<!-- src: src/qbm/pgsql/resultset.cpp:424-500; src/qbm/pgsql/type_converter.cpp:681-758,891-914; src/qbm/pgsql/type_converter.h:1751-1767 -->
 
 `qb::wall_time` text remains UTC with `+00` and six fractional digits when a fraction is present.
 Years 1970–9999 use the existing qb calendar and a stack formatter; pre-1970 and later years keep
@@ -1655,7 +1655,7 @@ and special values; integer limb formatting and transfer of the decoded string c
 `TypeConverter<qb::wall_time>::append_text` writes `to_text`'s text into a caller's string, and
 `decode_pg_numeric`, `from_binary` and `append_text_from_binary` decode through
 `append_pg_numeric_text`, which writes the digits in place (Huly QB-1087).
-<!-- src: src/qbm/pgsql/type_converter.cpp:138-212,675-752,885-908 -->
+<!-- src: src/qbm/pgsql/type_converter.cpp:138-212,681-758,891-914 -->
 
 ## Error Handling
 

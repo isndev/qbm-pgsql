@@ -204,6 +204,11 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Fixed
 
+- **Inline the shared timestamp decode into the canonical entry on GCC and Clang.**
+  `TypeConverter<qb::wall_time>::from_binary` uses `[[gnu::flatten]]` on these compilers; MSVC keeps its existing
+  definition. The shared `wall_time_from_binary` validation, eight-byte and prefixed inputs, negative epochs and
+  cv/ref forms are unchanged. Earlier macOS timings are not measurements of this composed source.
+
 - **Primitive-reader test comments name the current branches (Huly QB-1102).** Correct the
   binary auto-detection reference and replace retired module/SQLSTATE/boolean-reader coordinates
   with their actual symbols. No decoder, query path or test assertion changes.
