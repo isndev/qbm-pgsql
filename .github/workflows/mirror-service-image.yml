@@ -1,0 +1,62 @@
+# The GHCR mirror of this lane's PostgreSQL image (Huly QB-1142).
+#
+# tests.yml starts postgres:17-alpine by digest with `docker run`. It pulled Docker Hub's copy from
+# ECR Public, anonymously, from a hosted runner whose egress IP is shared with the whole GitHub
+# population: ECR Public caps anonymous transfers per IP, and runs of this lane never started their
+# suite ("toomanyrequests: Data limit exceeded"). The organisation's own runners, on their own IP,
+# never hit it. This workflow copies the same manifest list, digest preserved, into a package of
+# this repository, which the lane then pulls with its own GITHUB_TOKEN (packages: read): no
+# anonymous quota, no shared IP.
+#
+# The copy is `docker buildx imagetools create`: it re-publishes the manifest list and every blob
+# as they are, so the digest the lane pins is the digest the mirror carries, and the last step
+# refuses anything else. Run it once by hand after the pin changes (it is idempotent), and the
+# weekly run re-reads the digest so a mirror that drifted from the pin is a red run, not a lane
+# that quietly tests something else. ECR Public is the first source, Docker Hub the second: both
+# hold the same bytes under the same digest.
+name: mirror-service-image
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '47 4 * * 1'
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: mirror-service-image
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    name: postgres:17-alpine -> ghcr.io, digest preserved
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # One pin, three spellings of the same bytes: the lane's source, its fallback, the mirror.
+      DIGEST: 'sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24'
+      SOURCE: 'public.ecr.aws/docker/library/postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24'
+      FALLBACK: 'docker.io/library/postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24'
+      TARGET: 'ghcr.io/isndev/qbm-pgsql/postgres:17-alpine'
+    steps:
+      - name: Log in to GHCR with the job's token
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+
+      - name: Copy the pinned manifest list into the mirror
+        run: |
+          docker buildx imagetools create -t "$TARGET" "$SOURCE" \
+            || docker buildx imagetools create -t "$TARGET" "$FALLBACK"
+
+      - name: The mirror carries the pinned digest
+        run: |
+          got="$(docker buildx imagetools inspect "$TARGET" --format '{{.Manifest.Digest}}')"
+          echo "mirror $TARGET is $got"
+          if [ "$got" != "$DIGEST" ]; then
+            echo "::error::$TARGET is $got, the lane pins $DIGEST"
+            exit 1
+          fi

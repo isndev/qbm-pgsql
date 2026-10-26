@@ -97,6 +97,7 @@ on:
 
 permissions:
   contents: read
+  packages: read # the server image is this repository's GHCR mirror (mirror-service-image.yml)
 
 concurrency:
   group: tests-${{ github.ref }}
@@ -116,8 +117,11 @@ jobs:
       QB_PG_SSL_DSN: 'tcp://test:test@localhost:5432[test]'
       # One place to change the server. Referenced by the uid probe and by `docker run`, so the
       # uid that is chowned and the image that is started can never drift apart.
-      # postgres:17-alpine, immutable ECR mirror; review with the release image checklist.
-      PG_IMAGE: 'public.ecr.aws/docker/library/postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24'
+      # postgres:17-alpine by digest, from this repository's GHCR mirror (mirror-service-image.yml
+      # copies Docker Hub's manifest list, digest preserved): a hosted runner's anonymous pull from
+      # ECR Public shares its IP's data quota with all of GitHub and ran dry four times in a week
+      # (Huly QB-1142). Review with the release image checklist.
+      PG_IMAGE: 'ghcr.io/isndev/qbm-pgsql/postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24'
       # Pinned, and the reason is measured rather than inherited: the ubuntu-latest default
       # compiler is GNU 13.3.0, which this project targets nowhere, and which hits
       # `internal compiler error: in build_special_member_call` on the coroutine ramps in the
@@ -169,6 +173,14 @@ jobs:
 
       # PostgreSQL WITH TLS. Generated cert first, then the server -- the ordering a service
       # container cannot express.
+      - name: Log in to GHCR with the job's token
+        # PG_IMAGE is this repository's mirror; the two `docker run` below pull it with the job's
+        # token (Huly QB-1142). The token goes through the environment, never the command line.
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+
       - name: Start PostgreSQL with TLS enabled
         run: |
           set -euo pipefail
