@@ -14,9 +14,16 @@
 # weekly run re-reads the digest so a mirror that drifted from the pin is a red run, not a lane
 # that quietly tests something else. ECR Public is the first source, Docker Hub the second: both
 # hold the same bytes under the same digest.
+#
+# A push of this file runs it on that branch: GitHub registers a workflow for `workflow_dispatch`
+# from the default branch only, so the first mirror of a new pin on an integration branch is made
+# by the push that lands the pin, and a later `gh workflow run` serves the default branch.
 name: mirror-service-image
 
 on:
+  push:
+    paths:
+      - .github/workflows/mirror-service-image.yml
   workflow_dispatch:
   schedule:
     - cron: '47 4 * * 1'
