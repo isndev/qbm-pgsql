@@ -7,6 +7,10 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ## [Unreleased]
 
+Nothing yet. Entries land here as they are merged, and move under a version heading when that version is tagged.
+
+## [3.3.0] - 2026-10-26
+
 ### Added
 
 - **Explicit PostgreSQL metrics adapter (Huly QB-154).** Include `<qbm/pgsql/metrics.h>`
@@ -636,7 +640,8 @@ Aligns qbm-pgsql with the qb 2.0 framework (C++20 baseline) and hardens the Post
 - Drop the connection via `not_ok()` on a malformed frame instead of attempting a reconnect.
 - Fixed a heap over-read in the timestamp binary decoder for 9–11 byte fields.
 
-[Unreleased]: https://github.com/isndev/qbm-pgsql/compare/v3.2.1...HEAD
+[Unreleased]: https://github.com/isndev/qbm-pgsql/compare/v3.3.0...HEAD
+[3.3.0]: https://github.com/isndev/qbm-pgsql/compare/v3.2.1...v3.3.0
 [3.2.1]: https://github.com/isndev/qbm-pgsql/compare/v3.2.0...v3.2.1
 [3.2.0]: https://github.com/isndev/qbm-pgsql/compare/v3.1.0...v3.2.0
 [3.1.0]: https://github.com/isndev/qbm-pgsql/compare/v3.0.1...v3.1.0
