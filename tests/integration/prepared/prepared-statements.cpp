@@ -735,6 +735,139 @@ TEST_F(PreparedStatementsIntegration, PreparedCacheCapacityBoundsTheServerSideSt
 }
 
 // ---------------------------------------------------------------------------
+// A stale cached plan is re-prepared (Huly QB-114)
+// ---------------------------------------------------------------------------
+
+namespace prepared_statements_test {
+
+/// What one `execute(name)` returned: its first row's columns as text, or the failure.
+struct shape_result {
+    bool                     ok = false;
+    sqlstate::code           sqlstate{sqlstate::unknown_code};
+    std::string              what;
+    std::vector<std::string> types; ///< The result columns' type OIDs, as decimal text
+    std::vector<std::string> row;   ///< The first row, every column read as text
+};
+
+[[nodiscard]] shape_result
+execute_shape(qb::pg::tcp::database &db, std::string const &name) {
+    shape_result out;
+    (void) db
+        .execute(
+            name, params{},
+            [&out](Transaction &, results r) {
+                out.ok = true;
+                for (auto const &column : r.row_description())
+                    out.types.push_back(std::to_string(static_cast<int>(column.type_oid)));
+                if (r.size() != 1U)
+                    return;
+                // Each column read through the type its OWN description names: an int4, an int8,
+                // else text -- so a stale description would read the wrong width.
+                for (std::size_t c = 0; c < static_cast<std::size_t>(r.columns_size()); ++c) {
+                    const auto type = r.row_description()[c].type_oid;
+                    if (type == oid::int4)
+                        out.row.push_back(std::to_string(r[0][c].as<std::int32_t>()));
+                    else if (type == oid::int8)
+                        out.row.push_back(std::to_string(r[0][c].as<std::int64_t>()));
+                    else
+                        out.row.push_back(r[0][c].as<std::string>());
+                }
+            },
+            [&out](error::db_error const &e) {
+                out.sqlstate = e.sqlstate;
+                out.what     = e.what();
+            })
+        .await();
+    return out;
+}
+
+[[nodiscard]] bool
+simple(qb::pg::tcp::database &db, std::string const &sql) {
+    return static_cast<bool>(db.execute(sql, discard_query, discard_error).await());
+}
+
+} // namespace prepared_statements_test
+
+/**
+ * @brief A DDL that changes a prepared statement's result columns makes PostgreSQL refuse its next
+ *        Bind with 0A000 ("cached plan must not change result type", routine
+ *        `RevalidateCachedQuery`). Outside a block the client re-prepares the statement and binds it
+ *        again, once, so the caller gets the NEW shape -- and the server holds the statement once.
+ */
+TEST_F(PreparedStatementsIntegration, AStaleCachedPlanIsRePreparedAndTheExecutionRetried) {
+    using namespace prepared_statements_test;
+    ASSERT_TRUE(simple(*db_, "CREATE TEMP TABLE qb114_shape (id int)"));
+    ASSERT_TRUE(simple(*db_, "INSERT INTO qb114_shape VALUES (7)"));
+    ASSERT_TRUE(db_->prepare("qb114_star", "SELECT * FROM qb114_shape", type_oid_sequence{}, discard_prepare, discard_error).await());
+    const auto first = execute_shape(*db_, "qb114_star");
+    ASSERT_TRUE(first.ok) << first.what;
+    EXPECT_EQ(first.row, (std::vector<std::string>{"7"}));
+
+    ASSERT_TRUE(simple(*db_, "ALTER TABLE qb114_shape ADD COLUMN v text DEFAULT 'x'"));
+    const auto before = db_->stats();
+    const auto again  = execute_shape(*db_, "qb114_star");
+    const auto after  = db_->stats();
+
+    ASSERT_TRUE(again.ok) << "SQLSTATE " << static_cast<int>(again.sqlstate) << ": " << again.what;
+    EXPECT_EQ(again.row, (std::vector<std::string>{"7", "x"}));
+    EXPECT_EQ(after.prepared_replans - before.prepared_replans, 1U);
+    EXPECT_EQ(after.errors - before.errors, 0U);
+    EXPECT_EQ(server_statements(*db_, "qb114_"), (std::vector<std::string>{"qb114_star"}));
+    (void) simple(*db_, "DROP TABLE qb114_shape");
+}
+
+/**
+ * @brief The Bind of the retry takes its result formats from the re-prepared columns: a column
+ *        widened from int to bigint is read as the 8-byte binary integer the server now sends.
+ */
+TEST_F(PreparedStatementsIntegration, AColumnTypeChangeIsReadWithTheNewType) {
+    using namespace prepared_statements_test;
+    ASSERT_TRUE(simple(*db_, "CREATE TEMP TABLE qb114_type (n int)"));
+    ASSERT_TRUE(simple(*db_, "INSERT INTO qb114_type VALUES (7)"));
+    ASSERT_TRUE(db_->prepare("qb114_n", "SELECT n FROM qb114_type", type_oid_sequence{}, discard_prepare, discard_error).await());
+    const auto first = execute_shape(*db_, "qb114_n");
+    ASSERT_TRUE(first.ok) << first.what;
+    EXPECT_EQ(first.types, (std::vector<std::string>{std::to_string(static_cast<int>(oid::int4))}));
+
+    ASSERT_TRUE(simple(*db_, "ALTER TABLE qb114_type ALTER COLUMN n TYPE bigint"));
+    ASSERT_TRUE(simple(*db_, "UPDATE qb114_type SET n = 5000000000"));
+    const auto again = execute_shape(*db_, "qb114_n");
+
+    ASSERT_TRUE(again.ok) << "SQLSTATE " << static_cast<int>(again.sqlstate) << ": " << again.what;
+    EXPECT_EQ(again.types, (std::vector<std::string>{std::to_string(static_cast<int>(oid::int8))}));
+    EXPECT_EQ(again.row, (std::vector<std::string>{"5000000000"}));
+    (void) simple(*db_, "DROP TABLE qb114_type");
+}
+
+/**
+ * @brief Inside a block the 0A000 is the caller's: the server aborted the block, and a retry would
+ *        only fail with 25P02. The statement is marked, so after the ROLLBACK its next execution
+ *        re-prepares it before binding.
+ */
+TEST_F(PreparedStatementsIntegration, InsideABlockTheStalePlanReachesTheCallerThenTheNextExecutionRePrepares) {
+    using namespace prepared_statements_test;
+    ASSERT_TRUE(simple(*db_, "CREATE TEMP TABLE qb114_block (id int)"));
+    ASSERT_TRUE(simple(*db_, "INSERT INTO qb114_block VALUES (3)"));
+    ASSERT_TRUE(db_->prepare("qb114_block_star", "SELECT * FROM qb114_block", type_oid_sequence{}, discard_prepare, discard_error).await());
+    ASSERT_TRUE(execute_shape(*db_, "qb114_block_star").ok);
+    ASSERT_TRUE(simple(*db_, "ALTER TABLE qb114_block ADD COLUMN v text DEFAULT 'b'"));
+
+    const auto before = db_->stats();
+    ASSERT_TRUE(simple(*db_, "BEGIN"));
+    const auto in_block = execute_shape(*db_, "qb114_block_star");
+    ASSERT_TRUE(simple(*db_, "ROLLBACK"));
+    const auto after_rollback = execute_shape(*db_, "qb114_block_star");
+    const auto after          = db_->stats();
+
+    EXPECT_FALSE(in_block.ok);
+    EXPECT_EQ(in_block.sqlstate, sqlstate::feature_not_supported) << in_block.what;
+    ASSERT_TRUE(after_rollback.ok) << "SQLSTATE " << static_cast<int>(after_rollback.sqlstate) << ": " << after_rollback.what;
+    EXPECT_EQ(after_rollback.row, (std::vector<std::string>{"3", "b"}));
+    EXPECT_EQ(after.prepared_replans - before.prepared_replans, 1U);
+    (void) simple(*db_, "DROP TABLE qb114_block");
+}
+
+// ---------------------------------------------------------------------------
 // Statement reuse, prepared SELECT, batch, large result set
 // ---------------------------------------------------------------------------
 

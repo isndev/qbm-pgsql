@@ -17,8 +17,9 @@ TEST(PgsqlMetrics, CountersRemainExactAndDurationsUseSeconds) {
     stats.prepared_hits           = first + 6;
     stats.prepared_misses         = first + 7;
     stats.prepared_evicted        = first + 8;
-    stats.reconnects              = first + 9;
-    stats.gaps                    = first + 10;
+    stats.prepared_replans        = first + 9;
+    stats.reconnects              = first + 10;
+    stats.gaps                    = first + 11;
     stats.last_query_duration     = std::chrono::milliseconds(125);
     qb::metrics::snapshot snapshot;
     qb::metrics::describe(snapshot, stats, {{"connection", "catalog\"\\\n"}, {"core", "1"}});
@@ -32,6 +33,7 @@ TEST(PgsqlMetrics, CountersRemainExactAndDurationsUseSeconds) {
         "prepared_hits",
         "prepared_misses",
         "prepared_evicted",
+        "prepared_replans",
         "reconnects",
         "gaps"
     };
@@ -51,7 +53,7 @@ TEST(PgsqlMetrics, CountersRemainExactAndDurationsUseSeconds) {
     ASSERT_NE(duration, nullptr);
     EXPECT_EQ(duration->type, qb::metrics::metric_type::gauge);
     EXPECT_DOUBLE_EQ(duration->samples[0].number.as_double(), 0.125);
-    EXPECT_EQ(snapshot.families().size(), 12u);
+    EXPECT_EQ(snapshot.families().size(), 13u);
     const auto text = qb::metrics::write_text(snapshot);
     EXPECT_NE(text.find("qb_pgsql_queries_total{connection=\"catalog\\\"\\\\\\n\",core=\"1\"} 9007199254740993\n"), std::string::npos);
 }

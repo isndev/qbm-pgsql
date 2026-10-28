@@ -114,6 +114,9 @@ if (QB_HAS_SSL AND TARGET qbm-pgsql-test-system-cancel-request-wire)
     target_include_directories(qbm-pgsql-test-system-cancel-request-wire PRIVATE "${QB_ROOT_DIR}/tests/io/shared")
 endif ()
 qpg_test(system inline-query-order system/query/inline-query-order.cpp EXTRA_LABELS protocol coroutine)
+# A statement whose cached plan went stale (0A000 from RevalidateCachedQuery) is re-prepared, and its execution retried
+# once outside a block, against a fake backend that scripts every edge (Huly QB-114). No daemon.
+qpg_test(system prepared-replan-wire system/query/prepared-replan-wire.cpp EXTRA_LABELS protocol)
 # connect(dsn, raw_io) runs the handshake on the transport it is given, against a fake backend (Huly QB-1096).
 qpg_test(system adopted-transport system/connection/adopted-transport.cpp EXTRA_LABELS connection)
 if (QB_HAS_SSL AND TARGET qbm-pgsql-test-system-adopted-transport)

@@ -137,6 +137,16 @@ client-side (`not registered`) without touching the wire; prepare it again — t
 The unnamed statement of `query(sql, args...)` takes one slot and is never closed: the next unnamed Parse
 replaces it (Huly QB-207).
 
+**A stale cached plan.** A DDL that changes a statement's result columns -- `ALTER TABLE ... ADD COLUMN` under a
+`SELECT *`, a column whose type changes -- makes PostgreSQL refuse every later Bind of it with SQLSTATE 0A000
+(`cached plan must not change result type`, routine `RevalidateCachedQuery`). The client marks the statement and
+re-prepares it before binding it again: `Close('S')` + `Parse` + `Describe('S')` + `Sync`, one round trip, and the
+Bind then asks the result formats of the NEW columns. Outside a transaction block the refused execution is retried
+once and the caller sees only its result; inside a block the 0A000 reaches the caller -- the block is aborted -- and
+the statement's next execution, after the `ROLLBACK`, re-prepares it first. The routine field alone identifies the
+case (the message is localized, and 0A000 is any unsupported feature). A re-preparation that fails fails the execution
+with its own error; `stats().prepared_replans` counts the re-preparations (Huly QB-114).
+
 **Coroutine — prepare + execute**
 
 ```cpp
@@ -236,7 +246,7 @@ Ordinary chunk delivery borrows the operation and callable without copying eithe
 If cancellation detaches the sink or completion releases the operation during a call, ownership
 is retained in that operation's outermost sink invocation until it returns. Nested calls share
 that retention. This protects owned captures; it does not extend the lifetime of borrowed data.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:1825-1864,1872-1889,2601-2617,3355-3364 (CopyOperation / SinkInvocation / detach_sink; finish_copy; on_copy_data; copy_out) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:1833-1872,1880-1897,2740-2756,3494-3503 (CopyOperation / SinkInvocation / detach_sink; finish_copy; on_copy_data; copy_out) -->
 The source or sink activates only when that command reaches the wire, so an earlier
 plain SQL command cannot borrow it.
 
@@ -282,7 +292,7 @@ transaction is never joined and never ended by `query_stream`.
 > caller-owned only once its `BEGIN` has **completed** — `in_transaction()` mirrors the last `ReadyForQuery`. Started
 > before that, the stream reads the session as idle and opens (and later ends) a block of its own. `co_await` the
 > `begin()` first.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:3441-3561,3455-3473,3475-3478,3533-3553,3231-3239 (in that order: query_stream; the seat/guard bookkeeping; the cursor name; the last-one-out COMMIT/ROLLBACK; in_transaction) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:3580-3700,3594-3612,3614-3617,3672-3692,3370-3378 (in that order: query_stream; the seat/guard bookkeeping; the cursor name; the last-one-out COMMIT/ROLLBACK; in_transaction) -->
 
 ---
 

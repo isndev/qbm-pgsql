@@ -100,7 +100,9 @@ qb-io, not qb-core.
   Parse/Bind/Execute with **binary** parameters and a bounded prepared-statement
   LRU (default capacity 100, `db.prepared_cache_capacity(n)`); a statement it evicts
   is closed on the server too (a protocol `Close` message for it rides in the evicting
-  Parse's own message, so the backend holds no more statements than the cache). Framing, auth (SCRAM-SHA-256 / MD5 / cleartext), and type
+  Parse's own message, so the backend holds no more statements than the cache). A statement
+  whose cached plan a DDL made stale (0A000 from `RevalidateCachedQuery`) is re-prepared
+  before it is bound again, its execution retried once outside a transaction block (Huly QB-114). Framing, auth (SCRAM-SHA-256 / MD5 / cleartext), and type
   codecs are all in-module. SCRAM-SHA-256 is **mutual**: the client verifies the
   server's SASLFinal `ServerSignature` and refuses `AuthenticationOk` if a SCRAM
   exchange started but that signature never verified — so a server that cannot
@@ -246,6 +248,13 @@ db.prepare("sel_user", "SELECT name FROM users WHERE id = $1", {oid::int4},
   in the evicting Parse's message (after a shrink, in the next Parse or Bind). Executing
   an evicted name fails client-side ("not registered") — prepare it again; the name is
   free on the server. A statement must be prepared before it is executed (Huly QB-207).
+- A DDL that changes a prepared statement's result columns (`ALTER TABLE ... ADD COLUMN`
+  under a `SELECT *`, a column type change) makes the server refuse its Bind with 0A000,
+  routine `RevalidateCachedQuery`. The client re-prepares the statement (`Close` + `Parse` +
+  `Describe`, one round trip) and binds it again with the result formats of the NEW columns:
+  outside a block the execution is retried once and the caller never sees the 0A000; inside
+  a block the 0A000 reaches the caller (the block is aborted) and the next execution, after
+  the ROLLBACK, re-prepares first. `stats().prepared_replans` counts them (Huly QB-114).
 
 ### 3.4 Transactions + savepoints
 
@@ -568,7 +577,7 @@ the operation and callable without copying either shared owner; retention occurs
 cancellation detaches the sink or completion releases the operation during the call. That
 ownership stays in the operation's outermost sink invocation through nested calls until return.
 Borrowed capture data still needs its own lifetime; command admission and reservation are unchanged.
-_(src/qbm/pgsql/pgsql.h:1825-1864,1872-1889,2601-2617,3355-3364)_
+_(src/qbm/pgsql/pgsql.h:1833-1872,1880-1897,2740-2756,3494-3503)_
 
 > **`copy_in` is NOT constant-memory.** It drains the entire `source` into the
 > output pipe synchronously (bounded only by the write-buffer ceiling). Only
@@ -623,7 +632,7 @@ coroutine, an actor, or a second connection's trigger; reach for `cancel()` only
 where no coroutine can run.
 During the packet write, a native TLS `WANT_READ` waits for readability alone;
 otherwise native TLS and plain writes wait for writability. A custom secure transport
-without native TLS state keeps the combined read/write fallback (`pgsql.h:3684-3695`).
+without native TLS state keeps the combined read/write fallback (`pgsql.h:3823-3834`).
 
 **Connection introspection (all `[[nodiscard]]`, libpq-style):**
 
@@ -657,6 +666,7 @@ client members so it unregisters before their destruction. _(metrics.h:21)_
 qb::pg::stats s = db.stats();          // a snapshot, by value: monotonic since construction
 // s.queries, s.errors, s.bytes_sent, s.bytes_received, s.notifications_received,
 // s.notifications_dropped, s.prepared_hits, s.prepared_misses, s.prepared_evicted,
+// s.prepared_replans (Huly QB-114),
 // s.reconnects, s.gaps (Huly QB-111), s.last_query_duration (qb::duration)
 
 db.on_query_complete([](qb::pg::query_info const &q) {    // one call per completed query

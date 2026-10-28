@@ -7,7 +7,28 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ## [Unreleased]
 
-Nothing yet. Entries land here as they are merged, and move under a version heading when that version is tagged.
+### Added
+
+- **A prepared statement whose cached plan went stale is re-prepared, and its execution retried once outside a
+  transaction block (Huly QB-114).** A DDL that changes a statement's result columns -- an `ALTER TABLE` that adds a
+  column under a `SELECT *`, a column widened from `int` to `bigint` -- makes PostgreSQL refuse every later Bind of it
+  with SQLSTATE 0A000 (`cached plan must not change result type`, routine `RevalidateCachedQuery`); the error repeated
+  on every execution, and preparing the name again failed with 42P05 while the server still held it, so the only
+  recoveries were a `DEALLOCATE` in SQL or a new connection (measured on PostgreSQL 18.6). The client now marks the
+  statement stale and re-prepares it -- `Close('S')`, `Parse`, `Describe('S')`, `Sync`, one round trip -- before it
+  binds it again, the Bind taking its result formats from the NEW columns. Outside a block the refused execution is
+  retried once, transparently: the server refuses it at Bind, before it does anything, and the implicit transaction it
+  ran in ended with the error. In a block the error is the caller's (the block is aborted; a retry could only fail
+  with 25P02), and the statement's next execution, after the `ROLLBACK`, re-prepares it first. The routine field
+  alone identifies the case: the message is localized, and 0A000 is any feature the server does not support. A
+  re-preparation that fails fails the execution with its own error, and the statement stays marked; the unnamed
+  statement of an inline `query(sql, args...)` is parsed on every call and is not concerned. `stats().prepared_replans`
+  counts the re-preparations (`qb_pgsql_prepared_replans_total` in `<qbm/pgsql/metrics.h>`); the retried execution
+  is one query, counted and reported once. Proven live on PostgreSQL 18.6 (three cases, each failing without the
+  change) and against a scripted backend (seven wire cases; eight mutants of the logic, each caught). ABI:
+  `PreparedStorage` gains the stale marks, `Database` the re-preparation state, `qb::pg::stats` the
+  `prepared_replans` field and the internal `ISqlQuery` the virtual `prepared_statement()` -- additive growth in qbm
+  classes; consumers recompile with the train.
 
 ## [3.3.0] - 2026-10-26
 

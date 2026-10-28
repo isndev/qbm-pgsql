@@ -26,7 +26,7 @@ here so you can navigate the implementation — application code never includes 
 - **`type_oid_sequence`.** `using type_oid_sequence = std::vector<oid>` ([`src/qbm/pgsql/common.h`](../src/qbm/pgsql/common.h)). You pass
   one to `prepare()` to declare each parameter's type. <!-- src: src/qbm/pgsql/common.h:532-537 -->
 - **`params`.** `using params = detail::QueryParams` ([`pgsql.h`](../src/qbm/pgsql/pgsql.h)). A heterogeneous container of bind values
-  serialized to PostgreSQL **binary** wire form. <!-- src: pgsql.h:4346 -->
+  serialized to PostgreSQL **binary** wire form. <!-- src: pgsql.h:4487 -->
 - **`type_mapping<T>`.** Compile-time C++-type → OID lookup ([`src/qbm/pgsql/type_mapping.h`](../src/qbm/pgsql/type_mapping.h)). Drives
   `get_type_oid<T>()` and `fill_types<T...>()`. The primary template is **intentionally ill-formed** (a `static_assert`):
   a C++ type with no mapping is a **hard compile error**, not a silent fallback to OID `705` (unknown). Add a
@@ -329,7 +329,7 @@ auto ex = co_await db.execute("ins",
 
 The parameter count and the declared-type count must each fit in a signed 16-bit field (≤ 32767); `prepare` rejects more
 declared types and `params` serialization throws `std::length_error` past 32767 values, because a wrapped `int16` count
-would desynchronize the wire stream. <!-- src: src/qbm/pgsql/queries.h:862-874; src/qbm/pgsql/param_serializer.h:91-106 -->
+would desynchronize the wire stream. <!-- src: src/qbm/pgsql/queries.h:944-956; src/qbm/pgsql/param_serializer.h:91-106 -->
 
 Each individual bind value is also framed as `[int32 byte-length][payload]`, so a **single parameter ≥ 2 GiB** is
 rejected — `checked_param_length` throws `std::length_error` rather than let the signed `int32` length wrap while the
@@ -343,7 +343,7 @@ safer for overloaded operators and for `NULL` parameters whose type the server c
 
 ## Binary versus text on the wire
 
-- **Parameters:** always binary (format code 1, applied uniformly). <!-- src: src/qbm/pgsql/queries.h:987-996 -->
+- **Parameters:** always binary (format code 1, applied uniformly). <!-- src: src/qbm/pgsql/queries.h:1054-1063 -->
 - **Result columns:** chosen per column by `type_oid_prefers_binary_result_format(oid)` ([
   `src/qbm/pgsql/common.h`](../src/qbm/pgsql/common.h)). After `Bind`, the client patches each `RowDescription` column's `format_code` to
   match what it requested, via `sync_field_format_codes_with_extended_query_bind` (because `Describe('S')` always
