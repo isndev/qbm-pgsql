@@ -13,7 +13,8 @@
  *    entry's mark with it, and only that one; `clear()` (a new backend session) drops them all;
  *  - copy construction carries each entry's mark and the count, independently of the source; copy
  *    assignment -- a copy swapped in, `swap()` being private -- replaces the target's marks with the
- *    source's; move construction and assignment carry them.
+ *    source's; move construction and assignment carry them, and leave the source empty with no mark
+ *    counted -- usable as it is, as after `clear()`.
  * The wire behaviour the marks drive is in `system/query/prepared-replan-wire.cpp`.
  *
  * @author qb - C++ Actor Framework
@@ -50,6 +51,22 @@ columns(std::vector<std::string> const &names) {
         out.push_back(std::move(fd));
     }
     return out;
+}
+
+/// The state a moved-from storage must be left in: what `clear()` leaves -- no entry, no pending Close,
+/// no mark counted -- and usable as it is: a mark set and cleared again leaves nothing counted.
+void
+expect_left_empty(PreparedStorage &from) {
+    EXPECT_EQ(from.size(), 0u);
+    EXPECT_FALSE(from.has("a"));
+    EXPECT_FALSE(from.is_stale("a"));
+    EXPECT_FALSE(from.has_pending_close());
+    EXPECT_FALSE(from.has_stale()) << "a count with no marked entry behind it: every execution would test the marks";
+    from.push(make_query("a", "SELECT 1"));
+    from.mark_stale("a");
+    EXPECT_TRUE(from.has_stale());
+    from.refresh("a", {});
+    EXPECT_FALSE(from.has_stale()) << "the count did not restart from zero";
 }
 
 } // namespace
@@ -193,19 +210,24 @@ TEST(PreparedStorageStale, ACopyCarriesTheMarksIndependentlyOfItsSource) {
     EXPECT_TRUE(source.has_stale());
 }
 
-/// A move carries the entries with their marks and the count.
-TEST(PreparedStorageStale, AMoveCarriesTheMarks) {
-    PreparedStorage source(4);
+/// A move carries the entries with their marks, the count and the pending Closes, and leaves the
+/// source empty.
+TEST(PreparedStorageStale, AMoveCarriesTheMarksAndLeavesTheSourceEmpty) {
+    PreparedStorage source(2);
+    source.push(make_query("z", "SELECT 0"));
     source.push(make_query("a", "SELECT 1"));
-    source.push(make_query("b", "SELECT 2"));
+    source.push(make_query("b", "SELECT 2")); // over capacity: evicts "z", its Close pending
     source.mark_stale("a");
+    source.mark_stale("b");
 
     PreparedStorage moved(std::move(source));
     EXPECT_TRUE(moved.has_stale());
     EXPECT_TRUE(moved.is_stale("a"));
-    EXPECT_FALSE(moved.is_stale("b"));
-    source.clear(); // a moved-from storage is reused after clear()
-    EXPECT_FALSE(source.has_stale());
+    EXPECT_TRUE(moved.is_stale("b"));
+    EXPECT_TRUE(moved.has_pending_close());
+    expect_left_empty(source);
+    moved.refresh("a", {});
+    EXPECT_TRUE(moved.has_stale()) << "b is still marked";
 
     // Assigned over a storage with two marks of its own: they go with its old entries.
     PreparedStorage assigned(4);
@@ -215,10 +237,11 @@ TEST(PreparedStorageStale, AMoveCarriesTheMarks) {
     assigned.mark_stale("y");
     assigned = std::move(moved);
     EXPECT_FALSE(assigned.has("x"));
-    EXPECT_TRUE(assigned.is_stale("a"));
+    EXPECT_FALSE(assigned.is_stale("a"));
+    EXPECT_TRUE(assigned.is_stale("b"));
     EXPECT_TRUE(assigned.has_stale());
-    assigned.refresh("a", {});
+    EXPECT_TRUE(assigned.has_pending_close());
+    assigned.refresh("b", {});
     EXPECT_FALSE(assigned.has_stale()) << "the count came with the entries";
-    moved.clear();
-    EXPECT_FALSE(moved.has_stale());
+    expect_left_empty(moved);
 }

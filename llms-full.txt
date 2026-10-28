@@ -116,8 +116,10 @@ qb-io, not qb-core.
   LRU (default capacity 100, `db.prepared_cache_capacity(n)`); a statement it evicts
   is closed on the server too (a protocol `Close` message for it rides in the evicting
   Parse's own message, so the backend holds no more statements than the cache). A statement
-  whose cached plan a DDL made stale (0A000 from `RevalidateCachedQuery`) is re-prepared
-  before it is bound again, its execution retried once outside a transaction block (Huly QB-114). Framing, auth (SCRAM-SHA-256 / MD5 / cleartext), and type
+  whose cached plan a DDL made stale (0A000 from `RevalidateCachedQuery` refusing its Bind)
+  is re-prepared before it is bound again, the refused execution retried once outside a
+  transaction block; a 0A000 after BindComplete is the execution's, the caller's error
+  (Huly QB-114). Framing, auth (SCRAM-SHA-256 / MD5 / cleartext), and type
   codecs are all in-module. SCRAM-SHA-256 is **mutual**: the client verifies the
   server's SASLFinal `ServerSignature` and refuses `AuthenticationOk` if a SCRAM
   exchange started but that signature never verified — so a server that cannot
@@ -265,11 +267,17 @@ db.prepare("sel_user", "SELECT name FROM users WHERE id = $1", {oid::int4},
   free on the server. A statement must be prepared before it is executed (Huly QB-207).
 - A DDL that changes a prepared statement's result columns (`ALTER TABLE ... ADD COLUMN`
   under a `SELECT *`, a column type change) makes the server refuse its Bind with 0A000,
-  routine `RevalidateCachedQuery`. The client re-prepares the statement (`Close` + `Parse` +
-  `Describe`, one round trip) and binds it again with the result formats of the NEW columns:
-  outside a block the execution is retried once and the caller never sees the 0A000; inside
-  a block the 0A000 reaches the caller (the block is aborted) and the next execution, after
-  the ROLLBACK, re-prepares first. `stats().prepared_replans` counts them (Huly QB-114).
+  routine `RevalidateCachedQuery`. The client marks the statement and re-prepares it
+  (`Close` + `Parse` + `Describe`, one round trip) before binding it again, with the result
+  formats of the NEW columns. Only the execution whose Bind was refused, and only outside a
+  transaction block, is retried -- once, the caller seeing its result and not the 0A000.
+  Inside a block the 0A000 reaches the caller (the block is aborted); an execution sent while
+  the block is failed is bound as it is and gets the server's 25P02; the first one once the
+  block is live again (`ROLLBACK`, `ROLLBACK TO SAVEPOINT`) re-prepares first. A 0A000 that
+  arrives AFTER BindComplete is not the statement's -- the execution raised it, e.g. a
+  function that `EXECUTE`s a SQL-level prepared statement -- and is the caller's error:
+  nothing is replayed (a sequence's `nextval` would run twice), re-prepared or marked.
+  `stats().prepared_replans` counts the re-preparations (Huly QB-114).
 
 ### 3.4 Transactions + savepoints
 
@@ -592,7 +600,7 @@ the operation and callable without copying either shared owner; retention occurs
 cancellation detaches the sink or completion releases the operation during the call. That
 ownership stays in the operation's outermost sink invocation through nested calls until return.
 Borrowed capture data still needs its own lifetime; command admission and reservation are unchanged.
-_(src/qbm/pgsql/pgsql.h:1834-1873,1881-1898,2748-2764,3502-3511)_
+_(src/qbm/pgsql/pgsql.h:1834-1873,1881-1898,2750-2766,3504-3513)_
 
 > **`copy_in` is NOT constant-memory.** It drains the entire `source` into the
 > output pipe synchronously (bounded only by the write-buffer ceiling). Only
@@ -647,7 +655,7 @@ coroutine, an actor, or a second connection's trigger; reach for `cancel()` only
 where no coroutine can run.
 During the packet write, a native TLS `WANT_READ` waits for readability alone;
 otherwise native TLS and plain writes wait for writability. A custom secure transport
-without native TLS state keeps the combined read/write fallback (`pgsql.h:3831-3842`).
+without native TLS state keeps the combined read/write fallback (`pgsql.h:3833-3844`).
 
 **Connection introspection (all `[[nodiscard]]`, libpq-style):**
 
@@ -997,8 +1005,8 @@ public:
         query_stream(std::string sql, std::size_t batch_size, RowFn on_row);
 
     // Connection introspection / control:
-    bool cancel();                                      // out-of-band PostgreSQL CancelRequest (SYNCHRONOUS, ≤2s, plaintext); NOT [[nodiscard]] (pgsql.h:3730-3731)
-    [[nodiscard]] qb::io::async::task<bool> cancel_async(); // the same request, non-blocking, TLS on a secure database (pgsql.h:3775-3776)
+    bool cancel();                                      // out-of-band PostgreSQL CancelRequest (SYNCHRONOUS, ≤2s, plaintext); NOT [[nodiscard]] (pgsql.h:3732-3733)
+    [[nodiscard]] qb::io::async::task<bool> cancel_async(); // the same request, non-blocking, TLS on a secure database (pgsql.h:3777-3778)
     [[nodiscard]] bool in_transaction() const noexcept; // backend session in a transaction block ('T'/'E')
     [[nodiscard]] bool used_channel_binding() const noexcept; // SCRAM-SHA-256-PLUS tls-server-end-point binding negotiated
     [[nodiscard]] std::optional<std::string_view> parameter_status(std::string_view key) const; // PQparameterStatus
@@ -1057,7 +1065,7 @@ struct tcp {
     - `copy_in(std::string sql, std::function<std::optional<std::string>()> source) -> task<Reply<resultset>>`: Runs a `COPY … FROM STDIN`, calling `source` repeatedly and sending each returned chunk as `CopyData` until it returns `std::nullopt` (then `CopyDone`). A throwing `source` aborts the COPY with `CopyFail`. Resolves to `ok()` (the `COPY n` count) on success; the connection stays usable on error. **NOT constant-memory** — it drains the whole source into the output pipe synchronously (capped by the write-buffer ceiling); only `copy_out` and `query_stream` stream in constant memory.
     - `copy_in(std::string sql, std::string data) -> task<Reply<resultset>>`: Convenience overload that sends the entire `data` payload in one shot.
     - The connection admits one COPY at a time, in either direction. A second COPY returns a failed `Reply` without sending SQL or invoking its source/sink. Destroying the awaiting coroutine detaches its callback; its command keeps the reservation until completion, so a later COPY cannot answer the old server response. A source that destroys its own waiter causes its returned chunk to be discarded and `CopyFail` to be sent without another source call.
-    - A COPY OUT sink and its owned captures stay alive until its invocation returns, including self-cancellation or disconnect; detachment prevents later calls. Ordinary chunk delivery borrows the operation and callable without copying either shared owner. Cancellation or completion during the call retains the needed ownership in the operation's outermost sink invocation, shared by nested calls until return. Borrowed capture data needs its own lifetime. Command admission and query association remain unchanged (`src/qbm/pgsql/pgsql.h:1834-1873,1881-1898,2748-2764,3502-3511`).
+    - A COPY OUT sink and its owned captures stay alive until its invocation returns, including self-cancellation or disconnect; detachment prevents later calls. Ordinary chunk delivery borrows the operation and callable without copying either shared owner. Cancellation or completion during the call retains the needed ownership in the operation's outermost sink invocation, shared by nested calls until return. Borrowed capture data needs its own lifetime. Command admission and query association remain unchanged (`src/qbm/pgsql/pgsql.h:1834-1873,1881-1898,2750-2766,3504-3513`).
     - `query_stream(std::string sql, std::size_t batch_size, RowFn on_row) -> task<Reply<void>>`: Streams a large result via a server-side `CURSOR` (`DECLARE`/`FETCH`, `batch_size` rows per round trip), invoking `on_row` per row in **constant memory**. Auto-manages a transaction when idle (`BEGIN`/`COMMIT`, `ROLLBACK` on failure); when `in_transaction()` it declares the cursor in the caller's transaction and touches only the cursor. Cursor names are unique per connection (`qb_stream_cursor_<n>`), so streams **may overlap** on one `database` — and because a session has a single transaction, overlapping streams **share** the self-opened block: the first opens it, later ones only join, the last one out `COMMIT`s (or `ROLLBACK`s if any participant failed), so a server error in one stream aborts the block for the others. A caller-opened transaction is recognised as caller-owned only once its `BEGIN` has **completed** (`in_transaction()` mirrors the last `ReadyForQuery`), so do not start a stream while your own `begin()` is still in flight. `on_row` exceptions are rethrown after the cursor is closed and any self-opened transaction rolled back. `batch_size` is clamped to ≥ 1.
 - **Connection introspection / control:**
     - `bool cancel()`: Sends an out-of-band PostgreSQL `CancelRequest` on a short-lived **separate** connection (libpq `PQcancel` style). It is **synchronous / blocking** (capped at ≤ 2s) and plaintext even when the main link is SSL. Surfaces on the in-flight query as `sqlstate::query_canceled` (57014). Note: it briefly blocks the calling thread — prefer `cancel_async()`.
@@ -1065,7 +1073,7 @@ struct tcp {
     - `bool in_transaction() const noexcept`: True when the backend session is in a transaction block (`'T'`) or a failed transaction block (`'E'`); false when idle (`'I'`).
     - Packet-write readiness in `cancel_async()`: native TLS `WANT_READ` waits for read only;
       other native TLS/plain writes wait for write. Custom secure transports without native
-      TLS state retain the combined read/write fallback (`pgsql.h:3831-3842`).
+      TLS state retain the combined read/write fallback (`pgsql.h:3833-3844`).
     - `bool used_channel_binding() const noexcept`: True when **SCRAM-SHA-256-PLUS** with `tls-server-end-point` channel binding was negotiated (only over TLS, when the server offers the `-PLUS` mechanism).
     - `std::optional<std::string_view> parameter_status(std::string_view key) const`: Value of a server `ParameterStatus` report (libpq `PQparameterStatus`); e.g. `"server_version"`, `"server_encoding"`, `"TimeZone"`. `std::nullopt` if the key was never reported.
     - `int server_version() const`: Server version as a libpq-style integer (`PQserverVersion`), e.g. `160002` for 16.2. Returns 0 if the `server_version` parameter is unknown.
@@ -1073,7 +1081,7 @@ struct tcp {
     - `qb::pg::stats stats() const noexcept`: A snapshot, by value, of what the connection has done — monotonic `std::uint64_t` counts since construction (a reconnect resets nothing) and the last query's duration. See [Observability](#observability-qbpgstats-qbpgquery_info-qbpgquery_kind). (Huly QB-115)
     - `Database &on_query_complete(std::function<void(qb::pg::query_info const &)> hook)`: One call per completed query, on the connection's thread, before the query's own callback or awaiter: success, server error, local refusal, or a disconnect's drain. An empty function (the default) removes it; without one a completion pays one predictable branch. Must not drive the connection; an exception escaping it is contained and logged. (Huly QB-115)
     - `Database &on_notice(std::function<void(qb::pg::notice const &)> fn)`: Every NoticeResponse (`RAISE NOTICE` / `WARNING`, server notices) with all its fields, on the connection's thread as the message is read; must not drive the connection; an exception escaping it is contained and logged. Without a handler (the default, or an empty function) a notice is logged at INFO. Replaces any previous handler. (Huly QB-108)
-    - `Database &prepared_cache_capacity(std::size_t capacity)` / `std::size_t prepared_cache_capacity() const noexcept`: The bound of the connection's prepared-statement LRU — 100 by default, `0` restores it. A statement the LRU evicts is closed on the server as well: a protocol `Close` message for it precedes the evicting Parse in the same message, or, after a shrink (which evicts at once), the next Parse or Bind. The backend therefore holds no more named statements than the cache; executing an evicted name fails client-side and the name can be prepared again. The inline `query(sql, args...)` path's unnamed statement takes one slot and is never closed. (Huly QB-207) A statement whose cached plan the server reports stale -- SQLSTATE 0A000 with the routine `RevalidateCachedQuery`, after a DDL changed its result columns -- is marked, and re-prepared (`Close('S')` + `Parse` + `Describe('S')` + `Sync`) before its next Bind, which takes its result formats from the new columns; the refused execution itself is retried once when it ran outside a transaction block, and its 0A000 reaches the caller inside one. A failed re-preparation fails the execution with its own error; the unnamed statement is not concerned; `stats().prepared_replans` counts the re-preparations. (Huly QB-114)
+    - `Database &prepared_cache_capacity(std::size_t capacity)` / `std::size_t prepared_cache_capacity() const noexcept`: The bound of the connection's prepared-statement LRU — 100 by default, `0` restores it. A statement the LRU evicts is closed on the server as well: a protocol `Close` message for it precedes the evicting Parse in the same message, or, after a shrink (which evicts at once), the next Parse or Bind. The backend therefore holds no more named statements than the cache; executing an evicted name fails client-side and the name can be prepared again. The inline `query(sql, args...)` path's unnamed statement takes one slot and is never closed. (Huly QB-207) A statement whose cached plan the server reports stale -- SQLSTATE 0A000 with the routine `RevalidateCachedQuery` refusing its Bind, after a DDL changed its result columns -- is marked, and re-prepared (`Close('S')` + `Parse` + `Describe('S')` + `Sync`) before its next Bind, which takes its result formats from the new columns; the refused execution itself is retried once when it ran outside a transaction block, and its 0A000 reaches the caller inside one. While the block is failed (`'E'`) a marked statement is bound as it is and gets the server's 25P02; the first execution once the block is live again (`ROLLBACK`, `ROLLBACK TO SAVEPOINT`) re-prepares it. A 0A000 after BindComplete is the execution's (a function `EXECUTE`ing a SQL-level prepared statement), not the statement's: the caller's error -- nothing replayed, re-prepared, marked or counted. A failed re-preparation fails the execution with its own error; the unnamed statement is not concerned; `stats().prepared_replans` counts the re-preparations. (Huly QB-114)
 - **Transaction API:**
     - `begin(...)`: Starts a new transaction. Takes success/error callbacks and optional `transaction_mode`.
     - `execute(...)`: Executes a simple SQL query or a prepared statement. Callbacks handle results or errors.
@@ -1346,7 +1354,7 @@ namespace qb::pg {
   Copies rebuild their own LRU iterators; self-move assignment preserves the cache. `get()` promotes recency even on a const storage object.
   Every eviction of a named statement queues its server-side Close: `make_room_for(name)` runs as a Parse is written (so the Close rides in that message), `set_max_size()` evicts down to the new bound at once, and the next Parse or Bind drains the queue (`has_pending_close()` / `take_pending_close()`, prefixed by `close_evicted_statements_before`). `clear()` drops the queue with the cache. `hits()` / `misses()` count named executions found / refused at dispatch (`lookup_for_execute`); the unnamed `""` slot is not counted. (Huly QB-207) `mark_stale(name)` records a statement whose cached plan the server reported stale, `has_stale()` is the one test an execution pays, `is_stale(name)` decides that its execution re-prepares first, and `refresh(name, description)` stores the re-preparation's columns and clears the mark; an eviction or `clear()` drops the mark with the entry. (Huly QB-114)
   ```cpp
-  class PreparedStorage {      // queries.h:81 — `PreparedQueryStorage` is the ALIAS (queries.h:330)
+  class PreparedStorage {      // queries.h:81 — `PreparedQueryStorage` is the ALIAS (queries.h:332)
   public:
       bool has(std::string_view name) const;
       const PreparedQuery& push(PreparedQuery &&query);
@@ -1369,7 +1377,7 @@ namespace qb::pg {
 
 ### `qb::pg::results` (alias for `qb::pg::resultset`)
 
-Represents the set of rows returned by a query. The class is declared publicly as `qb::pg::resultset` in `resultset.h`; `qb::pg::results` is its public alias (`qbm/pgsql/src/qbm/pgsql/pgsql.h:4487`). Both spellings are valid, with `results` preferred for application code. Row and field are reachable as `qb::pg::results::row` / `qb::pg::results::field`.
+Represents the set of rows returned by a query. The class is declared publicly as `qb::pg::resultset` in `resultset.h`; `qb::pg::results` is its public alias (`qbm/pgsql/src/qbm/pgsql/pgsql.h:4489`). Both spellings are valid, with `results` preferred for application code. Row and field are reachable as `qb::pg::results::row` / `qb::pg::results::field`.
 
 **Definition (`qbm/pgsql/src/qbm/pgsql/resultset.h`):**
 ```cpp
