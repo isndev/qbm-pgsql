@@ -111,9 +111,9 @@ public:
 
     PreparedStorage(const PreparedStorage &other);
     PreparedStorage &operator=(const PreparedStorage &other);
-    /// The entries, their marks and the pending Closes move; the source is left as `clear()` leaves it.
+    /// Move construction and assignment carry the entries, their marks and the pending Closes, and leave
+    /// the source as `clear()` leaves it: no entry, no pending Close, no mark counted.
     PreparedStorage(PreparedStorage &&other) noexcept;
-    /// The entries, their marks and the pending Closes move; the source is left as `clear()` leaves it.
     PreparedStorage &operator=(PreparedStorage &&other) noexcept;
 
     /**

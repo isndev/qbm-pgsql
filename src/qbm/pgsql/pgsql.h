@@ -2253,7 +2253,7 @@ public:
      *          is the caller's error: the statement is not marked, and the execution, which may have
      *          done things a transaction does not undo, is not replayed. A refused Bind is kept, and
      *          retried once its statement is prepared again, when it ran outside a transaction block and
-     *          was not already retried: the server refused it before it did anything, and the implicit
+     *          was not already retried: the server refused it at Bind, before executing it, and the implicit
      *          transaction it ran in ended with the error. In a block the error is the caller's: the
      *          block is aborted, and a retry would only fail with 25P02 (in_failed_sql_transaction).
      * @return true when the execution is kept for its retry, its error unreported

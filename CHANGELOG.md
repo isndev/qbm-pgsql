@@ -17,7 +17,7 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
   the only recoveries were a `DEALLOCATE` in SQL or a new connection (measured on PostgreSQL 18.6). The client now marks
   the statement stale and re-prepares it -- `Close('S')`, `Parse`, `Describe('S')`, `Sync`, one round trip -- before it
   binds it again, the Bind taking its result formats from the NEW columns. Outside a block the execution whose Bind was
-  refused is retried once, transparently: the server refused it before running any of it, and the implicit
+  refused is retried once, transparently: the server refused it at Bind, before executing it, and the implicit
   transaction it ran in ended with the error. In a block the error is the caller's (the block is aborted; a retry could
   only fail with 25P02), and the statement's first execution once the block is live again -- after the `ROLLBACK`, or
   a `ROLLBACK TO SAVEPOINT` -- re-prepares it first; one sent while the block is still failed is bound as it is and gets

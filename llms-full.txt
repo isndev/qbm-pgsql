@@ -1351,7 +1351,7 @@ namespace qb::pg {
   ```
 - **`qb::pg::detail::PreparedQueryStorage` (`qbm/pgsql/src/qbm/pgsql/queries.h`):**
   Manages a collection of `PreparedQuery` objects, typically one per database connection/session. Used internally by `Transaction`.
-  Copies rebuild their own LRU iterators; self-move assignment preserves the cache. `get()` promotes recency even on a const storage object.
+  Copies rebuild their own LRU iterators; self-move assignment preserves the cache. A move (construction or assignment) carries the entries, their marks and the pending Closes; the moved-from storage is left as `clear()` leaves it (no entry, no pending Close, no mark counted). `get()` promotes recency even on a const storage object.
   Every eviction of a named statement queues its server-side Close: `make_room_for(name)` runs as a Parse is written (so the Close rides in that message), `set_max_size()` evicts down to the new bound at once, and the next Parse or Bind drains the queue (`has_pending_close()` / `take_pending_close()`, prefixed by `close_evicted_statements_before`). `clear()` drops the queue with the cache. `hits()` / `misses()` count named executions found / refused at dispatch (`lookup_for_execute`); the unnamed `""` slot is not counted. (Huly QB-207) `mark_stale(name)` records a statement whose cached plan the server reported stale, `has_stale()` is the one test an execution pays, `is_stale(name)` decides that its execution re-prepares first, and `refresh(name, description)` stores the re-preparation's columns and clears the mark; an eviction or `clear()` drops the mark with the entry. (Huly QB-114)
   ```cpp
   class PreparedStorage {      // queries.h:81 — `PreparedQueryStorage` is the ALIAS (queries.h:332)
