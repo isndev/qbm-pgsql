@@ -36,7 +36,7 @@ daemon (a connect-to-dead-host timeout), and `integration/` needs a live server.
 
 | Tier        | Suites                                                                                                                                                                                                                                                                              | Server required |
 |-------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------|
-| Unit        | `unserializer-primitives`, `typeconverter-codecs`, `result-format-routing`, `param-serializer-encode`, `typeconverter-{scalar,numeric,temporal,array,json,adversarial}`, `datastructures`, `oid-stream`, `protocol-message-codec`, `identifier-quoting`, `dsn-parse`, `scram-and-cancel`, `prepared-storage-lru`, `module-surface`, `metrics`, `savepoint-command-order`, and two `invalid-{simple,prepared}-execute-callback` compile-negative checks | No |
+| Unit        | `unserializer-primitives`, `typeconverter-codecs`, `result-format-routing`, `param-serializer-encode`, `typeconverter-{scalar,numeric,temporal,array,json,adversarial}`, `datastructures`, `oid-stream`, `protocol-message-codec`, `identifier-quoting`, `dsn-parse`, `scram-and-cancel`, `prepared-storage-lru`, `prepared-storage-stale`, `module-surface`, `metrics`, `savepoint-command-order`, and two `invalid-{simple,prepared}-execute-callback` compile-negative checks | No |
 | System      | `connect-timeout` (dead host), `tls-warning-race` (separate TLS clients), `scram-mitm-refuse` (SCRAM refusal), `cancel-request-wire` (fake backend), `inline-query-order` (inline completion), `adopted-transport` (`connect(dsn, raw_io)` on fake backends, a TLS one with OpenSSL), `prepared-replan-wire` (a stale cached plan re-prepared, on a scripted backend); none needs a daemon | No |
 | Integration | `connection-lifecycle`, `queries`, `inline-query`, `prepared-statements`, `transaction-basic`, `transaction-advanced`, `datatypes-roundtrip`, `wire-formats`, `listen-notify`, `coro-api`, `copy-owner`, `errors-sqlstate`, `database-api-extra`, `param-roundtrip`, `resilience`, `reconnect-contract`, and `connection-ssl` (TLS only) | Yes |
 
@@ -44,7 +44,7 @@ The unit suites exercise wire-format encoding and decoding, parameter serializat
 protocol-message framing in isolation — they pass on any host. The integration suites drive a real wire
 handshake, prepared statements, transactions, type round-trips, and asynchronous NOTIFY delivery against a server.
 
-<!-- src: qbm/pgsql/tests/CMakeLists.txt:60-101,103-150 -->
+<!-- src: qbm/pgsql/tests/CMakeLists.txt:60-102,104-151 -->
 
 ### How a missing server is handled
 
@@ -100,7 +100,7 @@ accepts the usual `--gtest_filter`, `--gtest_list_tests`, and `--gtest_repeat` f
 
 The TLS suites are conditional: `tls-warning-race` has `REQUIRES ssl`, and `connection-ssl` is registered inside
 `if (QB_HAS_SSL)` with the same gate. They require the `qb::pg::tcp::ssl::database` alias, which exists only with
-OpenSSL (<!-- src: qbm/pgsql/tests/CMakeLists.txt:107,148-150 -->).
+OpenSSL (<!-- src: qbm/pgsql/tests/CMakeLists.txt:108,149-151 -->).
 
 ## Configuring the server
 

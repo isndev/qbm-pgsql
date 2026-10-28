@@ -793,9 +793,11 @@ simple(qb::pg::tcp::database &db, std::string const &sql) {
  *        Bind with 0A000 ("cached plan must not change result type", routine
  *        `RevalidateCachedQuery`). Outside a block the client re-prepares the statement and binds it
  *        again, once, so the caller gets the NEW shape -- and the server holds the statement once.
+ *        The re-preparation clears the mark: the next execution is not re-prepared again.
  */
 TEST_F(PreparedStatementsIntegration, AStaleCachedPlanIsRePreparedAndTheExecutionRetried) {
     using namespace prepared_statements_test;
+    const auto start = db_->stats();
     ASSERT_TRUE(simple(*db_, "CREATE TEMP TABLE qb114_shape (id int)"));
     ASSERT_TRUE(simple(*db_, "INSERT INTO qb114_shape VALUES (7)"));
     ASSERT_TRUE(db_->prepare("qb114_star", "SELECT * FROM qb114_shape", type_oid_sequence{}, discard_prepare, discard_error).await());
@@ -813,6 +815,12 @@ TEST_F(PreparedStatementsIntegration, AStaleCachedPlanIsRePreparedAndTheExecutio
     EXPECT_EQ(after.prepared_replans - before.prepared_replans, 1U);
     EXPECT_EQ(after.errors - before.errors, 0U);
     EXPECT_EQ(server_statements(*db_, "qb114_"), (std::vector<std::string>{"qb114_star"}));
+
+    const auto next = execute_shape(*db_, "qb114_star");
+    const auto end  = db_->stats();
+    ASSERT_TRUE(next.ok) << "SQLSTATE " << static_cast<int>(next.sqlstate) << ": " << next.what;
+    EXPECT_EQ(next.row, (std::vector<std::string>{"7", "x"}));
+    EXPECT_EQ(end.prepared_replans - start.prepared_replans, 1U) << "the re-preparation cleared the statement's mark";
     (void) simple(*db_, "DROP TABLE qb114_shape");
 }
 
