@@ -142,7 +142,7 @@ replaces it (Huly QB-207).
 (`cached plan must not change result type`, routine `RevalidateCachedQuery`). The client marks the statement and
 re-prepares it before binding it again: `Close('S')` + `Parse` + `Describe('S')` + `Sync`, one round trip, and the
 Bind then asks the result formats of the NEW columns. The execution whose Bind was refused is retried once, and the
-caller sees only its result, when it ran outside a transaction block: the server refused it before running any of
+caller sees only its result, when it ran outside a transaction block: the server refused it at Bind, before executing
 it, and the implicit transaction it ran in ended with the error. Inside a block the 0A000 reaches the caller -- the
 block is aborted; an execution sent while the block is still failed is bound as it is and gets the server's 25P02;
 and the first execution once the block is live again, after the `ROLLBACK` or a `ROLLBACK TO SAVEPOINT`, re-prepares
