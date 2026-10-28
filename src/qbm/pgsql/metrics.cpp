@@ -27,6 +27,8 @@ describe(snapshot &snap, qb::pg::stats const &stats, label_set labels) {
         .add(labels, stats.prepared_misses);
     snap.counter("qb_pgsql_prepared_evicted_total", "Prepared statements evicted and closed on the server.")
         .add(labels, stats.prepared_evicted);
+    snap.counter("qb_pgsql_prepared_replans_total", "Prepared statements re-prepared after the server reported their cached plan stale.")
+        .add(labels, stats.prepared_replans);
     snap.counter("qb_pgsql_reconnects_total", "Ready connections reached after a lost connection.").add(labels, stats.reconnects);
     snap.counter("qb_pgsql_gaps_total", "Notification stream gap markers emitted.").add(labels, stats.gaps);
     snap.gauge("qb_pgsql_last_query_duration_seconds", "Send-to-completion time of the last sent query; zero before any measurement.")

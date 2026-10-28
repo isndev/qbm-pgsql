@@ -82,6 +82,7 @@ struct stats {
     std::uint64_t prepared_hits          = 0; ///< Named executions found in the prepared-statement cache
     std::uint64_t prepared_misses        = 0; ///< Named executions refused because the name was not cached
     std::uint64_t prepared_evicted       = 0; ///< Statements the cache evicted (and closed on the server)
+    std::uint64_t prepared_replans       = 0; ///< Statements re-prepared because the server reported their cached plan stale (0A000)
     std::uint64_t reconnects = 0;        ///< Ready connections reached after a lost one (an explicit `disconnect()` ends the session: none)
     std::uint64_t gaps       = 0;        ///< Gap markers a notify consumer emitted: after a reconnection, or where its queue overflowed
     qb::duration  last_query_duration{}; ///< Send-to-completion time of the last query that was sent

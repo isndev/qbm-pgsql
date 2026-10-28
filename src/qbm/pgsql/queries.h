@@ -72,19 +72,26 @@ struct PreparedQuery {
  * itself BEFORE it is written (`make_room_for()`), so the Close of the statement it pushes
  * out travels in the same message. The unnamed statement `""` is never closed: the next
  * unnamed Parse replaces it on the server.
+ *
+ * A statement whose cached plan the server reported stale -- SQLSTATE 0A000 from
+ * `RevalidateCachedQuery`: a DDL changed its result columns -- is marked (`mark_stale()`), and
+ * the connection re-prepares it before it binds it again (`refresh()` clears the mark, Huly
+ * QB-114).
  */
 class PreparedStorage {
     // LRU cache implementation
     struct LruEntry {
-        std::string                              name;     ///< Query name (key)
-        PreparedQuery                            query;    ///< The prepared query
-        mutable std::list<std::string>::iterator lru_iter; ///< Iterator in LRU list (mutable for get())
+        std::string                              name;         ///< Query name (key)
+        PreparedQuery                            query;        ///< The prepared query
+        mutable std::list<std::string>::iterator lru_iter;     ///< Iterator in LRU list (mutable for get())
+        bool                                     stale{false}; ///< The server reported its cached plan stale
     };
 
     qb::unordered_map<std::string, LruEntry> _prepared_queries; ///< Map of queries
     mutable std::list<std::string>           _lru_list;         ///< LRU order list, reordered by get()
     size_t                                   _max_size{100};    ///< Max capacity
     size_t                                   _evicted_count{0}; ///< Stats: evicted
+    size_t                                   _stale_count{0};   ///< Entries marked stale: one test per execution while 0
     std::vector<std::string>                 _pending_close;    ///< Evicted named statements the server still holds
     mutable std::uint64_t                    _hits{0};          ///< Stats: execute(name) found in the cache
     mutable std::uint64_t                    _misses{0};        ///< Stats: execute(name) refused, name not cached
@@ -255,6 +262,43 @@ public:
     PreparedQuery const &get(std::string_view name) const;
 
     /**
+     * @brief The server reported the cached plan of @p name stale (Huly QB-114)
+     *
+     * SQLSTATE 0A000 from `RevalidateCachedQuery`: a DDL changed the statement's result columns
+     * since it was prepared, and every Bind of it fails until it is prepared again. No-op for a
+     * name that is not cached.
+     *
+     * @param name Name of the prepared query
+     */
+    void mark_stale(std::string_view name);
+
+    /**
+     * @brief Whether any cached statement is marked stale: the one test an execution pays
+     */
+    [[nodiscard]] bool
+    has_stale() const noexcept {
+        return _stale_count != 0;
+    }
+
+    /**
+     * @brief Whether @p name is cached and marked stale
+     *
+     * @param name Name of the prepared query
+     * @return bool True when its next execution must re-prepare it first
+     */
+    [[nodiscard]] bool is_stale(std::string_view name) const;
+
+    /**
+     * @brief The statement @p name was prepared again: its new result columns, its mark cleared
+     *
+     * No-op for a name that is no longer cached.
+     *
+     * @param name Name of the prepared query
+     * @param description The RowDescription the re-preparation's Describe returned (empty: no rows)
+     */
+    void refresh(std::string_view name, row_description_type &&description);
+
+    /**
      * @brief Clear all prepared queries
      *
      * For a new backend session: the statements of the old one, and the Closes still owed to
@@ -265,6 +309,7 @@ public:
         _prepared_queries.clear();
         _lru_list.clear();
         _pending_close.clear();
+        _stale_count = 0;
     }
 
 private:
@@ -297,6 +342,29 @@ using PreparedQueryStorage = PreparedStorage;
  * @return message The Closes, then @p tail
  */
 [[nodiscard]] message close_evicted_statements_before(PreparedStorage &storage, message &&tail);
+
+/**
+ * @brief Parse + Describe('S') + Sync of @p query: the message a preparation sends
+ *
+ * @param query The statement to prepare
+ * @return message The three messages, packed
+ */
+[[nodiscard]] message parse_describe_sync(PreparedQuery const &query);
+
+/**
+ * @brief Close('S') + Parse + Describe('S') + Sync of @p query, preceded by the Closes the
+ *        cache still owes: the re-preparation of a statement whose cached plan went stale
+ *        (Huly QB-114)
+ *
+ * The Close comes first because the backend still holds the name -- a Parse of a name it
+ * holds fails with 42P05 -- and the cycle ends with its own Sync, so the ReadyForQuery that
+ * answers it says when the statement is ready to be bound again.
+ *
+ * @param storage The session's statement cache; its pending-close queue is drained
+ * @param query The statement to prepare again
+ * @return message The message to send
+ */
+[[nodiscard]] message reprepare_statement(PreparedStorage &storage, PreparedQuery const &query);
 
 /**
  * @brief Class for managing query parameters
@@ -450,6 +518,20 @@ public:
      * @return query_info The query's description
      */
     [[nodiscard]] virtual query_info describe() const = 0;
+
+    /**
+     * @brief The named prepared statement this query binds; empty for any other query, and for
+     *        the unnamed statement of an inline `query(sql, args...)`
+     *
+     * What the connection reads to re-prepare a statement whose cached plan went stale (Huly
+     * QB-114), without the cache lookup `describe()` makes.
+     *
+     * @return std::string_view The statement's name, valid as long as the query
+     */
+    [[nodiscard]] virtual std::string_view
+    prepared_statement() const noexcept {
+        return {};
+    }
 };
 
 /**
@@ -887,33 +969,13 @@ public:
         QB_LOG_DEBUG("[pgsql] Send PARSE QUERY \"" << _query.expression << "\"");
         _storage.make_room_for(_query.name);
         if (_storage.has_pending_close())
-            return close_evicted_statements_before(_storage, parse_describe_sync());
-        return parse_describe_sync();
+            return close_evicted_statements_before(_storage, parse_describe_sync(_query));
+        return parse_describe_sync(_query);
     }
 
     [[nodiscard]] query_info
     describe() const final {
         return describe_query(query_kind::prepare, _query.name, _query.expression);
-    }
-
-private:
-    [[nodiscard]] message
-    parse_describe_sync() const {
-        message cmd(parse_tag);
-        cmd.write(_query.name);
-        cmd.write(_query.expression);
-        cmd.write((smallint) _query.param_types.size());
-        for (auto oid_val : _query.param_types) {
-            cmd.write(static_cast<integer>(oid_val));
-        }
-
-        message describe(describe_tag);
-        describe.write('S');
-        describe.write(_query.name);
-        cmd.pack(describe);
-        cmd.pack(message(sync_tag));
-
-        return cmd;
     }
 };
 
@@ -969,6 +1031,11 @@ public:
     describe() const final {
         PreparedQuery const *const query = _storage.find(_query_name);
         return describe_query(query_kind::execute, _query_name, query ? std::string_view{query->expression} : std::string_view{});
+    }
+
+    [[nodiscard]] std::string_view
+    prepared_statement() const noexcept final {
+        return _query_name;
     }
 
 private:

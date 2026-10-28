@@ -1129,6 +1129,7 @@ private:
         _error                 = error::db_error{"unknown error"};
         _current_command       = root_transaction();
         _current_query         = nullptr;
+        _replan                = replan_phase::none;
         _query_sent            = false;
         _ready_for_query       = false;
         _raw_listen_seen       = false;
@@ -1666,6 +1667,7 @@ private:
             fail_all_pending_counted(error::client_error("database disconnected"));
         _current_command = root_transaction();
         _current_query   = nullptr;
+        _replan          = replan_phase::none;
         _ready_for_query = false;
     }
 
@@ -1716,6 +1718,10 @@ private:
 
         if (_current_query) {
             if (qb::likely(_current_query->is_valid())) {
+                if (storage_.has_stale()) [[unlikely]] {
+                    if (reprepare_before_execute_())
+                        return true;
+                }
                 const auto msg = _current_query->get();
                 _query_sent_at = clock_now();
                 _query_sent    = true;
@@ -1772,6 +1778,7 @@ private:
     on_success_query() {
         if (!_current_query)
             return;
+        _replan = replan_phase::none;
         if (!_current_command) {
             _current_query = nullptr;
             _query_sent    = false;
@@ -1795,6 +1802,7 @@ private:
         _error = err;
         if (!_current_query)
             return;
+        _replan = replan_phase::none;
         if (!_current_command) {
             _current_query = nullptr;
             _query_sent    = false;
@@ -1907,6 +1915,17 @@ private:
         }};
     }
     char _txn_status{'I'}; ///< Last ReadyForQuery transaction status: 'I' idle, 'T' in a block, 'E' failed block
+
+    /// Where the execution in flight stands with the re-preparation of its statement (Huly QB-114).
+    enum class replan_phase : std::uint8_t {
+        none,    ///< No re-preparation
+        owed,    ///< The server refused it, its cached plan stale, outside a block: the next ReadyForQuery re-prepares
+        parsing, ///< The Close + Parse + Describe of its statement is in flight
+        resent   ///< Sent again after its statement was re-prepared: it is not retried twice
+    };
+    replan_phase         _replan{replan_phase::none};
+    row_description_type _replan_columns{};        ///< The re-prepared statement's result columns
+    bool                 _replan_columns_ok{true}; ///< false: their RowDescription was malformed
 
 public:
     /**
@@ -2204,7 +2223,108 @@ public:
             on_startup_error_(err);
             return;
         }
+        if (is_stale_cached_plan(err)) [[unlikely]] {
+            if (keep_for_replan_())
+                return;
+        }
         on_error_query(err);
+    }
+
+    /**
+     * @brief SQLSTATE 0A000 from the server's plan cache: the result columns of the statement changed
+     *        since it was prepared -- an ALTER TABLE, a `SELECT *` over a table that gained a column
+     *        (Huly QB-114)
+     * @details The routine field names it: the message is localized, and 0A000 is any feature the
+     *          server does not support.
+     */
+    [[nodiscard]] static bool
+    is_stale_cached_plan(error::db_error const &err) noexcept {
+        return err.sqlstate == ::qb::pg::sqlstate::feature_not_supported && err.routine() == "RevalidateCachedQuery";
+    }
+
+    /**
+     * @brief The execution in flight was refused because its statement's cached plan went stale
+     *        (Huly QB-114): the statement is marked, so its next execution re-prepares it first
+     * @details The execution is kept, and retried once its statement is prepared again, when it ran
+     *          outside a transaction block and was not already retried: the server refuses it at Bind,
+     *          before it did anything, and the implicit transaction it ran in ended with the error. In a
+     *          block the error is the caller's: the block is aborted, and a retry would only fail with
+     *          25P02 (in_failed_sql_transaction).
+     * @return true when the execution is kept for its retry, its error unreported
+     */
+    QB_NOINLINE QB_COLD bool
+    keep_for_replan_() {
+        if (!_current_query)
+            return false;
+        const auto name = _current_query->prepared_statement();
+        if (name.empty())
+            return false;
+        storage_.mark_stale(name);
+        if (_replan != replan_phase::none || _txn_status != 'I' || !storage_.is_stale(name))
+            return false;
+        _replan = replan_phase::owed;
+        return true;
+    }
+
+    /**
+     * @brief The query about to be sent binds a statement marked stale (Huly QB-114): its
+     *        re-preparation goes first, and the ReadyForQuery that answers it sends the execution
+     * @return true when the re-preparation was sent in the execution's place
+     */
+    QB_NOINLINE QB_COLD bool
+    reprepare_before_execute_() {
+        const auto name = _current_query->prepared_statement();
+        if (name.empty() || !storage_.is_stale(name))
+            return false;
+        _query_sent_at = clock_now();
+        _query_sent    = true;
+        send_reprepare_(*storage_.find(name));
+        return true;
+    }
+
+    /// Close + Parse + Describe + Sync of a stale statement, counted in `stats().prepared_replans`.
+    void
+    send_reprepare_(PreparedQuery const &statement) {
+        QB_LOG_DEBUG("[pgsql] Re-prepare \"" << statement.name << "\": its cached plan is stale");
+        _replan = replan_phase::parsing;
+        _replan_columns.clear();
+        _replan_columns_ok = true;
+        ++_stats.prepared_replans;
+        send_message(reprepare_statement(storage_, statement));
+    }
+
+    /**
+     * @brief The ReadyForQuery that ends a step of a re-preparation (Huly QB-114)
+     * @details After the refused execution, the Close + Parse + Describe of its statement leaves. After
+     *          that, the statement's new result columns are recorded -- the Bind takes its result formats
+     *          from them -- and the execution is sent again. A statement evicted meanwhile
+     *          (`prepared_cache_capacity()`), or a malformed RowDescription, fails the execution.
+     * @param msg The ReadyForQuery
+     */
+    QB_NOINLINE QB_COLD void
+    continue_replan_(message &msg) {
+        char stat(0);
+        msg.read(stat);
+        if (stat == 'I' || stat == 'T' || stat == 'E')
+            _txn_status = stat;
+        PreparedQuery const *const statement = storage_.find(_current_query->prepared_statement());
+        const char                *failure   = nullptr;
+        if (!statement)
+            failure = "the prepared statement was evicted while it was re-prepared";
+        else if (_replan == replan_phase::owed) {
+            send_reprepare_(*statement);
+            return;
+        } else if (!_replan_columns_ok)
+            failure = "malformed RowDescription while re-preparing a statement";
+        if (failure) {
+            on_error_query(error::client_error{failure});
+            if (_session_live && !process_query(_current_command) && _session_live)
+                _ready_for_query = true;
+            return;
+        }
+        storage_.refresh(statement->name, std::move(_replan_columns));
+        _replan = replan_phase::resent;
+        send_message(_current_query->get());
     }
 
     /**
@@ -2279,6 +2399,13 @@ public:
         auto clock_guard = qb::scope_guard([this] { _ready_clock_set = false; });
         if (startup_pending_() && _session_live) [[unlikely]]
             _startup->settle(startup_outcome::up);
+        if (_replan == replan_phase::owed || _replan == replan_phase::parsing) [[unlikely]] {
+            if (_current_query && _session_live) {
+                continue_replan_(msg);
+                return;
+            }
+            _replan = replan_phase::none;
+        }
         on_success_query();
         if (_raw_listen_seen) [[unlikely]]
             note_raw_listen_();
@@ -2319,6 +2446,10 @@ public:
         smallint col_cnt = 0;
         if (!msg.read(col_cnt) || col_cnt < 0) {
             QB_LOG_WARN("[pgsql] RowDescription with missing or negative column count");
+            if (_replan == replan_phase::parsing) [[unlikely]] {
+                _replan_columns_ok = false;
+                return;
+            }
             _current_command->result(false);
             _current_command->on_new_row_description({});
             return;
@@ -2330,9 +2461,17 @@ public:
                 fields.push_back(fd);
             } else {
                 QB_LOG_WARN("[pgsql] Failed to read field description " << i);
+                if (_replan == replan_phase::parsing) [[unlikely]] {
+                    _replan_columns_ok = false;
+                    return;
+                }
                 _current_command->result(false);
                 break;
             }
+        }
+        if (_replan == replan_phase::parsing) [[unlikely]] {
+            _replan_columns = std::move(fields); // the re-prepared statement's, not a result's (Huly QB-114)
+            return;
         }
         _current_command->on_new_row_description(std::move(fields));
     }
@@ -3865,6 +4004,7 @@ public:
             fail_all_pending_counted(error::client_error("database disconnected"));
             _current_command = root_transaction();
             _current_query   = nullptr;
+            _replan          = replan_phase::none;
             _ready_for_query = false;
         }
         if (!was_ready)
@@ -3929,6 +4069,7 @@ public:
         _error                 = error::db_error{"unknown error"};
         _current_command       = root_transaction();
         _current_query         = nullptr;
+        _replan                = replan_phase::none;
         _query_sent            = false;
         _ready_for_query       = false;
     }

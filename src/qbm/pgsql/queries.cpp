@@ -22,6 +22,7 @@ PreparedStorage::PreparedStorage(const PreparedStorage &other)
     : _lru_list(other._lru_list)
     , _max_size(other._max_size)
     , _evicted_count(other._evicted_count)
+    , _stale_count(other._stale_count)
     , _pending_close(other._pending_close)
     , _hits(other._hits)
     , _misses(other._misses) {
@@ -30,7 +31,7 @@ PreparedStorage::PreparedStorage(const PreparedStorage &other)
         auto source = other._prepared_queries.find(*it);
         if (source == other._prepared_queries.end())
             throw std::logic_error("PreparedStorage LRU entry has no matching query");
-        _prepared_queries.emplace(*it, LruEntry{source->second.name, source->second.query, it});
+        _prepared_queries.emplace(*it, LruEntry{source->second.name, source->second.query, it, source->second.stale});
     }
 }
 
@@ -50,6 +51,7 @@ PreparedStorage::operator=(PreparedStorage &&other) noexcept {
         _lru_list         = std::move(other._lru_list);
         _max_size         = other._max_size;
         _evicted_count    = other._evicted_count;
+        _stale_count      = other._stale_count;
         _pending_close    = std::move(other._pending_close);
         _hits             = other._hits;
         _misses           = other._misses;
@@ -64,6 +66,7 @@ PreparedStorage::swap(PreparedStorage &other) {
     _lru_list.swap(other._lru_list);
     swap(_max_size, other._max_size);
     swap(_evicted_count, other._evicted_count);
+    swap(_stale_count, other._stale_count);
     _pending_close.swap(other._pending_close);
     swap(_hits, other._hits);
     swap(_misses, other._misses);
@@ -93,6 +96,8 @@ PreparedStorage::push(PreparedQuery &&query) {
         // Relink the existing node; its stored iterator stays valid.
         _lru_list.splice(_lru_list.begin(), _lru_list, it->second.lru_iter);
         it->second.query = std::move(query);
+        if (std::exchange(it->second.stale, false))
+            --_stale_count;
         return it->second.query;
     }
 
@@ -125,6 +130,29 @@ PreparedStorage::get(std::string_view name) const {
 }
 
 void
+PreparedStorage::mark_stale(std::string_view name) {
+    auto it = _prepared_queries.find(std::string(name));
+    if (it != _prepared_queries.end() && !std::exchange(it->second.stale, true))
+        ++_stale_count;
+}
+
+bool
+PreparedStorage::is_stale(std::string_view name) const {
+    const auto it = _prepared_queries.find(std::string(name));
+    return it != _prepared_queries.cend() && it->second.stale;
+}
+
+void
+PreparedStorage::refresh(std::string_view name, row_description_type &&description) {
+    auto it = _prepared_queries.find(std::string(name));
+    if (it == _prepared_queries.end())
+        return;
+    it->second.query.row_description = std::move(description);
+    if (std::exchange(it->second.stale, false))
+        --_stale_count;
+}
+
+void
 PreparedStorage::evict_down_to(size_t limit) {
     while (_prepared_queries.size() > limit && !_lru_list.empty())
         evict_lru();
@@ -138,6 +166,9 @@ PreparedStorage::evict_lru() {
     std::string const &lru_name = _lru_list.back();
     if (!lru_name.empty())
         _pending_close.push_back(lru_name);
+    const auto entry = _prepared_queries.find(lru_name);
+    if (entry != _prepared_queries.end() && entry->second.stale)
+        --_stale_count;
     _prepared_queries.erase(lru_name);
     _lru_list.pop_back();
     ++_evicted_count;
@@ -159,6 +190,36 @@ close_evicted_statements_before(PreparedStorage &storage, message &&tail) {
     }
     out.pack(tail);
     return out;
+}
+
+message
+parse_describe_sync(PreparedQuery const &query) {
+    message cmd(parse_tag);
+    cmd.write(query.name);
+    cmd.write(query.expression);
+    cmd.write((smallint) query.param_types.size());
+    for (auto oid_val : query.param_types) {
+        cmd.write(static_cast<integer>(oid_val));
+    }
+
+    message describe(describe_tag);
+    describe.write('S');
+    describe.write(query.name);
+    cmd.pack(describe);
+    cmd.pack(message(sync_tag));
+
+    return cmd;
+}
+
+message
+reprepare_statement(PreparedStorage &storage, PreparedQuery const &query) {
+    message close(close_tag);
+    close.write('S');
+    close.write(query.name);
+    close.pack(parse_describe_sync(query));
+    if (storage.has_pending_close())
+        return close_evicted_statements_before(storage, std::move(close));
+    return close;
 }
 
 smallint
