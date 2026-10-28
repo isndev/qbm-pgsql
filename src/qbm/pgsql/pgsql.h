@@ -1718,6 +1718,7 @@ private:
 
         if (_current_query) {
             if (qb::likely(_current_query->is_valid())) {
+                _query_rows_received = false;
                 if (storage_.has_stale()) [[unlikely]] {
                     if (reprepare_before_execute_())
                         return true;
@@ -1924,8 +1925,9 @@ private:
         resent   ///< Sent again after its statement was re-prepared: it is not retried twice
     };
     replan_phase         _replan{replan_phase::none};
-    row_description_type _replan_columns{};        ///< The re-prepared statement's result columns
-    bool                 _replan_columns_ok{true}; ///< false: their RowDescription was malformed
+    row_description_type _replan_columns{};           ///< The re-prepared statement's result columns
+    bool                 _replan_columns_ok{true};    ///< false: their RowDescription was malformed
+    bool                 _query_rows_received{false}; ///< The query in flight received a DataRow: it is never replayed
 
 public:
     /**
@@ -2249,7 +2251,9 @@ public:
      *          outside a transaction block and was not already retried: the server refuses it at Bind,
      *          before it did anything, and the implicit transaction it ran in ended with the error. In a
      *          block the error is the caller's: the block is aborted, and a retry would only fail with
-     *          25P02 (in_failed_sql_transaction).
+     *          25P02 (in_failed_sql_transaction). So is an error raised after a DataRow -- a function
+     *          that EXECUTEs a SQL-level prepared statement fails mid-stream: a replay would deliver
+     *          those rows twice.
      * @return true when the execution is kept for its retry, its error unreported
      */
     QB_NOINLINE QB_COLD bool
@@ -2260,7 +2264,7 @@ public:
         if (name.empty())
             return false;
         storage_.mark_stale(name);
-        if (_replan != replan_phase::none || _txn_status != 'I' || !storage_.is_stale(name))
+        if (_replan != replan_phase::none || _txn_status != 'I' || _query_rows_received || !storage_.is_stale(name))
             return false;
         _replan = replan_phase::owed;
         return true;
@@ -2269,12 +2273,15 @@ public:
     /**
      * @brief The query about to be sent binds a statement marked stale (Huly QB-114): its
      *        re-preparation goes first, and the ReadyForQuery that answers it sends the execution
+     * @details Not in a failed block (`'E'`): the server would refuse the Parse with 25P02 as it
+     *          refuses the Bind, so the Bind goes as it is and the statement stays marked for the
+     *          first execution after the ROLLBACK.
      * @return true when the re-preparation was sent in the execution's place
      */
     QB_NOINLINE QB_COLD bool
     reprepare_before_execute_() {
         const auto name = _current_query->prepared_statement();
-        if (name.empty() || !storage_.is_stale(name))
+        if (name.empty() || _txn_status == 'E' || !storage_.is_stale(name))
             return false;
         _query_sent_at = clock_now();
         _query_sent    = true;
@@ -2483,6 +2490,7 @@ public:
      */
     void
     on_data_row(message &msg) {
+        _query_rows_received = true; // a stale plan raised past this row is the caller's (Huly QB-114)
         if (!_current_command)
             return;
         row_data row;

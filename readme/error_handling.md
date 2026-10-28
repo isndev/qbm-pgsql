@@ -128,7 +128,7 @@ if (!r.ok() && r.error().sqlstate == qb::pg::sqlstate::unique_violation) {
 
 The fields are shared by the error's copies and allocated only for a server error: `db_error`, and so every `Reply<T>`,
 grows by one `std::shared_ptr` (16 bytes on a 64-bit target).
-<!-- src: qbm/pgsql/src/qbm/pgsql/error.h:50,147,159,230 (in that order: server_error_fields; the db_error constructor from it; server_fields; the shared member); qbm/pgsql/src/qbm/pgsql/pgsql.h:2219-2220 (on_error_response keeps them) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/error.h:50,147,159,230 (in that order: server_error_fields; the db_error constructor from it; server_fields; the shared member); qbm/pgsql/src/qbm/pgsql/pgsql.h:2221-2222 (on_error_response keeps them) -->
 
 ### Notices
 
@@ -137,7 +137,7 @@ nothing. `db.on_notice([](qb::pg::notice const &n) { ... })` receives each one w
 `server_error_fields`): `n.severity_nonlocalized`, `n.sqlstate`, `n.message`, `n.hint`, ... It runs on the connection's
 thread as the message is read, must not drive the connection, and an exception escaping it is contained and logged.
 Without a handler a notice is logged at INFO, as before.
-<!-- src: qbm/pgsql/src/qbm/pgsql/error.h:74 (notice); qbm/pgsql/src/qbm/pgsql/pgsql.h:3203-3206,2378-2387 (in that order: on_notice; on_notice_response) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/error.h:74 (notice); qbm/pgsql/src/qbm/pgsql/pgsql.h:3211-3214,2385-2394 (in that order: on_notice; on_notice_response) -->
 
 ### What each path fills
 

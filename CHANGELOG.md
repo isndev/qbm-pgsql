@@ -19,16 +19,21 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
   binds it again, the Bind taking its result formats from the NEW columns. Outside a block the refused execution is
   retried once, transparently: the server refuses it at Bind, before it does anything, and the implicit transaction it
   ran in ended with the error. In a block the error is the caller's (the block is aborted; a retry could only fail
-  with 25P02), and the statement's next execution, after the `ROLLBACK`, re-prepares it first. The routine field
-  alone identifies the case: the message is localized, and 0A000 is any feature the server does not support. A
-  re-preparation that fails fails the execution with its own error, and the statement stays marked; the unnamed
-  statement of an inline `query(sql, args...)` is parsed on every call and is not concerned. `stats().prepared_replans`
-  counts the re-preparations (`qb_pgsql_prepared_replans_total` in `<qbm/pgsql/metrics.h>`); the retried execution
-  is one query, counted and reported once. Proven live on PostgreSQL 18.6 (three cases, each failing without the
-  change) and against a scripted backend (seven wire cases; eight mutants of the logic, each caught). ABI:
-  `PreparedStorage` gains the stale marks, `Database` the re-preparation state, `qb::pg::stats` the
-  `prepared_replans` field and the internal `ISqlQuery` the virtual `prepared_statement()` -- additive growth in qbm
-  classes; consumers recompile with the train.
+  with 25P02), and the statement's next execution, after the `ROLLBACK`, re-prepares it first; one sent while the
+  block is still failed is bound as it is and gets the server's 25P02, re-preparing nothing. An execution that had
+  already received rows when the 0A000 came -- a function that `EXECUTE`s a SQL-level prepared statement, failing
+  mid-stream -- is not replayed, which would deliver those rows twice: the error is the caller's, and the statement
+  stays marked. The routine field alone identifies the case: the message is localized, and 0A000 is any feature the
+  server does not support. A re-preparation that fails fails the execution with its own error, and the statement stays
+  marked; the unnamed statement of an inline `query(sql, args...)` is parsed on every call and is not concerned.
+  `stats().prepared_replans` counts the re-preparations (`qb_pgsql_prepared_replans_total` in
+  `<qbm/pgsql/metrics.h>`); the retried execution is one query, counted and reported once. Proven live on PostgreSQL
+  18.6 (three cases, each failing without the change), against a scripted backend (ten wire cases, among them commands
+  queued behind the refused execution) and in six unit cases of the marks' bookkeeping; every mutant tried -- eight of
+  the logic, then sixteen of the logic and the bookkeeping -- was caught. ABI: `PreparedStorage` gains the stale
+  marks, `Database` the re-preparation state, `qb::pg::stats` the `prepared_replans` field and the internal
+  `ISqlQuery` the virtual `prepared_statement()` -- additive growth in qbm classes; consumers recompile with the
+  train.
 
 ## [3.3.0] - 2026-10-26
 
