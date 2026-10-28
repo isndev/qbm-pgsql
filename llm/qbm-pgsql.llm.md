@@ -101,8 +101,10 @@ qb-io, not qb-core.
   LRU (default capacity 100, `db.prepared_cache_capacity(n)`); a statement it evicts
   is closed on the server too (a protocol `Close` message for it rides in the evicting
   Parse's own message, so the backend holds no more statements than the cache). A statement
-  whose cached plan a DDL made stale (0A000 from `RevalidateCachedQuery`) is re-prepared
-  before it is bound again, its execution retried once outside a transaction block (Huly QB-114). Framing, auth (SCRAM-SHA-256 / MD5 / cleartext), and type
+  whose cached plan a DDL made stale (0A000 from `RevalidateCachedQuery` refusing its Bind)
+  is re-prepared before it is bound again, the refused execution retried once outside a
+  transaction block; a 0A000 after BindComplete is the execution's, the caller's error
+  (Huly QB-114). Framing, auth (SCRAM-SHA-256 / MD5 / cleartext), and type
   codecs are all in-module. SCRAM-SHA-256 is **mutual**: the client verifies the
   server's SASLFinal `ServerSignature` and refuses `AuthenticationOk` if a SCRAM
   exchange started but that signature never verified — so a server that cannot
@@ -250,11 +252,17 @@ db.prepare("sel_user", "SELECT name FROM users WHERE id = $1", {oid::int4},
   free on the server. A statement must be prepared before it is executed (Huly QB-207).
 - A DDL that changes a prepared statement's result columns (`ALTER TABLE ... ADD COLUMN`
   under a `SELECT *`, a column type change) makes the server refuse its Bind with 0A000,
-  routine `RevalidateCachedQuery`. The client re-prepares the statement (`Close` + `Parse` +
-  `Describe`, one round trip) and binds it again with the result formats of the NEW columns:
-  outside a block the execution is retried once and the caller never sees the 0A000; inside
-  a block the 0A000 reaches the caller (the block is aborted) and the next execution, after
-  the ROLLBACK, re-prepares first. `stats().prepared_replans` counts them (Huly QB-114).
+  routine `RevalidateCachedQuery`. The client marks the statement and re-prepares it
+  (`Close` + `Parse` + `Describe`, one round trip) before binding it again, with the result
+  formats of the NEW columns. Only the execution whose Bind was refused, and only outside a
+  transaction block, is retried -- once, the caller seeing its result and not the 0A000.
+  Inside a block the 0A000 reaches the caller (the block is aborted); an execution sent while
+  the block is failed is bound as it is and gets the server's 25P02; the first one once the
+  block is live again (`ROLLBACK`, `ROLLBACK TO SAVEPOINT`) re-prepares first. A 0A000 that
+  arrives AFTER BindComplete is not the statement's -- the execution raised it, e.g. a
+  function that `EXECUTE`s a SQL-level prepared statement -- and is the caller's error:
+  nothing is replayed (a sequence's `nextval` would run twice), re-prepared or marked.
+  `stats().prepared_replans` counts the re-preparations (Huly QB-114).
 
 ### 3.4 Transactions + savepoints
 
@@ -577,7 +585,7 @@ the operation and callable without copying either shared owner; retention occurs
 cancellation detaches the sink or completion releases the operation during the call. That
 ownership stays in the operation's outermost sink invocation through nested calls until return.
 Borrowed capture data still needs its own lifetime; command admission and reservation are unchanged.
-_(src/qbm/pgsql/pgsql.h:1834-1873,1881-1898,2748-2764,3502-3511)_
+_(src/qbm/pgsql/pgsql.h:1834-1873,1881-1898,2750-2766,3504-3513)_
 
 > **`copy_in` is NOT constant-memory.** It drains the entire `source` into the
 > output pipe synchronously (bounded only by the write-buffer ceiling). Only
@@ -632,7 +640,7 @@ coroutine, an actor, or a second connection's trigger; reach for `cancel()` only
 where no coroutine can run.
 During the packet write, a native TLS `WANT_READ` waits for readability alone;
 otherwise native TLS and plain writes wait for writability. A custom secure transport
-without native TLS state keeps the combined read/write fallback (`pgsql.h:3831-3842`).
+without native TLS state keeps the combined read/write fallback (`pgsql.h:3833-3844`).
 
 **Connection introspection (all `[[nodiscard]]`, libpq-style):**
 

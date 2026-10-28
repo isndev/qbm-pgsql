@@ -1718,7 +1718,7 @@ private:
 
         if (_current_query) {
             if (qb::likely(_current_query->is_valid())) {
-                _query_rows_received = false;
+                _query_bound = false;
                 if (storage_.has_stale()) [[unlikely]] {
                     if (reprepare_before_execute_())
                         return true;
@@ -1925,9 +1925,9 @@ private:
         resent   ///< Sent again after its statement was re-prepared: it is not retried twice
     };
     replan_phase         _replan{replan_phase::none};
-    row_description_type _replan_columns{};           ///< The re-prepared statement's result columns
-    bool                 _replan_columns_ok{true};    ///< false: their RowDescription was malformed
-    bool                 _query_rows_received{false}; ///< The query in flight received a DataRow: it is never replayed
+    row_description_type _replan_columns{};        ///< The re-prepared statement's result columns
+    bool                 _replan_columns_ok{true}; ///< false: their RowDescription was malformed
+    bool                 _query_bound{false};      ///< The query in flight got its BindComplete: a stale plan raised after it is the caller's
 
 public:
     /**
@@ -2247,13 +2247,15 @@ public:
     /**
      * @brief The execution in flight was refused because its statement's cached plan went stale
      *        (Huly QB-114): the statement is marked, so its next execution re-prepares it first
-     * @details The execution is kept, and retried once its statement is prepared again, when it ran
-     *          outside a transaction block and was not already retried: the server refuses it at Bind,
-     *          before it did anything, and the implicit transaction it ran in ended with the error. In a
-     *          block the error is the caller's: the block is aborted, and a retry would only fail with
-     *          25P02 (in_failed_sql_transaction). So is an error raised after a DataRow -- a function
-     *          that EXECUTEs a SQL-level prepared statement fails mid-stream: a replay would deliver
-     *          those rows twice.
+     * @details Only a refused Bind is the statement's own stale plan: the server sends BindComplete
+     *          once that plan is valid, so a 0A000 after it was raised by the execution -- a function
+     *          that EXECUTEs a SQL-level prepared statement, with or without rows before it. That one
+     *          is the caller's error: the statement is not marked, and the execution, which may have
+     *          done things a transaction does not undo, is not replayed. A refused Bind is kept, and
+     *          retried once its statement is prepared again, when it ran outside a transaction block and
+     *          was not already retried: the server refused it before it did anything, and the implicit
+     *          transaction it ran in ended with the error. In a block the error is the caller's: the
+     *          block is aborted, and a retry would only fail with 25P02 (in_failed_sql_transaction).
      * @return true when the execution is kept for its retry, its error unreported
      */
     QB_NOINLINE QB_COLD bool
@@ -2261,10 +2263,10 @@ public:
         if (!_current_query)
             return false;
         const auto name = _current_query->prepared_statement();
-        if (name.empty())
+        if (name.empty() || _query_bound)
             return false;
         storage_.mark_stale(name);
-        if (_replan != replan_phase::none || _txn_status != 'I' || _query_rows_received || !storage_.is_stale(name))
+        if (_replan != replan_phase::none || _txn_status != 'I' || !storage_.is_stale(name))
             return false;
         _replan = replan_phase::owed;
         return true;
@@ -2490,7 +2492,6 @@ public:
      */
     void
     on_data_row(message &msg) {
-        _query_rows_received = true; // a stale plan raised past this row is the caller's (Huly QB-114)
         if (!_current_command)
             return;
         row_data row;
@@ -2529,6 +2530,7 @@ public:
      */
     void
     on_bind_complete(message &) {
+        _query_bound = true; // its statement's plan is valid: a stale plan raised after this is the caller's (Huly QB-114)
         QB_LOG_DEBUG("[pgsql] Bind complete");
     }
 

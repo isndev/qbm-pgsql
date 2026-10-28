@@ -13,11 +13,11 @@
 # digest <TAB> excerpt.  Keyed WITHOUT the doc's own line number, so
 # re-flowing a paragraph does not re-key the file.
 llm/qbm-pgsql.llm.api.md	metrics.h:21-21	e2387997aabf	void describe(snapshot &snap, qb::pg::stats const &stats, label_set l...
-llm/qbm-pgsql.llm.api.md	pgsql.h:3730-3731	174bc1d30cbd	bool
-llm/qbm-pgsql.llm.api.md	pgsql.h:3775-3776	14276ca02568	[[nodiscard]] qb::io::async::task<bool>
-llm/qbm-pgsql.llm.api.md	pgsql.h:3831-3842	c0a478f5184b	int events = EV_WRITE; // A plain would-block write needs output capa...
-llm/qbm-pgsql.llm.api.md	qbm/pgsql/src/qbm/pgsql/pgsql.h:4487-4487	3e2a63be5571	using results = detail::resultset;
-llm/qbm-pgsql.llm.api.md	queries.h:330-330	ab6ca6aa9ac4	using PreparedQueryStorage = PreparedStorage;
+llm/qbm-pgsql.llm.api.md	pgsql.h:3732-3733	174bc1d30cbd	bool
+llm/qbm-pgsql.llm.api.md	pgsql.h:3777-3778	14276ca02568	[[nodiscard]] qb::io::async::task<bool>
+llm/qbm-pgsql.llm.api.md	pgsql.h:3833-3844	c0a478f5184b	int events = EV_WRITE; // A plain would-block write needs output capa...
+llm/qbm-pgsql.llm.api.md	qbm/pgsql/src/qbm/pgsql/pgsql.h:4489-4489	3e2a63be5571	using results = detail::resultset;
+llm/qbm-pgsql.llm.api.md	queries.h:332-332	ab6ca6aa9ac4	using PreparedQueryStorage = PreparedStorage;
 llm/qbm-pgsql.llm.api.md	queries.h:81-81	e0fb44c50b81	class PreparedStorage {
 llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/commands.h:1249-1256	66990ac08294	Transaction::notify(std::string_view channel, std::string_view payloa...
 llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/commands.h:1673-1675	daa78edff6fc	Transaction::notify(std::string_view channel, std::string_view payloa...
@@ -25,8 +25,8 @@ llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/error.cpp:144-155	350e2276d74b	client_err
 llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/pg_notify_sql.cpp:65-74	bc316f2d0a42	build_notify_sql(std::string_view channel, std::string_view payload) {
 llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/pgsql.h:1834-1873	061f03687138	struct CopyOperation {
 llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/pgsql.h:1881-1898	d30fc447582e	finish_copy(std::shared_ptr<CopyOperation> const &owner) {
-llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/pgsql.h:2748-2764	e5d1a2f5a413	on_copy_data(message &msg) {
-llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/pgsql.h:3502-3511	ffc7f5e94922	copy_out(std::string sql, std::function<void(std::string_view)> sink) {
+llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/pgsql.h:2750-2766	e5d1a2f5a413	on_copy_data(message &msg) {
+llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/pgsql.h:3504-3513	ffc7f5e94922	copy_out(std::string sql, std::function<void(std::string_view)> sink) {
 llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/resultset.cpp:424-500	c46dba93262f	append_binary_array_bounds(std::string &out, std::span<const std::byt...
 llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/transaction.h:489-501	371ffdb8d432	template <typename CB_SUCCESS, typename CB_ERROR>
 llm/qbm-pgsql.llm.api.md	src/qbm/pgsql/type_converter.cpp:138-212	c7dbcc4a91dd	TypeConverter<qb::wall_time>::to_text(const qb::wall_time &value) {
@@ -49,15 +49,15 @@ llm/qbm-pgsql.llm.api.md	type_converter.h:1397-1397	f295c514857a	struct TypeConv
 llm/qbm-pgsql.llm.api.md	type_converter.h:181-181	5055bd28810c	public:
 llm/qbm-pgsql.llm.api.md	type_converter.h:699-700	e9e35cf613f8	static void
 llm/qbm-pgsql.llm.md	metrics.h:21-21	e2387997aabf	void describe(snapshot &snap, qb::pg::stats const &stats, label_set l...
-llm/qbm-pgsql.llm.md	pgsql.h:3831-3842	c0a478f5184b	int events = EV_WRITE; // A plain would-block write needs output capa...
+llm/qbm-pgsql.llm.md	pgsql.h:3833-3844	c0a478f5184b	int events = EV_WRITE; // A plain would-block write needs output capa...
 llm/qbm-pgsql.llm.md	src/qbm/pgsql/commands.h:1249-1256	66990ac08294	Transaction::notify(std::string_view channel, std::string_view payloa...
 llm/qbm-pgsql.llm.md	src/qbm/pgsql/commands.h:1673-1675	daa78edff6fc	Transaction::notify(std::string_view channel, std::string_view payloa...
 llm/qbm-pgsql.llm.md	src/qbm/pgsql/error.cpp:144-155	350e2276d74b	client_error::client_error(std::string const &what_arg)
 llm/qbm-pgsql.llm.md	src/qbm/pgsql/pg_notify_sql.cpp:65-74	bc316f2d0a42	build_notify_sql(std::string_view channel, std::string_view payload) {
 llm/qbm-pgsql.llm.md	src/qbm/pgsql/pgsql.h:1834-1873	061f03687138	struct CopyOperation {
 llm/qbm-pgsql.llm.md	src/qbm/pgsql/pgsql.h:1881-1898	d30fc447582e	finish_copy(std::shared_ptr<CopyOperation> const &owner) {
-llm/qbm-pgsql.llm.md	src/qbm/pgsql/pgsql.h:2748-2764	e5d1a2f5a413	on_copy_data(message &msg) {
-llm/qbm-pgsql.llm.md	src/qbm/pgsql/pgsql.h:3502-3511	ffc7f5e94922	copy_out(std::string sql, std::function<void(std::string_view)> sink) {
+llm/qbm-pgsql.llm.md	src/qbm/pgsql/pgsql.h:2750-2766	e5d1a2f5a413	on_copy_data(message &msg) {
+llm/qbm-pgsql.llm.md	src/qbm/pgsql/pgsql.h:3504-3513	ffc7f5e94922	copy_out(std::string sql, std::function<void(std::string_view)> sink) {
 llm/qbm-pgsql.llm.md	src/qbm/pgsql/resultset.cpp:424-500	c46dba93262f	append_binary_array_bounds(std::string &out, std::span<const std::byt...
 llm/qbm-pgsql.llm.md	src/qbm/pgsql/resultset.cpp:586-599	42d2afa147c6	qb::json
 llm/qbm-pgsql.llm.md	src/qbm/pgsql/type_converter.cpp:138-212	c7dbcc4a91dd	TypeConverter<qb::wall_time>::to_text(const qb::wall_time &value) {

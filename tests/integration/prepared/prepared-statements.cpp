@@ -14,6 +14,9 @@
  *   throwing non-existent-file path).
  * - The bounded statement cache closes what it evicts on the server: `pg_prepared_statements`
  *   after N+1 prepares, re-preparing an evicted name, `prepared_cache_capacity()` (Huly QB-207).
+ * - A stale cached plan (Huly QB-114): the statement re-prepared and the execution whose Bind was
+ *   refused retried, a column type change read with its new type, the error left to the caller inside
+ *   a block, and a 0A000 that the execution raises after BindComplete neither replayed nor re-prepared.
  * - Statement reuse, batch prepare+execute, SELECTs (LIKE filter, empty result set),
  *   large result sets, and SQL-level transaction visibility (COMMIT / ROLLBACK).
  *
@@ -873,6 +876,48 @@ TEST_F(PreparedStatementsIntegration, InsideABlockTheStalePlanReachesTheCallerTh
     EXPECT_EQ(after_rollback.row, (std::vector<std::string>{"3", "b"}));
     EXPECT_EQ(after.prepared_replans - before.prepared_replans, 1U);
     (void) simple(*db_, "DROP TABLE qb114_block");
+}
+
+/**
+ * @brief A 0A000 from `RevalidateCachedQuery` that the EXECUTION raises is not the statement's: here
+ *        a function EXECUTEs a SQL-level prepared statement whose table changed. The server sent
+ *        BindComplete -- the statement's own plan was valid -- so the error is the caller's: nothing
+ *        is replayed (the function's nextval() ran once, a replay would run it again: a sequence is not
+ *        rolled back), nothing is re-prepared, and the statement is not marked.
+ */
+TEST_F(PreparedStatementsIntegration, AStalePlanRaisedByTheExecutionReachesTheCallerAndIsNotReplayed) {
+    using namespace prepared_statements_test;
+    ASSERT_TRUE(simple(*db_, "CREATE TEMP SEQUENCE qb114_calls"));
+    ASSERT_TRUE(simple(*db_, "CREATE TEMP TABLE qb114_inner (id int)"));
+    ASSERT_TRUE(simple(*db_, "INSERT INTO qb114_inner VALUES (1)"));
+    ASSERT_TRUE(simple(*db_, "PREPARE qb114_inner_sql AS SELECT * FROM qb114_inner"));
+    ASSERT_TRUE(simple(*db_, "CREATE FUNCTION pg_temp.qb114_run() RETURNS bigint LANGUAGE plpgsql AS $$ DECLARE n bigint; "
+                             "BEGIN n := nextval('qb114_calls'); EXECUTE 'EXECUTE qb114_inner_sql'; RETURN n; END $$"));
+    ASSERT_TRUE(db_->prepare("qb114_outer", "SELECT pg_temp.qb114_run()", type_oid_sequence{}, discard_prepare, discard_error).await());
+    const auto first = execute_shape(*db_, "qb114_outer");
+    ASSERT_TRUE(first.ok) << first.what;
+    EXPECT_EQ(first.row, (std::vector<std::string>{"1"}));
+
+    ASSERT_TRUE(simple(*db_, "ALTER TABLE qb114_inner ADD COLUMN v text"));
+    const auto before = db_->stats();
+    const auto failed = execute_shape(*db_, "qb114_outer");
+    const auto after  = db_->stats();
+    EXPECT_FALSE(failed.ok);
+    EXPECT_EQ(failed.sqlstate, sqlstate::feature_not_supported) << failed.what;
+    EXPECT_EQ(after.prepared_replans - before.prepared_replans, 0U) << "the execution's error re-prepared the statement";
+
+    // The inner statement prepared again: the next execution is the statement's as it is.
+    ASSERT_TRUE(simple(*db_, "DEALLOCATE qb114_inner_sql"));
+    ASSERT_TRUE(simple(*db_, "PREPARE qb114_inner_sql AS SELECT * FROM qb114_inner"));
+    const auto next = execute_shape(*db_, "qb114_outer");
+    const auto end  = db_->stats();
+    ASSERT_TRUE(next.ok) << "SQLSTATE " << static_cast<int>(next.sqlstate) << ": " << next.what;
+    EXPECT_EQ(next.row, (std::vector<std::string>{"3"})) << "the failed execution ran once: a replay would make it 4";
+    EXPECT_EQ(end.prepared_replans - before.prepared_replans, 0U) << "the statement was not marked";
+    (void) simple(*db_, "DEALLOCATE qb114_inner_sql");
+    (void) simple(*db_, "DROP FUNCTION pg_temp.qb114_run()");
+    (void) simple(*db_, "DROP TABLE qb114_inner");
+    (void) simple(*db_, "DROP SEQUENCE qb114_calls");
 }
 
 // ---------------------------------------------------------------------------

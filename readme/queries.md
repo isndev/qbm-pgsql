@@ -141,11 +141,18 @@ replaces it (Huly QB-207).
 `SELECT *`, a column whose type changes -- makes PostgreSQL refuse every later Bind of it with SQLSTATE 0A000
 (`cached plan must not change result type`, routine `RevalidateCachedQuery`). The client marks the statement and
 re-prepares it before binding it again: `Close('S')` + `Parse` + `Describe('S')` + `Sync`, one round trip, and the
-Bind then asks the result formats of the NEW columns. Outside a transaction block the refused execution is retried
-once and the caller sees only its result; inside a block the 0A000 reaches the caller -- the block is aborted -- and
-the statement's next execution, after the `ROLLBACK`, re-prepares it first. The routine field alone identifies the
-case (the message is localized, and 0A000 is any unsupported feature). A re-preparation that fails fails the execution
-with its own error; `stats().prepared_replans` counts the re-preparations (Huly QB-114).
+Bind then asks the result formats of the NEW columns. The execution whose Bind was refused is retried once, and the
+caller sees only its result, when it ran outside a transaction block: the server refused it before running any of
+it, and the implicit transaction it ran in ended with the error. Inside a block the 0A000 reaches the caller -- the
+block is aborted; an execution sent while the block is still failed is bound as it is and gets the server's 25P02;
+and the first execution once the block is live again, after the `ROLLBACK` or a `ROLLBACK TO SAVEPOINT`, re-prepares
+the statement first. Only a refused Bind is the statement's stale plan: the server sends BindComplete once that plan
+is valid, so a 0A000 after it was raised by the execution -- a function that `EXECUTE`s a SQL-level prepared
+statement, with or without rows before it. That one is the caller's error: nothing is replayed (the execution may
+have done what a rollback does not undo, a sequence's `nextval`, and a replay would deliver its rows twice),
+re-prepared or marked. The routine field alone identifies the case (the message is localized, and 0A000 is any
+unsupported feature). A re-preparation that fails fails the execution with its own error; `stats().prepared_replans`
+counts the re-preparations (Huly QB-114).
 
 **Coroutine — prepare + execute**
 
@@ -246,7 +253,7 @@ Ordinary chunk delivery borrows the operation and callable without copying eithe
 If cancellation detaches the sink or completion releases the operation during a call, ownership
 is retained in that operation's outermost sink invocation until it returns. Nested calls share
 that retention. This protects owned captures; it does not extend the lifetime of borrowed data.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:1834-1873,1881-1898,2748-2764,3502-3511 (CopyOperation / SinkInvocation / detach_sink; finish_copy; on_copy_data; copy_out) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:1834-1873,1881-1898,2750-2766,3504-3513 (CopyOperation / SinkInvocation / detach_sink; finish_copy; on_copy_data; copy_out) -->
 The source or sink activates only when that command reaches the wire, so an earlier
 plain SQL command cannot borrow it.
 
@@ -292,7 +299,7 @@ transaction is never joined and never ended by `query_stream`.
 > caller-owned only once its `BEGIN` has **completed** — `in_transaction()` mirrors the last `ReadyForQuery`. Started
 > before that, the stream reads the session as idle and opens (and later ends) a block of its own. `co_await` the
 > `begin()` first.
-<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:3588-3708,3602-3620,3622-3625,3680-3700,3378-3386 (in that order: query_stream; the seat/guard bookkeeping; the cursor name; the last-one-out COMMIT/ROLLBACK; in_transaction) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:3590-3710,3604-3622,3624-3627,3682-3702,3380-3388 (in that order: query_stream; the seat/guard bookkeeping; the cursor name; the last-one-out COMMIT/ROLLBACK; in_transaction) -->
 
 ---
 

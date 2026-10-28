@@ -44,6 +44,20 @@ PreparedStorage::operator=(const PreparedStorage &other) {
     return *this;
 }
 
+// A moved-from container is valid but unspecified, and the count is a plain integer the move copies:
+// the source is cleared, so that its has_stale() agrees with its marks (Huly QB-114).
+PreparedStorage::PreparedStorage(PreparedStorage &&other) noexcept
+    : _prepared_queries(std::move(other._prepared_queries))
+    , _lru_list(std::move(other._lru_list))
+    , _max_size(other._max_size)
+    , _evicted_count(other._evicted_count)
+    , _stale_count(other._stale_count)
+    , _pending_close(std::move(other._pending_close))
+    , _hits(other._hits)
+    , _misses(other._misses) {
+    other.clear();
+}
+
 PreparedStorage &
 PreparedStorage::operator=(PreparedStorage &&other) noexcept {
     if (this != &other) {
@@ -55,6 +69,7 @@ PreparedStorage::operator=(PreparedStorage &&other) noexcept {
         _pending_close    = std::move(other._pending_close);
         _hits             = other._hits;
         _misses           = other._misses;
+        other.clear();
     }
     return *this;
 }

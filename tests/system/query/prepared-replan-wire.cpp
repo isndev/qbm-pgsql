@@ -10,8 +10,10 @@
  * live server produces on demand: commands queued behind the refused execution, a second stale
  * plan right after the retry (no second retry), a 0A000 from another routine (no retry), a
  * re-preparation that fails, a malformed RowDescription, an error inside a block, an execution
- * queued in the failed block it left (no re-preparation), a stale plan after DataRows (no
- * replay), and the unnamed statement of an inline query. The live counterpart, with real DDL, is in
+ * queued in the failed block it left (no re-preparation), the block made live again by a
+ * `ROLLBACK TO SAVEPOINT` (re-preparation), a stale plan raised after BindComplete, with or without
+ * DataRows (the execution's, not the statement's: no replay, no mark), and the unnamed statement of
+ * an inline query. The live counterpart, with real DDL, is in
  * `integration/prepared/prepared-statements.cpp`.
  *
  * @author qb - C++ Actor Framework
@@ -631,17 +633,52 @@ TEST(PgsqlPreparedReplan, InAFailedBlockAMarkedStatementIsBoundWithoutRePreparat
     EXPECT_EQ(after.prepared_replans - before.prepared_replans, 1U);
 }
 
+/// The failed-block guard is about 'E' alone: a `ROLLBACK TO SAVEPOINT` makes the block live again
+/// ('T'), and the first execution after it re-prepares the statement the 0A000 marked, then binds it
+/// with the new result formats.
+TEST(PgsqlPreparedReplan, AfterARollbackToASavepointTheMarkedStatementIsRePrepared) {
+    wire w;
+    ASSERT_TRUE(w.start([](backend &b) {
+        b.expect({"P s1", "D S s1", "S"}) && b.reply({backend_msg('1', {}), no_parameters(), row_description({{"id", int4_oid}}), ready('T')});
+        b.expect({"B s1 r=1", "E", "S"}) && b.reply({stale_plan(), ready('E')});
+        b.expect({"Q ROLLBACK TO SAVEPOINT sp"}) && b.reply({command_complete("ROLLBACK"), ready('T')});
+        b.expect({"C S s1", "P s1", "D S s1", "S"})
+            && b.reply(
+                {backend_msg('3', {}), backend_msg('1', {}), no_parameters(), row_description({{"id", int4_oid}, {"v", text_oid}}),
+                 ready('T')});
+        b.expect({"B s1 r=1,0", "E", "S"}) && b.reply({backend_msg('2', {}), b.data_row(9, "z"), command_complete("SELECT 1"), ready('T')});
+    }));
+    ASSERT_TRUE(w.prepare("s1", "SELECT * FROM t"));
+    const auto before   = w.db.stats();
+    const auto in_block = w.execute("s1");
+    const bool rolled   = static_cast<bool>(w.db.execute("ROLLBACK TO SAVEPOINT sp", qb::pg::discard_query, qb::pg::discard_error).await());
+    const auto after_sp = w.execute("s1");
+    const auto after    = w.db.stats();
+    const bool in_txn   = w.db.in_transaction();
+    w.stop();
+
+    EXPECT_TRUE(w.server.ok) << w.server.failure;
+    EXPECT_FALSE(in_block.ok);
+    EXPECT_EQ(in_block.sqlstate, qb::pg::sqlstate::feature_not_supported) << in_block.what;
+    EXPECT_TRUE(rolled);
+    ASSERT_TRUE(after_sp.ok) << after_sp.what;
+    EXPECT_EQ(after_sp.columns, 2U);
+    EXPECT_EQ(after_sp.id, 9);
+    EXPECT_EQ(after_sp.text, std::optional<std::string>{"z"});
+    EXPECT_EQ(after.prepared_replans - before.prepared_replans, 1U);
+    EXPECT_TRUE(in_txn) << "the block is still open";
+}
+
 /// A stale plan raised after DataRows -- a function that EXECUTEs a SQL-level prepared statement fails
-/// mid-stream -- is the caller's: a replay would deliver those rows twice. Nothing is re-prepared for
-/// it, and the statement is marked: the next execution re-prepares first and gets its own rows, once.
-/// The rows are the execution's own: a stale plan raised before any row of a later one is retried.
+/// mid-stream -- is the execution's, not the statement's: the server sent BindComplete, so the
+/// statement's own plan was valid. The error is the caller's, and a replay would deliver those rows
+/// twice. Nothing is re-prepared and the statement is not marked: the next execution is a Bind alone
+/// and gets its own rows, once. A stale plan that refuses a later Bind is the statement's, and retried.
 TEST(PgsqlPreparedReplan, AStalePlanAfterRowsReachesTheCallerAndIsNotReplayed) {
     wire w;
     ASSERT_TRUE(w.start([](backend &b) {
         b.expect({"P s1", "D S s1", "S"}) && b.reply({backend_msg('1', {}), no_parameters(), row_description({{"id", int4_oid}}), ready('I')});
         b.expect({"B s1 r=1", "E", "S"}) && b.reply({backend_msg('2', {}), b.data_row(1), b.data_row(2), stale_plan(), ready('I')});
-        b.expect({"C S s1", "P s1", "D S s1", "S"})
-            && b.reply({backend_msg('3', {}), backend_msg('1', {}), no_parameters(), row_description({{"id", int4_oid}}), ready('I')});
         b.expect({"B s1 r=1", "E", "S"})
             && b.reply({backend_msg('2', {}), b.data_row(1), b.data_row(2), command_complete("SELECT 2"), ready('I')});
         b.expect({"B s1 r=1", "E", "S"}) && b.reply({stale_plan(), ready('I')});
@@ -664,15 +701,44 @@ TEST(PgsqlPreparedReplan, AStalePlanAfterRowsReachesTheCallerAndIsNotReplayed) {
     EXPECT_FALSE(streamed.ok) << "replayed: the caller got the rows " << ::testing::PrintToString(streamed.ids);
     EXPECT_EQ(streamed.sqlstate, qb::pg::sqlstate::feature_not_supported) << streamed.what;
     EXPECT_EQ(streamed.calls, 1);
-    EXPECT_EQ(between.prepared_replans - before.prepared_replans, 0U) << "no Parse for an execution that streamed rows";
+    EXPECT_EQ(between.prepared_replans - before.prepared_replans, 0U) << "no Parse for an execution past its BindComplete";
     ASSERT_TRUE(next.ok) << next.what;
     EXPECT_EQ(next.calls, 1);
     EXPECT_EQ(next.ids, (std::vector<std::int32_t>{1, 2}));
-    EXPECT_EQ(after.prepared_replans - before.prepared_replans, 1U) << "the statement was marked: its next execution re-prepared it";
+    EXPECT_EQ(after.prepared_replans - before.prepared_replans, 0U) << "the statement was not marked: its next execution is a Bind alone";
     ASSERT_TRUE(retried.ok) << retried.what;
     EXPECT_EQ(retried.ids, (std::vector<std::int32_t>{1, 2}));
     EXPECT_EQ(end.prepared_replans - after.prepared_replans, 1U);
-    EXPECT_EQ(end.errors - after.errors, 0U) << "the earlier execution's rows do not stop this one's retry";
+    EXPECT_EQ(end.errors - after.errors, 0U) << "an earlier execution's BindComplete does not stop this one's retry";
+}
+
+/// The same with no row before the error -- the function fails before it returns one, a CALL, a
+/// statement that returns nothing: BindComplete alone says the statement's plan was valid. The error
+/// is the caller's, nothing is replayed (what the execution did, a nextval() for one, is not done
+/// twice), nothing is re-prepared, and the statement is not marked.
+TEST(PgsqlPreparedReplan, AStalePlanAfterBindCompleteWithoutARowIsNotReplayed) {
+    wire w;
+    ASSERT_TRUE(w.start([](backend &b) {
+        b.expect({"P s1", "D S s1", "S"}) && b.reply({backend_msg('1', {}), no_parameters(), row_description({{"id", int4_oid}}), ready('I')});
+        b.expect({"B s1 r=1", "E", "S"}) && b.reply({backend_msg('2', {}), stale_plan(), ready('I')});
+        b.expect({"B s1 r=1", "E", "S"}) && b.reply({backend_msg('2', {}), b.data_row(3), command_complete("SELECT 1"), ready('I')});
+    }));
+    ASSERT_TRUE(w.prepare("s1", "SELECT * FROM f()"));
+    const auto before = w.db.stats();
+    const auto failed = w.execute("s1");
+    const auto next   = w.execute("s1");
+    const auto after  = w.db.stats();
+    w.stop();
+
+    EXPECT_TRUE(w.server.ok) << w.server.failure;
+    EXPECT_FALSE(failed.ok) << "replayed";
+    EXPECT_EQ(failed.sqlstate, qb::pg::sqlstate::feature_not_supported) << failed.what;
+    EXPECT_EQ(failed.calls, 1);
+    ASSERT_TRUE(next.ok) << next.what;
+    EXPECT_EQ(next.id, 3);
+    EXPECT_EQ(after.prepared_replans - before.prepared_replans, 0U) << "nothing re-prepared, the statement not marked";
+    EXPECT_EQ(after.errors - before.errors, 1U);
+    EXPECT_EQ(after.queries - before.queries, 2U);
 }
 
 /// 0A000 names any feature the server does not support: only the plan cache's routine is a stale

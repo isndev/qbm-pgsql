@@ -137,7 +137,7 @@ nothing. `db.on_notice([](qb::pg::notice const &n) { ... })` receives each one w
 `server_error_fields`): `n.severity_nonlocalized`, `n.sqlstate`, `n.message`, `n.hint`, ... It runs on the connection's
 thread as the message is read, must not drive the connection, and an exception escaping it is contained and logged.
 Without a handler a notice is logged at INFO, as before.
-<!-- src: qbm/pgsql/src/qbm/pgsql/error.h:74 (notice); qbm/pgsql/src/qbm/pgsql/pgsql.h:3211-3214,2385-2394 (in that order: on_notice; on_notice_response) -->
+<!-- src: qbm/pgsql/src/qbm/pgsql/error.h:74 (notice); qbm/pgsql/src/qbm/pgsql/pgsql.h:3213-3216,2387-2396 (in that order: on_notice; on_notice_response) -->
 
 ### What each path fills
 

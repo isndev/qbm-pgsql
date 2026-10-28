@@ -298,7 +298,7 @@ roll back to it, or release it aborts the outer block. The `name` is **quoted as
 identifier** (double-quoted, embedded `"` doubled, matching libpq's `PQescapeIdentifier`) before it enters the
 simple-query string — on **both** the callback (`SavePointQuery` / `EndSavePointQuery`) and coroutine paths — so a name
 can never inject a second statement.
-<!-- src: src/qbm/pgsql/commands.h:233-266,319-344, src/qbm/pgsql/transaction.cpp:77-92, src/qbm/pgsql/queries.h:727-744,782-785,825-828,868-871 -->
+<!-- src: src/qbm/pgsql/commands.h:233-266,319-344, src/qbm/pgsql/transaction.cpp:77-92, src/qbm/pgsql/queries.h:729-746,784-787,827-830,870-873 -->
 
 **Coroutine — explicit control:**
 
@@ -367,7 +367,7 @@ objects.
 
 ## Statement timeout
 
-<!-- src: src/qbm/pgsql/transaction.h:704-729, src/qbm/pgsql/commands.h:1338-1346, src/qbm/pgsql/queries.h:603-636 -->
+<!-- src: src/qbm/pgsql/transaction.h:704-729, src/qbm/pgsql/commands.h:1338-1346, src/qbm/pgsql/queries.h:605-638 -->
 
 `set_timeout(qb::duration)` arms a PostgreSQL `statement_timeout` for the **next** `BEGIN` on this connection. The
 following `begin()` (callback *or* coroutine) appends `; SET LOCAL statement_timeout = N` to the same simple-query
@@ -402,7 +402,7 @@ Key facts to get right:
 
 ## LISTEN / NOTIFY
 
-<!-- src: src/qbm/pgsql/transaction.h:483-547; src/qbm/pgsql/pg_notify_sql.h:25-92; qbm/pgsql/src/qbm/pgsql/pgsql.h:406-423,3190-3195,4163-4451 (in that order: notification; on_incoming_notify; notify_consumer / notify_cb_consumer / notify_co_consumer) -->
+<!-- src: src/qbm/pgsql/transaction.h:483-547; src/qbm/pgsql/pg_notify_sql.h:25-92; qbm/pgsql/src/qbm/pgsql/pgsql.h:406-423,3192-3197,4165-4453 (in that order: notification; on_incoming_notify; notify_consumer / notify_cb_consumer / notify_co_consumer) -->
 
 ### Publishing (NOTIFY)
 
@@ -497,7 +497,7 @@ only when the connection is `down`: `receive()` yields what it holds, then `std:
   `End`/`with_transaction` do it) before sending new commands.
 - **A lost connection fails every pending query automatically.** You do **not** write a disconnect handler. The built-in
   `Database::on(qb::io::async::event::disconnected)` handler calls `fail_all_pending(...)` on the root transaction (through
-  `fail_all_pending_counted`, `qbm/pgsql/src/qbm/pgsql/pgsql.h:4012`, which also counts each drained query), which drains every queued query and pending sub-transaction so suspended `co_await`
+  `fail_all_pending_counted`, `qbm/pgsql/src/qbm/pgsql/pgsql.h:4014`, which also counts each drained query), which drains every queued query and pending sub-transaction so suspended `co_await`
   awaiters resume with `client_error("database disconnected")` instead of hanging forever.
   See [connection.md](./connection.md) (Fail-all-on-disconnect).
 - **Statement timeout below 1 ms vanishes.** A sub-millisecond `set_timeout` truncates to 0 and emits no `SET LOCAL`.
