@@ -40,6 +40,24 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
   re-preparation state, `qb::pg::stats` the `prepared_replans` field and the internal `ISqlQuery` the virtual
   `prepared_statement()` -- additive growth in qbm classes; consumers recompile with the train.
 
+### Fixed
+
+- **A handshake frame destroyed while it waits no longer leaves its handle in the connection (Huly QB-1246).**
+  `Database`'s startup and replay coroutines park on a slot the connection shares (`slot_awaiter`). The awaiter had
+  no destructor: a frame destroyed while parked -- `reset_coro_scheduler()`, a `VirtualCore`'s teardown, the
+  listener's destruction -- left its handle in the slot, `~Database` settled the slot and queued the freed frame,
+  and the loop resumed freed memory (SIGSEGV in `CoroutineScheduler::run_ready()` with two databases mid-handshake;
+  silent with one, by the luck of the frame pool). The awaiter takes its handle back out of the slot when it is
+  destroyed. `qbm-pgsql-test-system-handshake-slot-teardown` holds it with one, two and four databases, no daemon
+  needed.
+- **A completion delivered after the thread's loop is destroyed is dropped (Huly QB-1246).** The five completions
+  of the client (`pgsql.h`, `pg_awaiter.h`) resumed their coroutine through `coro_scheduler().schedule_resume()`;
+  from the destructor of a `Database` with static storage that reached the destroyed listener. They go through
+  `qb::io::async::resume_via_current()`: queued on the thread's current scheduler while the loop lives -- the rule
+  of qb-io's own wakers; it was the thread's listener's scheduler, which is the same one on a core -- and dropped
+  once it is gone (`qbm-pgsql-test-system-completion-after-loop`, a child process). Requires the qb of the same
+  train.
+
 ## [3.3.0] - 2026-10-26
 
 ### Added

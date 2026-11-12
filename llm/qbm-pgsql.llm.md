@@ -585,7 +585,7 @@ the operation and callable without copying either shared owner; retention occurs
 cancellation detaches the sink or completion releases the operation during the call. That
 ownership stays in the operation's outermost sink invocation through nested calls until return.
 Borrowed capture data still needs its own lifetime; command admission and reservation are unchanged.
-_(src/qbm/pgsql/pgsql.h:1834-1873,1881-1898,2750-2766,3504-3513)_
+_(src/qbm/pgsql/pgsql.h:1849-1888,1896-1913,2765-2781,3519-3528)_
 
 > **`copy_in` is NOT constant-memory.** It drains the entire `source` into the
 > output pipe synchronously (bounded only by the write-buffer ceiling). Only
@@ -640,7 +640,7 @@ coroutine, an actor, or a second connection's trigger; reach for `cancel()` only
 where no coroutine can run.
 During the packet write, a native TLS `WANT_READ` waits for readability alone;
 otherwise native TLS and plain writes wait for writability. A custom secure transport
-without native TLS state keeps the combined read/write fallback (`pgsql.h:3833-3844`).
+without native TLS state keeps the combined read/write fallback (`pgsql.h:3848-3859`).
 
 **Connection introspection (all `[[nodiscard]]`, libpq-style):**
 

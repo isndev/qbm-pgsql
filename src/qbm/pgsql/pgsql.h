@@ -719,7 +719,7 @@ private:
                 return;
             outcome = value;
             if (auto h = std::exchange(waiter, {}))
-                qb::io::async::coro_scheduler().schedule_resume(h);
+                qb::io::async::resume_via_current(h);
         }
     };
 
@@ -736,14 +736,26 @@ private:
             done  = true;
             error = std::move(failure);
             if (auto h = std::exchange(waiter, {}))
-                qb::io::async::coro_scheduler().schedule_resume(h);
+                qb::io::async::resume_via_current(h);
         }
     };
 
-    /// Awaits a startup or replay slot; the frame holds the slot, never the connection.
+    /// Awaits a startup or replay slot; the frame holds the slot, never the connection. A frame destroyed while it
+    /// waits takes its handle back out of the slot: the slot outlives the frame -- the connection shares it -- and
+    /// its next settle(), the one ~Database makes, queued the freed frame for resumption (Huly QB-1246).
     template <typename Slot>
     struct slot_awaiter {
-        std::shared_ptr<Slot> slot;
+        std::shared_ptr<Slot>   slot;
+        std::coroutine_handle<> parked{}; ///< this frame, while it waits in the slot
+
+        explicit slot_awaiter(std::shared_ptr<Slot> s) noexcept
+            : slot(std::move(s)) {}
+        slot_awaiter(slot_awaiter const &)            = delete;
+        slot_awaiter &operator=(slot_awaiter const &) = delete;
+        ~slot_awaiter() {
+            if (parked && slot->waiter == parked)
+                slot->waiter = {};
+        }
 
         [[nodiscard]] bool
         await_ready() const noexcept {
@@ -755,10 +767,13 @@ private:
         void
         await_suspend(std::coroutine_handle<> h) noexcept {
             qb::io::async::track_suspension(h, "pgsql handshake");
+            parked       = h;
             slot->waiter = h;
         }
         void
-        await_resume() const noexcept {}
+        await_resume() noexcept {
+            parked = {};
+        }
     };
 
     /// Where a connect() reports: its awaiter's coroutine.
@@ -770,7 +785,7 @@ private:
         settle(bool value) {
             ok = value;
             if (auto h = std::exchange(waiter, {}))
-                qb::io::async::coro_scheduler().schedule_resume(h);
+                qb::io::async::resume_via_current(h);
         }
     };
 
@@ -1038,7 +1053,7 @@ private:
                 if (!*v)
                     return; // the frame is gone; the socket closes with s
                 sock.emplace(std::move(s));
-                qb::io::async::coro_scheduler().schedule_resume(handle);
+                qb::io::async::resume_via_current(handle);
             };
             const qb::io::uri connect_uri{db.conn_opts_.schema + "://" + db.conn_opts_.uri};
             if constexpr (transport_sock::is_secure()) {

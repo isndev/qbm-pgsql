@@ -124,6 +124,11 @@ if (QB_HAS_SSL AND TARGET qbm-pgsql-test-system-adopted-transport)
     # The TLS case reuses qb's test certificate (ssl_fixtures.h).
     target_include_directories(qbm-pgsql-test-system-adopted-transport PRIVATE "${QB_ROOT_DIR}/tests/io/shared")
 endif ()
+# A handshake frame destroyed while it waits on its startup slot takes its handle back out of the slot, and a wake
+# delivered after the thread's loop is destroyed is dropped (Huly QB-1246); a loopback listener that never accepts
+# holds the connections mid-handshake. No daemon.
+qpg_test(system handshake-slot-teardown system/connection/handshake-slot-teardown.cpp EXTRA_LABELS connection coroutine)
+qpg_test(system completion-after-loop system/connection/completion-after-loop.cpp EXTRA_LABELS connection coroutine)
 
 # -----------------------------------------------------------------------------
 # INTEGRATION — live postgres:5432 (REQUIRES live, RESOURCE_LOCK)

@@ -114,7 +114,7 @@ public:
                 return;
             s->out.emplace(std::move(r));
             if (s->h)
-                qb::io::async::coro_scheduler().schedule_resume(s->h);
+                qb::io::async::resume_via_current(s->h);
         };
         operation_(std::move(done));
     }
