@@ -40,6 +40,16 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
   re-preparation state, `qb::pg::stats` the `prepared_replans` field and the internal `ISqlQuery` the virtual
   `prepared_statement()` -- additive growth in qbm classes; consumers recompile with the train.
 
+### Changed
+
+- **A `Database` that ends its connection keeps no half-closed descriptor (qb-io, Huly QB-1270).** Since 3.3 a
+  `disconnect()` shut the sending side down and the object kept the descriptor until it was destroyed or connected
+  again. The descriptor now leaves the object when its teardown completes: the thread's loop sends the FIN -- the
+  server reads EOF and the backend leaves `pg_stat_activity` at once, as before --, reads and drops what the server
+  still sends, and closes the descriptor on the server's EOF, a socket error or qb-io's close bound (2 s by default).
+  The change is qb-io's and is described in qb's CHANGELOG; this module's sources are untouched and its reference
+  says the new behaviour (`llm/qbm-pgsql.llm.api.md`, `disconnect()`).
+
 ### Fixed
 
 - **A handshake frame destroyed while it waits no longer leaves its handle in the connection (Huly QB-1246).**
