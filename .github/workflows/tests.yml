@@ -288,7 +288,7 @@ jobs:
       #
       # UNLIKE qbm-http, NOTHING HERE IS HOST-VARYING, and that is a measurement rather than an
       # assumption: qbm-pgsql registers 34 (18 unit + 2 system + 14 integration) on a
-      # maintainer's macOS box and 34 on ubuntu-latest. qbm-http's four http3 tests must be
+      # maintainer's macOS box and 34 on ubuntu-latest. qbm-http's http3 tests have to be
       # derived from a capability because ubuntu-latest has no ngtcp2 OpenSSL crypto helper;
       # this module has no such gate, so the floor is the constant. If one is ever added --
       # anything wrapped in an if(QB_HAS_*) or a find_package() result -- this step must start
