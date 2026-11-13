@@ -129,6 +129,30 @@ endif ()
 # holds the connections mid-handshake. No daemon.
 qpg_test(system handshake-slot-teardown system/connection/handshake-slot-teardown.cpp EXTRA_LABELS connection coroutine)
 qpg_test(system completion-after-loop system/connection/completion-after-loop.cpp EXTRA_LABELS connection coroutine)
+# A Database with static storage -- destroyed after the main thread's event loop -- ends cleanly at process exit, one
+# child process per state, against a scripted backend (Huly QB-1246). The relay and the judge's tools are qb's
+# (static_exit_support.h). No daemon.
+qpg_test(system client-static-exit system/connection/client-static-exit.cpp EXTRA_LABELS connection coroutine)
+if (TARGET qbm-pgsql-test-system-client-static-exit)
+    target_include_directories(qbm-pgsql-test-system-client-static-exit PRIVATE "${QB_ROOT_DIR}/tests/io/shared")
+endif ()
+# The same cases with the relay in front of the live PostgreSQL (QB_PG_DSN) instead of the scripted backend. Only in
+# a build with OpenSSL: without it the module answers neither MD5 nor SCRAM, the daemon of the gate serves nothing,
+# and the release gate holds the skips of that build to an exact list (dev/agent/release-gate.sh). The scripted
+# copy above is that build's witness.
+if (QB_HAS_SSL)
+    qb_register_module_test(
+            MODULE_NAME pgsql TIER integration TEST_NAME client-static-exit
+            SOURCES system/connection/client-static-exit.cpp
+            INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
+            DEFINES QB_STATIC_EXIT_DAEMON=1
+            LABELS module:qbm-pgsql tier:integration connection coroutine
+            REQUIRES live
+            RESOURCE_LOCK qb_pgsql_integration)
+    if (TARGET qbm-pgsql-test-integration-client-static-exit)
+        target_include_directories(qbm-pgsql-test-integration-client-static-exit PRIVATE "${QB_ROOT_DIR}/tests/io/shared")
+    endif ()
+endif ()
 
 # -----------------------------------------------------------------------------
 # INTEGRATION — live postgres:5432 (REQUIRES live, RESOURCE_LOCK)

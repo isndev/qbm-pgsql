@@ -9,6 +9,23 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Added
 
+- **A `Database` kept in static storage is witnessed through process exit, and what it does there is written down
+  (Huly QB-1246).** `exit()` destroys the main thread's event loop, a thread-local, before the objects with static
+  storage, so a `static` database is destroyed after the loop it ran on, where a request for the loop stops the
+  process on qb-io's named line. `~Database` asks nothing of it, and `qbm-pgsql-test-system-client-static-exit` now
+  holds that: a database with static storage runs to the end of a child process -- never connected, in its handshake,
+  ready, a query in flight and one queued with their callbacks pending, a coroutine parked on a query, disconnected,
+  a reconnection run waiting for its next attempt, the handshake of a run in flight, with a reconnection policy armed
+  and without -- ended from `main`, from a callback of the loop, from a result's callback and from a coroutine. Each
+  child must print its judge's line and nothing else; the judge, an `atexit` handler registered before the database,
+  asserts that it was destroyed after the loop, reads the end of the peer's stream (a clean EOF, never a reset) and
+  asks LeakSanitizer. The 26 cases pass on the code as it was: no product line changes. The peer is a scripted
+  backend, so the binary needs no daemon; `qbm-pgsql-test-integration-client-static-exit` is the same source with the
+  relay in front of the live PostgreSQL, registered where the build has OpenSSL (without it the module answers
+  neither MD5 nor SCRAM) and skipped, not failed, when no connection to the daemon becomes ready. The contract is stated where it lives -- a database destroyed is not
+  disconnected: the queries in flight and queued are discarded with it and none of their callbacks runs -- in
+  `readme/connection.md` and the `llm/` reference.
+
 - **A prepared statement whose cached plan went stale is re-prepared, and the execution whose Bind it refused retried
   once outside a transaction block (Huly QB-114).** A DDL that changes a statement's result columns -- an `ALTER TABLE`
   that adds a column under a `SELECT *`, a column widened from `int` to `bigint` -- makes PostgreSQL refuse every later

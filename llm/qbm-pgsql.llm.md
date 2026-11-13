@@ -787,6 +787,14 @@ if (!co_await db.connect(dsn)) { /* db.down_reason(), db.error() */ }
   `connect(connection_options)` for chain/hostname checks (the DSN string cannot
   carry it). There is no libpq `sslmode` string parsing — the level is the
   `ssl_verify` field.
+- A `database` destroyed is NOT disconnected: the queries in flight and queued are
+  discarded with it and none of their callbacks runs (`disconnect()` first, to fail
+  them); the socket closes with the object. The destructor asks nothing of the thread's
+  event loop, so a database kept in static storage -- destroyed after the loop at process
+  exit -- ends cleanly, a reconnection policy armed or not: the server reads a clean end
+  of stream (a TCP reset only when bytes it sent are still unread), and a coroutine
+  parked on a query was destroyed with the loop and is not
+  resumed (QB-1246).
 - `Transaction` (and `database`) is non-copyable and non-movable; hold by
   pointer/reference.
 - `results` is a `shared_ptr<const result_impl>` (cheap to copy); `row`/`field`

@@ -615,6 +615,22 @@ This also covers a malformed wire message and an unsupported/hostile auth method
 handshake the attempt fails (`down_reason::protocol` for a plain `connect()`, one more attempt for a run).
 <!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h:344-368 (onMessage noexcept containment -> not_ok) -->
 
+### Destruction, and a database kept in static storage
+
+Destroying a `database` is not a `disconnect()`: the queries in flight and queued are discarded with it and none of
+their callbacks runs -- call `disconnect()` first when they must hear. The destructor marks the connection gone for the
+coroutines of the engine that are still suspended, settles the wait of a handshake, and lets the TCP client close the
+socket: the server reads a clean end of stream -- a reset only when the database goes with bytes of the server still
+unread, as any TCP close gives.
+
+It asks nothing of the event loop, and that is what makes a `static` database safe. `exit()` -- and the return from
+`main` -- destroys the main thread's thread-locals before the objects with static storage, and the loop of qb-io is a
+thread-local: such a database is destroyed after the loop it ran on, where a request for the loop stops the process on
+a line that names it. Never connected, in its handshake, ready, with a query in flight, disconnected or in a
+reconnection run, with a policy armed or without, it ends with nothing printed; a coroutine parked on one of its
+queries was destroyed with the loop, before it, and is not resumed (Huly QB-1246).
+<!-- src: qbm/pgsql/src/qbm/pgsql/pgsql.h (Database::~Database) -->
+
 ---
 
 ## Pitfalls
