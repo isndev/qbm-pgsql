@@ -600,7 +600,7 @@ the operation and callable without copying either shared owner; retention occurs
 cancellation detaches the sink or completion releases the operation during the call. That
 ownership stays in the operation's outermost sink invocation through nested calls until return.
 Borrowed capture data still needs its own lifetime; command admission and reservation are unchanged.
-_(src/qbm/pgsql/pgsql.h:1849-1888,1896-1913,2765-2781,3519-3528)_
+_(src/qbm/pgsql/pgsql.h:1915-1954,1962-1979,2831-2847,3591-3600)_
 
 > **`copy_in` is NOT constant-memory.** It drains the entire `source` into the
 > output pipe synchronously (bounded only by the write-buffer ceiling). Only
@@ -655,7 +655,7 @@ coroutine, an actor, or a second connection's trigger; reach for `cancel()` only
 where no coroutine can run.
 During the packet write, a native TLS `WANT_READ` waits for readability alone;
 otherwise native TLS and plain writes wait for writability. A custom secure transport
-without native TLS state keeps the combined read/write fallback (`pgsql.h:3848-3859`).
+without native TLS state keeps the combined read/write fallback (`pgsql.h:3920-3931`).
 
 **Connection introspection (all `[[nodiscard]]`, libpq-style):**
 
@@ -779,7 +779,14 @@ if (!co_await db.connect(dsn)) { /* db.down_reason(), db.error() */ }
   If `disconnect()` runs inside one of that connection's
   query or fluent `.then` / `.error` callbacks, queued failures run just after
   the callback returns; new callback commands fail once with a connection error
-  and coroutine calls return failed replies meanwhile.
+  and coroutine calls return failed replies meanwhile. A `connect()` begun in that
+  callback -- or in an error callback of a lost link -- installs its link only once
+  the callback has returned and the old link's teardown is over (3.4): never wait
+  synchronously for it there (`connect_timeout` does not bound that wait), and
+  `prepare_reconnect()` does nothing there. An error callback of a lost link that
+  calls `disconnect()` or `connect()` owns the connection, as the `on_disconnected`
+  hook does: no reconnection run after its `disconnect()`, no `down` (and no
+  `on_down`) after its `connect()`.
 - On a lost connection the disconnect handler calls `fail_all_pending(...)`, so
   every queued query and sub-transaction resumes its awaiter with an error
   instead of hanging; each drained query is counted in `stats()` and reported to
@@ -1013,8 +1020,8 @@ public:
         query_stream(std::string sql, std::size_t batch_size, RowFn on_row);
 
     // Connection introspection / control:
-    bool cancel();                                      // out-of-band PostgreSQL CancelRequest (SYNCHRONOUS, ≤2s, plaintext); NOT [[nodiscard]] (pgsql.h:3747-3748)
-    [[nodiscard]] qb::io::async::task<bool> cancel_async(); // the same request, non-blocking, TLS on a secure database (pgsql.h:3792-3793)
+    bool cancel();                                      // out-of-band PostgreSQL CancelRequest (SYNCHRONOUS, ≤2s, plaintext); NOT [[nodiscard]] (pgsql.h:3819-3820)
+    [[nodiscard]] qb::io::async::task<bool> cancel_async(); // the same request, non-blocking, TLS on a secure database (pgsql.h:3864-3865)
     [[nodiscard]] bool in_transaction() const noexcept; // backend session in a transaction block ('T'/'E')
     [[nodiscard]] bool used_channel_binding() const noexcept; // SCRAM-SHA-256-PLUS tls-server-end-point binding negotiated
     [[nodiscard]] std::optional<std::string_view> parameter_status(std::string_view key) const; // PQparameterStatus
@@ -1065,15 +1072,15 @@ struct tcp {
 - `Database &enable_auto_reconnect(RetryPolicy policy = {})` / `disable_auto_reconnect()` / `bool is_reconnecting() const`: arm (disarm) a reconnection run for a ready connection the server or the network takes away -- never for `disconnect()`. Read when the loss happens; `is_reconnecting()` is true from the loss until the run is ready or down. (Huly QB-111)
 - `qb::io::connection_state state() const` / `qb::io::down_reason down_reason() const` / `bool is_connected() const`: where the connection stands (`idle`, `connecting`, `handshaking`, `ready`, `reconnecting`, `down`) and why it is down (`user`, `peer`, `protocol`, `retries_exhausted`, `handshake_refused`); `is_connected()` is `state() == ready` -- until 3.3 it was the io base's flag, true on a database that never connected. (Huly QB-111)
 - `Database &set_handshake(handshake_hook hook)`: a `task<bool>(qb::pg::handshake_session &)` run on EVERY connection, the first one included, after authentication and the first ReadyForQuery and before the connection is ready. `false` or a throw refuses the connection for good (`handshake_refused`). The session (`execute(sql)`, `query(sql)`, `prepare(name, sql, types)`, `execute(name, params)`, `live()`) is the only way to queue while the connection is not ready -- the connection itself refuses work outside `ready` -- and only while its own handshake runs: a kept copy fails with `"handshake over"`. (Huly QB-111)
-- `on_connected(fn)` (each time the connection becomes ready), `on_disconnected(fn(down_reason))` (once per ready connection lost, cause `user` / `peer` / `protocol`, after the in-flight work failed and before the reconnection decision -- a hook that disarms the policy prevents the run; it alternates strictly with `on_connected`), `on_down(fn(down_reason))` (each time the connection reaches `down`). Empty until set; an exception escaping one is contained and logged. (Huly QB-111)
+- `on_connected(fn)` (each time the connection becomes ready), `on_disconnected(fn(down_reason))` (once per ready connection lost, cause `user` / `peer` / `protocol`, after the in-flight work failed and before the reconnection decision -- a hook that disarms the policy prevents the run; it alternates strictly with `on_connected`), `on_down(fn(down_reason))` (each time the connection settles `down`; not for a loss whose error callback or `on_disconnected` hook began another connection -- that call owns the state, 3.4). Empty until set; an exception escaping one is contained and logged. (Huly QB-111)
 - `listened_channels()`: the channels `listen()` / `unlisten()` / `unlisten_all()` left the connection listening on, maintained when the server confirms them and replayed at the start of every new session; cleared by `disconnect()`. A `LISTEN` written as SQL is not in it. (Huly QB-111)
-- `void disconnect()`: Marks the connection down and refuses new queries immediately; callback commands receive one connection error and coroutine calls return failed replies. Outside a completion callback, it fails in-flight/queued work and completes io teardown before returning, without a loop pass (safe from a coroutine body). Teardown hands the descriptor to the thread's loop, which sends the FIN -- the server reads EOF and the backend leaves `pg_stat_activity` at once -- and closes it after the server, within qb-io's close bound, 2 s by default: the object holds nothing of the ended connection (Huly QB-1060, QB-1270). When called inside a query or fluent `.then` / `.error` callback, queued failures run after that callback returns so its transaction owner stays alive; io teardown follows message dispatch. A later ordinary `connect()` on the same object opens a fresh socket and handshake and starts the session with an empty prepared-statement cache, an empty ParameterStatus cache and an idle transaction status (Huly QB-1095); `prepare_reconnect()` is optional, to close the old fd early.
+- `void disconnect()`: Marks the connection down and refuses new queries immediately; callback commands receive one connection error and coroutine calls return failed replies. Outside a completion callback, it fails in-flight/queued work and completes io teardown before returning, without a loop pass (safe from a coroutine body). Teardown hands the descriptor to the thread's loop, which sends the FIN -- the server reads EOF and the backend leaves `pg_stat_activity` at once -- and closes it after the server, within qb-io's close bound, 2 s by default: the object holds nothing of the ended connection (Huly QB-1060, QB-1270). When called inside a query or fluent `.then` / `.error` callback, queued failures run after that callback returns so its transaction owner stays alive; io teardown follows message dispatch. A later ordinary `connect()` on the same object opens a fresh socket and handshake and starts the session with an empty prepared-statement cache, an empty ParameterStatus cache and an idle transaction status (Huly QB-1095); `prepare_reconnect()` is optional, to close the old fd early; it does nothing while a connection, a handshake or a run owns the link, nor (3.4) while the previous link's teardown is owed or running -- inside a query callback after its `disconnect()`, inside an error callback of a lost link. A `connect()` begun there installs its link once that callback has returned (3.4, Huly QB-1278).
 - **Streaming / bulk-load (coroutine, `co_await`-only; each returns `qb::io::async::task<Reply<T>>`):**
     - `copy_out(std::string sql, std::function<void(std::string_view)> sink) -> task<Reply<resultset>>`: Runs a `COPY … TO STDOUT` and delivers each `CopyData` chunk to `sink` as it arrives. Streams in **constant memory** (rows are never buffered in a result set). The `string_view` is valid only during the call. Resolves to `ok()` on success.
     - `copy_in(std::string sql, std::function<std::optional<std::string>()> source) -> task<Reply<resultset>>`: Runs a `COPY … FROM STDIN`, calling `source` repeatedly and sending each returned chunk as `CopyData` until it returns `std::nullopt` (then `CopyDone`). A throwing `source` aborts the COPY with `CopyFail`. Resolves to `ok()` (the `COPY n` count) on success; the connection stays usable on error. **NOT constant-memory** — it drains the whole source into the output pipe synchronously (capped by the write-buffer ceiling); only `copy_out` and `query_stream` stream in constant memory.
     - `copy_in(std::string sql, std::string data) -> task<Reply<resultset>>`: Convenience overload that sends the entire `data` payload in one shot.
     - The connection admits one COPY at a time, in either direction. A second COPY returns a failed `Reply` without sending SQL or invoking its source/sink. Destroying the awaiting coroutine detaches its callback; its command keeps the reservation until completion, so a later COPY cannot answer the old server response. A source that destroys its own waiter causes its returned chunk to be discarded and `CopyFail` to be sent without another source call.
-    - A COPY OUT sink and its owned captures stay alive until its invocation returns, including self-cancellation or disconnect; detachment prevents later calls. Ordinary chunk delivery borrows the operation and callable without copying either shared owner. Cancellation or completion during the call retains the needed ownership in the operation's outermost sink invocation, shared by nested calls until return. Borrowed capture data needs its own lifetime. Command admission and query association remain unchanged (`src/qbm/pgsql/pgsql.h:1849-1888,1896-1913,2765-2781,3519-3528`).
+    - A COPY OUT sink and its owned captures stay alive until its invocation returns, including self-cancellation or disconnect; detachment prevents later calls. Ordinary chunk delivery borrows the operation and callable without copying either shared owner. Cancellation or completion during the call retains the needed ownership in the operation's outermost sink invocation, shared by nested calls until return. Borrowed capture data needs its own lifetime. Command admission and query association remain unchanged (`src/qbm/pgsql/pgsql.h:1915-1954,1962-1979,2831-2847,3591-3600`).
     - `query_stream(std::string sql, std::size_t batch_size, RowFn on_row) -> task<Reply<void>>`: Streams a large result via a server-side `CURSOR` (`DECLARE`/`FETCH`, `batch_size` rows per round trip), invoking `on_row` per row in **constant memory**. Auto-manages a transaction when idle (`BEGIN`/`COMMIT`, `ROLLBACK` on failure); when `in_transaction()` it declares the cursor in the caller's transaction and touches only the cursor. Cursor names are unique per connection (`qb_stream_cursor_<n>`), so streams **may overlap** on one `database` — and because a session has a single transaction, overlapping streams **share** the self-opened block: the first opens it, later ones only join, the last one out `COMMIT`s (or `ROLLBACK`s if any participant failed), so a server error in one stream aborts the block for the others. A caller-opened transaction is recognised as caller-owned only once its `BEGIN` has **completed** (`in_transaction()` mirrors the last `ReadyForQuery`), so do not start a stream while your own `begin()` is still in flight. `on_row` exceptions are rethrown after the cursor is closed and any self-opened transaction rolled back. `batch_size` is clamped to ≥ 1.
 - **Connection introspection / control:**
     - `bool cancel()`: Sends an out-of-band PostgreSQL `CancelRequest` on a short-lived **separate** connection (libpq `PQcancel` style). It is **synchronous / blocking** (capped at ≤ 2s) and plaintext even when the main link is SSL. Surfaces on the in-flight query as `sqlstate::query_canceled` (57014). Note: it briefly blocks the calling thread — prefer `cancel_async()`.
@@ -1081,7 +1088,7 @@ struct tcp {
     - `bool in_transaction() const noexcept`: True when the backend session is in a transaction block (`'T'`) or a failed transaction block (`'E'`); false when idle (`'I'`).
     - Packet-write readiness in `cancel_async()`: native TLS `WANT_READ` waits for read only;
       other native TLS/plain writes wait for write. Custom secure transports without native
-      TLS state retain the combined read/write fallback (`pgsql.h:3848-3859`).
+      TLS state retain the combined read/write fallback (`pgsql.h:3920-3931`).
     - `bool used_channel_binding() const noexcept`: True when **SCRAM-SHA-256-PLUS** with `tls-server-end-point` channel binding was negotiated (only over TLS, when the server offers the `-PLUS` mechanism).
     - `std::optional<std::string_view> parameter_status(std::string_view key) const`: Value of a server `ParameterStatus` report (libpq `PQparameterStatus`); e.g. `"server_version"`, `"server_encoding"`, `"TimeZone"`. `std::nullopt` if the key was never reported.
     - `int server_version() const`: Server version as a libpq-style integer (`PQserverVersion`), e.g. `160002` for 16.2. Returns 0 if the `server_version` parameter is unknown.
@@ -1385,7 +1392,7 @@ namespace qb::pg {
 
 ### `qb::pg::results` (alias for `qb::pg::resultset`)
 
-Represents the set of rows returned by a query. The class is declared publicly as `qb::pg::resultset` in `resultset.h`; `qb::pg::results` is its public alias (`qbm/pgsql/src/qbm/pgsql/pgsql.h:4504`). Both spellings are valid, with `results` preferred for application code. Row and field are reachable as `qb::pg::results::row` / `qb::pg::results::field`.
+Represents the set of rows returned by a query. The class is declared publicly as `qb::pg::resultset` in `resultset.h`; `qb::pg::results` is its public alias (`qbm/pgsql/src/qbm/pgsql/pgsql.h:4612`). Both spellings are valid, with `results` preferred for application code. Row and field are reachable as `qb::pg::results::row` / `qb::pg::results::field`.
 
 **Definition (`qbm/pgsql/src/qbm/pgsql/resultset.h`):**
 ```cpp

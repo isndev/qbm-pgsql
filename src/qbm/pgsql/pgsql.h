@@ -391,7 +391,10 @@ namespace qb::pg {
  * from `initial_delay` by `multiplier` up to `max_delay`, jittered by a quarter either way, `max_attempts`
  * per run (-1 = unlimited), `on_retry(attempt, next_delay)` before each wait. Its `connect_timeout` bounds
  * each attempt -- the transport and the whole handshake; zero (the default) means the connection's own
- * `connect_timeout`, else 10 s. Used by `connect_with_retry()` and `enable_auto_reconnect()`.
+ * `connect_timeout`, else 10 s. An attempt begun while the previous link's teardown is owed or running -- from a
+ * callback of that link -- connects its transport, then waits for that teardown before it installs the link,
+ * outside that bound: the wait ends when the callback returns. Used by `connect_with_retry()` and
+ * `enable_auto_reconnect()`.
  */
 using RetryPolicy = ::qb::io::reconnect_policy;
 
@@ -795,9 +798,11 @@ private:
     qb::io::down_reason        _loss_cause    = qb::io::down_reason::peer; ///< why the last link went away
     bool                       _session_live  = false;                     ///< an authenticated protocol session runs on the installed link
     bool                       _link_open     = false;                     ///< a link is installed and its teardown has not begun
+    bool                       _link_ending   = false;                     ///< the last link's teardown is owed or running: no install yet
     bool                       _cause_set     = false;                     ///< the client named _loss_cause before it dropped the link
     bool                       _session_ready = false;                     ///< the installed link reached ready: its loss fires on_disconnected
     bool                       _recovering    = false;                     ///< a reconnection run is in progress (is_reconnecting())
+    bool                       _stay_down     = false;                     ///< disconnect() on a client already down: no run before connect()
     bool                       _ever_ready    = false;                     ///< a connection was ready once: the next one follows a gap
     /// Bumped by disconnect(), by every connect() that starts a lifecycle and by every terminal transition:
     /// the run, the attempt and the handshake that captured an older value were superseded and step aside.
@@ -821,6 +826,55 @@ private:
     std::function<void(qb::io::down_reason)> _on_disconnected{};
     std::function<void(qb::io::down_reason)> _on_down{};
     std::shared_ptr<bool>                    _alive{std::make_shared<bool>(true)};
+    /// The attempts and adoptions that wait for the last link's teardown to be over. Shared: an awaiter whose frame
+    /// is destroyed after the database leaves the list by it, not by the database.
+    struct link_gate {
+        std::vector<std::coroutine_handle<>> waiters;
+    };
+    std::shared_ptr<link_gate> _link_gate{std::make_shared<link_gate>()};
+
+    /**
+     * @brief Suspends an attempt or an adoption while the last link's teardown is owed or running.
+     * @details Resumed by `on(event::dispose&&)`, from the scheduler's next drain. A link installed before that
+     *          was installed over the link being torn down: `install_link_()` resets the buffers, the protocol
+     *          and the io state that the dispatch or the teardown on the stack still reads. Neither copyable nor
+     *          movable: its place in the list is its own.
+     */
+    struct link_ended_awaiter {
+        Database                  &_db;
+        std::shared_ptr<link_gate> _waiting;
+        std::coroutine_handle<>    _self;
+
+        explicit link_ended_awaiter(Database &db) noexcept
+            : _db(db) {}
+        link_ended_awaiter(link_ended_awaiter const &)            = delete;
+        link_ended_awaiter(link_ended_awaiter &&)                 = delete;
+        link_ended_awaiter &operator=(link_ended_awaiter const &) = delete;
+        link_ended_awaiter &operator=(link_ended_awaiter &&)      = delete;
+
+        ~link_ended_awaiter() {
+            if (_waiting && _self)
+                std::erase(_waiting->waiters, _self); // a frame destroyed while it waits is never resumed
+        }
+
+        bool
+        await_ready() const noexcept {
+            return !_db._link_ending;
+        }
+
+        void
+        await_suspend(std::coroutine_handle<> h) {
+            qb::io::async::track_suspension(h, "pgsql link teardown");
+            _waiting = _db._link_gate;
+            _self    = h;
+            _waiting->waiters.push_back(h);
+        }
+
+        void
+        await_resume() noexcept {
+            _self = {}; // resumed: on(event::dispose&&) took the list
+        }
+    };
 
     /// Owned handshake-deadline timer. MUST be a ScopedTimeout (cancelled on destruction),
     /// not a fire-and-forget async::callback: the latter is a self-deleting heap Timeout that
@@ -912,9 +966,10 @@ private:
     drop_link_(qb::io::down_reason cause) noexcept {
         if (!_link_open)
             return;
-        _loss_cause = cause;
-        _cause_set  = true;
-        _link_open  = false;
+        _loss_cause  = cause;
+        _cause_set   = true;
+        _link_open   = false;
+        _link_ending = true; // owed from here when the link's own dispatch is on the stack; over at on(event::dispose&&)
         this->disconnect_now();
     }
 
@@ -1345,6 +1400,11 @@ private:
             _loss_cause = qb::io::down_reason::peer;
             co_return attempt_outcome::transport_failed;
         }
+        // Never over a link whose teardown is owed or running: a caller that ended its link from that link's own
+        // query callback and then ran the loop is still on the stack, and `on(disconnected)` has not run.
+        co_await link_ended_awaiter{*this};
+        if (!*alive || epoch != _epoch)
+            co_return attempt_outcome::cancelled; // the socket closes with this frame
         install_link_(std::move(sock), limit);
         co_return co_await handshake_(alive, epoch);
     }
@@ -1427,7 +1487,8 @@ private:
         if (_state != qb::io::connection_state::idle && _state != qb::io::connection_state::down)
             return false; // a connection, a handshake or a run is in progress: it owns the state
         ++_epoch;
-        _state = qb::io::connection_state::connecting;
+        _stay_down = false;
+        _state     = qb::io::connection_state::connecting;
         consumer_([](auto &consumer) { consumer.on_pg_notify_lifecycle_start(); });
         return true;
     }
@@ -1467,6 +1528,11 @@ private:
         }
         auto sock = std::move(*_adopted);
         _adopted.reset();
+        co_await link_ended_awaiter{*this}; // the caller ran the loop under the dispatch it called from
+        if (!*alive || epoch != _epoch) {
+            done->settle(false); // superseded while it waited: the call that did it owns the state
+            co_return;
+        }
         attempt_outcome outcome = attempt_outcome::transport_failed;
         if (sock.is_open()) {
             install_link_(std::move(sock), limit);
@@ -3120,7 +3186,11 @@ public:
         return *this;
     }
 
-    /** @brief Called each time the connection reaches `down`, with the reason (Huly QB-111). */
+    /**
+     * @brief Called each time the connection settles `down`, with the reason (Huly QB-111).
+     * @details A loss whose error callback, or `on_disconnected` hook, began another connection does not settle
+     *          `down` -- that call owns the state -- and reports none, although `state()` read `down` inside it.
+     */
     Database<QB_IO_, NotifyDerived> &
     on_down(std::function<void(qb::io::down_reason)> hook) {
         _on_down = std::move(hook);
@@ -3143,7 +3213,9 @@ public:
      *
      * For a transport a program already holds -- one from a pool, one a supervisor handed over: the
      * first connection of the new lifecycle uses it, with the whole handshake (authentication, the hook
-     * installed with `set_handshake()`, the LISTEN replay) under the connection's `connect_timeout`.
+     * installed with `set_handshake()`, the LISTEN replay) under the connection's `connect_timeout`. Awaited
+     * from a callback of a link whose teardown is owed or running, the adoption first waits for that
+     * teardown, outside that bound: it ends when the callback returns.
      * `conn_opts` is the session's DSN all the same: it names the user and the database the
      * StartupMessage carries, and the address a reconnection run (`enable_auto_reconnect`) or a later
      * `connect()` dials -- only the first connection adopts.
@@ -3986,12 +4058,17 @@ public:
      *          the work in flight and queued, once, with `database disconnected`; then `on_disconnected`
      *          fires with the cause, BEFORE the reconnection decision (a hook that disarms the policy
      *          prevents the run); then a run starts when the cause is not `user` and a policy is armed,
-     *          else the connection is down.
+     *          else the connection is down. An error callback or the hook that calls `connect()` owns the
+     *          connection from then on: this loss decides nothing after it. One that calls `disconnect()` ends
+     *          the matter: no run starts, whatever policy was armed when the link was lost (`down` with
+     *          `down_reason::user`, at once) or is armed by that callback (the connection stays `down` as the
+     *          loss left it).
      *
      * @param ev Disconnection event
      */
     void
     on(qb::io::async::event::disconnected const &ev) {
+        _link_ending         = true; // a loss the peer or the socket caused begins its teardown here
         const bool was_ready = _session_ready;
         const bool was_live  = _session_live;
         _session_ready       = false;
@@ -4013,6 +4090,11 @@ public:
             if (!_reconnect_policy)
                 _down_reason = cause;
         }
+        // Read before anything user code runs: a failure callback below, or the on_disconnected hook, that
+        // moves the epoch -- connect(), or disconnect() on a connection this loss left reconnecting -- owns the
+        // connection from then on, and this loss decides nothing after it. (A disconnect() on a connection it
+        // left down: _stay_down.)
+        const auto epoch = _epoch;
         if (was_live) {
             if (_completion_callback_depth != 0)
                 _deferred_disconnect = DeferredDisconnect::transport;
@@ -4045,12 +4127,11 @@ public:
         }
         // The state the connection is heading for -- set above, readable from the hook; the hook may still
         // change the policy, and a callback may have connected or disconnected meanwhile (the epoch says so).
-        const auto epoch = _epoch;
         notify_(_on_disconnected, "on_disconnected", cause);
         if (epoch != _epoch)
-            return; // the hook disconnected or connected: that call owns the state now
-        if (!_reconnect_policy) {
-            enter_down_(cause);
+            return; // a failure callback or the hook disconnected or connected: that call owns the state now
+        if (!_reconnect_policy || _stay_down) {
+            enter_down_(cause); // no policy, or a disconnect() made by a callback of this loss: it stays down
             return;
         }
         _state      = qb::io::connection_state::reconnecting;
@@ -4060,13 +4141,29 @@ public:
     }
 
     /**
+     * @brief The link's teardown is over: what waited to install the next link goes on.
+     * @details The last thing a standalone io's `dispose()` does, after `on(disconnected)` and the end of the
+     *          transport. An attempt or an adoption that found the teardown owed or running is resumed from the
+     *          scheduler's next drain.
+     */
+    void
+    on(qb::io::async::event::dispose &&) {
+        _link_ending = false;
+        auto waiters = std::exchange(_link_gate->waiters, {});
+        for (const auto waiter : waiters)
+            qb::io::async::resume_via_current(waiter);
+    }
+
+    /**
      * @brief Close the previous link's descriptor early and clear its per-backend state.
      *
      * Optional: every `connect()` installs its link through the same reset (fresh buffers and protocol,
      * an empty prepared-statement cache, no ParameterStatus, an idle transaction status, a re-armed
      * SCRAM gate), so a bare `connect()` after `disconnect()` needs none of it. Call it to release the
      * old descriptor before the next `connect()`. Does nothing while a connection, a handshake or a
-     * reconnection run owns the link.
+     * reconnection run owns the link, nor while the previous link's teardown is still owed or running -- a query
+     * callback that has just called `disconnect()` is inside the read dispatch of that link, and an error
+     * callback of a lost link inside its teardown: the teardown releases the descriptor itself.
      *
      * @pre No pending queries on this connection (finish or drain the transaction queue first).
      */
@@ -4074,6 +4171,8 @@ public:
     prepare_reconnect() noexcept {
         if (_state != qb::io::connection_state::idle && _state != qb::io::connection_state::down)
             return;
+        if (_link_ending)
+            return; // under the dispatch or the teardown of the link it would reset: that teardown does it
         // Transport is a private base of `tcp::client`; use public `in`/`out`/`transport`.
         this->in().reset();
         this->out().reset();
@@ -4102,6 +4201,8 @@ public:
     /**
      * @brief Disconnect for good: terminal, `down` with `down_reason::user` (Huly QB-111)
      *
+     * On a connection that is already `down` -- a lost link, a refused handshake, a run that gave up --, it stays
+     * `down` with the reason it has.
      * Whatever the reconnection policy, an explicit disconnect starts no run, and it ends the session:
      * the listened channels are forgotten, and a later `connect()` starts a fresh session -- no LISTEN
      * replayed, no gap marker. A connection, a handshake or a run in progress is abandoned.
@@ -4119,7 +4220,14 @@ public:
     disconnect() {
         switch (_state) {
             case qb::io::connection_state::idle:
+                return;
             case qb::io::connection_state::down:
+                // Already down, and it stays so. Said from an error callback or the hook of a loss that is still
+                // deciding -- no policy was armed when the link was lost --, this is what keeps a policy that
+                // callback arms from starting a run: an explicit disconnect starts none, whatever the policy.
+                // And the session ends, as from every other state: the listened set is forgotten.
+                _stay_down = true;
+                end_session_();
                 return;
             case qb::io::connection_state::ready:
                 // Leave `ready` before teardown so a new query is refused immediately.
@@ -4173,7 +4281,7 @@ private:
  * `notify_consumer<QB_IO_, Derived>` (see `notify_cb_consumer`, `notify_co_consumer`). The connection
  * calls three more hooks, defaulted here, that a consumer hides when it needs them (Huly QB-111):
  * `on_pg_notify_gap(gap_info)` when a session that follows an earlier ready one becomes ready, before any
- * notification of that session; `on_pg_notify_down()` when the connection reaches `down`;
+ * notification of that session; `on_pg_notify_down()` when the connection settles `down` (as `on_down`);
  * `on_pg_notify_lifecycle_start()` when a `connect()` leaves `idle` or `down`.
  */
 template <typename QB_IO_, typename Derived>

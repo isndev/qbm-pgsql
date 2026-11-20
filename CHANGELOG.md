@@ -69,6 +69,44 @@ All notable changes to the qbm-pgsql module are documented here. The format is b
 
 ### Fixed
 
+- **A link is no longer installed over the one a callback has just ended (Huly QB-1278).** A query's callback runs
+  inside the read dispatch of the connection's own link. `disconnect()` called there cannot tear that link down under
+  the callback: its teardown -- the failure of what was queued, `on_disconnected` -- runs when the callback returns.
+  A `connect()` begun in the same callback opens its transport from the loop; when the callback then ran the loop
+  itself (a synchronous wait on other work), that transport completed under it and the link was installed there --
+  the buffers, the protocol and the io state reset under the dispatch that was still reading them: the heap
+  corrupted in a release build (a segmentation fault, or the allocator's `double free or corruption`), and
+  `io::start() while a disconnect() is pending` in a build with assertions. The same
+  held for a transport handed over (`connect(dsn, raw_io)`), and for a link the server closed, when an error
+  callback or the `on_disconnected` hook connected again and ran the loop: the new link was installed inside the
+  teardown of the old one. Now no link is installed while the last link's teardown is owed or running: an attempt or
+  an adoption that finds one waits for its end (`on(event::dispose&&)`), then looks again at who owns the
+  connection. The wait has no deadline of its own -- `connect_timeout` bounds the transport and the handshake, not
+  this -- because it ends when the callback on the stack returns: a callback that waits synchronously for the
+  connection it has just asked for does not see it come up. `prepare_reconnect()` follows the same rule: called
+  from a query callback after its `disconnect()`, it emptied the buffer the dispatch on the stack was reading,
+  closed the descriptor under its watcher and zeroed the reason its teardown was owed for (a build with assertions
+  stopped there: `io::reset_io_state() while a disconnect() is pending`); it now does nothing while that teardown
+  is owed or running -- the teardown releases the descriptor itself.
+- **A callback of a lost link that connects or disconnects owns the connection from then on (Huly QB-1278).**
+  `on(disconnected)` read the lifecycle's epoch after the error callbacks of the work in flight had run, so what one
+  of them had decided was not seen. With no reconnection policy, a `connect()` begun there was undone: the teardown
+  went on to settle the connection `down`, which superseded the attempt, and the connect resolved `false`. With a
+  policy armed, a `disconnect()` made there was overridden: the teardown went on and started a reconnection run,
+  after `on_down(user)` had fired. The epoch is read before any callback runs, as its own comment said and as
+  qbm-redis does: an error callback, like the `on_disconnected` hook, that connects or disconnects decides, and the
+  loss decides nothing after it. One consequence to know: a loss whose callback connects again never settles `down`,
+  so `on_down` does not fire for it, although `state()` read `down` inside that callback.
+- **A `disconnect()` made by a callback of a lost link starts no run, whatever policy that callback arms (Huly
+  QB-1278).** `disconnect()` is terminal: "no run starts, whatever the reconnection policy". On a connection the loss
+  had already left `down` -- no policy armed when the link was lost -- it returned at once, having done nothing: a
+  policy the same error callback or `on_disconnected` hook armed then started a reconnection run, and the connection
+  came back by itself. `disconnect()` on a connection that is `down` now keeps it down until the next `connect()`,
+  and ends the session there as it does from every other state: the listened channels are forgotten, and the next
+  `connect()` replays no `LISTEN` and counts no reconnection (it kept both). The connection stays `down` with the
+  reason the loss gave it.
+  `tests/integration/connection/lifecycle-in-query-callback.cpp` holds the three entries: eleven cases against a
+  live server, nine of them failing on the code as it was -- two with the heap corrupted, seven on what they expect.
 - **A handshake frame destroyed while it waits no longer leaves its handle in the connection (Huly QB-1246).**
   `Database`'s startup and replay coroutines park on a slot the connection shares (`slot_awaiter`). The awaiter had
   no destructor: a frame destroyed while parked -- `reset_coro_scheduler()`, a `VirtualCore`'s teardown, the

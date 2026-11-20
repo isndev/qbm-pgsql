@@ -174,6 +174,7 @@ qpg_itest(param-roundtrip integration/serialization/param-roundtrip.cpp REQUIRES
 qpg_itest(resilience integration/resilience/coro-cancel-and-connection-loss.cpp REQUIRES coroutine)
 # The reconnect contract (Huly QB-111): connect at ready, the handshake hook, refusals, runs, terminal disconnect.
 qpg_itest(reconnect-contract integration/connection/reconnect-contract.cpp REQUIRES coroutine)
+qpg_itest(lifecycle-in-query-callback integration/connection/lifecycle-in-query-callback.cpp REQUIRES coroutine)
 
 if (QB_HAS_SSL)
     qpg_itest(connection-ssl integration/connection/connection-ssl.cpp REQUIRES ssl coroutine EXTRA_LABELS ssl)
